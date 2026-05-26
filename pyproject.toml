@@ -30,6 +30,7 @@ ignore = [
     "RUF001", # 全角标点（中文文档/字符串故意保留）
     "RUF002",
     "RUF003",
+    "PLC0415",  # 允许 lazy import（adapter 层避免冷启动加载重依赖）
 ]
 
 [tool.ruff.lint.per-file-ignores]

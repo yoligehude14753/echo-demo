@@ -1,1 +1,5 @@
-"""TTS adapter（cosyvoice / yunwu openai-tts）：后续 PR 填充。"""
+"""TTS adapter 集合。"""
+
+from app.adapters.tts.cosyvoice import CosyVoiceTTS, TTSError
+
+__all__ = ["CosyVoiceTTS", "TTSError"]

@@ -1,1 +1,5 @@
-"""STT adapter（sensevoice_gpu / in-process）：后续 PR 填充。"""
+"""STT adapter 集合。"""
+
+from app.adapters.stt.sensevoice_gpu import SenseVoiceGPUSTT, STTError
+
+__all__ = ["STTError", "SenseVoiceGPUSTT"]

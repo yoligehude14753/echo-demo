@@ -1,1 +1,5 @@
-"""ECAPA-TDNN 声纹 adapter：后续 PR 填充。"""
+"""声纹识别 adapter。"""
+
+from app.adapters.diarizer.ecapa import DiarizerError, ECAPADiarizer, NullDiarizer, make_diarizer
+
+__all__ = ["DiarizerError", "ECAPADiarizer", "NullDiarizer", "make_diarizer"]
