@@ -61,7 +61,13 @@ async def ensure_pptxgenjs_installed(
     """首次调用时把 pptxgenjs 装到 ``node_modules_root/node_modules/pptxgenjs``。
 
     后续调用如果已安装直接返回。
+
+    前置检查：node_bin 不可执行时立刻返回失败，避免做无意义的 ~80MB npm install。
     """
+    missing = [b for b in (node_bin, npm_bin) if not _is_executable(b)]
+    if missing:
+        return False, f"node/npm not executable: {', '.join(missing)}"
+
     await asyncio.to_thread(node_modules_root.mkdir, parents=True, exist_ok=True)
     pptx_dir = node_modules_root / "node_modules" / "pptxgenjs"
     if pptx_dir.exists():
@@ -184,3 +190,13 @@ def _path_env() -> str:
     import os
 
     return os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+
+
+def _is_executable(bin_path: str) -> bool:
+    """检查 bin 是绝对路径并且文件存在/可执行，或者能通过 PATH 找到。"""
+    import os
+    import shutil as _shutil
+
+    if "/" in bin_path or "\\" in bin_path:
+        return os.path.isfile(bin_path) and os.access(bin_path, os.X_OK)
+    return _shutil.which(bin_path) is not None
