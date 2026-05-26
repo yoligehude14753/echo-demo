@@ -122,12 +122,37 @@ jobs:
             --timeout=30 --timeout-method=thread --durations=10 \
             -m "unit or arch"
 
+  desktop-e2e:
+    name: desktop / e2e (playwright)
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: install deps
+        working-directory: desktop
+        run: npm ci
+      - name: install playwright browsers
+        working-directory: desktop
+        run: npx playwright install --with-deps chromium
+      - name: run e2e
+        working-directory: desktop
+        env:
+          CI: "1"
+          NODE_ENV: test
+        run: npm run e2e
+
   check:
     # 唯一 Required Status Check：上游必须真跑通才算 pass
     # detect-changes 必须 success（不允许 failed/cancelled）
-    # backend-* 允许 skipped（无 backend 改动时），但只要跑了就必须 success
+    # backend-* / desktop-e2e 允许 skipped（对应区域无改动时），但只要跑了就必须 success
     name: check
-    needs: [changes, backend-lint, backend-typecheck, backend-test]
+    needs: [changes, backend-lint, backend-typecheck, backend-test, desktop-e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -141,12 +166,17 @@ jobs:
           [[ "${{ needs.backend-lint.result }}" =~ ^(success|skipped)$ ]] || { echo "lint failed"; exit 1; }
           [[ "${{ needs.backend-typecheck.result }}" =~ ^(success|skipped)$ ]] || { echo "typecheck failed"; exit 1; }
           [[ "${{ needs.backend-test.result }}" =~ ^(success|skipped)$ ]] || { echo "test failed"; exit 1; }
-          # 触发了 backend 变更但所有 backend job 都 skipped → 漏跑
+          [[ "${{ needs.desktop-e2e.result }}" =~ ^(success|skipped)$ ]] || { echo "desktop e2e failed"; exit 1; }
           if [[ "${{ needs.changes.outputs.backend }}" == "true" && \
                 "${{ needs.backend-lint.result }}" == "skipped" && \
                 "${{ needs.backend-typecheck.result }}" == "skipped" && \
                 "${{ needs.backend-test.result }}" == "skipped" ]]; then
             echo "backend 有变更但 lint/typecheck/test 全 skipped → 漏跑"
+            exit 1
+          fi
+          if [[ "${{ needs.changes.outputs.desktop }}" == "true" && \
+                "${{ needs.desktop-e2e.result }}" == "skipped" ]]; then
+            echo "desktop 有变更但 e2e skipped → 漏跑"
             exit 1
           fi
           echo "all checks ok"
