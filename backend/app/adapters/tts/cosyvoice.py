@@ -57,7 +57,7 @@ class CosyVoiceTTS:
                 )
                 resp.raise_for_status()
                 ct = resp.headers.get("content-type", "")
-                audio = resp.content
+                audio: bytes = bytes(resp.content)
         except Exception as e:
             raise TTSError(
                 f"cosyvoice synthesize failed ({time.monotonic() - t0:.2f}s): {e}"

@@ -93,6 +93,7 @@ jobs:
             openai==1.51.0 \
             httpx-sse==0.4.0 \
             tenacity==9.0.0 \
+            numpy==2.1.1 \
             pytest==8.3.3 \
             pytest-asyncio==0.24.0 \
             pytest-cov==5.0.0
