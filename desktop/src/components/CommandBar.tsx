@@ -90,13 +90,21 @@ export default function CommandBar(): JSX.Element {
           message.warning("brief 为空，无法生成产物");
           return;
         }
-        message.info(`已派发：${kindLabel[r.kind]}（后台生成中）`);
-        const art = await generateArtifact({
+        message.info(`已派发：${kindLabel[r.kind]}（后台生成中，请稍候）`);
+        // 异步触发，结果通过 WS artifact.ready event 反馈到 store
+        // 不 await，避免 busy/textarea 在 60-180s LLM 链路上一直锁住
+        void generateArtifact({
           artifact_type: kind as "html" | "pptx" | "xlsx" | "word",
           brief,
-        });
-        addArtifact(art);
-        message.success(`已生成 ${art.artifact_type}`);
+        })
+          .then((art) => {
+            addArtifact(art);
+            message.success(`已生成 ${art.artifact_type}`);
+          })
+          .catch((e) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            message.error(`生成失败：${msg}`);
+          });
         return;
       }
       case "summarize_meeting": {
@@ -125,20 +133,27 @@ export default function CommandBar(): JSX.Element {
           message.warning("question 为空");
           return;
         }
-        message.info("正在检索…");
-        const ans = await ragAsk(question);
-        applyEvent({
-          type: "rag.answer.done",
-          seq: 0,
-          ts: new Date().toISOString(),
-          payload: {
-            question,
-            answer: ans.answer,
-            citations: ans.citations,
-            arbitration: ans.arbitration,
-          } as unknown as Record<string, unknown>,
-        });
-        message.success("已返回检索结果（见事件流）");
+        message.info("已派发：检索中（后台进行中）");
+        // 同样异步触发
+        void ragAsk(question)
+          .then((ans) => {
+            applyEvent({
+              type: "rag.answer.done",
+              seq: 0,
+              ts: new Date().toISOString(),
+              payload: {
+                question,
+                answer: ans.answer,
+                citations: ans.citations,
+                arbitration: ans.arbitration,
+              } as unknown as Record<string, unknown>,
+            });
+            message.success("已返回检索结果（见事件流）");
+          })
+          .catch((e) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            message.error(`检索失败：${msg}`);
+          });
         return;
       }
       case "chat":

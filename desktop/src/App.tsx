@@ -5,6 +5,7 @@ import TranscriptStream from "@/components/TranscriptStream";
 import ArtifactPanel from "@/components/ArtifactPanel";
 import MinutesView from "@/components/MinutesView";
 import CommandBar from "@/components/CommandBar";
+import MicRecorder from "@/components/MicRecorder";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 
@@ -59,10 +60,13 @@ export default function App(): JSX.Element {
                 转写流
               </span>
               {currentMeetingId && (
-                <span className="ml-auto text-[11px] text-ink-400 font-mono">
+                <span className="ml-2 text-[11px] text-ink-400 font-mono">
                   {currentMeetingId}
                 </span>
               )}
+              <div className="ml-auto">
+                <MicRecorder />
+              </div>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
               <TranscriptStream />
