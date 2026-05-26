@@ -49,7 +49,7 @@ jobs:
       - name: install dev deps
         run: |
           python -m pip install --upgrade pip
-          pip install ruff==0.6.9
+          pip install ruff==0.15.14
       - run: ruff check backend
       - run: ruff format --check backend
 
