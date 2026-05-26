@@ -1,1 +1,5 @@
-"""jieba + BM25 RAG adapter：后续 PR 填充。"""
+"""RAG adapter。"""
+
+from app.adapters.rag.bm25 import BM25Rag, RagError
+
+__all__ = ["BM25Rag", "RagError"]

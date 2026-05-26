@@ -11,10 +11,14 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 项目根目录的 .env（无论从 backend/ 还是项目根启动都能找到）
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_ENV_FILES = (_PROJECT_ROOT / ".env", Path(".env"))
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
