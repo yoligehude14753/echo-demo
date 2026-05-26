@@ -51,14 +51,19 @@ class InMemoryEventBus:
             for q in stale:
                 self._subscribers.discard(q)
 
-    async def subscribe(self) -> AsyncIterator[EchoEvent]:
-        """新订阅者先补发 history 内的事件，再开始接收实时事件。
+    async def subscribe(self, *, since_seq: int = 0) -> AsyncIterator[EchoEvent]:
+        """订阅事件流，从 ``since_seq`` 之后开始 replay。
 
         Demo 友好：UI 后开也能看到刚发生的会议；生产环境若换 Redis 则用 stream id 续传。
+
+        - since_seq=0 → 全量 replay（最多 replay_buffer 条）
+        - since_seq > _seq → 客户端 last_seq 跑超了，等价全量 replay
+        - since_seq 落在 history 内 → 仅 replay seq > since_seq 的部分
+        - since_seq < oldest_seq_in_history → 调用方应识别"history 已淘汰"决定要不要 resync
         """
         q: asyncio.Queue[EchoEvent] = asyncio.Queue(maxsize=self._cap)
         async with self._lock:
-            replay = list(self._history)
+            replay = [evt for evt in self._history if evt.seq > since_seq]
             self._subscribers.add(q)
         for evt in replay:
             yield evt
@@ -68,6 +73,15 @@ class InMemoryEventBus:
         finally:
             async with self._lock:
                 self._subscribers.discard(q)
+
+    @property
+    def max_seq(self) -> int:
+        return self._seq
+
+    @property
+    def oldest_history_seq(self) -> int:
+        """history 内最旧事件的 seq；空则 0。"""
+        return self._history[0].seq if self._history else 0
 
     def subscriber_count(self) -> int:
         return len(self._subscribers)

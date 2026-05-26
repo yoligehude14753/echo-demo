@@ -19,6 +19,7 @@ interface Store {
   applyEvent(e: EchoEvent): void;
   upsertMeeting(id: string, patch: Partial<MeetingCard>): void;
   addArtifact(a: GeneratedArtifact): void;
+  reset(): void;
 }
 
 function emptyMeeting(id: string, title?: string): MeetingCard {
@@ -41,6 +42,14 @@ export const useStore = create<Store>((set, get) => ({
 
   setConnected: (v) => set({ connected: v }),
   selectMeeting: (id) => set({ currentMeetingId: id }),
+
+  reset: () =>
+    set({
+      meetings: {},
+      currentMeetingId: null,
+      artifacts: [],
+      events: [],
+    }),
 
   upsertMeeting: (id, patch) =>
     set((s) => {

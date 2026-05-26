@@ -1,4 +1,4 @@
-export type EventType =
+export type BusinessEventType =
   | "meeting.started"
   | "meeting.segment"
   | "meeting.ended"
@@ -13,6 +13,15 @@ export type EventType =
   | "chat.done"
   | "error";
 
+export type ProtocolEventType =
+  | "server_hello"
+  | "server_ping"
+  | "server_resync"
+  | "client_hello"
+  | "client_ping";
+
+export type EventType = BusinessEventType | ProtocolEventType;
+
 export interface EchoEvent<T = Record<string, unknown>> {
   type: EventType;
   seq: number;
@@ -20,6 +29,10 @@ export interface EchoEvent<T = Record<string, unknown>> {
   meeting_id?: string | null;
   payload: T;
 }
+
+export const WS_PROTOCOL_VERSION = "1.0";
+export const WS_SERVER_PING_TIMEOUT_MS = 30_000;
+export const WS_INACTIVE_RECONNECT_MS = 45_000;
 
 export interface TranscriptSegment {
   text: string;
