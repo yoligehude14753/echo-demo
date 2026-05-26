@@ -26,7 +26,7 @@ class STTError(RuntimeError):
 class SenseVoiceGPUSTT:
     """实现 ports.stt.STTPort。"""
 
-    def __init__(self, settings: Settings, *, timeout_s: float = 10.0) -> None:
+    def __init__(self, settings: Settings, *, timeout_s: float = 60.0) -> None:
         self._settings = settings
         self._base = settings.stt_sensevoice_gpu_url.rstrip("/")
         self._timeout = timeout_s
