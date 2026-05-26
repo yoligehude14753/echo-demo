@@ -145,6 +145,21 @@ class MeetingPipeline:
             await self._publish("meeting.segment", meeting_id, seg.model_dump(mode="json"))
         return out
 
+    async def append_segment(self, meeting_id: str, seg: TranscriptSegment) -> TranscriptSegment:
+        """直接附加一个已知 segment（用于 demo / 离线回放）。
+
+        - 复用相同的说话人标签逻辑（speaker_id → 说话人N）
+        - 仍触发 ``meeting.segment`` 事件，保持 UI 一致
+        """
+        if meeting_id not in self._wall_clock_start:
+            await self.start_meeting(meeting_id)
+        label = seg.speaker_label or self._label_for(meeting_id, seg.speaker_id)
+        normalized = seg.model_copy(update={"speaker_label": label})
+        async with self._lock:
+            self._segments[meeting_id].append(normalized)
+        await self._publish("meeting.segment", meeting_id, normalized.model_dump(mode="json"))
+        return normalized
+
     def _label_for(self, meeting_id: str, speaker_id: str | None) -> str:
         if speaker_id is None:
             return "未识别"

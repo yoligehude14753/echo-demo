@@ -91,3 +91,18 @@ async def list_segments(
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
 ) -> list[TranscriptSegment]:
     return pipeline.get_segments(meeting_id)
+
+
+@router.post("/{meeting_id}/inject_segment", response_model=TranscriptSegment)
+async def inject_segment(
+    meeting_id: str,
+    seg: TranscriptSegment,
+    pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+) -> TranscriptSegment:
+    """演示/兜底入口：当 STT 服务不可用时直接注入已知转写片段。
+
+    用途：
+    - demo 录制：把预先准备的逐字稿喂进 pipeline，避开 STT 依赖
+    - 离线回放：从 raw_transcript_ref 文件重放
+    """
+    return await pipeline.append_segment(meeting_id, seg)

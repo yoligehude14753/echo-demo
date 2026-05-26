@@ -21,16 +21,26 @@ logger = logging.getLogger(__name__)
 class InMemoryEventBus:
     """实现 ports.event_bus.EventBusPort。"""
 
-    def __init__(self, *, per_subscriber_queue: int = 256) -> None:
+    def __init__(
+        self,
+        *,
+        per_subscriber_queue: int = 256,
+        replay_buffer: int = 200,
+    ) -> None:
         self._subscribers: set[asyncio.Queue[EchoEvent]] = set()
         self._lock = asyncio.Lock()
         self._seq = 0
         self._cap = per_subscriber_queue
+        self._history: list[EchoEvent] = []
+        self._replay_cap = replay_buffer
 
     async def publish(self, event: EchoEvent) -> None:
         async with self._lock:
             self._seq += 1
             evt = event.model_copy(update={"seq": self._seq})
+            self._history.append(evt)
+            if len(self._history) > self._replay_cap:
+                self._history = self._history[-self._replay_cap :]
             stale: list[asyncio.Queue[EchoEvent]] = []
             for q in self._subscribers:
                 try:
@@ -42,9 +52,16 @@ class InMemoryEventBus:
                 self._subscribers.discard(q)
 
     async def subscribe(self) -> AsyncIterator[EchoEvent]:
+        """新订阅者先补发 history 内的事件，再开始接收实时事件。
+
+        Demo 友好：UI 后开也能看到刚发生的会议；生产环境若换 Redis 则用 stream id 续传。
+        """
         q: asyncio.Queue[EchoEvent] = asyncio.Queue(maxsize=self._cap)
         async with self._lock:
+            replay = list(self._history)
             self._subscribers.add(q)
+        for evt in replay:
+            yield evt
         try:
             while True:
                 yield await q.get()
@@ -61,9 +78,7 @@ class InMemoryEventBus:
             for q in self._subscribers:
                 with contextlib.suppress(asyncio.QueueFull):
                     q.put_nowait(
-                        EchoEvent(
-                            type="error", payload={"reason": "server shutting down"}
-                        )
+                        EchoEvent(type="error", payload={"reason": "server shutting down"})
                     )
             self._subscribers.clear()
 
