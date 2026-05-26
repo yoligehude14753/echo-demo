@@ -1,12 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "@/store";
 import type { EchoEvent } from "@/types";
-
-const WS_URL =
-  typeof window !== "undefined" &&
-  window.location.protocol.startsWith("http")
-    ? `${window.location.protocol.replace("http", "ws")}//${window.location.host}/ws/echo`
-    : "ws://localhost:5173/ws/echo";
+import { backendWsUrl } from "@/runtime";
 
 export function useEchoWS(): void {
   const setConnected = useStore((s) => s.setConnected);
@@ -17,8 +12,11 @@ export function useEchoWS(): void {
 
   useEffect(() => {
     stopRef.current = false;
-    const connect = (): void => {
-      const ws = new WebSocket(WS_URL);
+
+    const connect = async (): Promise<void> => {
+      if (stopRef.current) return;
+      const url = await backendWsUrl();
+      const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -36,17 +34,21 @@ export function useEchoWS(): void {
         }
       };
       ws.onerror = () => {
-        // 由 onclose 处理重连
+        /* close 处理重连 */
       };
       ws.onclose = () => {
         setConnected(false);
         if (stopRef.current) return;
         retryRef.current = Math.min(retryRef.current + 1, 8);
         const backoff = Math.min(500 * 2 ** retryRef.current, 8_000);
-        setTimeout(connect, backoff);
+        setTimeout(() => {
+          void connect();
+        }, backoff);
       };
     };
-    connect();
+
+    void connect();
+
     return () => {
       stopRef.current = true;
       wsRef.current?.close();

@@ -1,14 +1,14 @@
-import { Empty, List, Tag } from "antd";
+import { Empty } from "antd";
 import { useStore } from "@/store";
 import type { MeetingCard } from "@/types";
 
-const stateColor: Record<MeetingCard["state"], string> = {
-  idle: "default",
-  in_meeting: "processing",
-  ended: "success",
+const dot: Record<MeetingCard["state"], string> = {
+  idle: "bg-ink-400",
+  in_meeting: "bg-accent animate-pulse",
+  ended: "bg-ink-500",
 };
 
-const stateText: Record<MeetingCard["state"], string> = {
+const label: Record<MeetingCard["state"], string> = {
   idle: "待开始",
   in_meeting: "进行中",
   ended: "已结束",
@@ -25,42 +25,51 @@ export default function MeetingList(): JSX.Element {
 
   if (items.length === 0) {
     return (
-      <Empty
-        description={
-          <span className="text-slate-500 text-xs">
-            尚无会议
-            <br />
-            等待 backend 推送事件
-          </span>
-        }
-      />
+      <div className="px-2 py-8">
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={
+            <span className="text-ink-400 text-[11px]">
+              暂无会议
+              <br />
+              等待事件
+            </span>
+          }
+        />
+      </div>
     );
   }
 
   return (
-    <List
-      size="small"
-      dataSource={items}
-      renderItem={(m) => (
-        <List.Item
-          key={m.meeting_id}
-          className={`!px-3 !py-2 cursor-pointer rounded-md ${
-            currentId === m.meeting_id ? "bg-bg-700" : "hover:bg-bg-700/60"
-          }`}
-          onClick={() => select(m.meeting_id)}
-        >
-          <div className="w-full">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-slate-200 truncate">{m.title}</span>
-              <Tag color={stateColor[m.state]}>{stateText[m.state]}</Tag>
+    <div className="space-y-0.5">
+      {items.map((m) => {
+        const active = currentId === m.meeting_id;
+        return (
+          <button
+            key={m.meeting_id}
+            onClick={() => select(m.meeting_id)}
+            className={`w-full text-left px-2.5 py-2 rounded-md transition-colors ${
+              active
+                ? "bg-paper-300/70 text-ink-900"
+                : "hover:bg-paper-200 text-ink-700"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot[m.state]}`} />
+              <span className="text-[13px] font-medium truncate flex-1">
+                {m.title}
+              </span>
             </div>
-            <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
+            <div className="mt-1 text-[11px] text-ink-400 flex items-center gap-2 pl-3.5">
+              <span>{label[m.state]}</span>
+              <span>·</span>
               <span>{m.segments.length} 段</span>
-              <span>{m.speakers.size} 位说话人</span>
+              <span>·</span>
+              <span>{m.speakers.size} 人</span>
             </div>
-          </div>
-        </List.Item>
-      )}
-    />
+          </button>
+        );
+      })}
+    </div>
   );
 }

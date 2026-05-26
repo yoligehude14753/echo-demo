@@ -2,12 +2,20 @@ import { useEffect, useRef } from "react";
 import { Empty } from "antd";
 import { useStore } from "@/store";
 
-const speakerPalette = ["#5b8cff", "#3ecf8e", "#f0b429", "#ff6b6b", "#a78bfa"];
+const speakerColors = [
+  { fg: "#10a37f", bg: "#ecfdf5" },
+  { fg: "#2563eb", bg: "#eff6ff" },
+  { fg: "#d97706", bg: "#fffbeb" },
+  { fg: "#db2777", bg: "#fdf2f8" },
+  { fg: "#7c3aed", bg: "#f5f3ff" },
+];
 
-function colorForSpeaker(label: string | null | undefined): string {
-  if (!label) return "#94a3b8";
+function colorForSpeaker(
+  label: string | null | undefined,
+): { fg: string; bg: string } {
+  if (!label) return { fg: "#737373", bg: "#f5f5f5" };
   const idx = parseInt(label.replace(/[^\d]/g, ""), 10) || 0;
-  return speakerPalette[idx % speakerPalette.length];
+  return speakerColors[idx % speakerColors.length];
 }
 
 function fmtMs(ms: number): string {
@@ -30,11 +38,12 @@ export default function TranscriptStream(): JSX.Element {
 
   if (!meeting) {
     return (
-      <div className="h-full flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center">
         <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={
-            <span className="text-slate-500 text-xs">
-              选择一个会议查看转写流
+            <span className="text-ink-400 text-[11px]">
+              从左侧选择会议查看转写流
             </span>
           }
         />
@@ -44,34 +53,39 @@ export default function TranscriptStream(): JSX.Element {
 
   if (meeting.segments.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-slate-500 text-sm">
+      <div className="flex-1 flex items-center justify-center text-ink-400 text-[12px]">
         等待转写片段…
       </div>
     );
   }
 
   return (
-    <div className="h-[calc(100vh-120px)] overflow-y-auto px-6 py-4 space-y-3">
-      {meeting.segments.map((s, idx) => {
-        const c = colorForSpeaker(s.speaker_label);
-        return (
-          <div key={`${s.start_ms}-${idx}`} className="flex gap-3 items-start">
-            <span className="text-xs text-slate-500 font-mono shrink-0 pt-0.5">
-              {fmtMs(s.start_ms)}
-            </span>
-            <span
-              className="text-xs font-medium shrink-0 pt-0.5"
-              style={{ color: c, minWidth: 64 }}
+    <div className="flex-1 overflow-y-auto px-8 py-6">
+      <div className="max-w-3xl mx-auto space-y-4">
+        {meeting.segments.map((s, idx) => {
+          const c = colorForSpeaker(s.speaker_label);
+          return (
+            <div
+              key={`${s.start_ms}-${idx}`}
+              className="flex gap-3 items-start"
             >
-              {s.speaker_label ?? "未识别"}
-            </span>
-            <span className="text-sm text-slate-100 leading-relaxed">
-              {s.text}
-            </span>
-          </div>
-        );
-      })}
-      <div ref={endRef} />
+              <span className="text-[10px] text-ink-400 font-mono shrink-0 pt-1 w-10 text-right">
+                {fmtMs(s.start_ms)}
+              </span>
+              <span
+                className="text-[11px] font-medium shrink-0 px-2 py-0.5 rounded-full"
+                style={{ color: c.fg, background: c.bg }}
+              >
+                {s.speaker_label ?? "未识别"}
+              </span>
+              <span className="text-[14px] text-ink-800 leading-7 flex-1">
+                {s.text}
+              </span>
+            </div>
+          );
+        })}
+        <div ref={endRef} />
+      </div>
     </div>
   );
 }

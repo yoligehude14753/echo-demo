@@ -49,7 +49,10 @@ export const useStore = create<Store>((set, get) => ({
     }),
 
   addArtifact: (a) =>
-    set((s) => ({ artifacts: [a, ...s.artifacts].slice(0, 50) })),
+    set((s) => {
+      const dedup = s.artifacts.filter((x) => x.artifact_id !== a.artifact_id);
+      return { artifacts: [a, ...dedup].slice(0, 50) };
+    }),
 
   applyEvent: (e) => {
     set((s) => ({ events: [...s.events.slice(-200), e] }));
@@ -66,7 +69,8 @@ export const useStore = create<Store>((set, get) => ({
             state: "in_meeting",
             started_at: e.ts,
           });
-          if (!get().currentMeetingId) set({ currentMeetingId: mid });
+          // 总是把焦点切到最新启动的会议（demo 与真实开会都符合预期）
+          set({ currentMeetingId: mid });
         }
         break;
       case "meeting.segment": {
@@ -104,10 +108,12 @@ export const useStore = create<Store>((set, get) => ({
         get().addArtifact(a);
         if (mid) {
           const cur = get().meetings[mid];
-          if (cur)
-            get().upsertMeeting(mid, {
-              artifacts: [a, ...cur.artifacts],
-            });
+          if (cur) {
+            const dedup = cur.artifacts.filter(
+              (x) => x.artifact_id !== a.artifact_id,
+            );
+            get().upsertMeeting(mid, { artifacts: [a, ...dedup] });
+          }
         }
         break;
       }
