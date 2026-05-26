@@ -287,13 +287,23 @@ async def test_pptx_forbidden_token_raises(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
+@pytest.mark.integration
 @pytest.mark.skipif(
     shutil.which("node") is None or shutil.which("npm") is None,
     reason="node / npm 未在 PATH",
 )
+@pytest.mark.skipif(
+    "CI" in __import__("os").environ and "ECHO_RUN_NODE_INSTALL" not in __import__("os").environ,
+    reason="CI 默认不跑 npm install pptxgenjs（耗时不稳定，已被 yunwu E2E 覆盖）",
+)
 async def test_pptx_generation_executes_pptxgenjs(tmp_path: Path) -> None:
-    """mock LLM 返回最小可运行的 pptxgenjs 代码 → 真跑 node → 验证 .pptx 文件."""
+    """mock LLM 返回最小可运行的 pptxgenjs 代码 → 真跑 node → 验证 .pptx 文件.
+
+    注：此测试需要 ``npm install pptxgenjs``（首次约 80 MB），网络不稳时易卡 CI。
+    单测层只保留 _is_safe_node / normalize_kind / node 缺失分支等纯 Python 路径。
+    完整 pptxgenjs 链路由 ``tests/integration/test_skill_e2e_yunwu.py::test_skill_pptx_real_yunwu``
+    在 integration 阶段覆盖（本地或夜间 runner 跑）。
+    """
     skill = SkillExecutor(_settings(tmp_path))
     code = (
         "const PptxGenJS = require('pptxgenjs');\n"
