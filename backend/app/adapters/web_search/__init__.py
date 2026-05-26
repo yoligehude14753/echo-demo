@@ -1,1 +1,5 @@
-"""Tavily / DDG adapter：后续 PR 填充。"""
+"""Web Search adapter。"""
+
+from app.adapters.web_search.tavily import TavilyWebSearch, WebSearchError
+
+__all__ = ["TavilyWebSearch", "WebSearchError"]
