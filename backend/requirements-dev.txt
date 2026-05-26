@@ -9,7 +9,7 @@ pytest-mock==3.14.0
 httpx==0.27.2
 
 # Lint / Type
-ruff==0.6.9
+ruff==0.15.14
 mypy==1.11.2
 types-requests==2.32.0.20240914
 
