@@ -22,7 +22,7 @@ class LLMPort(Protocol):
         timeout_s: float = 120.0,
     ) -> LLMResponse: ...
 
-    async def chat_stream(
+    def chat_stream(
         self,
         messages: list[ChatMessage],
         *,
@@ -30,4 +30,6 @@ class LLMPort(Protocol):
         max_tokens: int | None = None,
         temperature: float = 0.3,
         timeout_s: float = 600.0,
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncIterator[str]:
+        """Async generator：调用方使用 `async for chunk in port.chat_stream(...)`."""
+        ...
