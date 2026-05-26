@@ -1,8 +1,19 @@
 # Echo Demo · 数字分身 (Another Me) 演示版
 
-> **目标**：会议 + 办公场景的"数字分身"演示 demo，按 PRD v6.7.1 实现。
-> **基准 PRD**：`../echo/docs/DEMO_V1_STORYLINE.md` (v6.7.1, 2026-05-26)
-> **现状**：D0 · 项目初始化中
+> **目标**：会议 + 办公场景的"数字分身"演示 demo。
+> **现状**：D7 · M3 已完成（PR-1 ~ PR-8 + PR-11 合并），全链路 E2E 通过。
+> **快速跑通**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)。
+
+## 状态摘要 (2026-05-26)
+
+| 阶段 | 范围 | 状态 |
+|---|---|---|
+| M1 | 脚手架 + LLM/STT/TTS/Diarizer/RAG/Web 6 adapter | ✅ 4 PR 合并 |
+| M2 | Skill 执行器（Word/Excel/HTML）+ 会议 pipeline | ✅ PR-5/6 合并 |
+| M3 | WS 事件总线 + desktop 清单式 UI | ✅ PR-7/8 合并 |
+| M4 | 全链路 E2E + demo 脚本 + 截图 | ✅ PR-11 合并 |
+
+测试：88 unit + 4 真服务 integration 全过，ruff/mypy 0 错误。
 
 ## 架构
 
