@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from app.api.chat import get_llm
+from app.api.deps import get_llm_singleton as get_llm
 from app.main import create_app
 from app.schemas.llm import ChatMessage
 from fastapi.testclient import TestClient

@@ -14,36 +14,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.adapters.llm import LLMError, OpenAICompatibleLLM
+from app.adapters.llm import LLMError
+from app.api.deps import aclose_llm_singleton, get_llm_singleton
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
 from app.use_cases.ask_question import ask_question
 
 router = APIRouter(tags=["chat"])
 
+__all__ = ["aclose_llm_singleton", "router"]
+
 
 class ChatRequest(BaseModel):
     question: str
     model: str | None = None
-
-
-_llm_singleton: OpenAICompatibleLLM | None = None
-
-
-def get_llm(settings: Settings = Depends(get_settings)) -> LLMPort:
-    """LLM 单例依赖（按需懒加载，生命周期由 lifespan 关闭）。"""
-    global _llm_singleton  # noqa: PLW0603
-    if _llm_singleton is None:
-        _llm_singleton = OpenAICompatibleLLM(settings)
-    return _llm_singleton
-
-
-async def aclose_llm_singleton() -> None:
-    """供 main.py lifespan 调用。"""
-    global _llm_singleton  # noqa: PLW0603
-    if _llm_singleton is not None:
-        await _llm_singleton.aclose()
-        _llm_singleton = None
 
 
 def _resolve_model_alias(alias: str | None, settings: Settings) -> str | None:
@@ -72,7 +56,7 @@ async def _sse(stream: AsyncIterator[str]) -> AsyncIterator[bytes]:
 @router.post("/chat")
 async def chat_endpoint(
     body: ChatRequest,
-    llm: LLMPort = Depends(get_llm),
+    llm: LLMPort = Depends(get_llm_singleton),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     if not body.question.strip():

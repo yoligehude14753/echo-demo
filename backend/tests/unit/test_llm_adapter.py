@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from app.adapters.llm import LLMError, OpenAICompatibleLLM
-from app.adapters.llm.openai_compatible import _is_reasoning
+from app.adapters.llm.openai_compatible import (
+    _is_reasoning,
+    _strip_thinking,
+    _ThinkStripper,
+)
 from app.config import Settings
 from app.schemas.llm import ChatMessage
 
@@ -144,7 +148,6 @@ async def test_chat_stream_yields_chunks_with_mock(settings: Settings) -> None:
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_chat_wraps_openai_timeout_into_llmerror(settings: Settings) -> None:
-
     llm = OpenAICompatibleLLM(settings)
     try:
         llm._main.chat.completions.create = AsyncMock(side_effect=TimeoutError())
@@ -152,3 +155,35 @@ async def test_chat_wraps_openai_timeout_into_llmerror(settings: Settings) -> No
             await llm.chat([ChatMessage(role="user", content="x")], timeout_s=0.01)
     finally:
         await llm.aclose()
+
+
+@pytest.mark.unit
+def test_strip_thinking_complete_block() -> None:
+    assert _strip_thinking("<think>let me think</think>final answer") == "final answer"
+
+
+@pytest.mark.unit
+def test_strip_thinking_only_close_tag() -> None:
+    """Yunwu 代理 minimax 时，``<think>`` 标签可能被截断，只剩 ``</think>``。"""
+    assert _strip_thinking("just thinking</think>final") == "final"
+
+
+@pytest.mark.unit
+def test_strip_thinking_no_tag() -> None:
+    assert _strip_thinking("plain content") == "plain content"
+
+
+@pytest.mark.unit
+def test_think_stripper_swallows_until_close() -> None:
+    s = _ThinkStripper()
+    parts = ["<think>", "long ", "reason", "ing</think>", "real ", "answer"]
+    out = "".join(s.feed(p) for p in parts) + s.flush()
+    assert out == "real answer"
+
+
+@pytest.mark.unit
+def test_think_stripper_no_think_passes_through() -> None:
+    s = _ThinkStripper()
+    parts = ["hello ", "world"]
+    out = "".join(s.feed(p) for p in parts) + s.flush()
+    assert out == "hello world"

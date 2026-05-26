@@ -10,7 +10,6 @@ import socket
 from pathlib import Path
 
 import pytest
-
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from app.adapters.skill.llm_skill import SkillExecutor
 from app.config import Settings
