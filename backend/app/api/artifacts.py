@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.adapters.skill import SkillError, SkillExecutor
-from app.api.chat import get_llm
+from app.api.deps import get_llm_singleton as get_llm
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
 from app.schemas.artifact import GeneratedArtifact
