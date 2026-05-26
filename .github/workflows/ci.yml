@@ -5,6 +5,7 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch:
 
 # 取消旧 run（同 PR push 多次时）
 concurrency:
