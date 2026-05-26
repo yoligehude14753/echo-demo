@@ -14,8 +14,9 @@ test("点击生成按钮触发产物生成流程，卡片出现", async ({ page 
   await expect(page.locator("text=生成产物")).toBeVisible();
 
   // 2. 选 HTML（默认即是）+ 填 brief
+  // 注：页面里另有 CommandBar 的 textarea，必须限定在 modal 里
   const brief = "生成一份测试 HTML 报告";
-  await page.locator("textarea").fill(brief);
+  await page.locator(".ant-modal textarea:not([aria-hidden=\"true\"])").fill(brief);
 
   // 3. 点击确认
   await page.locator(".ant-modal-footer button.ant-btn-primary").click();
