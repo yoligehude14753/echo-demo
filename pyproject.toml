@@ -1,0 +1,54 @@
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$version"
+update_changelog_on_bump = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [".venv", "backend/.skill_build", "backend/.skill_artifacts"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",    # pycodestyle + pyflakes
+    "I",              # isort
+    "B",              # bugbear
+    "UP",             # pyupgrade
+    "SIM",            # simplify
+    "C4",             # comprehensions
+    "RET",            # return
+    "ASYNC",          # async pitfalls
+    "PL",             # pylint subset
+    "RUF",
+]
+ignore = [
+    "E501",   # 由 formatter 处理
+    "PLR0913",
+    "PLR2004",
+    "B008",   # FastAPI Depends(...) 默认值是常规用法
+    "RUF001", # 全角标点（中文文档/字符串故意保留）
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/**" = ["PLR2004", "S101"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+exclude = ["backend/.skill_build", "backend/.skill_artifacts", "backend/tests/skill_runs"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["backend/tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "unit: 单元测试，毫秒级",
+    "integration: 接外部服务（heyi-bj / Yunwu / Tavily）",
+    "e2e: 端到端，含真实音频/PDF/产物",
+    "arch: 架构 Fitness Function",
+    "slow: > 30s，CI 默认跳过",
+]

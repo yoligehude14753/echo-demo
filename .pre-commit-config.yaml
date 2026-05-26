@@ -1,0 +1,37 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v3.29.1
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  # 本地 hook：检测裸 openai / anthropic / sqlalchemy.Base 使用（alld 06-platforms 硬约束）
+  # echo-demo 暂未引入中台 yoli_*，但保留检测，违规即报警以便后续切换
+  - repo: local
+    hooks:
+      - id: no-direct-llm-imports
+        name: 禁止业务层裸 import openai / anthropic
+        entry: bash -c '! rg -n "^(from|import) (openai|anthropic)" backend/app/use_cases backend/app/adapters/skill backend/app/adapters/rag 2>/dev/null'
+        language: system
+        pass_filenames: false
+        types: [python]

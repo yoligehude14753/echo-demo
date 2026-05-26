@@ -1,0 +1,49 @@
+# ── Web 框架 ────────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-multipart==0.0.10
+websockets==13.1
+
+# ── HTTP 客户端 ─────────────────────────────────────────────
+httpx==0.27.2
+httpx-sse==0.4.0
+
+# ── LLM SDK（仅 adapter 层 import，业务禁用） ──────────────
+openai==1.51.0
+
+# ── DB ──────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.35
+aiosqlite==0.20.0
+alembic==1.13.3
+
+# ── RAG ─────────────────────────────────────────────────────
+jieba==0.42.1
+rank-bm25==0.2.2
+pdfplumber==0.11.4
+
+# ── 音频 / STT 兜底 ─────────────────────────────────────────
+soundfile==0.12.1
+numpy==2.1.1
+funasr==1.1.14            # SenseVoice in-process fallback
+torch==2.4.1              # CPU 版即可（声纹 + STT fallback）
+torchaudio==2.4.1
+speechbrain==1.0.0        # ECAPA-TDNN 声纹
+
+# ── Web Search ──────────────────────────────────────────────
+tavily-python==0.5.0
+duckduckgo-search==6.2.13
+
+# ── Skill 产物生成（adapter 层 only） ──────────────────────
+python-docx==1.1.2
+openpyxl==3.1.5
+jinja2==3.1.4             # HTML 模板
+
+# ── 观测 / 日志 ─────────────────────────────────────────────
+structlog==24.4.0
+python-json-logger==2.0.7
+
+# ── 工具链 ──────────────────────────────────────────────────
+tenacity==9.0.0           # retry
+anyio==4.6.0
