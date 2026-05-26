@@ -27,9 +27,7 @@ def _yunwu_alive() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _yunwu_alive(), reason="YUNWU_OPEN_KEY 未设置或网络不可达"
-)
+pytestmark = pytest.mark.skipif(not _yunwu_alive(), reason="YUNWU_OPEN_KEY 未设置或网络不可达")
 
 
 def _settings(tmp_path: Path) -> Settings:

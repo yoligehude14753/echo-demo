@@ -229,9 +229,7 @@ def test_normalize_kind_invalid_returns_empty() -> None:
 
 @pytest.mark.unit
 def test_is_safe_node_rejects_child_process() -> None:
-    ok, reason = _is_safe_node(
-        "const cp = require('child_process'); cp.exec('ls');"
-    )
+    ok, reason = _is_safe_node("const cp = require('child_process'); cp.exec('ls');")
     assert not ok
     assert "child_process" in reason
 

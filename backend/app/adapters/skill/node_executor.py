@@ -19,16 +19,16 @@ from pathlib import Path
 
 _FORBIDDEN_NODE_TOKENS = (
     "require('child_process')",
-    "require(\"child_process\")",
+    'require("child_process")',
     "child_process",
     "require('http')",
-    "require(\"http\")",
+    'require("http")',
     "require('https')",
-    "require(\"https\")",
+    'require("https")',
     "require('net')",
-    "require(\"net\")",
+    'require("net")',
     "require('fs')",  # pptxgenjs 内部走 writeFile/saveAsync，无需用户脚本直接读文件
-    "require(\"fs\")",
+    'require("fs")',
     "process.exit",
     "eval(",
     "Function(",
@@ -162,6 +162,7 @@ async def exec_node_to_artifact(
             check=False,
         )
         return proc.returncode, proc.stderr or proc.stdout
+
     try:
         rc, stderr = await asyncio.to_thread(_run)
     except subprocess.TimeoutExpired as e:
