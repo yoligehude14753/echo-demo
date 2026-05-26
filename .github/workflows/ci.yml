@@ -111,11 +111,16 @@ jobs:
             rank-bm25==0.2.2 \
             pytest==8.3.3 \
             pytest-asyncio==0.24.0 \
-            pytest-cov==5.0.0
+            pytest-cov==5.0.0 \
+            pytest-timeout==2.3.1
       - name: unit + arch tests
+        timeout-minutes: 5
         working-directory: backend
         run: |
-          pytest tests/unit tests/arch -v --cov=app --cov-report=term-missing -m "unit or arch"
+          pytest tests/unit tests/arch \
+            --cov=app --cov-report=term-missing \
+            --timeout=30 --timeout-method=thread --durations=10 \
+            -m "unit or arch"
 
   check:
     # 唯一 Required Status Check：上游必须真跑通才算 pass
