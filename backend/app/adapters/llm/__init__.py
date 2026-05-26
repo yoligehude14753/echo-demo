@@ -1,1 +1,5 @@
-"""LLM adapter 实现集：在后续 PR 中填充。"""
+"""LLM adapter 集合。"""
+
+from app.adapters.llm.openai_compatible import LLMError, OpenAICompatibleLLM
+
+__all__ = ["LLMError", "OpenAICompatibleLLM"]
