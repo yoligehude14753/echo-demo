@@ -31,6 +31,8 @@ ignore = [
     "RUF002",
     "RUF003",
     "PLC0415",  # 允许 lazy import（adapter 层避免冷启动加载重依赖）
+    "ASYNC240", # Path.exists()/stat()/unlink 在 async 中调用：本项目按需到 to_thread；
+                # 测试和 lifespan 中允许直接调用（< 1ms，影响可忽略）
 ]
 
 [tool.ruff.lint.per-file-ignores]

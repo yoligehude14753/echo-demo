@@ -1,4 +1,5 @@
-"""Anthropic Skill workflow adapter（pptxgenjs / python-docx / openpyxl / html）。
+"""Skill 执行器：LLM 生成代码 → 执行 → 产物（Word/Excel/HTML）。"""
 
-复用 echo/experiments/2026-05-26_anthropic_skill_quality 的 prompt + iterative fix loop。
-"""
+from app.adapters.skill.llm_skill import SkillError, SkillExecutor
+
+__all__ = ["SkillError", "SkillExecutor"]

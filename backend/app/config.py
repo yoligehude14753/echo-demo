@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     skill_html_tool: str = "single-file-tailwind-cdn"
     skill_fix_max_retries: int = 3
     skill_node_bin: str = "node"
+    skill_executor_build_dir: Path = Field(
+        default=Path("~/.echo-demo/skill_build").expanduser()
+    )
+    skill_executor_timeout_s: int = 300
+    skill_executor_max_tokens: int = 80_000
 
     # ── DB ────────────────────────────────────────────────────────
     db_path: Path = Field(default=Path("~/.echo-demo/echo.db").expanduser())

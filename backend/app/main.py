@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.api.artifacts import router as artifacts_router
 from app.api.chat import aclose_llm_singleton
 from app.api.chat import router as chat_router
 from app.api.retrieval import router as retrieval_router
@@ -80,6 +81,7 @@ def create_app() -> FastAPI:
 
     app.include_router(chat_router)
     app.include_router(retrieval_router)
+    app.include_router(artifacts_router)
     return app
 
 
