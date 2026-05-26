@@ -1,5 +1,6 @@
 import type {
   GeneratedArtifact,
+  IntentResult,
   MeetingMinutes,
   TranscriptSegment,
 } from "@/types";
@@ -89,4 +90,20 @@ export async function ragAsk(question: string): Promise<{
 // 用于预热缓存（main.tsx 调）
 export async function bootstrapBase(): Promise<void> {
   await backendBase();
+}
+
+export async function routeIntent(
+  text: string,
+  currentMeetingId: string | null,
+): Promise<IntentResult> {
+  const u = await apiUrl("/intent/route");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text,
+      current_meeting_id: currentMeetingId ?? undefined,
+    }),
+  });
+  return asJson<IntentResult>(r);
 }

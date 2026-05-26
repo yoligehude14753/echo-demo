@@ -1,0 +1,182 @@
+"""PR-16 unit：意图路由
+
+覆盖：
+- 关键字快速命中（不调 LLM）
+- 非 @ 前缀 → chat
+- 关键字未命中 → 走 mock LLM（含合法 JSON / 非法 JSON 兜底）
+- LLM 失败 → chat 兜底
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import pytest
+from app.adapters.intent.llm_router import LLMIntentRouter
+from app.config import Settings
+from app.schemas.intent import (
+    SUPPORTED_INTENTS,
+    keyword_route,
+    parse_at_prefix,
+)
+from app.schemas.llm import ChatMessage, LLMResponse
+
+
+def _settings(tmp_path: Path) -> Settings:
+    return Settings(
+        storage_dir=tmp_path / "echo",
+        rag_index_dir=tmp_path / "rag",
+        llm_main_model="MiniMax-M2.7",
+        llm_fast_model="qwen3-1.7b",
+        yunwu_api_key="test",
+        yunwu_base_url="http://localhost",
+        heyi_base_url="http://localhost",
+    )
+
+
+class _MockLLM:
+    """可控 chat 返回 / chat_stream 不实现。"""
+
+    def __init__(self, content: str | None = None, *, raise_exc: Exception | None = None) -> None:
+        self._content = content
+        self._exc = raise_exc
+        self.calls: list[list[ChatMessage]] = []
+
+    async def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.3,
+        timeout_s: float = 120.0,
+    ) -> LLMResponse:
+        self.calls.append(messages)
+        if self._exc is not None:
+            raise self._exc
+        return LLMResponse(content=self._content or "", model=model or "mock")
+
+    def chat_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.3,
+        timeout_s: float = 600.0,
+    ) -> AsyncIterator[str]:  # pragma: no cover - 路由不用 stream
+        raise NotImplementedError
+
+
+@pytest.mark.unit
+def test_parse_at_prefix() -> None:
+    assert parse_at_prefix("@查英伟达 营收") == "查英伟达"
+    assert parse_at_prefix("  @生成 PPT") == "生成"
+    assert parse_at_prefix("没有 @") is None
+    assert parse_at_prefix("@") is None
+    assert parse_at_prefix("@   ") is None
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_html() -> None:
+    hit = keyword_route("@生成 HTML 周报")
+    assert hit is not None
+    kind, conf = hit
+    assert kind == "generate_html"
+    assert conf >= 0.8
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_pptx() -> None:
+    hit = keyword_route("@幻灯片 英伟达 2025")
+    assert hit is not None
+    assert hit[0] == "generate_pptx"
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_xlsx() -> None:
+    hit = keyword_route("@财务模型 dcf")
+    assert hit is not None
+    assert hit[0] == "generate_xlsx"
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_summarize() -> None:
+    hit = keyword_route("@生成纪要")
+    assert hit is not None
+    assert hit[0] == "summarize_meeting"
+
+
+@pytest.mark.unit
+def test_keyword_route_misses() -> None:
+    assert keyword_route("帮我把这件事记下来") is None
+
+
+@pytest.mark.unit
+def test_supported_intents_complete() -> None:
+    # 9 类必须齐
+    assert len(SUPPORTED_INTENTS) == 9
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_no_at_returns_chat(tmp_path: Path) -> None:
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("帮我写个周报", current_meeting_id=None)
+    assert r.kind == "chat"
+    assert llm.calls == []  # 完全跳过 LLM
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_keyword_hit_skips_llm(tmp_path: Path) -> None:
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@生成 PPT 英伟达 2025 投资展望", current_meeting_id="m1")
+    assert r.kind == "generate_pptx"
+    assert llm.calls == []
+    assert r.params.get("artifact_type") == "pptx"
+    assert "英伟达" in str(r.params.get("brief", ""))
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_llm_json_ok(tmp_path: Path) -> None:
+    # 用一个关键字命中不到的 @ 短句
+    llm = _MockLLM(content='{"kind":"search_rag","confidence":0.78,"rationale":"想找之前的资料"}')
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@想找之前我们关于策略的讨论", current_meeting_id="m9")
+    assert r.kind == "search_rag"
+    assert 0.7 <= r.confidence <= 0.9
+    assert r.params.get("question")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_llm_jsonp_with_fence(tmp_path: Path) -> None:
+    llm = _MockLLM(content='```json\n{"kind":"chat","confidence":0.55,"rationale":"闲聊"}\n```')
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@顺便聊两句", current_meeting_id=None)
+    assert r.kind == "chat"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_llm_non_json_extract(tmp_path: Path) -> None:
+    # LLM 输出非 JSON 但含有合法 kind 关键字
+    llm = _MockLLM(content="kind: search_web ，因为是最新消息")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@请把这个查清楚以后告诉我", current_meeting_id=None)
+    assert r.kind == "search_web"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_llm_failure_falls_back_to_chat(tmp_path: Path) -> None:
+    llm = _MockLLM(raise_exc=TimeoutError("net down"))
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@语义不明的句子触发 LLM 兜底", current_meeting_id=None)
+    assert r.kind == "chat"
+    assert r.confidence <= 0.5

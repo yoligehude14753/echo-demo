@@ -71,6 +71,24 @@ export interface GeneratedArtifact {
   metadata: Record<string, string>;
 }
 
+export type IntentKind =
+  | "search_web"
+  | "search_rag"
+  | "generate_html"
+  | "generate_pptx"
+  | "generate_xlsx"
+  | "generate_word"
+  | "summarize_meeting"
+  | "start_meeting"
+  | "chat";
+
+export interface IntentResult {
+  kind: IntentKind;
+  confidence: number;
+  params: Record<string, unknown>;
+  rationale: string;
+}
+
 export type MeetingState = "idle" | "in_meeting" | "ended";
 
 export interface MeetingCard {
