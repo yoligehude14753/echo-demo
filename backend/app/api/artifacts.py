@@ -1,6 +1,6 @@
 """HTTP API: 产物生成 / 下载。
 
-POST /artifacts/generate — body { artifact_type: 'word'|'xlsx'|'html', brief: str }
+POST /artifacts/generate — body { artifact_type: 'word'|'xlsx'|'pptx'|'html', brief: str }
 GET  /artifacts/{id}/download — 下载产物文件
 """
 
@@ -10,7 +10,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.skill import SkillError, SkillExecutor
@@ -18,7 +17,8 @@ from app.api.deps import get_event_bus
 from app.api.deps import get_llm_singleton as get_llm
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
-from app.schemas.artifact import GeneratedArtifact
+from app.ports.skill import SkillExecutorPort
+from app.schemas.artifact import ArtifactRequest, GeneratedArtifact
 from app.schemas.events import EchoEvent
 from app.use_cases.generate_artifact import generate_artifact
 
@@ -28,7 +28,7 @@ router = APIRouter(tags=["artifacts"])
 _skill_singleton: SkillExecutor | None = None
 
 
-def get_skill(settings: Settings = Depends(get_settings)) -> SkillExecutor:
+def get_skill(settings: Settings = Depends(get_settings)) -> SkillExecutorPort:
     global _skill_singleton  # noqa: PLW0603
     if _skill_singleton is None:
         _skill_singleton = SkillExecutor(settings)
@@ -40,19 +40,14 @@ def reset_skill_singleton() -> None:
     _skill_singleton = None
 
 
-class GenerateRequest(BaseModel):
-    artifact_type: str
-    brief: str
-    extra_instructions: str | None = None
-
-
 @router.post("/artifacts/generate", response_model=GeneratedArtifact)
 async def generate(
-    body: GenerateRequest,
+    body: ArtifactRequest,
     llm: LLMPort = Depends(get_llm),
-    runner: SkillExecutor = Depends(get_skill),
+    runner: SkillExecutorPort = Depends(get_skill),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
 ) -> GeneratedArtifact:
+    """生成产物。artifact_type 走 ArtifactKind 枚举校验（含 ppt/pptx/word/xlsx/excel/html 别名）。"""
     if not body.brief.strip():
         raise HTTPException(status_code=400, detail="brief empty")
     await event_bus.publish(

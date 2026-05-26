@@ -1,8 +1,10 @@
-"""SkillExecutor: 用 LLM 生成代码 → 执行 → 返回 GeneratedArtifact。
+"""SkillExecutor: 实现 SkillExecutorPort。
 
-支持 4 种产物：word / xlsx / html /（ppt - 留接口未启用）
-
-参考 echo experiments/2026-05-26_anthropic_skill_quality/skill_bench_v2.py。
+按 artifact_type 路由：
+- pptx/ppt → pptxgenjs (Node) - node_executor
+- word     → python-docx  - python_executor
+- xlsx/excel → openpyxl    - python_executor
+- html     → 直接写文件    - python_executor (exec_html_to_file)
 """
 
 from __future__ import annotations
@@ -11,41 +13,80 @@ import re
 import time
 import uuid
 from pathlib import Path
+from typing import Final
 
+from app.adapters.skill.node_executor import exec_node_to_artifact
 from app.adapters.skill.prompts import SKILL_PROMPTS
 from app.adapters.skill.python_executor import exec_html_to_file, exec_python_to_artifact
 from app.config import Settings
 from app.ports.llm import LLMPort
-from app.schemas.artifact import GeneratedArtifact
+from app.schemas.artifact import SUPPORTED_KINDS, GeneratedArtifact, normalize_kind
 from app.schemas.llm import ChatMessage
+
+_CANONICAL_EXT: Final[dict[str, str]] = {
+    "pptx": "pptx",
+    "word": "docx",
+    "xlsx": "xlsx",
+    "html": "html",
+}
 
 
 class SkillError(RuntimeError):
     pass
 
 
+_CODE_START_PREFIXES = (
+    "from ",
+    "import ",
+    "#!/usr/bin",
+    "<!doctype",
+    "<!DOCTYPE",
+    "<html",
+    "const ",
+    "let ",
+    "var ",
+    "require(",
+    "function ",
+    "(async",
+    "async function",
+)
+
+
 def _strip_code_fence(text: str) -> str:
-    """剥掉 ```python / ```html 这种 LLM 偶尔加上的围栏。"""
+    """剥掉 ```python / ```html / ```javascript / ```js 围栏；
+    并在 LLM 加前导自然语言时（M2.7 thinking 残留）自动跳到第一行代码。
+    """
     text = text.strip()
-    if text.startswith("```"):
-        first_nl = text.find("\n")
-        if first_nl != -1:
-            text = text[first_nl + 1 :]
-        if text.endswith("```"):
-            text = text[:-3]
+    # 1. 围栏剥离
+    if "```" in text:
+        # 找到 ``` 块内部
+        first = text.find("```")
+        nl = text.find("\n", first)
+        if nl != -1:
+            close = text.find("```", nl + 1)
+            if close != -1:
+                return text[nl + 1 : close].strip()
+            return text[nl + 1 :].strip()
+    # 2. 没有围栏：找第一个代码起始 token
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if any(stripped.startswith(p) for p in _CODE_START_PREFIXES):
+            return "\n".join(lines[i:]).strip()
     return text.strip()
 
 
 class SkillExecutor:
-    """实现 ports.skill.SkillPort（4 产物生成）。"""
-
-    SUPPORTED: frozenset[str] = frozenset({"word", "xlsx", "excel", "html"})
+    """实现 ports.skill.SkillExecutorPort（4 产物生成 + 别名归一）。"""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._build_root = Path(settings.skill_executor_build_dir).expanduser()
+        self._node_modules_root = self._build_root.parent / "skill_node_deps"
         self._timeout_s = float(settings.skill_executor_timeout_s)
         self._max_tokens = settings.skill_executor_max_tokens
+        self._node_bin = settings.skill_node_bin
+        self._npm_bin = "npm"
 
     async def generate(
         self,
@@ -55,11 +96,13 @@ class SkillExecutor:
         brief: str,
         extra_instructions: str | None = None,
     ) -> GeneratedArtifact:
-        kind = artifact_type.lower()
-        if kind not in self.SUPPORTED:
+        if artifact_type.lower().strip() not in SUPPORTED_KINDS:
             raise SkillError(
-                f"unsupported artifact_type: {artifact_type} (supported: {sorted(self.SUPPORTED)})"
+                f"unsupported artifact_type: {artifact_type} (supported: {sorted(SUPPORTED_KINDS)})"
             )
+        kind = normalize_kind(artifact_type)
+        if not kind:
+            raise SkillError(f"cannot normalize artifact_type: {artifact_type}")
 
         sys_prompt = SKILL_PROMPTS[kind]
         user_msg = brief
@@ -83,42 +126,64 @@ class SkillExecutor:
         build_dir = self._build_root / artifact_id
         build_dir.mkdir(parents=True, exist_ok=True)
 
+        ext = _CANONICAL_EXT[kind]
         if kind == "html":
             result = await exec_html_to_file(code, build_dir)
-            ext = "html"
-        else:
-            ext_map = {"word": "docx", "xlsx": "xlsx", "excel": "xlsx"}
-            ext = ext_map[kind]
-            result = await exec_python_to_artifact(
+            exec_ok = result.success
+            output_path = result.output_path
+            stderr = result.stderr
+            exec_elapsed = result.elapsed_s
+        elif kind == "pptx":
+            node_result = await exec_node_to_artifact(
+                code,
+                build_dir,
+                node_modules_root=self._node_modules_root,
+                expected_ext=ext,
+                node_bin=self._node_bin,
+                npm_bin=self._npm_bin,
+                timeout_s=self._timeout_s,
+            )
+            exec_ok = node_result.success
+            output_path = node_result.output_path
+            stderr = node_result.stderr
+            exec_elapsed = node_result.elapsed_s
+        else:  # word / xlsx
+            py_result = await exec_python_to_artifact(
                 code, build_dir, expected_ext=ext, timeout_s=self._timeout_s
             )
+            exec_ok = py_result.success
+            output_path = py_result.output_path
+            stderr = py_result.stderr
+            exec_elapsed = py_result.elapsed_s
 
-        if not result.success or result.output_path is None:
-            raise SkillError(f"skill {kind} execution failed: {result.stderr[:400]}")
+        if not exec_ok or output_path is None:
+            raise SkillError(f"skill {kind} execution failed: {stderr[:400]}")
 
         metadata: dict[str, str] = {
             "kind": kind,
             "model": resp.model,
-            "exec_elapsed_s": f"{result.elapsed_s:.2f}",
+            "exec_elapsed_s": f"{exec_elapsed:.2f}",
             "code_size": str(len(code)),
         }
 
-        # 简单的质量信号（KPI 数量）
         bag = code.lower()
         if kind == "html":
             metadata["chars"] = str(len(code))
             metadata["has_tailwind"] = str("tailwindcss" in bag)
             metadata["has_svg"] = str("<svg" in bag)
-        elif kind in {"xlsx", "excel"}:
+        elif kind == "xlsx":
             metadata["formula_count"] = str(len(re.findall(r"=[A-Z]+\(", code)))
+        elif kind == "pptx":
+            metadata["slide_count_hint"] = str(len(re.findall(r"\.addSlide\(", code)))
+            metadata["table_count_hint"] = str(len(re.findall(r"\.addTable\(", code)))
 
         return GeneratedArtifact(
             artifact_id=artifact_id,
             artifact_type=kind,
-            file_path=str(result.output_path),
+            file_path=str(output_path),
             mime_type=_mime_for(ext),
-            size_bytes=result.output_path.stat().st_size,
-            generation_latency_ms=gen_latency_ms + result.elapsed_s * 1000.0,
+            size_bytes=output_path.stat().st_size,
+            generation_latency_ms=gen_latency_ms + exec_elapsed * 1000.0,
             model=resp.model,
             metadata=metadata,
         )
