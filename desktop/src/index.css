@@ -9,18 +9,66 @@ body,
   margin: 0;
 }
 
+html {
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
 body {
   font-family:
-    -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
-    "Helvetica Neue", Arial, sans-serif;
+    "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #ffffff;
+  color: #0d0d0d;
 }
 
-/* AntD dark 主题在浅色组件上的微调 */
-.ant-card {
-  background: #11161f !important;
-  border-color: #1a2030 !important;
+/* macOS 拖拽区：顶部 header 整条可拖拽窗口（Electron 用），按钮区禁用 */
+.app-drag {
+  -webkit-app-region: drag;
+}
+.app-no-drag {
+  -webkit-app-region: no-drag;
 }
 
+/* 滚动条：极细 + 浅灰 */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d4d4d4;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #a3a3a3;
+}
+
+/* AntD 微调：边框、间距、阴影靠拢 OpenAI 风格 */
 .ant-list-item {
-  border-bottom-color: #1a2030 !important;
+  border-bottom-color: #f0f0f0 !important;
+}
+.ant-tag {
+  border-radius: 4px !important;
+  font-size: 11px !important;
+  line-height: 18px !important;
+}
+.ant-modal-content {
+  border-radius: 12px !important;
+  box-shadow:
+    0 24px 48px rgba(0, 0, 0, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* 高亮选中态 */
+.row-active {
+  background: #f3f4f6 !important;
+}
+
+/* 标题字距收紧（OpenAI 习惯） */
+.brand {
+  letter-spacing: -0.01em;
 }

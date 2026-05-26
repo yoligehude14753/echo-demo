@@ -1,7 +1,6 @@
-import { Empty, Tag, Typography } from "antd";
+import { Empty } from "antd";
+import { FileText } from "lucide-react";
 import { useStore } from "@/store";
-
-const { Title, Paragraph } = Typography;
 
 export default function MinutesView(): JSX.Element {
   const currentId = useStore((s) => s.currentMeetingId);
@@ -11,10 +10,15 @@ export default function MinutesView(): JSX.Element {
 
   if (!meeting?.minutes) {
     return (
-      <div className="px-6 py-6 border-b border-bg-700">
+      <div className="px-6 py-6 border-b border-paper-300">
+        <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
+          <FileText className="w-3.5 h-3.5 text-ink-500" />
+          <span>会议纪要</span>
+        </div>
         <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={
-            <span className="text-slate-500 text-xs">
+            <span className="text-ink-400 text-[11px]">
               纪要尚未生成
               <br />
               结束会议后由 MiniMax-M2.7 自动产出
@@ -27,49 +31,72 @@ export default function MinutesView(): JSX.Element {
 
   const m = meeting.minutes;
   return (
-    <div className="px-6 py-4 border-b border-bg-700 max-h-[55vh] overflow-y-auto">
-      <Title level={5} className="!text-slate-100 !mb-1">
-        {m.title}
-      </Title>
-      <div className="text-xs text-slate-500 mb-3">
-        时长 {Math.round(m.duration_sec)}s · 说话人 {m.speakers.join(" / ")}
+    <div className="px-6 py-5 border-b border-paper-300 max-h-[55vh] overflow-y-auto">
+      <div className="flex items-center gap-2 mb-3 text-[13px] text-ink-700 font-medium">
+        <FileText className="w-3.5 h-3.5 text-ink-500" />
+        <span>会议纪要</span>
       </div>
-      <Paragraph className="!text-slate-200 !mb-3 text-sm">
-        {m.summary}
-      </Paragraph>
+      <h2 className="brand text-[17px] font-semibold text-ink-900 leading-snug mb-1">
+        {m.title}
+      </h2>
+      <div className="text-[11px] text-ink-400 mb-4 flex items-center gap-1.5">
+        <span>时长 {Math.round(m.duration_sec)}s</span>
+        <span>·</span>
+        <span>{m.speakers.join(" / ")}</span>
+      </div>
+
+      <p className="text-[13.5px] text-ink-800 leading-7 mb-5">{m.summary}</p>
+
       {m.sections.map((sec, i) => (
-        <div key={i} className="mb-3">
-          <div className="text-sm font-medium text-slate-200 mb-1">
+        <section key={i} className="mb-4">
+          <h3 className="text-[12.5px] font-semibold text-ink-900 mb-1.5">
             {sec.heading}
-          </div>
-          <ul className="list-disc pl-5 text-sm text-slate-300 space-y-0.5">
+          </h3>
+          <ul className="space-y-1 text-[13px] text-ink-700">
             {sec.bullets.map((b, j) => (
-              <li key={j}>{b}</li>
+              <li key={j} className="flex gap-2 leading-6">
+                <span className="text-ink-400 shrink-0">·</span>
+                <span>{b}</span>
+              </li>
             ))}
           </ul>
-        </div>
+        </section>
       ))}
+
       {m.decisions.length > 0 && (
-        <div className="mb-2">
-          <span className="text-xs text-slate-500">决议</span>
-          <div className="mt-1 flex flex-wrap gap-1">
+        <section className="mb-4">
+          <h3 className="text-[12.5px] font-semibold text-ink-900 mb-1.5">
+            决议
+          </h3>
+          <div className="flex flex-wrap gap-1.5">
             {m.decisions.map((d, i) => (
-              <Tag key={i} color="green">
+              <span
+                key={i}
+                className="text-[12px] px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200"
+              >
                 {d}
-              </Tag>
+              </span>
             ))}
           </div>
-        </div>
+        </section>
       )}
+
       {m.action_items.length > 0 && (
-        <div>
-          <span className="text-xs text-slate-500">行动项</span>
-          <ul className="list-disc pl-5 text-sm text-slate-300 mt-1 space-y-0.5">
+        <section>
+          <h3 className="text-[12.5px] font-semibold text-ink-900 mb-1.5">
+            行动项
+          </h3>
+          <ul className="space-y-1 text-[13px] text-ink-700">
             {m.action_items.map((a, i) => (
-              <li key={i}>{a}</li>
+              <li
+                key={i}
+                className="flex gap-2 leading-6 pl-2 border-l-2 border-paper-300"
+              >
+                <span>{a}</span>
+              </li>
             ))}
           </ul>
-        </div>
+        </section>
       )}
     </div>
   );
