@@ -15,6 +15,9 @@ jobs:
   changes:
     name: detect-changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       desktop: ${{ steps.filter.outputs.desktop }}
@@ -96,16 +99,30 @@ jobs:
           pytest tests/unit tests/arch -v --cov=app --cov-report=term-missing -m "unit or arch"
 
   check:
-    # 唯一 Required Status Check：所有上游 job 通过才算 pass
+    # 唯一 Required Status Check：上游必须真跑通才算 pass
+    # detect-changes 必须 success（不允许 failed/cancelled）
+    # backend-* 允许 skipped（无 backend 改动时），但只要跑了就必须 success
     name: check
-    needs: [backend-lint, backend-typecheck, backend-test]
+    needs: [changes, backend-lint, backend-typecheck, backend-test]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: gate
         run: |
           set -e
+          if [[ "${{ needs.changes.result }}" != "success" ]]; then
+            echo "detect-changes 必须 success（实际:${{ needs.changes.result }}）"
+            exit 1
+          fi
           [[ "${{ needs.backend-lint.result }}" =~ ^(success|skipped)$ ]] || { echo "lint failed"; exit 1; }
           [[ "${{ needs.backend-typecheck.result }}" =~ ^(success|skipped)$ ]] || { echo "typecheck failed"; exit 1; }
           [[ "${{ needs.backend-test.result }}" =~ ^(success|skipped)$ ]] || { echo "test failed"; exit 1; }
+          # 触发了 backend 变更但所有 backend job 都 skipped → 漏跑
+          if [[ "${{ needs.changes.outputs.backend }}" == "true" && \
+                "${{ needs.backend-lint.result }}" == "skipped" && \
+                "${{ needs.backend-typecheck.result }}" == "skipped" && \
+                "${{ needs.backend-test.result }}" == "skipped" ]]; then
+            echo "backend 有变更但 lint/typecheck/test 全 skipped → 漏跑"
+            exit 1
+          fi
           echo "all checks ok"
