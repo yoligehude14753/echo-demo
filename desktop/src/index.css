@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+/* AntD dark 主题在浅色组件上的微调 */
+.ant-card {
+  background: #11161f !important;
+  border-color: #1a2030 !important;
+}
+
+.ant-list-item {
+  border-bottom-color: #1a2030 !important;
+}
