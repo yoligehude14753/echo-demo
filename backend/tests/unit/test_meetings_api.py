@@ -44,7 +44,9 @@ def client(tmp_path: Path) -> TestClient:
 @pytest.mark.unit
 def test_meeting_full_flow(client: TestClient) -> None:
     r = client.post("/meetings/mtg-1/start")
-    assert r.status_code == 204
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "started"
 
     r = client.post(
         "/meetings/mtg-1/chunk",

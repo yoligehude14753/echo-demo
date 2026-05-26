@@ -98,7 +98,7 @@ def test_full_meeting_flow_via_http_and_ws_with_real_llm(client: TestClient) -> 
     received: list[dict] = []
     with client.websocket_connect("/ws/echo") as ws:
         r = client.post("/meetings/e2e-1/start")
-        assert r.status_code == 204
+        assert r.status_code == 200
 
         for _ in range(3):
             r = client.post(

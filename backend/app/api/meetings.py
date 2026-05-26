@@ -49,12 +49,14 @@ def reset_meeting_pipeline() -> None:
     _pipeline = None
 
 
-@router.post("/{meeting_id}/start", status_code=204)
+@router.post("/{meeting_id}/start")
 async def start_meeting(
     meeting_id: str,
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
-) -> None:
+) -> dict[str, str]:
+    """启动会议。返回 {meeting_id, status: 'started'}。"""
     await pipeline.start_meeting(meeting_id)
+    return {"meeting_id": meeting_id, "status": "started"}
 
 
 @router.post("/{meeting_id}/chunk", response_model=list[TranscriptSegment])
