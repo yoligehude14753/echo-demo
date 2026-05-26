@@ -4,6 +4,7 @@ import MeetingList from "@/components/MeetingList";
 import TranscriptStream from "@/components/TranscriptStream";
 import ArtifactPanel from "@/components/ArtifactPanel";
 import MinutesView from "@/components/MinutesView";
+import CommandBar from "@/components/CommandBar";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 
@@ -63,7 +64,10 @@ export default function App(): JSX.Element {
                 </span>
               )}
             </div>
-            <TranscriptStream />
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <TranscriptStream />
+            </div>
+            <CommandBar />
           </div>
 
           <div className="w-[440px] shrink-0 flex flex-col bg-paper-50">
