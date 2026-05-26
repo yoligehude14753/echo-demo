@@ -16,9 +16,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api.artifacts import router as artifacts_router
 from app.api.chat import router as chat_router
-from app.api.deps import aclose_llm_singleton
+from app.api.deps import aclose_event_bus, aclose_llm_singleton
 from app.api.meetings import router as meetings_router
 from app.api.retrieval import router as retrieval_router
+from app.api.ws import router as ws_router
 from app.config import get_settings
 
 logger = logging.getLogger("echo-demo")
@@ -39,6 +40,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings.rag_index_dir.mkdir(parents=True, exist_ok=True)
     yield
     await aclose_llm_singleton()
+    await aclose_event_bus()
     logger.info("echo-demo 关闭")
 
 
@@ -84,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(retrieval_router)
     app.include_router(artifacts_router)
     app.include_router(meetings_router)
+    app.include_router(ws_router)
     return app
 
 

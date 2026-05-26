@@ -29,9 +29,11 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.ports.diarizer import DiarizerPort
+from app.ports.event_bus import EventBusPort
 from app.ports.llm import LLMPort
 from app.ports.rag import RagPort
 from app.ports.stt import STTPort
+from app.schemas.events import EchoEvent
 from app.schemas.llm import ChatMessage
 from app.schemas.meeting import MeetingMinutes, MinutesSection, TranscriptSegment
 
@@ -71,12 +73,14 @@ class MeetingPipeline:
         diarizer: DiarizerPort,
         rag: RagPort,
         llm: LLMPort,
+        event_bus: EventBusPort | None = None,
     ) -> None:
         self._settings = settings
         self._stt = stt
         self._diarizer = diarizer
         self._rag = rag
         self._llm = llm
+        self._event_bus = event_bus
 
         self._segments: dict[str, list[TranscriptSegment]] = defaultdict(list)
         self._speaker_labels: dict[str, dict[str, str]] = defaultdict(dict)
@@ -85,12 +89,20 @@ class MeetingPipeline:
         self._transcript_dir = Path(settings.storage_dir).expanduser() / "meetings"
         self._transcript_dir.mkdir(parents=True, exist_ok=True)
 
+    async def _publish(self, event_type: str, meeting_id: str, payload: dict[str, Any]) -> None:
+        if self._event_bus is None:
+            return
+        await self._event_bus.publish(
+            EchoEvent(type=event_type, meeting_id=meeting_id, payload=payload)  # type: ignore[arg-type]
+        )
+
     async def start_meeting(self, meeting_id: str) -> None:
         async with self._lock:
             self._segments[meeting_id] = []
             self._speaker_labels[meeting_id] = {}
             self._wall_clock_start[meeting_id] = time.monotonic()
         await self._diarizer.reset()
+        await self._publish("meeting.started", meeting_id, {})
 
     async def add_audio_chunk(
         self,
@@ -129,6 +141,8 @@ class MeetingPipeline:
                 )
                 self._segments[meeting_id].append(seg)
                 out.append(seg)
+        for seg in out:
+            await self._publish("meeting.segment", meeting_id, seg.model_dump(mode="json"))
         return out
 
     def _label_for(self, meeting_id: str, speaker_id: str | None) -> str:
@@ -175,6 +189,9 @@ class MeetingPipeline:
         # RAG 入库（纪要 summary + 逐字稿一起检索）
         rag_payload = "【纪要】\n" + minutes.summary + "\n\n【逐字稿】\n" + transcript_text
         await self._rag.ingest_meeting(meeting_id, rag_payload, title)
+
+        await self._publish("meeting.ended", meeting_id, {"duration_sec": duration_sec})
+        await self._publish("minutes.ready", meeting_id, minutes.model_dump(mode="json"))
         return minutes
 
     @staticmethod
