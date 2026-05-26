@@ -12,11 +12,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.skill import SkillError, SkillExecutor
+from app.api.deps import get_event_bus
 from app.api.deps import get_llm_singleton as get_llm
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
 from app.schemas.artifact import GeneratedArtifact
+from app.schemas.events import EchoEvent
 from app.use_cases.generate_artifact import generate_artifact
 
 router = APIRouter(tags=["artifacts"])
@@ -48,9 +51,16 @@ async def generate(
     body: GenerateRequest,
     llm: LLMPort = Depends(get_llm),
     runner: SkillExecutor = Depends(get_skill),
+    event_bus: InMemoryEventBus = Depends(get_event_bus),
 ) -> GeneratedArtifact:
     if not body.brief.strip():
         raise HTTPException(status_code=400, detail="brief empty")
+    await event_bus.publish(
+        EchoEvent(
+            type="artifact.generating",
+            payload={"artifact_type": body.artifact_type, "brief": body.brief[:200]},
+        )
+    )
     try:
         artifact = await generate_artifact(
             runner=runner,
@@ -60,7 +70,16 @@ async def generate(
             extra_instructions=body.extra_instructions,
         )
     except SkillError as e:
+        await event_bus.publish(
+            EchoEvent(
+                type="artifact.failed",
+                payload={"artifact_type": body.artifact_type, "error": str(e)[:300]},
+            )
+        )
         raise HTTPException(status_code=400, detail=str(e)) from e
+    await event_bus.publish(
+        EchoEvent(type="artifact.ready", payload=artifact.model_dump(mode="json"))
+    )
     return artifact
 
 

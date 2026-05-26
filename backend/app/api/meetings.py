@@ -11,10 +11,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.adapters.diarizer import make_diarizer
+from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from app.adapters.rag.bm25 import BM25Rag
 from app.adapters.stt.sensevoice_gpu import SenseVoiceGPUSTT
-from app.api.deps import get_llm_singleton
+from app.api.deps import get_event_bus, get_llm_singleton
 from app.config import Settings, get_settings
 from app.schemas.meeting import MeetingMinutes, TranscriptSegment
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
@@ -27,6 +28,7 @@ _pipeline: MeetingPipeline | None = None
 def get_meeting_pipeline(
     settings: Settings = Depends(get_settings),
     llm: OpenAICompatibleLLM = Depends(get_llm_singleton),
+    event_bus: InMemoryEventBus = Depends(get_event_bus),
 ) -> MeetingPipeline:
     global _pipeline  # noqa: PLW0603
     if _pipeline is None:
@@ -36,6 +38,7 @@ def get_meeting_pipeline(
             diarizer=make_diarizer(settings),
             rag=BM25Rag(settings),
             llm=llm,
+            event_bus=event_bus,
         )
     return _pipeline
 
