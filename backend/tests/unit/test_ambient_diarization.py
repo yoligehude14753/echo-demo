@@ -79,7 +79,13 @@ class FakeMeeting:
 
 
 def _settings(tmp_path: Path) -> Settings:
-    return Settings(storage_dir=tmp_path / "storage", rag_index_dir=tmp_path / "rag")
+    return Settings(
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        ambient_rms_gate=0,
+        ambient_min_speech_frame_ratio=0.0,
+        ambient_min_stt_chars=0,
+    )
 
 
 @pytest.mark.unit

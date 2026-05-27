@@ -16,6 +16,9 @@ def ambient_pipeline(tmp_path: Path) -> AmbientCapturePipeline:
     settings = Settings(
         storage_dir=tmp_path / "storage",
         rag_index_dir=tmp_path / "rag",
+        ambient_rms_gate=0,
+        ambient_min_speech_frame_ratio=0.0,
+        ambient_min_stt_chars=0,
     )
     stt = AsyncMock()
     stt.transcribe = AsyncMock(
