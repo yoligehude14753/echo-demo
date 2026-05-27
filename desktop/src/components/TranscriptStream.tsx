@@ -33,19 +33,39 @@ function fmtClock(iso: string): string {
   return `${hh}:${mm}:${ss}`;
 }
 
-/** 待机状态：轮询 /capture/recent 显示 ambient 持续转写流。 */
-function AmbientLiveView(): JSX.Element {
+/**
+ * 转写流主面板：永远显示 ambient 持续转写流（用户期望）。
+ *
+ * 设计（2026-05 修订）：
+ * - ambient 流是 EchoDesk 的核心输出，应**始终可见**，无论是否在开会、是否选了会议
+ * - 会议的 segments 是 ambient 的真子集（同一份 STT 复用），所以单独看会议视图是冗余
+ * - 选中会议时，把该会议时间窗 [started_at, ended_at] 内的 ambient 高亮即可
+ * - 数据：3s 轮询 /capture/recent，加 WS 事件触发立即刷新（会议/ambient 事件来时）
+ */
+export default function TranscriptStream(): JSX.Element {
   const [segs, setSegs] = useState<AmbientSegment[]>([]);
+  const events = useStore((s) => s.events);
+  const currentMeetingId = useStore((s) => s.currentMeetingId);
+  const meeting = useStore((s) =>
+    currentMeetingId ? s.meetings[currentMeetingId] : undefined,
+  );
   const endRef = useRef<HTMLDivElement>(null);
 
+  // 时间窗：选中会议时高亮该窗内的 segments
+  const winStart = meeting?.started_at
+    ? new Date(meeting.started_at).getTime()
+    : null;
+  const winEnd = meeting?.ended_at ? new Date(meeting.ended_at).getTime() : null;
+
+  // 轮询 ambient + WS 事件触发
   useEffect(() => {
     let alive = true;
     const tick = async (): Promise<void> => {
       try {
-        const recent = await listRecentAmbient(50);
+        const recent = await listRecentAmbient(100);
         if (alive) setSegs(recent);
       } catch {
-        // 静默，CaptureStatus 那里已有错误提示
+        // 静默
       }
     };
     void tick();
@@ -56,14 +76,32 @@ function AmbientLiveView(): JSX.Element {
     };
   }, []);
 
+  // 收到 meeting.segment / state_changed 事件立即刷新
+  useEffect(() => {
+    if (!events.length) return;
+    const last = events[events.length - 1];
+    if (
+      last.type === "meeting.segment" ||
+      last.type === "meeting.auto_detected" ||
+      last.type === "meeting.state_changed"
+    ) {
+      void listRecentAmbient(100)
+        .then((r) => setSegs(r))
+        .catch(() => undefined);
+    }
+  }, [events]);
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [segs.length]);
 
   if (segs.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-ink-400 text-[12px]">
-        等待环境音转写…（开口说话即可触发）
+      <div className="flex-1 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
+        <div>等待环境音转写…</div>
+        <div className="text-[10px] text-ink-300">
+          开口说话即可触发；环境静音/底噪会被自动过滤
+        </div>
       </div>
     );
   }
@@ -71,15 +109,28 @@ function AmbientLiveView(): JSX.Element {
   return (
     <div className="flex-1 overflow-y-auto px-8 py-6">
       <div className="max-w-3xl mx-auto space-y-3">
-        <div className="text-[11px] text-ink-400 mb-2 px-1">
-          ambient 持续转写 · 最近 {segs.length} 条 · 每 3s 刷新
+        <div className="text-[11px] text-ink-400 mb-2 px-1 flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span>ambient 持续转写 · {segs.length} 条 · 每 3s 刷新</span>
+          {meeting && (
+            <span className="ml-auto text-[10px] text-ink-500">
+              高亮：{meeting.title || currentMeetingId} 时间窗
+            </span>
+          )}
         </div>
         {segs.map((s, idx) => {
           const c = colorForSpeaker(s.speaker_label);
+          const t = new Date(s.captured_at).getTime();
+          const inWindow =
+            winStart !== null &&
+            t >= winStart &&
+            (winEnd === null || t <= winEnd);
           return (
             <div
               key={`${s.captured_at}-${idx}`}
-              className="flex gap-3 items-start"
+              className={`flex gap-3 items-start rounded-md transition px-2 py-1 ${
+                inWindow ? "bg-amber-50/50 ring-1 ring-amber-200/60" : ""
+              }`}
             >
               <span className="text-[10px] text-ink-400 font-mono shrink-0 pt-1 w-14 text-right">
                 {fmtClock(s.captured_at)}
@@ -102,57 +153,5 @@ function AmbientLiveView(): JSX.Element {
   );
 }
 
-export default function TranscriptStream(): JSX.Element {
-  const currentId = useStore((s) => s.currentMeetingId);
-  const meeting = useStore((s) =>
-    currentId ? s.meetings[currentId] : undefined,
-  );
-  const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [meeting?.segments.length]);
-
-  // 未选会议（待机态）→ 显示 ambient 持续转写流
-  if (!meeting) {
-    return <AmbientLiveView />;
-  }
-
-  if (meeting.segments.length === 0) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-ink-400 text-[12px]">
-        等待转写片段…
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex-1 overflow-y-auto px-8 py-6">
-      <div className="max-w-3xl mx-auto space-y-4">
-        {meeting.segments.map((s, idx) => {
-          const c = colorForSpeaker(s.speaker_label);
-          return (
-            <div
-              key={`${s.start_ms}-${idx}`}
-              className="flex gap-3 items-start"
-            >
-              <span className="text-[10px] text-ink-400 font-mono shrink-0 pt-1 w-10 text-right">
-                {fmtMs(s.start_ms)}
-              </span>
-              <span
-                className="text-[11px] font-medium shrink-0 px-2 py-0.5 rounded-full"
-                style={{ color: c.fg, background: c.bg }}
-              >
-                {s.speaker_label ?? "未识别"}
-              </span>
-              <span className="text-[14px] text-ink-800 leading-7 flex-1">
-                {s.text}
-              </span>
-            </div>
-          );
-        })}
-        <div ref={endRef} />
-      </div>
-    </div>
-  );
-}
+// 占位：保留 fmtMs 以备会议详情视图复用
+void fmtMs;
