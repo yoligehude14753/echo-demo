@@ -133,7 +133,10 @@ async def test_scan_ignores_hidden_dirs(tmp_path: Path) -> None:
     r = await scanner.scan()
     assert r.n_total == 1
     docs = await rag.list_docs()
-    assert all("git" not in str(d.get("source_path", "")) or "/.git/" not in str(d.get("source_path", "")) for d in docs)
+    assert all(
+        "git" not in str(d.get("source_path", "")) or "/.git/" not in str(d.get("source_path", ""))
+        for d in docs
+    )
 
 
 @pytest.mark.asyncio
@@ -146,9 +149,7 @@ async def test_scan_respects_max_file_size(tmp_path: Path) -> None:
     small = ws / "small.txt"
     small.write_text("ok small", encoding="utf-8")
 
-    rag, scanner = _make(
-        tmp_path, [ws], workspace_max_file_mb=0.1
-    )  # 100 KB 上限
+    rag, scanner = _make(tmp_path, [ws], workspace_max_file_mb=0.1)  # 100 KB 上限
     r = await scanner.scan()
     assert r.n_total == 1  # 只有 small 通过
     docs = await rag.list_docs()

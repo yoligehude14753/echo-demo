@@ -83,9 +83,7 @@ async def test_ingest_with_source_path_records_metadata(tmp_path: Path) -> None:
     f = tmp_path / "notes.md"
     f.write_text("workspace 元数据测试", encoding="utf-8")
     src_path = str(f.resolve())
-    doc_id = await rag.ingest_file(
-        str(f), source="workspace", source_path=src_path
-    )
+    doc_id = await rag.ingest_file(str(f), source="workspace", source_path=src_path)
     found = await rag.find_by_source_path(src_path)
     assert found == doc_id
     docs = await rag.list_docs()
@@ -116,9 +114,7 @@ async def test_ingest_persists_across_reload(tmp_path: Path) -> None:
     rag1 = BM25Rag(_settings(idx))
     f = tmp_path / "doc.md"
     f.write_text("持久化测试 alpha", encoding="utf-8")
-    await rag1.ingest_file(
-        str(f), source="workspace", source_path=str(f.resolve())
-    )
+    await rag1.ingest_file(str(f), source="workspace", source_path=str(f.resolve()))
     rag2 = BM25Rag(_settings(idx))
     hits = await rag2.query("持久化")
     assert hits
