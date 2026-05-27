@@ -82,9 +82,15 @@ export async function manualStartMeeting(
   title?: string,
 ): Promise<MeetingStateSnapshot> {
   const u = await apiUrl("/meetings/manual_start");
-  const fd = new FormData();
-  if (title) fd.append("title", title);
-  const r = await fetch(u, { method: "POST", body: fd });
+  // 不带 title 时直接发空 POST，避免空 multipart body 被 backend 拒绝
+  // （Fastapi Form(None) 仍要求 Content-Type: multipart，且必须有边界内容）
+  let init: RequestInit = { method: "POST" };
+  if (title && title.trim()) {
+    const fd = new FormData();
+    fd.append("title", title);
+    init = { method: "POST", body: fd };
+  }
+  const r = await fetch(u, init);
   return asJson<MeetingStateSnapshot>(r);
 }
 

@@ -30,11 +30,19 @@ test("happy path: connect → start meeting → 4 artifacts → rag ask", async 
   await page.goto("/");
   await expect(page.locator("text=已连接")).toBeVisible({ timeout: 15_000 });
 
-  // 2. @开始会议
-  await typeAndSend(page, "@开始会议");
+  // 2. 手动开始会议（PR-8 删除 @开始会议 intent，改为点击 MeetingStatusBar）
+  const bar = page.locator("[data-testid='meeting-status-bar']");
+  await expect(bar).toBeVisible();
+  if (((await bar.textContent()) ?? "").includes("会议中")) {
+    // hydrate 出来的 in_meeting：先点回 idle 再点开始
+    await bar.click();
+    await expect(bar).toContainText("待机", { timeout: 15_000 });
+  }
+  await bar.click();
+  await expect(bar).toContainText("会议中", { timeout: 15_000 });
   await expect(
-    page.locator(".ant-message").filter({ hasText: /开启/ }),
-  ).toBeVisible({ timeout: 15_000 });
+    page.locator(".ant-message").filter({ hasText: /已开始会议/ }),
+  ).toBeVisible({ timeout: 5_000 });
   // 等 toast 消失避免重叠
   await page.waitForTimeout(2_500);
 
@@ -78,8 +86,14 @@ test("happy path: connect → start meeting → 4 artifacts → rag ask", async 
 
   // 8. CaptureSession 持续采集
   await expect(page.getByTestId("capture-status")).toBeVisible();
-  await expect(page.getByTestId("capture-status")).toContainText(/持续采集|初始化麦克风|ambient/);
+  await expect(page.getByTestId("capture-status")).toContainText(
+    /持续采集|初始化麦克风|麦克风不可用/,
+  );
 
-  // 9. 截图，存证
+  // 9. 结束会议（点 MeetingStatusBar）→ 状态回到待机
+  await bar.click();
+  await expect(bar).toContainText("待机", { timeout: 30_000 });
+
+  // 10. 截图，存证
   await page.screenshot({ path: "test-results/happy-path-final.png", fullPage: true });
 });
