@@ -23,10 +23,12 @@ from app.api.deps import (
     aclose_llm_singleton,
     aclose_repository,
     get_repository,
+    get_speaker_registry,
 )
 from app.api.intent import router as intent_router
 from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
+from app.api.speakers import router as speakers_router
 from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
 from app.api.workspace import router as workspace_router
@@ -53,9 +55,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.rag_index_dir.mkdir(parents=True, exist_ok=True)
 
-    # SQLite repository：建表 + hydrate 未结束的会议（断电恢复）
+    # SQLite repository：建表 + hydrate 未结束的会议 + 加载已知说话人
     repo = get_repository(settings)
     await repo.init()
+    try:
+        registry = get_speaker_registry(repo)
+        await registry.hydrate()
+        n_speakers = len(registry.known_speaker_ids())
+        if n_speakers:
+            logger.info("speaker registry: hydrated %d known speakers", n_speakers)
+    except Exception as e:
+        logger.warning("speaker registry hydrate failed: %s", e)
     try:
         pipeline = get_meeting_pipeline_for_lifespan(settings, repo)
         n_resumed = await pipeline.hydrate_from_repo()
@@ -144,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(workspace_router)
     app.include_router(artifacts_router)
     app.include_router(meetings_router)
+    app.include_router(speakers_router)
     app.include_router(intent_router)
     app.include_router(ws_router)
     return app

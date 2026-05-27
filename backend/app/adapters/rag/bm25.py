@@ -278,30 +278,49 @@ class BM25Rag:
         *,
         captured_at: str,
         audio_ref: str,
+        speaker_id: str | None = None,
+        speaker_label: str | None = None,
     ) -> str:
         async with self._lock:
             return await asyncio.to_thread(
-                self._ingest_ambient_segment_sync, text, captured_at, audio_ref
+                self._ingest_ambient_segment_sync,
+                text,
+                captured_at,
+                audio_ref,
+                speaker_id,
+                speaker_label,
             )
 
-    def _ingest_ambient_segment_sync(self, text: str, captured_at: str, audio_ref: str) -> str:
+    def _ingest_ambient_segment_sync(
+        self,
+        text: str,
+        captured_at: str,
+        audio_ref: str,
+        speaker_id: str | None = None,
+        speaker_label: str | None = None,
+    ) -> str:
         """按日追加 ambient STT 段（主链路记忆层）。"""
         day = captured_at[:10].replace("-", "")
         doc_id = f"ambient-{day}"
         title = f"Ambient {captured_at[:10]}"
         existing = [c for c in self._chunks if c.doc_id == doc_id]
         seq = len(existing)
+        meta: dict[str, str] = {
+            "kind": "ambient",
+            "source": "ambient",
+            "captured_at": captured_at,
+            "audio_ref": audio_ref,
+        }
+        if speaker_id is not None:
+            meta["speaker_id"] = speaker_id
+        if speaker_label is not None:
+            meta["speaker_label"] = speaker_label
         chunk = RagChunk(
             doc_id=doc_id,
             doc_title=title,
             chunk_id=f"{doc_id}-c{seq:04d}",
             text=text.strip(),
-            metadata={
-                "kind": "ambient",
-                "source": "ambient",
-                "captured_at": captured_at,
-                "audio_ref": audio_ref,
-            },
+            metadata=meta,
         )
         self._chunks.append(chunk)
         self._tokens.append(_tokenize_cn_en(chunk.text))
