@@ -24,11 +24,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.api.deps import get_diarizer_singleton, get_repository
 from app.config import Settings, get_settings
+from app.config_io import load_user_config_json, user_config_path, write_user_config_json
 from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
 
@@ -363,6 +365,127 @@ async def reset_speakers(
         "speakers_deleted": speakers_deleted,
         "segments_cleared": cleared_count,
         "diarizer_reset": diarizer_reset_ok,
+    }
+
+
+# ── 4. 远端 endpoint 配置（P3.2） ─────────────────────────────────
+#
+# 让用户在 SettingsPanel 直接改 LLM/STT/TTS/Tavily 的 base_url + key，
+# 不需要再编辑 ~/.echodesk/config.json 文件。
+#
+# 安全策略：
+# - 只允许白名单内字段可读 / 可写，永远不暴露 db_path / workspace_dirs
+#   等本地路径（即便 GET 也不返回）
+# - GET 返回的 key 字段（标记 sensitive=True）做脱敏；不脱敏的 base_url
+#   等明文返回，让用户能看到改了没改
+# - 写入只调 write_user_config_json（pydantic-settings 启动期 load），
+#   响应里 restart_required=true 提示用户重启 backend 才能让单例生效
+# - 不在这里调 BackendSupervisor 重启；用户走 StatusBar「重启 backend」按钮
+#   触发，避免本 endpoint 自身被切断
+
+
+# 字段元信息：name → (settings_attr, sensitive)
+# 顺序与 SettingsPanel UI 一致
+_REMOTE_FIELDS: list[tuple[str, str, bool]] = [
+    # (config key in ~/.echodesk/config.json, Settings 属性, 是否 sensitive)
+    ("llm_main_base_url", "llm_main_base_url", False),
+    ("yunwu_open_key", "yunwu_open_key", True),
+    ("llm_fast_base_url", "llm_fast_base_url", False),
+    ("stt_firered_url", "stt_firered_url", False),
+    ("tts_qwen3_url", "tts_qwen3_url", False),
+    ("tts_qwen3_voice", "tts_qwen3_voice", False),
+    ("tavily_api_key", "tavily_api_key", True),
+]
+
+_ALLOWED_KEYS = {f[0] for f in _REMOTE_FIELDS}
+
+
+def _mask_secret(value: str) -> str:
+    """key 脱敏：留首 4 / 末 4，中间 ***；短 key（≤8）保留首末各 1。空字符串直接空。"""
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return f"{value[0]}***{value[-1]}"
+    return f"{value[:4]}***{value[-4:]}"
+
+
+class RemoteFieldDTO(BaseModel):
+    key: str
+    value: str = Field(description="脱敏后的明文（sensitive=False 时即原值）")
+    sensitive: bool
+    source: str = Field(description="default | user（来自 ~/.echodesk/config.json）")
+
+
+class RemoteSettingsDTO(BaseModel):
+    config_path: str = Field(description="~/.echodesk/config.json 的绝对路径")
+    fields: list[RemoteFieldDTO]
+
+
+class RemoteSettingsPatch(BaseModel):
+    """PATCH body：dict 形式，只接受白名单字段；其它键直接 422。"""
+
+    updates: dict[str, str] = Field(description="key → new value 映射；空字符串 = 清空该字段")
+
+
+@router.get("/settings/remote", response_model=RemoteSettingsDTO)
+def get_remote_settings(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RemoteSettingsDTO:
+    """读当前生效的远端 endpoint + key（脱敏）。
+
+    生效值 = pydantic-settings 三层合并结果（env > user.json > default）。
+    `source = "user"` 当且仅当 user.json 出现了该 key（不管值是不是和 default 一样）。
+    """
+    user_overrides = load_user_config_json()
+    items: list[RemoteFieldDTO] = []
+    for key, attr, sensitive in _REMOTE_FIELDS:
+        raw_value = getattr(settings, attr, "")
+        display = _mask_secret(raw_value) if sensitive else str(raw_value)
+        items.append(
+            RemoteFieldDTO(
+                key=key,
+                value=display,
+                sensitive=sensitive,
+                source="user" if key in user_overrides else "default",
+            )
+        )
+    return RemoteSettingsDTO(
+        config_path=str(user_config_path()),
+        fields=items,
+    )
+
+
+@router.patch("/settings/remote")
+def patch_remote_settings(body: RemoteSettingsPatch) -> dict[str, object]:
+    """合并写入到 ~/.echodesk/config.json；非白名单 key 整体 422。
+
+    返回：{written_keys: [...], skipped_keys: [...], restart_required: True}
+    """
+    unknown = set(body.updates.keys()) - _ALLOWED_KEYS
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"未知配置项：{sorted(unknown)}（允许：{sorted(_ALLOWED_KEYS)}）",
+        )
+
+    # 空字符串保留为空字符串而非删除：用户想清掉 key 时显式置空即可
+    sanitized = {k: v for k, v in body.updates.items() if k in _ALLOWED_KEYS}
+    if not sanitized:
+        return {
+            "written_keys": [],
+            "skipped_keys": [],
+            "restart_required": False,
+            "config_path": str(user_config_path()),
+        }
+
+    write_user_config_json(sanitized)
+    logger.info("admin: remote settings updated keys=%s", sorted(sanitized.keys()))
+
+    return {
+        "written_keys": sorted(sanitized.keys()),
+        "skipped_keys": [],
+        "restart_required": True,
+        "config_path": str(user_config_path()),
     }
 
 

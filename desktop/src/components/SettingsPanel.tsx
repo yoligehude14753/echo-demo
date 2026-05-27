@@ -14,7 +14,7 @@
  *  POST /admin/speakers/reset
  */
 
-import { Drawer, Button, Modal, message, Spin, Tooltip } from "antd";
+import { Drawer, Button, Modal, message, Spin, Tooltip, Input, Form } from "antd";
 import {
   Database,
   Download,
@@ -22,8 +22,9 @@ import {
   RefreshCw,
   Users,
   AlertTriangle,
+  Server,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiUrl } from "@/runtime";
 
 interface DataDirBreakdown {
@@ -46,6 +47,63 @@ interface SpeakerResetResponse {
   segments_cleared: number;
   diarizer_reset: boolean;
 }
+
+interface RemoteField {
+  key: string;
+  value: string;
+  sensitive: boolean;
+  source: "default" | "user";
+}
+
+interface RemoteSettingsResponse {
+  config_path: string;
+  fields: RemoteField[];
+}
+
+interface RemoteFieldMeta {
+  label: string;
+  hint: string;
+  placeholder?: string;
+}
+
+// 字段顺序 + 文案，跟后端 _REMOTE_FIELDS 对齐
+const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
+  llm_main_base_url: {
+    label: "主 LLM Base URL",
+    hint: "Yunwu / OpenAI 兼容端点；默认 https://yunwu.ai/v1",
+    placeholder: "https://yunwu.ai/v1",
+  },
+  yunwu_open_key: {
+    label: "主 LLM API Key",
+    hint: "Yunwu key（sk- 开头）；脱敏显示，留空不修改",
+    placeholder: "sk-...",
+  },
+  llm_fast_base_url: {
+    label: "快速 LLM Base URL",
+    hint: "Qwen3-1.7B (heyi-bj :7860)；用于 intent 分类等低延时任务",
+    placeholder: "http://100.87.251.9:7860/v1",
+  },
+  stt_firered_url: {
+    label: "STT URL",
+    hint: "FireRedASR2-AED (heyi-bj :8090)",
+    placeholder: "http://100.87.251.9:8090",
+  },
+  tts_qwen3_url: {
+    label: "TTS URL",
+    hint: "faster-qwen3-tts (heyi-bj :8094)",
+    placeholder: "http://100.87.251.9:8094",
+  },
+  tts_qwen3_voice: {
+    label: "TTS 音色",
+    hint: "CustomVoice 名（aiden / alice / ...）",
+    placeholder: "aiden",
+  },
+  tavily_api_key: {
+    label: "Tavily API Key",
+    hint: "Web 检索；脱敏显示，留空不修改",
+    placeholder: "tvly-...",
+  },
+};
 
 interface Props {
   open: boolean;
@@ -82,6 +140,10 @@ export default function SettingsPanel({
   const [loading, setLoading] = useState(false);
   const [diagBusy, setDiagBusy] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
+  const [remote, setRemote] = useState<RemoteSettingsResponse | null>(null);
+  const [remoteBusy, setRemoteBusy] = useState(false);
+  const [needsRestart, setNeedsRestart] = useState(false);
+  const [form] = Form.useForm<Record<string, string>>();
 
   const refreshDataDir = useCallback(async () => {
     setLoading(true);
@@ -99,9 +161,32 @@ export default function SettingsPanel({
     }
   }, []);
 
+  const refreshRemote = useCallback(async () => {
+    try {
+      const url = await apiUrl("/admin/settings/remote");
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as RemoteSettingsResponse;
+      setRemote(json);
+      // 重置表单：sensitive 字段不显示原值（脱敏值仅作 placeholder），
+      // 用户留空就不修改；非 sensitive 字段直接拿明文当初值
+      const initial: Record<string, string> = {};
+      for (const f of json.fields) {
+        initial[f.key] = f.sensitive ? "" : f.value;
+      }
+      form.setFieldsValue(initial);
+    } catch (e) {
+      message.error(`读取远端配置失败：${(e as Error).message}`);
+      setRemote(null);
+    }
+  }, [form]);
+
   useEffect(() => {
-    if (open) void refreshDataDir();
-  }, [open, refreshDataDir]);
+    if (open) {
+      void refreshDataDir();
+      void refreshRemote();
+    }
+  }, [open, refreshDataDir, refreshRemote]);
 
   const onOpenDataDir = async () => {
     if (!dataDir?.path) return;
@@ -130,6 +215,72 @@ export default function SettingsPanel({
       setDiagBusy(false);
     }
   };
+
+  const onSaveRemote = async (values: Record<string, string>) => {
+    if (!remote) return;
+    // 只 PATCH 有真实输入的字段：sensitive 字段空字符串表示"不改"；
+    // 非 sensitive 字段如果跟当前明文一致也跳过（避免空写）
+    const original = new Map(remote.fields.map((f) => [f.key, f]));
+    const updates: Record<string, string> = {};
+    for (const [k, v] of Object.entries(values)) {
+      const meta = original.get(k);
+      if (!meta) continue;
+      if (meta.sensitive) {
+        if (v && v.length > 0) updates[k] = v;
+      } else {
+        if (v !== meta.value) updates[k] = v;
+      }
+    }
+    if (Object.keys(updates).length === 0) {
+      message.info("没有变更");
+      return;
+    }
+    setRemoteBusy(true);
+    try {
+      const url = await apiUrl("/admin/settings/remote");
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates }),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`HTTP ${res.status}: ${detail.slice(0, 200)}`);
+      }
+      const json = (await res.json()) as {
+        written_keys: string[];
+        restart_required: boolean;
+      };
+      message.success(
+        `已写入 ${json.written_keys.length} 项${json.restart_required ? "，需重启后端生效" : ""}`,
+      );
+      setNeedsRestart(json.restart_required);
+      void refreshRemote();
+    } catch (e) {
+      message.error(`保存失败：${(e as Error).message}`);
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
+
+  const onRestartBackend = async () => {
+    if (!window.echo?.manualRestartBackend) {
+      message.warning("仅 Electron 模式可一键重启；dev server 请手动重启 backend");
+      return;
+    }
+    try {
+      await window.echo.manualRestartBackend();
+      message.success("已发送重启请求");
+      setNeedsRestart(false);
+    } catch (e) {
+      message.error(`重启失败：${(e as Error).message}`);
+    }
+  };
+
+  const remoteFieldOrder = useMemo(
+    () => (remote?.fields ?? []).map((f) => f.key),
+    [remote],
+  );
 
   const onResetSpeakers = () => {
     Modal.confirm({
@@ -234,6 +385,93 @@ export default function SettingsPanel({
               </>
             )}
           </div>
+        </section>
+
+        <section>
+          <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
+            <Server className="w-4 h-4" />
+            <span>远端服务</span>
+            {remote && (
+              <span className="ml-auto text-[10px] text-ink-400 truncate max-w-[180px]">
+                {remote.config_path}
+              </span>
+            )}
+          </div>
+          {!remote ? (
+            <Spin size="small" />
+          ) : (
+            <Form
+              form={form}
+              layout="vertical"
+              onFinish={onSaveRemote}
+              autoComplete="off"
+              data-testid="remote-settings-form"
+            >
+              {remoteFieldOrder.map((key) => {
+                const meta = REMOTE_FIELD_META[key];
+                const fieldDto = remote.fields.find((f) => f.key === key);
+                if (!meta || !fieldDto) return null;
+                return (
+                  <Form.Item
+                    key={key}
+                    name={key}
+                    label={
+                      <div className="text-[12px] flex items-center gap-1.5">
+                        <span>{meta.label}</span>
+                        {fieldDto.source === "user" && (
+                          <span className="text-[10px] px-1 rounded bg-accent/10 text-accent">
+                            user.json
+                          </span>
+                        )}
+                        {fieldDto.sensitive && (
+                          <Tooltip title={`当前值（脱敏）：${fieldDto.value || "（空）"}`}>
+                            <span className="text-[10px] text-ink-400 cursor-help">
+                              [脱敏]
+                            </span>
+                          </Tooltip>
+                        )}
+                      </div>
+                    }
+                    extra={<span className="text-[11px] text-ink-400">{meta.hint}</span>}
+                  >
+                    {fieldDto.sensitive ? (
+                      <Input.Password
+                        placeholder={meta.placeholder ?? ""}
+                        size="small"
+                        autoComplete="off"
+                      />
+                    ) : (
+                      <Input placeholder={meta.placeholder ?? ""} size="small" />
+                    )}
+                  </Form.Item>
+                );
+              })}
+              <div className="flex gap-2">
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  loading={remoteBusy}
+                  size="small"
+                  data-testid="save-remote-settings"
+                >
+                  保存
+                </Button>
+                <Button size="small" onClick={() => void refreshRemote()}>
+                  重置
+                </Button>
+                {needsRestart && (
+                  <Button
+                    size="small"
+                    type="dashed"
+                    onClick={() => void onRestartBackend()}
+                    data-testid="restart-backend-after-config"
+                  >
+                    重启 backend 生效
+                  </Button>
+                )}
+              </div>
+            </Form>
+          )}
         </section>
 
         <section>
