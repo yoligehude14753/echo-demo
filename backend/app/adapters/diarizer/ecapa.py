@@ -44,12 +44,11 @@ logger = logging.getLogger("echodesk.diarizer.ecapa")
 # 1.0s @ 16k mono 16bit；短于此直接跳过 embedding（保护下限，echo 对齐）
 _MIN_BYTES_FOR_EMBED = 32_000
 
-# ⚠️ docs/ARCH-AUDIT.md §4 root #2：
-# `_MIN_DUR_FOR_NEW_PROFILE = 4.0` 在 6s 固定 chunk 下永远成立，guard 不触发；
-# 真正想做的是"没有足够语音活跃秒数 (VAD active) 就不允许注册新人"。
-# 留下来到 PR `echodesk-spk-2/3` 重构成 VAD active seconds 门控。
-_MIN_DUR_FOR_NEW_PROFILE = 4.0  # TODO(echodesk-spk-3): replace by VAD active seconds
-_OUTLIER_SIM_ALLOW_NEW = 0.30   # TODO(echodesk-spk-3): re-calibrate from echo bench data
+# spk-3 把以下两个 magic number 改成 settings 可配（diarizer_min_voiced_seconds_for_new_profile /
+# diarizer_outlier_match_threshold），便于 spk-5 真实多人音频回归调参。
+# 真正的"段够不够长能注册新人"门控基于 voiced_active_s（duration × active_ratio）
+# 而不是 audio_bytes 总长，因为 spk-2 切句后段长本身就是 voiced 区间，但偶有夹杂
+# 短噪声不应虚增 active 计数。
 
 _SPEAKER_ID_RE = re.compile(r"^speaker_(\d+)$")
 
@@ -239,12 +238,22 @@ class ECAPADiarizer:
             logger.warning("ecapa persist %s failed: %s", sid, e)
 
     async def _identify_one(
-        self, audio_bytes: bytes, sample_rate: int, dur_sec: float
+        self,
+        audio_bytes: bytes,
+        sample_rate: int,
+        dur_sec: float,
+        *,
+        voiced_active_s: float | None = None,
     ) -> str | None:
         """单段 embed + match + EMA（已持 self._lock）。
 
-        提取自原 `identify` 主体，给 `identify_segments` 复用。dur_sec 由调用方传入，
-        因为 voiced 段是切片，duration 由 audio_gate 给出比从 bytes 反推更准。
+        提取自原 `identify` 主体，给 `identify_segments` 复用。
+
+        spk-3 引入 voiced_active_s：段内真实活跃语音的秒数（duration × active_ratio）。
+        - 若 voiced_active_s 不够长（< settings.diarizer_min_voiced_seconds_for_new_profile）
+          → 不允许注册新人；尝试回退到最相似已知人（sim >= outlier_threshold 才命中）
+        - 若 voiced_active_s 充足 → 正常路径（命中或注册新人）
+        - 调用方未传 voiced_active_s 时退化为 dur_sec（向后兼容）
         """
         vec = await self._embed(audio_bytes, sample_rate)
         best_id, best_sim = self._best_match(vec)
@@ -254,16 +263,24 @@ class ECAPADiarizer:
             await self._persist(best_id, new_centroid)
             return best_id
 
-        # 短片段回退命中已知人（dead branch 在 6s 定长 chunk 下，留作 spk-3 重构成
-        # VAD active seconds 门控）
-        if (
-            dur_sec < _MIN_DUR_FOR_NEW_PROFILE
-            and best_id is not None
-            and best_sim >= _OUTLIER_SIM_ALLOW_NEW
-        ):
-            new_centroid = self._ema_update(best_id, vec)
-            await self._persist(best_id, new_centroid)
-            return best_id
+        # 注册新人门控：用 voiced_active_s（更准）；老调用方退化到 dur_sec
+        active_s = voiced_active_s if voiced_active_s is not None else dur_sec
+        min_for_new = self._settings.diarizer_min_voiced_seconds_for_new_profile
+        outlier_threshold = self._settings.diarizer_outlier_match_threshold
+
+        if active_s < min_for_new:
+            # 段太短不允许注册新人，尝试回退已知人
+            if best_id is not None and best_sim >= outlier_threshold:
+                new_centroid = self._ema_update(best_id, vec)
+                await self._persist(best_id, new_centroid)
+                return best_id
+            # 既不够注册又找不到够相似的已知人 → 丢弃该段（返回 None）
+            logger.debug(
+                "ecapa segment dropped: active_s=%.2f<%.2f, best_sim=%.3f<%.3f",
+                active_s, min_for_new,
+                best_sim if best_id else 0.0, outlier_threshold,
+            )
+            return None
 
         self._counter += 1
         new_id = f"speaker_{self._counter}"
@@ -332,6 +349,9 @@ class ECAPADiarizer:
             for seg in voiced:
                 # 段长不够稳定 embed（< 1s）→ 跳过，但保留 start/end 给调用方
                 seg_dur_sec = seg.duration_ms / 1000.0
+                # spk-3 门控用 voiced active seconds，比段总长更接近"真实人声时长"。
+                # active_ratio 由 audio_gate 帧扫描得到（每帧 RMS > threshold 算活跃）。
+                voiced_active_s = seg_dur_sec * seg.active_ratio
                 if len(seg.audio_bytes) < _MIN_BYTES_FOR_EMBED:
                     results.append(
                         SegmentSpeaker(seg.start_ms, seg.end_ms, None)
@@ -339,7 +359,10 @@ class ECAPADiarizer:
                     continue
                 try:
                     sid = await self._identify_one(
-                        seg.audio_bytes, sample_rate, seg_dur_sec
+                        seg.audio_bytes,
+                        sample_rate,
+                        seg_dur_sec,
+                        voiced_active_s=voiced_active_s,
                     )
                 except Exception as e:  # pragma: no cover
                     logger.warning(
