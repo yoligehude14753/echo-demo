@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listRecentAmbient, type AmbientSegment } from "@/api";
 import { useStore } from "@/store";
 
@@ -10,12 +10,34 @@ const speakerColors = [
   { fg: "#7c3aed", bg: "#f5f3ff" },
 ];
 
-function colorForSpeaker(
-  label: string | null | undefined,
-): { fg: string; bg: string } {
-  if (!label) return { fg: "#737373", bg: "#f5f5f5" };
-  const idx = parseInt(label.replace(/[^\d]/g, ""), 10) || 0;
-  return speakerColors[idx % speakerColors.length];
+function colorForDisplayIdx(idx: number): { fg: string; bg: string } {
+  if (idx <= 0) return { fg: "#737373", bg: "#f5f5f5" };
+  return speakerColors[(idx - 1) % speakerColors.length];
+}
+
+/**
+ * 把后端持久的全局 speaker label（"说话人 55"/"说话人 60"...）映射成
+ * 本次可见列表里的连续序号 1, 2, 3...（按首次出现的时间顺序）。
+ *
+ * 设计取舍：
+ * - 后端 SpeakerRegistry 给的 ID 是跨会议持久的（用于"重逢识别"），数字会越来越大
+ * - 用户在 UI 上不关心全局编号，只关心"这是说话人 1、2、3"
+ * - 仅在显示层重映射；后端原始 label 保留在 raw 字段里，导出/调试仍可见
+ */
+function buildSpeakerDisplayMap(
+  segs: AmbientSegment[],
+): Map<string, number> {
+  const m = new Map<string, number>();
+  let next = 1;
+  for (const s of segs) {
+    const raw = s.speaker_label;
+    if (!raw) continue;
+    if (!m.has(raw)) {
+      m.set(raw, next);
+      next += 1;
+    }
+  }
+  return m;
 }
 
 function fmtMs(ms: number): string {
@@ -53,6 +75,12 @@ export default function TranscriptStream(): JSX.Element {
   const scrollerRef = useRef<HTMLDivElement>(null);
   // 用户是否处在底部附近：未滚到底时不自动追，避免打断阅读
   const stickyToBottomRef = useRef(true);
+
+  // 全局 speaker label → 本次显示用的连续序号 (1, 2, 3 ...)
+  const speakerDisplayMap = useMemo(
+    () => buildSpeakerDisplayMap(segs),
+    [segs],
+  );
 
   // 时间窗：选中会议时高亮该窗内的 segments
   const winStart = meeting?.started_at
@@ -143,12 +171,18 @@ export default function TranscriptStream(): JSX.Element {
           )}
         </div>
         {segs.map((s, idx) => {
-          const c = colorForSpeaker(s.speaker_label);
+          const displayIdx = s.speaker_label
+            ? speakerDisplayMap.get(s.speaker_label) ?? 0
+            : 0;
+          const c = colorForDisplayIdx(displayIdx);
           const t = new Date(s.captured_at).getTime();
           const inWindow =
             winStart !== null &&
             t >= winStart &&
             (winEnd === null || t <= winEnd);
+          const displayLabel = displayIdx > 0
+            ? `说话人 ${displayIdx}`
+            : "未识别";
           return (
             <div
               key={`${s.captured_at}-${idx}`}
@@ -162,8 +196,14 @@ export default function TranscriptStream(): JSX.Element {
               <span
                 className="text-[11px] font-medium shrink-0 px-2 py-0.5 rounded-full"
                 style={{ color: c.fg, background: c.bg }}
+                title={
+                  s.speaker_label
+                    ? `全局编号：${s.speaker_label}`
+                    : "未识别说话人"
+                }
+                data-testid="speaker-tag"
               >
-                {s.speaker_label ?? "未识别"}
+                {displayLabel}
               </span>
               <span className="text-[14px] text-ink-800 leading-7 flex-1">
                 {s.text}

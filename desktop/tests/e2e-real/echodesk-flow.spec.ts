@@ -264,7 +264,47 @@ test.describe("EchoDesk 核心流程", () => {
     }
   });
 
-  test("13. WS 事件计数在交互后真增长", async ({ page }) => {
+  test("13. 转写流说话人标签从 1 开始连续编号（不显示后端全局编号）", async ({ page }) => {
+    test.setTimeout(60_000);
+    await gotoApp(page);
+
+    // 等转写流出现（有数据时才有 speaker-tag）；如果环境无音/空窗，跳过本断言
+    const tags = page.getByTestId("speaker-tag");
+    await page.waitForTimeout(4_000);
+    const count = await tags.count();
+    if (count === 0) {
+      test.skip(true, "环境无 ambient 数据，无法验证 speaker 显示规则");
+      return;
+    }
+
+    // 1) 所有可见 tag 形如「说话人 N」（有空格）或「未识别」，
+    //    不再有「说话人55」「说话人60」这种把后端全局 ID 直接粘上去的格式
+    const seen = new Set<number>();
+    let identifiedCount = 0;
+    for (let i = 0; i < count; i++) {
+      const txt = ((await tags.nth(i).textContent()) ?? "").trim();
+      if (txt === "未识别") continue;
+      identifiedCount++;
+      const m = /^说话人 (\d+)$/.exec(txt);
+      expect(m, `tag 文案不符合「说话人 N」格式：${txt}`).not.toBeNull();
+      seen.add(parseInt(m![1]!, 10));
+    }
+
+    if (identifiedCount > 0) {
+      // 2) 编号必须从 1 开始
+      expect(seen.has(1), "首位说话人编号必须为 1").toBe(true);
+
+      // 3) 编号必须是连续 1..max，无空洞
+      //    （隐含验证：如果后端全局 ID 透出，会形成 1..N 中间缺失或某个 N 远大于
+      //     可见说话人数，因此连续性约束就足以拒绝旧格式）
+      const maxN = Math.max(...seen);
+      for (let n = 1; n <= maxN; n++) {
+        expect(seen.has(n), `编号 ${n} 缺失，编号必须连续`).toBe(true);
+      }
+    }
+  });
+
+  test("14. WS 事件计数在交互后真增长", async ({ page }) => {
     test.setTimeout(60_000);
     await gotoApp(page);
 
