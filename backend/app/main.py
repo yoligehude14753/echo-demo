@@ -33,6 +33,7 @@ from app.api.deps import (
     get_repository,
     get_speaker_registry,
 )
+from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
 from app.api.health import start_prober, stop_prober
 from app.api.intent import router as intent_router
@@ -298,6 +299,8 @@ def create_app() -> FastAPI:
     app.include_router(intent_router)
     app.include_router(tts_router)
     app.include_router(ws_router)
+    # P2.6：诊断包导出，挂 /admin 前缀
+    app.include_router(diagnostics_router, prefix="/admin", tags=["admin"])
     return app
 
 
