@@ -84,11 +84,7 @@ class Settings(BaseSettings):
 
     @property
     def workspace_dirs_list(self) -> list[Path]:
-        return [
-            Path(d.strip()).expanduser()
-            for d in self.workspace_dirs.split(",")
-            if d.strip()
-        ]
+        return [Path(d.strip()).expanduser() for d in self.workspace_dirs.split(",") if d.strip()]
 
     # 用户拖入的最大上传大小（用户拖入；workspace 配置走 workspace_max_file_mb）
     upload_max_file_mb: float = 50.0

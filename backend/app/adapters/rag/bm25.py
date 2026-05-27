@@ -175,9 +175,7 @@ class BM25Rag:
         self._persist_doc(doc_id, title, chunks)
         return doc_id
 
-    def _tag_source_meta(
-        self, doc_id: str, source: str, source_path: str | None
-    ) -> None:
+    def _tag_source_meta(self, doc_id: str, source: str, source_path: str | None) -> None:
         """给已入库 doc 的 chunks 打上 source/source_path（PDF 走 ingest_pdf 后补元数据）。"""
         for c in self._chunks:
             if c.doc_id == doc_id:
@@ -189,8 +187,8 @@ class BM25Rag:
             return
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-            for c in data.get("chunks", []):
-                meta = c.setdefault("metadata", {})
+            for raw in data.get("chunks", []):
+                meta = raw.setdefault("metadata", {})
                 meta.setdefault("source", source)
                 if source_path:
                     meta.setdefault("source_path", source_path)
@@ -330,7 +328,7 @@ class BM25Rag:
     async def list_docs(self) -> list[dict[str, object]]:
         """所有 doc 摘要：{doc_id, title, source, source_path, kind, n_chunks}。"""
         async with self._lock:
-            agg: dict[str, dict[str, object]] = {}
+            agg: dict[str, dict[str, Any]] = {}
             for c in self._chunks:
                 d = agg.setdefault(
                     c.doc_id,
@@ -343,7 +341,7 @@ class BM25Rag:
                         "n_chunks": 0,
                     },
                 )
-                d["n_chunks"] = int(d["n_chunks"]) + 1  # type: ignore[operator]
+                d["n_chunks"] = int(d["n_chunks"]) + 1
             return list(agg.values())
 
     async def find_by_source_path(self, source_path: str) -> str | None:

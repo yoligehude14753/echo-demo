@@ -41,6 +41,10 @@ async def test_ingest_text(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_ingest_csv_via_markitdown(tmp_path: Path) -> None:
+    pytest.importorskip(
+        "markitdown",
+        reason="markitdown 是可选依赖；CI minimal 镜像未安装。本地 pip install markitdown 即可跑。",
+    )
     rag = BM25Rag(_settings(tmp_path / "idx"))
     f = tmp_path / "metrics.csv"
     f.write_text("quarter,revenue\nQ1,100\nQ2,120\nQ3,135\n", encoding="utf-8")
