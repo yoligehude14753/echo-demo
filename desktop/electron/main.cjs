@@ -65,6 +65,26 @@ function projectRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
+// backend 工作目录解析。prod (asar) 下 __dirname 在 asar 虚拟路径，
+// 不能作 child_process.spawn 的 cwd（uvicorn 启动期会 chdir 失败）。
+// 候选顺序跟 pythonCandidates 对齐，找到第一个真实存在的目录即用。
+function resolveBackendCwd() {
+  const cands = [
+    process.env.ECHO_BACKEND_CWD,
+    path.join(os.homedir(), ".echodesk", "source", "backend"),
+    path.join(projectRoot(), "backend"),
+  ].filter(Boolean);
+  for (const c of cands) {
+    try {
+      if (fs.existsSync(path.join(c, "app", "main.py"))) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  // 全找不到时退化用第一个（spawn 会失败，让上层走 handleBackendDeath）
+  return cands[1];
+}
+
 // ---------- Python 解析（P1.6） ----------
 
 // 候选顺序：env > 用户安装位置 (P1.7) > dev 仓库 venv > 系统 python3 > PATH
@@ -322,7 +342,19 @@ function spawnBackendAndWatch() {
     return;
   }
 
-  const cwd = path.join(projectRoot(), "backend");
+  const cwd = resolveBackendCwd();
+  if (!cwd || !fs.existsSync(path.join(cwd, "app", "main.py"))) {
+    emitStatus({
+      state: "backend-source-not-found",
+      searched: [
+        process.env.ECHO_BACKEND_CWD,
+        path.join(os.homedir(), ".echodesk", "source", "backend"),
+        path.join(projectRoot(), "backend"),
+      ].filter(Boolean),
+      help_url: "docs/INSTALL.md",
+    });
+    return;
+  }
   emitStatus({ state: "starting" });
   log(`[backend] spawn ${pythonResolved.python} -m uvicorn (cwd=${cwd})`);
 
