@@ -6,11 +6,23 @@ import type {
   MeetingMinutes,
   TranscriptSegment,
 } from "@/types";
+import {
+  buildFailedArtifact,
+  FAILED_ARTIFACT_LIMIT,
+  type FailedArtifact,
+} from "@/lib/failedArtifact";
 
 interface Store {
   meetings: Record<string, MeetingCard>;
   currentMeetingId: string | null;
   artifacts: GeneratedArtifact[];
+  failedArtifacts: FailedArtifact[];
+  /**
+   * 暂存最近一次 artifact.generating 的 brief，按 artifact_type 索引（最新覆盖旧的）。
+   * artifact.failed 到达时按 artifact_type 配对回填 intent_text；artifact.ready 时清除。
+   * 仅用于 best-effort 关联，无 1:1 严格匹配（同类型并发生成会丢失旧 brief，但 P2.2 演示场景够用）。
+   */
+  pendingArtifactBriefs: Record<string, string>;
   connected: boolean;
   events: EchoEvent[];
 
@@ -19,6 +31,7 @@ interface Store {
   applyEvent(e: EchoEvent): void;
   upsertMeeting(id: string, patch: Partial<MeetingCard>): void;
   addArtifact(a: GeneratedArtifact): void;
+  dismissFailedArtifact(id: string): void;
   reset(): void;
 }
 
@@ -37,6 +50,8 @@ export const useStore = create<Store>((set, get) => ({
   meetings: {},
   currentMeetingId: null,
   artifacts: [],
+  failedArtifacts: [],
+  pendingArtifactBriefs: {},
   connected: false,
   events: [],
 
@@ -48,8 +63,15 @@ export const useStore = create<Store>((set, get) => ({
       meetings: {},
       currentMeetingId: null,
       artifacts: [],
+      failedArtifacts: [],
+      pendingArtifactBriefs: {},
       events: [],
     }),
+
+  dismissFailedArtifact: (id) =>
+    set((s) => ({
+      failedArtifacts: s.failedArtifacts.filter((f) => f.id !== id),
+    })),
 
   upsertMeeting: (id, patch) =>
     set((s) => {
@@ -112,6 +134,20 @@ export const useStore = create<Store>((set, get) => ({
         });
         break;
       }
+      case "artifact.generating": {
+        // 暂存 brief，方便 artifact.failed 回填用户原始命令；
+        // 失败/成功后会被清除（见 artifact.failed / artifact.ready）。
+        const p = (e.payload ?? {}) as { artifact_type?: string; brief?: string };
+        if (p.artifact_type && typeof p.brief === "string" && p.brief) {
+          set((s) => ({
+            pendingArtifactBriefs: {
+              ...s.pendingArtifactBriefs,
+              [p.artifact_type as string]: p.brief as string,
+            },
+          }));
+        }
+        break;
+      }
       case "artifact.ready": {
         const a = e.payload as unknown as GeneratedArtifact;
         get().addArtifact(a);
@@ -124,6 +160,35 @@ export const useStore = create<Store>((set, get) => ({
             get().upsertMeeting(mid, { artifacts: [a, ...dedup] });
           }
         }
+        // 配对的 brief 已经无用，清掉避免污染下一次失败回填。
+        if (a?.artifact_type) {
+          set((s) => {
+            if (!(a.artifact_type in s.pendingArtifactBriefs)) return s;
+            const next = { ...s.pendingArtifactBriefs };
+            delete next[a.artifact_type];
+            return { pendingArtifactBriefs: next };
+          });
+        }
+        break;
+      }
+      case "artifact.failed": {
+        const p = (e.payload ?? {}) as { artifact_type?: string };
+        const briefs = get().pendingArtifactBriefs;
+        const intentText = p.artifact_type ? briefs[p.artifact_type] : undefined;
+        const failed = buildFailedArtifact(e, intentText);
+        set((s) => {
+          const nextBriefs = { ...s.pendingArtifactBriefs };
+          if (p.artifact_type && p.artifact_type in nextBriefs) {
+            delete nextBriefs[p.artifact_type];
+          }
+          return {
+            failedArtifacts: [failed, ...s.failedArtifacts].slice(
+              0,
+              FAILED_ARTIFACT_LIMIT,
+            ),
+            pendingArtifactBriefs: nextBriefs,
+          };
+        });
         break;
       }
       default:
