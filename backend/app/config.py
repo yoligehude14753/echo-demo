@@ -73,6 +73,22 @@ class Settings(BaseSettings):
     rag_pdf_chunk_tokens: int = 600
     rag_pdf_chunk_overlap: int = 100
 
+    # ── 授权工作区（M6：用户配置可索引的目录范围） ────────────
+    # 多个目录用逗号分隔，例如 ECHO_WORKSPACE_DIRS=~/Documents/work,~/Notes
+    workspace_dirs: str = ""
+    workspace_max_file_mb: float = 20.0
+    workspace_scan_on_startup: bool = True
+    workspace_state_file: Path = Field(
+        default=Path("~/.echo-demo/workspace_state.json").expanduser()
+    )
+
+    @property
+    def workspace_dirs_list(self) -> list[Path]:
+        return [Path(d.strip()).expanduser() for d in self.workspace_dirs.split(",") if d.strip()]
+
+    # 用户拖入的最大上传大小（用户拖入；workspace 配置走 workspace_max_file_mb）
+    upload_max_file_mb: float = 50.0
+
     # ── Web Search（Tavily 主 + DDG 兜底，2026-05-26 用户决策） ──
     web_search_enabled: bool = True
     web_search_top_n: int = 5

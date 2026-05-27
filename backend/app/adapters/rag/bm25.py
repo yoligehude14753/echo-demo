@@ -107,6 +107,95 @@ class BM25Rag:
         async with self._lock:
             return await asyncio.to_thread(self._ingest_pdf_sync, file_path, doc_title)
 
+    async def ingest_file(
+        self,
+        file_path: str,
+        doc_title: str | None = None,
+        *,
+        source: str = "upload",
+        source_path: str | None = None,
+    ) -> str:
+        """通用文档入库（任意 markitdown 支持的格式 + 文本类）。
+
+        - PDF 走 ingest_pdf（保留页码 metadata）
+        - 其他格式走 parsers.parse_to_text → chunk
+        - source: "upload"（用户拖入）/ "workspace"（授权工作区扫描）
+        - source_path: 工作区扫描时记录原始绝对路径，便于增量去重
+        """
+        path = Path(file_path).expanduser()
+        if not path.exists():
+            raise RagError(f"file not found: {file_path}")
+        if path.suffix.lower() == ".pdf":
+            doc_id = await self.ingest_pdf(str(path), doc_title=doc_title)
+            await asyncio.to_thread(self._tag_source_meta, doc_id, source, source_path)
+            return doc_id
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._ingest_generic_sync, str(path), doc_title, source, source_path
+            )
+
+    def _ingest_generic_sync(
+        self,
+        file_path: str,
+        doc_title: str | None,
+        source: str,
+        source_path: str | None,
+    ) -> str:
+        from app.adapters.rag.parsers import ParseError, parse_to_text
+
+        path = Path(file_path).expanduser()
+        title = doc_title or path.stem
+        try:
+            text = parse_to_text(path)
+        except ParseError as e:
+            raise RagError(str(e)) from e
+
+        ext = path.suffix.lower().lstrip(".")
+        doc_id = f"{ext or 'doc'}-{uuid.uuid4().hex[:12]}"
+        sub_chunks = self._chunk_text(text, self._chunk_size, self._chunk_overlap)
+        if not sub_chunks:
+            raise RagError(f"parsed but empty content: {path.name}")
+        chunks: list[RagChunk] = []
+        for j, sub in enumerate(sub_chunks):
+            meta: dict[str, str] = {"kind": ext or "text", "source": source}
+            if source_path:
+                meta["source_path"] = source_path
+            chunks.append(
+                RagChunk(
+                    doc_id=doc_id,
+                    doc_title=title,
+                    chunk_id=f"{doc_id}-c{j:04d}",
+                    text=sub,
+                    metadata=meta,
+                )
+            )
+        self._chunks.extend(chunks)
+        self._tokens.extend(_tokenize_cn_en(c.text) for c in chunks)
+        self._rebuild_bm25()
+        self._persist_doc(doc_id, title, chunks)
+        return doc_id
+
+    def _tag_source_meta(self, doc_id: str, source: str, source_path: str | None) -> None:
+        """给已入库 doc 的 chunks 打上 source/source_path（PDF 走 ingest_pdf 后补元数据）。"""
+        for c in self._chunks:
+            if c.doc_id == doc_id:
+                c.metadata.setdefault("source", source)
+                if source_path:
+                    c.metadata.setdefault("source_path", source_path)
+        f = self._index_dir / f"{doc_id}.json"
+        if not f.exists():
+            return
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            for raw in data.get("chunks", []):
+                meta = raw.setdefault("metadata", {})
+                meta.setdefault("source", source)
+                if source_path:
+                    meta.setdefault("source_path", source_path)
+            f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
     def _ingest_pdf_sync(self, file_path: str, doc_title: str | None) -> str:
         try:
             import pdfplumber
@@ -235,3 +324,30 @@ class BM25Rag:
             "n_docs": len(doc_ids),
             "ts": time.time(),
         }
+
+    async def list_docs(self) -> list[dict[str, object]]:
+        """所有 doc 摘要：{doc_id, title, source, source_path, kind, n_chunks}。"""
+        async with self._lock:
+            agg: dict[str, dict[str, Any]] = {}
+            for c in self._chunks:
+                d = agg.setdefault(
+                    c.doc_id,
+                    {
+                        "doc_id": c.doc_id,
+                        "title": c.doc_title,
+                        "kind": c.metadata.get("kind", ""),
+                        "source": c.metadata.get("source", "unknown"),
+                        "source_path": c.metadata.get("source_path"),
+                        "n_chunks": 0,
+                    },
+                )
+                d["n_chunks"] = int(d["n_chunks"]) + 1
+            return list(agg.values())
+
+    async def find_by_source_path(self, source_path: str) -> str | None:
+        """根据 source_path 找 doc_id（workspace 增量去重用）。"""
+        async with self._lock:
+            for c in self._chunks:
+                if c.metadata.get("source_path") == source_path:
+                    return c.doc_id
+            return None
