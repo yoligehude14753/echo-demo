@@ -6,6 +6,7 @@ import ArtifactPanel from "@/components/ArtifactPanel";
 import MinutesView from "@/components/MinutesView";
 import CommandBar from "@/components/CommandBar";
 import CaptureStatus from "@/components/CaptureStatus";
+import MeetingStatusBar from "@/components/MeetingStatusBar";
 import WorkspaceBar from "@/components/WorkspaceBar";
 import { useEchoCapture } from "@/capture/useEchoCapture";
 import { useStore } from "@/store";
@@ -33,6 +34,7 @@ export default function App(): JSX.Element {
           <span className="text-[11px] text-ink-500">v0.1</span>
         </div>
         <div className="app-no-drag flex items-center gap-4 text-[11px] text-ink-500">
+          <MeetingStatusBar />
           <Tooltip
             title={tts.enabled ? "TTS 已开：会议纪要/回答会语音播报" : "TTS 已关"}
           >

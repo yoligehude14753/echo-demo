@@ -13,6 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.adapters.audio_gate import is_likely_hallucination, pre_stt_gate
 from app.config import Settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
@@ -20,9 +21,8 @@ from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.capture import CaptureChunkResult
-from app.schemas.events import EchoEvent
-from app.use_cases.auto_meeting_detector import AutoMeetingDetector
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
+from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
 
 logger = logging.getLogger("echodesk.ambient")
@@ -39,7 +39,7 @@ class AmbientCapturePipeline:
         repository: RepositoryPort | None = None,
         diarizer: DiarizerPort | None = None,
         speaker_registry: SpeakerRegistry | None = None,
-        auto_meeting_detector: AutoMeetingDetector | None = None,
+        meeting_state: MeetingState | None = None,
         event_bus: EventBusPort | None = None,
     ) -> None:
         self._settings = settings
@@ -49,7 +49,7 @@ class AmbientCapturePipeline:
         self._repo = repository
         self._diarizer = diarizer
         self._registry = speaker_registry
-        self._detector = auto_meeting_detector
+        self._state = meeting_state
         self._event_bus = event_bus
         self._ambient_dir = Path(settings.storage_dir).expanduser() / "ambient"
         self._ambient_dir.mkdir(parents=True, exist_ok=True)
@@ -72,24 +72,57 @@ class AmbientCapturePipeline:
     ) -> CaptureChunkResult:
         audio_ref = await asyncio.to_thread(self._persist_wav, audio_bytes, sample_rate)
 
-        # STT 与 Diarizer 并发（节省 ambient 全天候链路的延迟）
-        stt_task = asyncio.create_task(self._safe_stt(audio_bytes, sample_rate))
-        diar_task: asyncio.Task[str | None] | None = None
-        if self._diarizer is not None:
-            diar_task = asyncio.create_task(self._safe_diarize(audio_bytes, sample_rate))
-        stt_segs = await stt_task
-        speaker_id: str | None = await diar_task if diar_task is not None else None
-
         captured_dt = datetime.now(UTC)
         captured_at = captured_dt.isoformat()
 
-        speaker_label: str | None = None
-        if self._registry is not None:
-            speaker_label = await self._registry.label_for(speaker_id, captured_at=captured_dt)
+        # ── 前置音频门控（RMS + 帧级 VAD） ──
+        # 静音/底噪 chunk 跳过 STT/diarizer（防 STT 幻觉 + speaker 编号爆炸），
+        # 但仍走 detector.observe 以便正确触发自动 end（silence_timeout）。
+        gate = pre_stt_gate(
+            audio_bytes,
+            rms_gate=self._settings.ambient_rms_gate,
+            frame_rms_threshold=self._settings.ambient_frame_rms_threshold,
+            min_speech_frame_ratio=self._settings.ambient_min_speech_frame_ratio,
+        )
+
+        stt_segs: list = []
+        speaker_id: str | None = None
+        if gate.pass_:
+            stt_task = asyncio.create_task(self._safe_stt(audio_bytes, sample_rate))
+            diar_task: asyncio.Task[str | None] | None = None
+            if self._diarizer is not None:
+                diar_task = asyncio.create_task(self._safe_diarize(audio_bytes, sample_rate))
+            stt_segs = await stt_task
+            speaker_id = await diar_task if diar_task is not None else None
+        else:
+            logger.debug(
+                "ambient gated: %s rms=%.0f ratio=%.2f",
+                gate.reason, gate.rms, gate.speech_ratio,
+            )
 
         ambient_stored = False
         ambient_text: str | None = None
         texts = [s.text.strip() for s in stt_segs if s.text.strip()]
+
+        # ── 后置 STT 幻觉门控 ──
+        if texts:
+            joined = " ".join(texts)
+            hallu, why = is_likely_hallucination(
+                joined,
+                audio_bytes,
+                max_cps=self._settings.ambient_max_cps,
+                min_chars=self._settings.ambient_min_stt_chars,
+            )
+            if hallu:
+                logger.debug("ambient hallu drop: %s text=%r", why, joined)
+                texts = []
+                stt_segs = []
+                speaker_id = None  # 同时撤销该 chunk 的 speaker（防注册脏档案）
+
+        speaker_label: str | None = None
+        if self._registry is not None and texts:
+            speaker_label = await self._registry.label_for(speaker_id, captured_at=captured_dt)
+
         if texts:
             ambient_text = " ".join(texts)
             duration_ms = max(0, max((s.end_ms for s in stt_segs), default=0))
@@ -117,46 +150,24 @@ class AmbientCapturePipeline:
                 except Exception as e:
                     logger.warning("ambient repo persist failed: %s", e)
 
-        # 自动会议检测（手动 meeting_id 优先；detector 让步）
-        effective_meeting_id = meeting_id
-        if self._detector is not None:
-            duration_ms = max((s.end_ms for s in stt_segs), default=0) if stt_segs else 0
-            events = self._detector.observe(
-                speaker_id=speaker_id,
-                duration_ms=duration_ms,
-                now=captured_dt,
-                manual_meeting_id=meeting_id,
+        # 自动会议检测：交给 MeetingState（单例状态机）；它内部协调 detector。
+        # ambient 主链路只负责"喂观测"，状态/落库由 MeetingState 全权决定。
+        effective_meeting_id: str | None = meeting_id
+        if self._state is not None and meeting_id is None:
+            duration_ms_obs = (
+                max((s.end_ms for s in stt_segs), default=0) if stt_segs else 0
             )
-            for ev in events:
-                if ev.kind == "start":
-                    try:
-                        await self._meeting.start_meeting(
-                            ev.meeting_id, auto_started=True
-                        )
-                    except Exception as e:
-                        logger.warning("auto-start meeting failed: %s", e)
-                        continue
-                    await self._publish_event(
-                        "meeting.auto_detected",
-                        ev.meeting_id,
-                        {"reason": ev.reason},
-                    )
-                elif ev.kind == "end":
-                    try:
-                        await self._meeting.end_meeting(ev.meeting_id)
-                    except Exception as e:
-                        logger.warning("auto-end meeting failed: %s", e)
-                    await self._publish_event(
-                        "meeting.auto_ended",
-                        ev.meeting_id,
-                        {"reason": ev.reason},
-                    )
-            # 手动 mid 优先；否则用 detector 当前的 auto meeting
-            if meeting_id is None:
-                effective_meeting_id = self._detector.active_meeting_id
+            try:
+                effective_meeting_id = await self._state.observe_chunk(
+                    speaker_id=speaker_id,
+                    duration_ms=duration_ms_obs,
+                    now=captured_dt,
+                )
+            except Exception as e:
+                logger.warning("meeting_state.observe_chunk failed: %s", e)
 
         meeting_segments = []
-        if effective_meeting_id:
+        if effective_meeting_id and texts:
             try:
                 meeting_segments = await self._meeting.ingest_from_stt(
                     effective_meeting_id,
@@ -176,18 +187,6 @@ class AmbientCapturePipeline:
             meeting_id=effective_meeting_id,
             meeting_segments=meeting_segments,
         )
-
-    async def _publish_event(
-        self, event_type: str, meeting_id: str, payload: dict[str, str]
-    ) -> None:
-        if self._event_bus is None:
-            return
-        try:
-            await self._event_bus.publish(
-                EchoEvent(type=event_type, meeting_id=meeting_id, payload=payload)  # type: ignore[arg-type]
-            )
-        except Exception as e:
-            logger.warning("publish %s failed: %s", event_type, e)
 
     async def _safe_stt(
         self, audio_bytes: bytes, sample_rate: int

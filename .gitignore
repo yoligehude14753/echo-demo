@@ -74,8 +74,3 @@ rag_index/
 # Skill artifact build dirs
 backend/.skill_build/
 backend/.skill_artifacts/
-
-# electron-builder output
-/desktop/release/
-/desktop/dist/
-

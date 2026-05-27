@@ -67,6 +67,28 @@ class Settings(BaseSettings):
     diarizer_match_threshold: float = 0.65
     diarizer_min_audio_bytes: int = 16_000
 
+    # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
+    # 整段 RMS 门控：低于此值视为底噪 → 跳过 STT/diarizer，整 chunk 丢弃
+    ambient_rms_gate: int = 600
+    # 帧级 VAD：20ms 帧统计；帧 RMS > 阈值算"活跃"
+    ambient_frame_rms_threshold: int = 400
+    # 活跃帧比例 < 此值 → 跳过 STT
+    ambient_min_speech_frame_ratio: float = 0.05
+    # STT 后 cps 门控：字符速率 > 此值视为幻觉/复读丢弃
+    ambient_max_cps: float = 12.0
+    # STT 输出最短字符数（小于此值丢弃，防止单字幻觉污染 RAG/speaker registry）
+    ambient_min_stt_chars: int = 4
+
+    # ── 会议自动检测（与 PRD §自动开会/自动结束 对齐） ──────────
+    # 检测窗口；distinct speakers 需 ≥ min_distinct 且总语音 ≥ min_active_s
+    automeet_window_s: float = 30.0
+    automeet_min_distinct_speakers: int = 2
+    automeet_min_active_seconds: float = 6.0
+    # 静默 X 秒 → 自动 end（含 finalize 纪要）
+    automeet_silence_timeout_s: float = 30.0
+    # 自动结束后多久内不再触发新会议（防抖）
+    automeet_cooldown_s: float = 60.0
+
     # ── RAG ───────────────────────────────────────────────────────
     rag_index_dir: Path = Field(default=Path("~/.echodesk/rag_index").expanduser())
     rag_top_k: int = 5

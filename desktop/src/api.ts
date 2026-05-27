@@ -2,6 +2,7 @@ import type {
   GeneratedArtifact,
   IntentResult,
   MeetingMinutes,
+  MeetingStateSnapshot,
   TranscriptSegment,
 } from "@/types";
 import { apiUrl, backendBase } from "@/runtime";
@@ -67,6 +68,30 @@ export async function finalizeMeeting(
   const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/finalize`);
   const r = await fetch(u, { method: "POST", body: fd });
   return asJson<MeetingMinutes>(r);
+}
+
+// ── 全局会议状态机（PRD：自动开/结 + 手动覆盖） ──────────────────
+
+export async function getCurrentMeeting(): Promise<MeetingStateSnapshot> {
+  const u = await apiUrl("/meetings/current");
+  const r = await fetch(u);
+  return asJson<MeetingStateSnapshot>(r);
+}
+
+export async function manualStartMeeting(
+  title?: string,
+): Promise<MeetingStateSnapshot> {
+  const u = await apiUrl("/meetings/manual_start");
+  const fd = new FormData();
+  if (title) fd.append("title", title);
+  const r = await fetch(u, { method: "POST", body: fd });
+  return asJson<MeetingStateSnapshot>(r);
+}
+
+export async function manualEndMeeting(): Promise<MeetingStateSnapshot> {
+  const u = await apiUrl("/meetings/manual_end");
+  const r = await fetch(u, { method: "POST" });
+  return asJson<MeetingStateSnapshot>(r);
 }
 
 export type ArtifactKind = "word" | "xlsx" | "excel" | "pptx" | "ppt" | "html";

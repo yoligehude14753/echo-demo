@@ -2,6 +2,7 @@ export type BusinessEventType =
   | "meeting.started"
   | "meeting.auto_detected"
   | "meeting.auto_ended"
+  | "meeting.state_changed"
   | "meeting.segment"
   | "meeting.ended"
   | "minutes.ready"
@@ -82,9 +83,17 @@ export type IntentKind =
   | "generate_xlsx"
   | "generate_word"
   | "summarize_meeting"
-  | "start_meeting"
-  | "end_meeting"
   | "chat";
+
+export type MeetingMode = "idle" | "in_meeting";
+export type StartReason = "auto" | "manual";
+
+export interface MeetingStateSnapshot {
+  mode: MeetingMode;
+  meeting_id: string | null;
+  started_at: string | null;
+  started_by: StartReason | null;
+}
 
 export interface IntentResult {
   kind: IntentKind;

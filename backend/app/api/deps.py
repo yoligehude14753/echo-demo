@@ -12,6 +12,7 @@ from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
 from app.use_cases.auto_meeting_detector import AutoMeetingDetector
+from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
 
 _llm_singleton: OpenAICompatibleLLM | None = None
@@ -20,6 +21,7 @@ _repo_singleton: RepositoryPort | None = None
 _diarizer_singleton: DiarizerPort | None = None
 _speaker_registry_singleton: SpeakerRegistry | None = None
 _auto_detector_singleton: AutoMeetingDetector | None = None
+_meeting_state_singleton: MeetingState | None = None
 
 
 def get_llm_singleton(
@@ -70,12 +72,44 @@ def get_speaker_registry(
     return _speaker_registry_singleton
 
 
-def get_auto_meeting_detector() -> AutoMeetingDetector:
-    """自动会议检测器单例（process-local state）。"""
+def get_auto_meeting_detector(
+    settings: Settings = Depends(get_settings),
+) -> AutoMeetingDetector:
+    """自动会议检测器单例（process-local state）；参数来自 Settings。"""
     global _auto_detector_singleton  # noqa: PLW0603
     if _auto_detector_singleton is None:
-        _auto_detector_singleton = AutoMeetingDetector()
+        _auto_detector_singleton = AutoMeetingDetector(
+            window_s=settings.automeet_window_s,
+            min_distinct_speakers=settings.automeet_min_distinct_speakers,
+            min_active_seconds=settings.automeet_min_active_seconds,
+            silence_timeout_s=settings.automeet_silence_timeout_s,
+            cooldown_s=settings.automeet_cooldown_s,
+        )
     return _auto_detector_singleton
+
+
+def get_meeting_state(
+    settings: Settings = Depends(get_settings),
+    repository: RepositoryPort = Depends(get_repository),
+    event_bus: InMemoryEventBus = Depends(get_event_bus),
+    detector: AutoMeetingDetector = Depends(get_auto_meeting_detector),
+) -> MeetingState:
+    """全局会议状态机单例（idle / in_meeting）。
+
+    依赖 MeetingPipeline，但为防循环 import，pipeline 在首次调用时延迟导入。
+    """
+    from app.api.meetings import get_meeting_pipeline_for_lifespan  # 局部导入避免循环
+
+    global _meeting_state_singleton  # noqa: PLW0603
+    if _meeting_state_singleton is None:
+        pipeline = get_meeting_pipeline_for_lifespan(settings, repository)
+        _meeting_state_singleton = MeetingState(
+            pipeline=pipeline,
+            detector=detector,
+            repository=repository,
+            event_bus=event_bus,
+        )
+    return _meeting_state_singleton
 
 
 async def aclose_llm_singleton() -> None:
@@ -103,10 +137,11 @@ def reset_deps_for_test() -> None:
     """测试用：清掉所有单例缓存。"""
     global _llm_singleton, _event_bus_singleton, _repo_singleton  # noqa: PLW0603
     global _diarizer_singleton, _speaker_registry_singleton  # noqa: PLW0603
-    global _auto_detector_singleton  # noqa: PLW0603
+    global _auto_detector_singleton, _meeting_state_singleton  # noqa: PLW0603
     _llm_singleton = None
     _event_bus_singleton = None
     _repo_singleton = None
     _diarizer_singleton = None
     _speaker_registry_singleton = None
     _auto_detector_singleton = None
+    _meeting_state_singleton = None

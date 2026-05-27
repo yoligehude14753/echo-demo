@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 _SYS_PROMPT = """你是 EchoDesk 桌面助手的意图路由器。
 
-把用户输入分类为以下 10 类之一：
+把用户输入分类为以下 8 类之一：
 
 - search_web        : 用户想查最新资讯 / 价格 / 时事 / 联网
 - search_rag        : 用户想回忆之前会议 / 文档 / 本地知识库
@@ -35,12 +35,13 @@ _SYS_PROMPT = """你是 EchoDesk 桌面助手的意图路由器。
 - generate_xlsx     : 用户想生成 Excel / 表格 / 财务模型 / DCF
 - generate_word     : 用户想生成 Word 文档
 - summarize_meeting : 用户想总结当前会议 / 生成会议纪要
-- start_meeting     : 用户想开始新会议 / 建会议
-- end_meeting       : 用户想结束当前会议（不生成纪要，ambient 继续）
 - chat              : 兜底，其它任何聊天对话
 
+注意：会议开始/结束**不通过 @ 命令**，由 UI 状态栏点击 + 自动检测完成。
+"开始会议""结束会议"这类话归类为 chat。
+
 严格输出 JSON：
-{"kind": "<上述 10 选 1>", "confidence": 0.0~1.0, "rationale": "中文 ≤ 30 字"}
+{"kind": "<上述 8 选 1>", "confidence": 0.0~1.0, "rationale": "中文 ≤ 30 字"}
 
 不要 markdown 围栏，不要解释。"""
 
@@ -175,7 +176,7 @@ class LLMIntentRouter:
             }[kind]
         elif kind in {"search_web", "search_rag"}:
             params["question"] = body
-        elif kind in {"summarize_meeting", "start_meeting", "end_meeting"}:
+        elif kind == "summarize_meeting":
             params["meeting_id"] = current_meeting_id or ""
         else:  # chat
             params["text"] = body or text.strip()

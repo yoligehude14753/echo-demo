@@ -75,6 +75,29 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         logger.warning("meeting hydrate failed: %s", e)
 
+    try:
+        from app.api.deps import (
+            get_auto_meeting_detector as _get_det,
+        )
+        from app.api.deps import (
+            get_event_bus as _get_bus,
+        )
+        from app.api.deps import (
+            get_meeting_state as _get_state,
+        )
+        detector = _get_det(settings)
+        bus = _get_bus()
+        state = _get_state(settings, repo, bus, detector)
+        await state.hydrate()
+        if state.current is not None:
+            logger.info(
+                "meeting-state hydrated: %s started_by=%s",
+                state.current.meeting_id,
+                state.current.started_by,
+            )
+    except Exception as e:
+        logger.warning("meeting-state hydrate failed: %s", e)
+
     # 授权工作区：启动后 fire-and-forget 扫描（不阻塞 startup）
     if settings.workspace_scan_on_startup and settings.workspace_dirs_list:
         from app.adapters.rag.workspace_scanner import WorkspaceScanner

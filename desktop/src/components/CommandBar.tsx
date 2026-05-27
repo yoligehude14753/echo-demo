@@ -20,13 +20,11 @@ import { Input, Tag, Tooltip, message } from "antd";
 import { FileText, Loader2, Paperclip, Sparkles, Upload, Wand2, X } from "lucide-react";
 
 import {
-  endMeeting,
   finalizeMeeting,
   generateArtifact,
   ingestFile,
   ragAsk,
   routeIntent,
-  startMeeting,
 } from "@/api";
 import { useStore } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
@@ -46,8 +44,6 @@ const kindLabel: Record<IntentKind, string> = {
   generate_xlsx: "生成 Excel",
   generate_word: "生成 Word",
   summarize_meeting: "总结会议",
-  start_meeting: "开始会议",
-  end_meeting: "结束会议",
   chat: "对话",
 };
 
@@ -59,8 +55,6 @@ const kindColor: Record<IntentKind, string> = {
   generate_xlsx: "green",
   generate_word: "cyan",
   summarize_meeting: "geekblue",
-  start_meeting: "lime",
-  end_meeting: "orange",
   chat: "default",
 };
 
@@ -89,8 +83,6 @@ export default function CommandBar(): JSX.Element {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
-  const upsertMeeting = useStore((s) => s.upsertMeeting);
-  const selectMeeting = useStore((s) => s.selectMeeting);
   const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -218,44 +210,12 @@ export default function CommandBar(): JSX.Element {
       case "summarize_meeting": {
         const mid = (r.params.meeting_id as string | undefined) ?? currentMeetingId;
         if (!mid) {
-          message.warning("当前没有选中的会议");
+          message.warning("当前没有进行中的会议");
           return;
         }
         message.info(`正在总结会议 ${mid}…`);
         const minutes = await finalizeMeeting(mid, `会议 ${mid}`);
         message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
-        return;
-      }
-      case "start_meeting": {
-        const mid =
-          (r.params.meeting_id as string | undefined) ||
-          `m-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}`;
-        // 结束其它仍在进行中的会议（只允许一个 meeting 叠加层）
-        const all = useStore.getState().meetings;
-        for (const [id, m] of Object.entries(all)) {
-          if (m.state === "in_meeting" && id !== mid) {
-            void endMeeting(id).catch(() => undefined);
-            upsertMeeting(id, {
-              state: "ended",
-              ended_at: new Date().toISOString(),
-            });
-          }
-        }
-        await startMeeting(mid);
-        upsertMeeting(mid, { state: "in_meeting", started_at: new Date().toISOString() });
-        selectMeeting(mid);
-        message.success(`会议 ${mid} 已开启`);
-        return;
-      }
-      case "end_meeting": {
-        const mid = (r.params.meeting_id as string | undefined) ?? currentMeetingId;
-        if (!mid) {
-          message.warning("当前没有进行中的会议");
-          return;
-        }
-        await endMeeting(mid);
-        upsertMeeting(mid, { state: "ended", ended_at: new Date().toISOString() });
-        message.success(`会议 ${mid} 已结束（ambient 持续采集）`);
         return;
       }
       case "search_web":

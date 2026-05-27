@@ -1,10 +1,15 @@
-"""Intent schema：@路由 10 类意图。
+"""Intent schema：@路由 8 类意图（2026-05 修订）。
 
 PR-16 / m5-t5：用户在前端聊天框输入"@查英伟达营收"等，
 调 /intent/route → LLM 分类返回 IntentResult{kind, params, confidence}
-→ 前端按 kind 触发对应业务（产物/搜索/会议）。
+→ 前端按 kind 触发对应业务（产物/搜索/纪要）。
 
-10 类意图：
+设计修订（2026-05）：
+- 删除 ``start_meeting`` / ``end_meeting`` 意图：会议状态由全局 UI 状态栏点击 +
+  自动检测控制（``MeetingState`` 单例状态机），不再由 @ 命令操作。
+- ``summarize_meeting`` 保留：作为手动 finalize 入口（会议正在进行时生成快照）。
+
+8 类意图：
 - search_web        : @查 / @搜 / @最新（联网检索）
 - search_rag        : @回忆 / @上次会议 / @找文档（本地知识库检索）
 - generate_html     : @生成 HTML / @报告
@@ -12,8 +17,6 @@ PR-16 / m5-t5：用户在前端聊天框输入"@查英伟达营收"等，
 - generate_xlsx     : @生成 Excel / @表格 / @财务模型
 - generate_word     : @生成 Word / @文档
 - summarize_meeting : @总结当前会议 / @生成纪要
-- start_meeting     : @开始会议 / @新建会议
-- end_meeting       : @结束会议 / @停会（不生成纪要）
 - chat              : 兜底，不带 @ 或不匹配上述意图
 """
 
@@ -31,8 +34,6 @@ IntentKind = Literal[
     "generate_xlsx",
     "generate_word",
     "summarize_meeting",
-    "start_meeting",
-    "end_meeting",
     "chat",
 ]
 
@@ -45,8 +46,6 @@ SUPPORTED_INTENTS: frozenset[str] = frozenset(
         "generate_xlsx",
         "generate_word",
         "summarize_meeting",
-        "start_meeting",
-        "end_meeting",
         "chat",
     ]
 )
@@ -61,7 +60,7 @@ class IntentResult(BaseModel):
 
 class IntentRequest(BaseModel):
     text: str
-    current_meeting_id: str | None = None  # 提供给 summarize_meeting / start_meeting 用
+    current_meeting_id: str | None = None  # 提供给 summarize_meeting 用
 
 
 def parse_at_prefix(text: str) -> str | None:
@@ -105,11 +104,6 @@ _KEYWORD_HINTS: dict[str, IntentKind] = {
     "生成纪要": "summarize_meeting",
     "总结当前": "summarize_meeting",
     "纪要": "summarize_meeting",
-    "开始会议": "start_meeting",
-    "新建会议": "start_meeting",
-    "结束会议": "end_meeting",
-    "结束当前": "end_meeting",
-    "停会": "end_meeting",
 }
 
 
