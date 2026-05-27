@@ -317,8 +317,22 @@ function MicPopover({ perm }: { perm: MicPermission }): JSX.Element {
         </span>
       </div>
       {perm === "denied" && (
-        <div className="text-err text-[11px] mt-1.5">
-          已被拒绝。请到 系统设置 → 隐私与安全 → 麦克风 勾选 EchoDesk
+        <div className="mt-1.5 space-y-1.5">
+          <div className="text-err text-[11px]">
+            已被拒绝。请到 系统设置 → 隐私与安全 → 麦克风 勾选 EchoDesk
+          </div>
+          {window.echo?.openMicSystemPrefs && (
+            <button
+              type="button"
+              onClick={async () => {
+                await window.echo?.openMicSystemPrefs?.();
+              }}
+              className="text-[11px] text-accent underline hover:no-underline"
+              data-testid="mic-open-system-prefs"
+            >
+              打开系统设置
+            </button>
+          )}
         </div>
       )}
       {perm === "prompt" && (

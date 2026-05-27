@@ -17,4 +17,13 @@ contextBridge.exposeInMainWorld("echo", {
 
   // degraded UI 上"重启 backend"按钮触发；主进程清 backoff + 重新 spawn
   manualRestartBackend: () => ipcRenderer.invoke("backend:manual-restart"),
+
+  // 麦克风权限（P3.5）
+  // - getMicStatus: macOS systemPreferences.getMediaAccessStatus("microphone")
+  //   返回 'not-determined'|'granted'|'denied'|'restricted'|'unknown'（非 mac → 'unknown'）
+  // - requestMic: 触发 macOS 系统弹窗请求权限；返回 true=用户点允许，false=拒绝
+  // - openMicSystemPrefs: 一键打开 macOS 隐私与安全-麦克风设置页
+  getMicStatus: () => ipcRenderer.invoke("mic:status"),
+  requestMic: () => ipcRenderer.invoke("mic:request"),
+  openMicSystemPrefs: () => ipcRenderer.invoke("mic:open-system-prefs"),
 });

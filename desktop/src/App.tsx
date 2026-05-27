@@ -11,10 +11,12 @@ import MeetingStatusBar from "@/components/MeetingStatusBar";
 import WorkspaceBar from "@/components/WorkspaceBar";
 import StatusBar from "@/components/StatusBar";
 import SettingsPanel from "@/components/SettingsPanel";
+import OnboardingModal from "@/components/OnboardingModal";
 import { useEchoCapture } from "@/capture/useEchoCapture";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
+import { useOnboarding } from "@/hooks/useOnboarding";
 
 const { Header, Sider, Content } = Layout;
 
@@ -26,6 +28,7 @@ export default function App(): JSX.Element {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const events = useStore((s) => s.events);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const onboarding = useOnboarding();
 
   return (
     <Layout className="!h-screen !bg-paper-50 !overflow-hidden">
@@ -89,6 +92,12 @@ export default function App(): JSX.Element {
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        onReplayOnboarding={onboarding.resetForDebug}
+      />
+
+      <OnboardingModal
+        open={onboarding.shouldShow}
+        onClose={onboarding.markCompleted}
       />
 
       <WorkspaceBar />
