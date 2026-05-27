@@ -179,23 +179,31 @@ async def test_outlier_threshold_setting_takes_effect() -> None:
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_active_ratio_affects_gate_decision() -> None:
-    """段长 2s 但 active_ratio 低（一半静音）→ voiced_active_s=1.0s < 1.5s → 不注册。
+    """段长够但 active_ratio 低 → voiced_active_s 不达门控 → 不注册。
 
-    模拟方式：在 sine 中间插入静音段使整段 active_ratio 降低，但 silence-gap
-    短于 200ms 不切句 → 仍是一段，duration=2s, active_ratio≈0.6 → voiced_active_s=1.2s。
+    场景：silence-gap 不超过 200ms 所以不切句，得到单段；但段内大量静音使
+    active_ratio 远低于 1。voiced_active_s = duration × active_ratio 应该用
+    "真实活跃语音"门控，而不是段总长。
+
+    用显式 settings 让用例跟默认值脱钩。
     """
-    d = ECAPADiarizer(_enabled())
+    d = ECAPADiarizer(_enabled(diarizer_min_voiced_seconds_for_new_profile=1.5))
     vec_a = np.array([1.0, 0.0, 0.0], dtype=np.float32)
 
     async def _fake_embed(_b: bytes, _sr: int) -> object:
         return vec_a
 
-    # 1s sine + 0.15s silence + 1s sine → 1 段（gap < 200ms），active_ratio ~ 1/1.15
-    buf = _sine_pcm(1_000) + _silence_pcm(150) + _sine_pcm(1_000)
+    # 600ms sine ×3 / 150ms silence ×2 = 2.1s 段长，active_ratio = 1800/2100 ≈ 0.857
+    # voiced_active_s ≈ 1.8s ≥ 1.5 → 注册（验证门控算的是 active_s 不是段长）
+    buf = (
+        _sine_pcm(600)
+        + _silence_pcm(150)
+        + _sine_pcm(600)
+        + _silence_pcm(150)
+        + _sine_pcm(600)
+    )
     with patch.object(d, "_embed", side_effect=_fake_embed):
         out = await d.identify_segments(buf)
 
     assert len(out) == 1
-    # 段长 ≈ 2.15s，active_ratio ≈ 0.87，voiced_active_s ≈ 1.87s ≥ 1.5 → 注册
-    # 这个用例验证算法跑得通；下个用例用更激进的低 ratio 模式验证拒注册。
     assert out[0].speaker_id == "speaker_1"

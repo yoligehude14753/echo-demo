@@ -65,8 +65,9 @@ async def test_identify_segments_single_voiced_returns_one() -> None:
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_two_speakers_in_one_chunk_get_distinct_ids() -> None:
-    """[A 1.5s | 静 0.5s | B 1.5s] → 两段，不同 speaker_id。
+    """[A 2.1s | 静 0.5s | B 2.1s] → 两段，不同 speaker_id。
 
+    段长 ≥ 默认 min_voiced_seconds_for_new_profile=2.0（spk-6 保守值）。
     这就是 spk-2 要修的根因场景：之前整段 embed → 混合向量 → 都不像 → 注册新人。
     """
     d = ECAPADiarizer(_settings())
@@ -77,8 +78,8 @@ async def test_two_speakers_in_one_chunk_get_distinct_ids() -> None:
     async def _fake_embed(_b: bytes, _sr: int) -> object:
         return feed.pop(0)
 
-    buf = _sine_pcm(1_500, freq_hz=440) + _silence_pcm(500) + _sine_pcm(
-        1_500, freq_hz=880
+    buf = _sine_pcm(2_100, freq_hz=440) + _silence_pcm(500) + _sine_pcm(
+        2_100, freq_hz=880
     )
     with patch.object(d, "_embed", side_effect=_fake_embed):
         out = await d.identify_segments(buf)
@@ -86,13 +87,13 @@ async def test_two_speakers_in_one_chunk_get_distinct_ids() -> None:
     assert len(out) == 2
     ids = [s.speaker_id for s in out]
     assert ids == ["speaker_1", "speaker_2"]
-    assert out[0].duration_ms >= 1_400 and out[1].duration_ms >= 1_400
+    assert out[0].duration_ms >= 2_000 and out[1].duration_ms >= 2_000
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_same_speaker_twice_in_chunk_returns_same_id() -> None:
-    """[A 1.5s | 静 0.5s | A 1.5s] → 两段，同一 speaker_id（EMA 命中）。"""
+    """[A 2.1s | 静 0.5s | A 2.1s] → 两段，同一 speaker_id（EMA 命中）。"""
     d = ECAPADiarizer(_settings())
     vec_a = np.array([1.0, 0.0, 0.0], dtype=np.float32)
     vec_a2 = np.array([0.95, 0.05, 0.0], dtype=np.float32)
@@ -103,7 +104,7 @@ async def test_same_speaker_twice_in_chunk_returns_same_id() -> None:
     async def _fake_embed(_b: bytes, _sr: int) -> object:
         return feed.pop(0)
 
-    buf = _sine_pcm(1_500) + _silence_pcm(500) + _sine_pcm(1_500)
+    buf = _sine_pcm(2_100) + _silence_pcm(500) + _sine_pcm(2_100)
     with patch.object(d, "_embed", side_effect=_fake_embed):
         out = await d.identify_segments(buf)
 
@@ -116,7 +117,7 @@ async def test_same_speaker_twice_in_chunk_returns_same_id() -> None:
 async def test_identify_fallback_returns_dominant_segment_id() -> None:
     """老 identify 接口走切片 → 选最长段的 speaker。
 
-    [A 1.6s | 静 0.5s | B 2.5s] → 返回 B 的 id（两段都过 spk-3 门控 1.5s）。
+    [A 2.1s | 静 0.5s | B 3.0s] → 返回 B 的 id（两段都过 spk-6 门控 2.0s）。
     """
     d = ECAPADiarizer(_settings())
     vec_a = np.array([1.0, 0.0, 0.0], dtype=np.float32)
@@ -126,7 +127,7 @@ async def test_identify_fallback_returns_dominant_segment_id() -> None:
     async def _fake_embed(_b: bytes, _sr: int) -> object:
         return feed.pop(0)
 
-    buf = _sine_pcm(1_600) + _silence_pcm(500) + _sine_pcm(2_500)
+    buf = _sine_pcm(2_100) + _silence_pcm(500) + _sine_pcm(3_000)
     with patch.object(d, "_embed", side_effect=_fake_embed):
         sid = await d.identify(buf)
     # B 是 speaker_2（A 先注册成 speaker_1）；最长段是 B

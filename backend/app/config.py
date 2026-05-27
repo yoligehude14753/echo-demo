@@ -102,11 +102,16 @@ class Settings(BaseSettings):
     # voiced_active_s = duration_ms / 1000 * active_ratio
     # 段内真实活跃语音 < 此值 → 不允许注册新人；尝试回退到最相似已知人
     # （sim 阈值用 diarizer_outlier_match_threshold）。echo 用 4.0s（整段 chunk
-    # 时代），spk-2 切句后段长普遍 1-3s，1.5s 是切句后合理预算（拍门 / 短句不允许新人）。
-    diarizer_min_voiced_seconds_for_new_profile: float = 1.5
+    # 时代），spk-2 切句后段长普遍 1-3s。
+    # spk-6 保守预设：1.5 → 2.0。trade-off：漏注册短句新人（下次说话还能补）
+    # vs 误注册（爆炸）。在拿到真实多人音频回归数据前，保守倾向漏注册。
+    diarizer_min_voiced_seconds_for_new_profile: float = 2.0
     # 短段强制回退已知人时的相似度兜底阈值；低于此值即使是最相似的人也不命中
-    # （宁可丢这段也不要污染最相似人的 centroid）。原硬编码 0.30 太宽松。
-    diarizer_outlier_match_threshold: float = 0.50
+    # （宁可丢这段也不要污染最相似人的 centroid）。
+    # spk-6 保守预设：0.50 → 0.60。trade-off：短段更难"回退已知人"，多段被丢
+    # （丢段无害，文本仍由 STT 出，只是没 speaker_label） vs 拉飘 centroid（污染）。
+    # 仍 < diarizer_match_threshold (0.70) 维持"短段比正常段更严"语义。
+    diarizer_outlier_match_threshold: float = 0.60
 
     # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
     # 对齐基线：echo `backend/app/pipeline.py:570-577`（生产值 600 / 400 / 0.05 / 12）。
