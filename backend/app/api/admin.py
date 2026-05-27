@@ -91,7 +91,8 @@ def _segments_to_markdown(
         lines.append(f"# {title}")
         lines.append("")
     for seg in segments:
-        text = (seg.get("text") or "").strip()  # type: ignore[union-attr]
+        raw_text = seg.get("text") or ""
+        text = str(raw_text).strip()
         if not text:
             continue
         label = seg.get("speaker_label") or "(未识别)"
@@ -242,9 +243,7 @@ async def export_meeting(
         "state": meeting.state,
         "started_at": meeting.started_at.isoformat(),
         "ended_at": meeting.ended_at.isoformat() if meeting.ended_at else None,
-        "finalized_at": (
-            meeting.finalized_at.isoformat() if meeting.finalized_at else None
-        ),
+        "finalized_at": (meeting.finalized_at.isoformat() if meeting.finalized_at else None),
         "auto_started": meeting.auto_started,
         "speaker_labels": labels,
         "minutes": minutes_obj,
@@ -343,12 +342,8 @@ async def reset_speakers(
 
         await conn.execute("DELETE FROM speakers")
         await conn.execute("DELETE FROM meeting_speaker_labels")
-        await conn.execute(
-            "UPDATE ambient_segments SET speaker_id = NULL, speaker_label = NULL"
-        )
-        await conn.execute(
-            "UPDATE meeting_segments SET speaker_id = NULL, speaker_label = NULL"
-        )
+        await conn.execute("UPDATE ambient_segments SET speaker_id = NULL, speaker_label = NULL")
+        await conn.execute("UPDATE meeting_segments SET speaker_id = NULL, speaker_label = NULL")
         await conn.commit()
 
     diarizer_reset_ok = True

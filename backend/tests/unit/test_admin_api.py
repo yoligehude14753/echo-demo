@@ -54,9 +54,7 @@ class _FakeDiarizer:
         self.reset_called = False
         self.identify_calls = 0
 
-    async def identify(
-        self, audio_bytes: bytes, *, sample_rate: int = 16_000
-    ) -> str | None:
+    async def identify(self, audio_bytes: bytes, *, sample_rate: int = 16_000) -> str | None:
         self.identify_calls += 1
         return None
 
@@ -73,9 +71,7 @@ class _FakeDiarizer:
 
 
 @pytest.mark.unit
-def test_data_dir_returns_breakdown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_data_dir_returns_breakdown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """5 个 breakdown 项各写 dummy 字节，验证 endpoint 反映正确。
 
     create_app() 会触发 _setup_logging() 在 logs/ 下创建 backend.log（会写一行
@@ -127,9 +123,7 @@ def test_data_dir_returns_breakdown(
 
 
 @pytest.mark.unit
-def test_data_dir_when_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_data_dir_when_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """整目录不存在时 exists=False / size_bytes=0 / 各 breakdown=0。"""
     monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
     reset_deps_for_test()
@@ -152,9 +146,7 @@ def test_data_dir_when_missing(
 
 
 @pytest.mark.unit
-async def test_export_meeting_returns_zip(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_export_meeting_returns_zip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """对预先 seed 的 meeting 拉 export → 200 + zip 内含 3 核心条目。"""
     monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
     reset_deps_for_test()
@@ -164,9 +156,7 @@ async def test_export_meeting_returns_zip(
     try:
         started = datetime(2026, 5, 28, 10, 30, 0, tzinfo=UTC)
         meeting_id = "meeting-abc12345-rest"
-        await repo.create_meeting(
-            meeting_id, started_at=started, title="Q3 销售复盘"
-        )
+        await repo.create_meeting(meeting_id, started_at=started, title="Q3 销售复盘")
         await repo.append_meeting_segment(
             meeting_id,
             TranscriptSegment(
@@ -196,9 +186,7 @@ async def test_export_meeting_returns_zip(
         app.dependency_overrides[get_settings] = lambda: settings
         app.dependency_overrides[get_repository] = lambda: repo
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post(f"/admin/meetings/{meeting_id}/export")
 
         assert r.status_code == 200, r.text
@@ -250,9 +238,7 @@ async def test_export_meeting_404_when_missing(
         app.dependency_overrides[get_settings] = lambda: settings
         app.dependency_overrides[get_repository] = lambda: repo
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post("/admin/meetings/no-such-id/export")
 
         assert r.status_code == 404
@@ -291,9 +277,7 @@ async def test_export_meeting_includes_minutes_when_finalized(
         app.dependency_overrides[get_settings] = lambda: settings
         app.dependency_overrides[get_repository] = lambda: repo
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post(f"/admin/meetings/{meeting_id}/export")
         assert r.status_code == 200
 
@@ -370,9 +354,7 @@ async def test_speakers_reset_clears_data_keeps_segments(
         app.dependency_overrides[get_repository] = lambda: repo
         app.dependency_overrides[get_diarizer_singleton] = lambda: diar
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post("/admin/speakers/reset")
 
         assert r.status_code == 200, r.text
@@ -425,9 +407,7 @@ async def test_speakers_reset_when_already_empty_is_idempotent(
         app.dependency_overrides[get_repository] = lambda: repo
         app.dependency_overrides[get_diarizer_singleton] = lambda: diar
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post("/admin/speakers/reset")
 
         assert r.status_code == 200
