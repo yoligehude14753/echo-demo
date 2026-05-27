@@ -11,6 +11,7 @@ from app.adapters.repo import make_repository
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
+from app.use_cases.auto_meeting_detector import AutoMeetingDetector
 from app.use_cases.speaker_registry import SpeakerRegistry
 
 _llm_singleton: OpenAICompatibleLLM | None = None
@@ -18,6 +19,7 @@ _event_bus_singleton: InMemoryEventBus | None = None
 _repo_singleton: RepositoryPort | None = None
 _diarizer_singleton: DiarizerPort | None = None
 _speaker_registry_singleton: SpeakerRegistry | None = None
+_auto_detector_singleton: AutoMeetingDetector | None = None
 
 
 def get_llm_singleton(
@@ -68,6 +70,14 @@ def get_speaker_registry(
     return _speaker_registry_singleton
 
 
+def get_auto_meeting_detector() -> AutoMeetingDetector:
+    """自动会议检测器单例（process-local state）。"""
+    global _auto_detector_singleton  # noqa: PLW0603
+    if _auto_detector_singleton is None:
+        _auto_detector_singleton = AutoMeetingDetector()
+    return _auto_detector_singleton
+
+
 async def aclose_llm_singleton() -> None:
     global _llm_singleton  # noqa: PLW0603
     if _llm_singleton is not None:
@@ -93,8 +103,10 @@ def reset_deps_for_test() -> None:
     """测试用：清掉所有单例缓存。"""
     global _llm_singleton, _event_bus_singleton, _repo_singleton  # noqa: PLW0603
     global _diarizer_singleton, _speaker_registry_singleton  # noqa: PLW0603
+    global _auto_detector_singleton  # noqa: PLW0603
     _llm_singleton = None
     _event_bus_singleton = None
     _repo_singleton = None
     _diarizer_singleton = None
     _speaker_registry_singleton = None
+    _auto_detector_singleton = None

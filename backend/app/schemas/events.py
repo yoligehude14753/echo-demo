@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 
 EventType = Literal[
     "meeting.started",
+    "meeting.auto_detected",
+    "meeting.auto_ended",
     "meeting.segment",
     "meeting.ended",
     "minutes.ready",
@@ -40,6 +42,8 @@ ProtocolEventType = Literal[
 
 EchoEventType = Literal[
     "meeting.started",
+    "meeting.auto_detected",
+    "meeting.auto_ended",
     "meeting.segment",
     "meeting.ended",
     "minutes.ready",

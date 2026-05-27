@@ -9,10 +9,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.rag.bm25 import BM25Rag
 from app.adapters.stt.sensevoice_gpu import SenseVoiceGPUSTT
 from app.api.deps import (
+    get_auto_meeting_detector,
     get_diarizer_singleton,
+    get_event_bus,
     get_repository,
     get_speaker_registry,
 )
@@ -22,6 +25,7 @@ from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
 from app.schemas.capture import CaptureChunkResult
 from app.use_cases.ambient_capture import AmbientCapturePipeline
+from app.use_cases.auto_meeting_detector import AutoMeetingDetector
 from app.use_cases.meeting_pipeline import MeetingPipeline
 from app.use_cases.speaker_registry import SpeakerRegistry
 
@@ -36,6 +40,8 @@ def get_ambient_pipeline(
     repository: RepositoryPort = Depends(get_repository),
     diarizer: DiarizerPort = Depends(get_diarizer_singleton),
     speaker_registry: SpeakerRegistry = Depends(get_speaker_registry),
+    detector: AutoMeetingDetector = Depends(get_auto_meeting_detector),
+    event_bus: InMemoryEventBus = Depends(get_event_bus),
 ) -> AmbientCapturePipeline:
     global _ambient  # noqa: PLW0603
     if _ambient is None:
@@ -47,6 +53,8 @@ def get_ambient_pipeline(
             repository=repository,
             diarizer=diarizer,
             speaker_registry=speaker_registry,
+            auto_meeting_detector=detector,
+            event_bus=event_bus,
         )
     return _ambient
 
