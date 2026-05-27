@@ -150,8 +150,7 @@ def _healthz_snapshot(settings: Settings) -> dict[str, Any]:
         },
         "db": health_mod._db_status(settings),
         "remote": {
-            name: health_mod._probe_to_dict(probe)
-            for name, probe in health_mod._cache.items()
+            name: health_mod._probe_to_dict(probe) for name, probe in health_mod._cache.items()
         },
         "mic": {"ok": "unknown"},
     }
@@ -235,8 +234,7 @@ def _probes_snapshot() -> dict[str, Any]:
         return {"note": "cache not yet populated", "entries": {}}
     return {
         "entries": {
-            name: health_mod._probe_to_dict(probe)
-            for name, probe in health_mod._cache.items()
+            name: health_mod._probe_to_dict(probe) for name, probe in health_mod._cache.items()
         },
     }
 
@@ -311,9 +309,7 @@ def _collect_log_files() -> list[Path]:
     return out
 
 
-def _write_zip_payload(
-    zf: zipfile.ZipFile, root: str, settings: Settings
-) -> dict[str, Any]:
+def _write_zip_payload(zf: zipfile.ZipFile, root: str, settings: Settings) -> dict[str, Any]:
     """把所有诊断 entry 写进 ``zf``，返回 manifest 内容。
 
     两个调用方共享同一份装配代码：``_build_zip``（落 temp file）和
@@ -383,9 +379,7 @@ def _build_zip(settings: Settings) -> tuple[Path, dict[str, Any]]:
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     root = f"echodesk-diag-{ts}"
 
-    with tempfile.NamedTemporaryFile(
-        prefix="echodesk-diag-", suffix=".zip", delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(prefix="echodesk-diag-", suffix=".zip", delete=False) as tmp:
         tmp_path = Path(tmp.name)
 
     with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:

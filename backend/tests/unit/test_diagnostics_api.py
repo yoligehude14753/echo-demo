@@ -246,9 +246,7 @@ def test_export_truncates_huge_log(client: TestClient, tmp_path: Path) -> None:
     r = client.get("/admin/diagnostics/export")
     assert r.status_code == 200
     zf = zipfile.ZipFile(io.BytesIO(r.content))
-    log_entry = next(
-        (n for n in zf.namelist() if n.endswith("/logs/backend.log")), None
-    )
+    log_entry = next((n for n in zf.namelist() if n.endswith("/logs/backend.log")), None)
     assert log_entry is not None, f"backend.log missing from zip: {zf.namelist()}"
     content = zf.read(log_entry)
     # 严格小于 5 MB + banner（这里给点余量 5.01 MB 上限即可）
@@ -275,27 +273,21 @@ def test_export_includes_recent_events(client: TestClient) -> None:
 
     async def _push() -> None:
         for i in range(5):
-            await bus.publish(
-                EchoEvent(type="chat.delta", payload={"i": i, "text": f"event-{i}"})
-            )
+            await bus.publish(EchoEvent(type="chat.delta", payload={"i": i, "text": f"event-{i}"}))
 
     asyncio.run(_push())
 
     r = client.get("/admin/diagnostics/export")
     assert r.status_code == 200
     zf = zipfile.ZipFile(io.BytesIO(r.content))
-    entry = next(
-        (n for n in zf.namelist() if n.endswith("/recent_events.jsonl")), None
-    )
+    entry = next((n for n in zf.namelist() if n.endswith("/recent_events.jsonl")), None)
     assert entry is not None, f"recent_events missing: {zf.namelist()}"
     lines = zf.read(entry).decode("utf-8").strip().splitlines()
     assert len(lines) == 5
     parsed = [json.loads(line) for line in lines]
     assert all(p["type"] == "chat.delta" for p in parsed)
 
-    manifest = json.loads(
-        zf.read(next(n for n in zf.namelist() if n.endswith("/manifest.json")))
-    )
+    manifest = json.loads(zf.read(next(n for n in zf.namelist() if n.endswith("/manifest.json"))))
     assert "recent_events" in manifest["items"]
     assert manifest["events_count"] == 5
 
@@ -305,9 +297,7 @@ def test_export_skips_events_when_buffer_empty(client: TestClient) -> None:
     """事件 buffer 空（启动期）时，manifest.items 不含 recent_events。"""
     r = client.get("/admin/diagnostics/export")
     zf = zipfile.ZipFile(io.BytesIO(r.content))
-    manifest = json.loads(
-        zf.read(next(n for n in zf.namelist() if n.endswith("/manifest.json")))
-    )
+    manifest = json.loads(zf.read(next(n for n in zf.namelist() if n.endswith("/manifest.json"))))
     assert "recent_events" not in manifest["items"]
     assert manifest["events_count"] == 0
     assert not any(n.endswith("/recent_events.jsonl") for n in zf.namelist())
@@ -335,9 +325,7 @@ def test_export_includes_probes_cache(client: TestClient) -> None:
 
 
 @pytest.mark.unit
-def test_export_includes_logs_with_rotated(
-    client: TestClient, tmp_path: Path
-) -> None:
+def test_export_includes_logs_with_rotated(client: TestClient, tmp_path: Path) -> None:
     """同时存在 backend.log + 几个 backend.log.YYYY-MM-DD 时，都进 zip。"""
     log_dir = tmp_path / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -360,7 +348,8 @@ def test_export_handles_missing_db_gracefully(
     """db 文件不存在时 endpoint 仍要返回 200 + 完整 zip（只是 db_schema.ok=False）。"""
     monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
     settings = Settings(
-        db_path=tmp_path / "nonexistent.db", _env_file=None  # type: ignore[call-arg]
+        db_path=tmp_path / "nonexistent.db",
+        _env_file=None,  # type: ignore[call-arg]
     )
     app = create_app()
     app.dependency_overrides[diag_mod.get_settings] = lambda: settings
@@ -369,9 +358,7 @@ def test_export_handles_missing_db_gracefully(
     r = c.get("/admin/diagnostics/export")
     assert r.status_code == 200
     zf = zipfile.ZipFile(io.BytesIO(r.content))
-    schema = json.loads(
-        zf.read(next(n for n in zf.namelist() if n.endswith("/db_schema.json")))
-    )
+    schema = json.loads(zf.read(next(n for n in zf.namelist() if n.endswith("/db_schema.json"))))
     assert schema["ok"] is False
     assert "missing" in schema["error"]
 
