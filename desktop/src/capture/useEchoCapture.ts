@@ -32,11 +32,24 @@ export function useEchoCapture(): CaptureStatus {
     });
 
     const offRouter = attachCaptureChunkRouter({
-      onAmbientUploaded: () => setAmbientChunks((n) => n + 1),
+      onChunkPosted: () => setAmbientChunks((n) => n + 1),
       onMeetingUploaded: () => setMeetingChunks((n) => n + 1),
-      onError: (e) => {
+      onConnectionLost: (e) => {
         const msg = e instanceof Error ? e.message : String(e);
-        message.warning(`采集上传失败：${msg}`);
+        // sticky 持久错误条；恢复时会被替换
+        message.error({
+          content: `后端连接断开（${msg}），自动重试中…`,
+          key: "chunk-upload-error",
+          duration: 0,
+        });
+      },
+      onConnectionRecovered: () => {
+        // 替换为短 toast 并自动消失
+        message.success({
+          content: "后端已恢复",
+          key: "chunk-upload-error",
+          duration: 2,
+        });
       },
     });
 
