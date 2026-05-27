@@ -1,0 +1,16 @@
+# 人工验收完成后，把代表性的 run_xxx/ 拷贝到这里作为「黄金对照」
+# 当前已有：
+#   mock_llm_meetly_demo/  ← 用 MockLLMClient + meetly_demo.txt 产出的基线 4 件套
+#     - data.json:    正典数据（标题/摘要/4 决议/4 待办/3 话题/flowchart）
+#     - preview.html: 18KB，含 KPI 卡 + 流程图 section + 决议时间线 + 待办表格 + 话题展开
+#     - minutes.docx: 70KB，python-docx fallback 输出，标题/章节/真实 table/嵌入流程图 PNG
+#     - flow.png:     mermaid.ink 在线渲染 (本机 mmdc 需要 Puppeteer Chrome 才能离线渲)
+#
+# 用途：
+#   1. 视觉回归对比的基线 — 改模板/prompt 时新产物跟这里 diff
+#   2. PR review 时让评审者直接打开看产物视觉
+#   3. INTEGRATION.md 接入 echo 后的「应该看到这种品质」样品参考
+#
+# 真实 LLM 跑通后，再追加：
+#   real_llm_meetly_demo_<date>/    ← OpenAI / m27 真跑的产物
+#   real_llm_echo_real_meeting_<date>/ ← echo 真实 ASR 噪声转录的产物

@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ data.title | e }} - 会议纪要</title>
+  <style>
+    /* ---------- 设计 Token（对齐参考图） ---------- */
+    :root {
+      --text-title:     #1F2329;
+      --text-body:      #1F2329;
+      --text-secondary: #4E5969;
+      --text-tertiary:  #86909C;
+      --text-quat:      #C9CDD4;
+      --border:         #E5E6EB;
+      --border-soft:    #F2F3F5;
+      --bg-page:        #FFFFFF;
+      --bg-card:        #F7F8FA;
+      --bg-card-2:      #FAFBFC;
+      --bg-callout:     #F4F5F7;
+
+      --tint-orange:    #FFFBF7;
+      --tint-orange-bd: #FFEAD7;
+      --tint-blue:      #F8FAFF;
+      --tint-blue-bd:   #E6EDFB;
+      --tint-green:     #F7FBF8;
+      --tint-green-bd:  #DCEEDF;
+
+      --brand:         #1664FF;
+      --warn:          #F5731B;
+      --warn-bg:       #FFF1E5;
+      --warn-bd:       #FFCFA8;
+      --success:       #00B42A;
+      --success-bg:    #E8F7EB;
+      --success-bd:    #B7E0BC;
+      --danger:        #F53F3F;
+      --danger-bg:     #FFECE8;
+      --danger-bd:     #FBC7C0;
+      --lamp:          #FFB200;
+
+      --fs-h1: 22px;
+      --fs-h2: 17px;
+      --fs-h3: 15px;
+      --fs-body: 14.5px;
+      --fs-small: 13px;
+      --fs-tiny: 12px;
+      --lh-body: 1.8;
+      --radius:  8px;
+      --radius-sm: 4px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --text-title:     #E8EAED;
+        --text-body:      #D1D4D9;
+        --text-secondary: #9CA0A6;
+        --text-tertiary:  #71757B;
+        --text-quat:      #4A4E55;
+        --border:         #2D3035;
+        --border-soft:    #232529;
+        --bg-page:        #1A1B1E;
+        --bg-card:        #232529;
+        --bg-card-2:      #1F2125;
+        --bg-callout:     #25272B;
+
+        --tint-orange:    #2A1F18;
+        --tint-orange-bd: #4A3324;
+        --tint-blue:      #18213A;
+        --tint-blue-bd:   #2C3A5F;
+        --tint-green:     #1A2A1F;
+        --tint-green-bd:  #2D4A33;
+
+        --brand:          #4988FF;
+        --warn:           #FF8A3C;
+        --warn-bg:        #3A2614;
+        --warn-bd:        #5A3E22;
+        --success:        #5BD96A;
+        --success-bg:     #1F3A24;
+        --success-bd:     #2E5236;
+        --danger:         #FF7370;
+        --danger-bg:      #3A1C1C;
+        --danger-bd:      #5A2A2A;
+        --lamp:           #FFC447;
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC',
+                   'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+      background: var(--bg-page);
+      color: var(--text-body);
+      font-size: var(--fs-body);
+      line-height: var(--lh-body);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .container {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 40px 28px 96px;
+    }
+
+    /* ---------- 头部 ---------- */
+    .doc-title {
+      color: var(--text-title);
+      font-size: var(--fs-h1);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      margin-bottom: 6px;
+    }
+    .doc-meta {
+      color: var(--text-tertiary);
+      font-size: var(--fs-small);
+      margin-bottom: 24px;
+    }
+
+    /* ---------- 核心结论（浅灰 banner） ---------- */
+    .callout {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px 14px;
+      padding: 16px 22px;
+      background: var(--bg-callout);
+      border-radius: var(--radius);
+      margin-bottom: 36px;
+      align-items: start;
+    }
+    .callout-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      color: var(--text-title);
+      font-size: var(--fs-body);
+      line-height: 1.7;
+      white-space: nowrap;
+    }
+    .callout-lamp {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      color: var(--lamp);
+    }
+    .callout-points {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .callout-points li {
+      position: relative;
+      padding-left: 14px;
+      color: var(--text-body);
+      font-size: var(--fs-body);
+      line-height: 1.8;
+    }
+    .callout-points li::before {
+      content: '';
+      position: absolute;
+      left: 3px;
+      top: 11.5px;
+      width: 4px;
+      height: 4px;
+      background: var(--text-body);
+      border-radius: 50%;
+    }
+
+    /* ---------- 章节标题 ---------- */
+    .section { margin-bottom: 36px; }
+    .section-title {
+      font-size: var(--fs-h2);
+      font-weight: 700;
+      color: var(--text-title);
+      margin-bottom: 14px;
+      letter-spacing: -0.005em;
+    }
+
+    /* ---------- 三栏卡片（决议） ---------- */
+    .cards-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    @media (max-width: 760px) {
+      .cards-3 { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--bg-card-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+    }
+    .card.tint-orange { background: var(--tint-orange); border-color: var(--tint-orange-bd); }
+    .card.tint-blue   { background: var(--tint-blue);   border-color: var(--tint-blue-bd); }
+    .card.tint-green  { background: var(--tint-green);  border-color: var(--tint-green-bd); }
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .card-emoji {
+      font-size: 15px;
+      line-height: 1;
+      filter: saturate(0.9);
+    }
+    .card-title {
+      flex: 1;
+      font-weight: 600;
+      color: var(--text-title);
+      font-size: var(--fs-body);
+      line-height: 1.4;
+    }
+    .card-body { font-size: var(--fs-small); color: var(--text-body); line-height: 1.85; }
+    .card-bullets { list-style: none; padding: 0; margin: 0; }
+    .card-bullets li {
+      position: relative;
+      padding-left: 13px;
+      margin-bottom: 4px;
+    }
+    .card-bullets li::before {
+      content: '';
+      position: absolute;
+      left: 3px;
+      top: 10px;
+      width: 4px;
+      height: 4px;
+      background: var(--text-secondary);
+      border-radius: 50%;
+    }
+    .card-bullets li:last-child { margin-bottom: 0; }
+    .card-bullets b, .card-bullets strong { font-weight: 600; color: var(--text-title); }
+
+    /* ---------- 状态徽章 ---------- */
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 8px;
+      height: 22px;
+      border-radius: 4px;
+      font-size: var(--fs-tiny);
+      font-weight: 500;
+      white-space: nowrap;
+      line-height: 1;
+      border: 1px solid transparent;
+    }
+    .tag-warn    { color: var(--warn);    background: var(--warn-bg);    border-color: var(--warn-bd); }
+    .tag-success { color: var(--success); background: var(--success-bg); border-color: var(--success-bd); }
+    .tag-danger  { color: var(--danger);  background: var(--danger-bg);  border-color: var(--danger-bd); }
+    .tag-neutral { color: var(--text-secondary); background: var(--bg-card); border-color: var(--border); }
+
+    /* ---------- 表格 ---------- */
+    .doc-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: var(--fs-small);
+    }
+    .doc-table thead th {
+      background: var(--bg-card);
+      color: var(--text-title);
+      font-weight: 600;
+      font-size: var(--fs-small);
+      padding: 14px 18px;
+      text-align: left;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      line-height: 1.4;
+    }
+    .doc-table thead th:first-child { border-left: 1px solid var(--border); border-top-left-radius: 6px; }
+    .doc-table thead th:last-child  { border-right: 1px solid var(--border); border-top-right-radius: 6px; }
+    .doc-table tbody td {
+      background: var(--bg-page);
+      padding: 18px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border-soft);
+      line-height: 1.7;
+    }
+    .doc-table tbody td:first-child {
+      border-left: 1px solid var(--border);
+      color: var(--text-title);
+      font-weight: 500;
+    }
+    .doc-table tbody td:last-child  { border-right: 1px solid var(--border); }
+    .doc-table tbody tr:last-child td { border-bottom: 1px solid var(--border); }
+    .doc-table tbody tr:last-child td:first-child { border-bottom-left-radius: 6px; }
+    .doc-table tbody tr:last-child td:last-child  { border-bottom-right-radius: 6px; }
+    .doc-table td strong, .doc-table td b { font-weight: 600; color: var(--text-title); }
+    .doc-table td .row-line { display: block; }
+    .doc-table td .row-line + .row-line { margin-top: 4px; }
+
+    /* ---------- 流程图 ---------- */
+    .flow-wrap {
+      background: var(--bg-card-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      padding: 20px;
+      overflow-x: auto;
+    }
+    .mermaid { text-align: center; min-height: 80px; }
+    .flow-hint {
+      margin-top: 8px;
+      font-size: var(--fs-tiny);
+      color: var(--text-tertiary);
+      text-align: center;
+    }
+
+    /* ---------- 议题 ---------- */
+    .topic { margin-bottom: 22px; }
+    .topic:last-child { margin-bottom: 0; }
+    .topic-head {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .topic-title {
+      font-weight: 600;
+      color: var(--text-title);
+      font-size: var(--fs-h3);
+    }
+    .topic-time {
+      color: var(--text-tertiary);
+      font-size: var(--fs-tiny);
+      font-variant-numeric: tabular-nums;
+    }
+    .topic-points { list-style: none; padding: 0; margin: 0; }
+    .topic-points > li {
+      position: relative;
+      padding-left: 18px;
+      font-size: var(--fs-body);
+      margin-bottom: 4px;
+      line-height: 1.8;
+    }
+    .topic-points > li::before {
+      content: '';
+      position: absolute;
+      left: 5px;
+      top: 12px;
+      width: 5px;
+      height: 5px;
+      background: var(--text-secondary);
+      border-radius: 50%;
+    }
+
+    /* ---------- 完整纪要 markdown ---------- */
+    .md-content { color: var(--text-body); font-size: var(--fs-body); line-height: var(--lh-body); }
+    .md-content > *:first-child { margin-top: 0; }
+    .md-content h1, .md-content h2, .md-content h3, .md-content h4 {
+      color: var(--text-title);
+      font-weight: 600;
+      line-height: 1.4;
+      margin: 24px 0 10px;
+    }
+    .md-content h1 { font-size: var(--fs-h1); }
+    .md-content h2 { font-size: var(--fs-h2); }
+    .md-content h3 { font-size: var(--fs-h3); }
+    .md-content h4 { font-size: var(--fs-body); color: var(--text-secondary); }
+    .md-content p { margin-bottom: 10px; }
+    .md-content ul, .md-content ol {
+      margin: 4px 0 12px;
+      padding-left: 0;
+      list-style: none;
+    }
+    .md-content > ul > li, .md-content > ol > li,
+    .md-content > ul ul > li, .md-content > ol ul > li,
+    .md-content > ul ol > li, .md-content > ol ol > li {
+      position: relative;
+      padding-left: 18px;
+      margin-bottom: 4px;
+    }
+    /* L1: 实心圆 ● */
+    .md-content > ul > li::before, .md-content > ol > li::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 12px;
+      width: 5px;
+      height: 5px;
+      background: var(--text-title);
+      border-radius: 50%;
+    }
+    /* L2: 空心圆 ○ */
+    .md-content > ul ul > li::before, .md-content > ol ul > li::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 11px;
+      width: 6px;
+      height: 6px;
+      background: transparent;
+      border: 1px solid var(--text-secondary);
+      border-radius: 50%;
+    }
+    /* L3: 实心方块 ■ */
+    .md-content > ul ul ul > li::before, .md-content > ol ul ul > li::before,
+    .md-content > ul ul ol > li::before, .md-content > ol ol ul > li::before,
+    .md-content > ul ol ul > li::before, .md-content > ol ul ol > li::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 12px;
+      width: 5px;
+      height: 5px;
+      background: var(--text-secondary);
+      border-radius: 1px;
+    }
+    .md-content strong { font-weight: 600; color: var(--text-title); }
+    .md-content code {
+      background: var(--bg-card);
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.92em;
+      color: var(--brand);
+    }
+
+    .empty-hint {
+      color: var(--text-tertiary);
+      font-style: normal;
+      padding: 8px 0;
+      font-size: var(--fs-small);
+    }
+
+    .footer {
+      margin-top: 56px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-soft);
+      color: var(--text-quat);
+      font-size: var(--fs-tiny);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .footer .ai-note { color: var(--text-tertiary); }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- ===== Header ===== -->
+    <h1 class="doc-title">{{ data.title | e }}</h1>
+    <div class="doc-meta">
+      {{ time_display | e }}
+      {%- if data.participants %}
+      · 参会人 {{ data.participants | length }}：{{ data.participants | join('、') | e }}
+      {%- endif %}
+    </div>
+
+    <!-- ===== Callout (核心结论) ===== -->
+    {% if core_points %}
+    <div class="callout">
+      <span class="callout-label">
+        <svg class="callout-lamp" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <path d="M8 1.2A4.6 4.6 0 0 0 5.2 9.5v.7c0 .55.45 1 1 1h3.6c.55 0 1-.45 1-1v-.7A4.6 4.6 0 0 0 8 1.2zm-1.4 13c0 .44.36.8.8.8h1.2c.44 0 .8-.36.8-.8v-.4H6.6v.4z"/>
+        </svg>
+        核心结论：
+      </span>
+      <ul class="callout-points">
+        {% for cp in core_points %}<li>{{ cp | safe }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <!-- ===== 会议流程 (Mermaid) ===== -->
+    {% if data.flow_mermaid %}
+    <section class="section">
+      <div class="section-title">会议流程</div>
+      <div class="flow-wrap">
+        <pre class="mermaid">{{ data.flow_mermaid }}</pre>
+      </div>
+      <div class="flow-hint">{{ flow_kind_label | e }}</div>
+    </section>
+    {% endif %}
+
+    <!-- ===== 会议决议（按 group 分组的三栏卡片）===== -->
+    <section class="section">
+      <div class="section-title">会议决议</div>
+      {% if decision_groups %}
+      <div class="cards-3">
+        {% for g in decision_groups %}
+        <div class="card {{ g.tint }}">
+          <div class="card-head">
+            <span class="card-emoji">{{ g.emoji }}</span>
+            <div class="card-title">{{ g.title | e }}</div>
+            {% if g.tag_label %}
+            <span class="tag {{ g.tag_class }}">{{ g.tag_label | e }}</span>
+            {% endif %}
+          </div>
+          <div class="card-body">
+            <ul class="card-bullets">
+              {% for line in g.bullets %}<li>{{ line | safe }}</li>{% endfor %}
+            </ul>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty-hint">本次会议未产生明确决议。</p>
+      {% endif %}
+    </section>
+
+    <!-- ===== 待办事项 ===== -->
+    <section class="section">
+      <div class="section-title">待办事项</div>
+      {% if data.todos %}
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th>任务</th>
+            <th>负责人</th>
+            <th>截止</th>
+            <th>优先级</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in data.todos %}
+          <tr>
+            <td>{{ t.task | e }}</td>
+            <td>{{ (t.owner or '未指派') | e }}</td>
+            <td>{{ (t.due or 'TBD') | e }}</td>
+            <td>
+              {% if t.priority == 'high' %}
+              <span class="tag tag-danger">高</span>
+              {% elif t.priority == 'low' %}
+              <span class="tag tag-success">低</span>
+              {% else %}
+              <span class="tag tag-warn">中</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty-hint">本次会议未产生待办事项。</p>
+      {% endif %}
+    </section>
+
+    <!-- ===== 议题展开 ===== -->
+    {% if data.topics %}
+    <section class="section">
+      <div class="section-title">议题展开</div>
+      {% for tp in data.topics %}
+      <div class="topic">
+        <div class="topic-head">
+          <span class="topic-title">{{ tp.name | e }}</span>
+          {% if tp.time_range %}<span class="topic-time">{{ tp.time_range | e }}</span>{% endif %}
+        </div>
+        {% if tp.key_points %}
+        <ul class="topic-points">
+          {% for kp in tp.key_points %}<li>{{ kp | e }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    <!-- ===== 完整纪要 ===== -->
+    {% if data.summary_md %}
+    <section class="section">
+      <div class="section-title">完整纪要</div>
+      <div class="md-content">
+        {{ summary_html | safe }}
+      </div>
+    </section>
+    {% endif %}
+
+    <div class="footer">
+      <span>{{ data.created_at[:19] | e }} · {{ data.minutes_id | e }}</span>
+      <span class="ai-note">AI 生成</span>
+    </div>
+
+  </div>
+
+  {% if data.flow_mermaid %}
+  <script>{{ mermaid_js | safe }}</script>
+  <script>
+    (function () {
+      function tryInit() {
+        if (!window.mermaid) return false;
+        var isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        window.mermaid.initialize({
+          startOnLoad: false,
+          theme: isDark ? 'dark' : 'neutral',
+          securityLevel: 'loose',
+          flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+          sequence: { useMaxWidth: true },
+          mindmap: { useMaxWidth: true },
+          timeline: { useMaxWidth: true },
+          themeVariables: {
+            fontFamily: '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
+            fontSize: '13px'
+          }
+        });
+        if (window.mermaid.run) {
+          window.mermaid.run({ querySelector: '.mermaid' }).catch(function (e) {
+            console.warn('[mermaid] render failed:', e);
+          });
+        }
+        return true;
+      }
+      if (tryInit()) return;
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries += 1;
+        if (tryInit() || tries > 40) clearInterval(timer);
+      }, 250);
+    })();
+  </script>
+  {% endif %}
+</body>
+</html>

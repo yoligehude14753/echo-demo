@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>周三例会 - 会议纪要</title>
+  <style>
+    /* ---------- 设计 Token（对齐参考图） ---------- */
+    :root {
+      --text-title:     #1F2329;
+      --text-body:      #1F2329;
+      --text-secondary: #4E5969;
+      --text-tertiary:  #86909C;
+      --text-quat:      #C9CDD4;
+      --border:         #E5E6EB;
+      --border-soft:    #F2F3F5;
+      --bg-page:        #FFFFFF;
+      --bg-card:        #F7F8FA;
+      --bg-card-2:      #FAFBFC;
+      --bg-callout:     #F4F5F7;
+
+      --tint-orange:    #FFFBF7;
+      --tint-orange-bd: #FFEAD7;
+      --tint-blue:      #F8FAFF;
+      --tint-blue-bd:   #E6EDFB;
+      --tint-green:     #F7FBF8;
+      --tint-green-bd:  #DCEEDF;
+
+      --brand:         #1664FF;
+      --warn:          #F5731B;
+      --warn-bg:       #FFF1E5;
+      --warn-bd:       #FFCFA8;
+      --success:       #00B42A;
+      --success-bg:    #E8F7EB;
+      --success-bd:    #B7E0BC;
+      --danger:        #F53F3F;
+      --danger-bg:     #FFECE8;
+      --danger-bd:     #FBC7C0;
+      --lamp:          #FFB200;
+
+      --fs-h1: 22px;
+      --fs-h2: 17px;
+      --fs-h3: 15px;
+      --fs-body: 14.5px;
+      --fs-small: 13px;
+      --fs-tiny: 12px;
+      --lh-body: 1.8;
+      --radius:  8px;
+      --radius-sm: 4px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --text-title:     #E8EAED;
+        --text-body:      #D1D4D9;
+        --text-secondary: #9CA0A6;
+        --text-tertiary:  #71757B;
+        --text-quat:      #4A4E55;
+        --border:         #2D3035;
+        --border-soft:    #232529;
+        --bg-page:        #1A1B1E;
+        --bg-card:        #232529;
+        --bg-card-2:      #1F2125;
+        --bg-callout:     #25272B;
+
+        --tint-orange:    #2A1F18;
+        --tint-orange-bd: #4A3324;
+        --tint-blue:      #18213A;
+        --tint-blue-bd:   #2C3A5F;
+        --tint-green:     #1A2A1F;
+        --tint-green-bd:  #2D4A33;
+
+        --brand:          #4988FF;
+        --warn:           #FF8A3C;
+        --warn-bg:        #3A2614;
+        --warn-bd:        #5A3E22;
+        --success:        #5BD96A;
+        --success-bg:     #1F3A24;
+        --success-bd:     #2E5236;
+        --danger:         #FF7370;
+        --danger-bg:      #3A1C1C;
+        --danger-bd:      #5A2A2A;
+        --lamp:           #FFC447;
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC',
+                   'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+      background: var(--bg-page);
+      color: var(--text-body);
+      font-size: var(--fs-body);
+      line-height: var(--lh-body);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .container {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 40px 28px 96px;
+    }
+
+    /* ---------- 头部 ---------- */
+    .doc-title {
+      color: var(--text-title);
+      font-size: var(--fs-h1);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      margin-bottom: 6px;
+    }
+    .doc-meta {
+      color: var(--text-tertiary);
+      font-size: var(--fs-small);
+      margin-bottom: 24px;
+    }
+
+    /* ---------- 核心结论（浅灰 banner） ---------- */
+    .callout {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px 14px;
+      padding: 16px 22px;
+      background: var(--bg-callout);
+      border-radius: var(--radius);
+      margin-bottom: 36px;
+      align-items: start;
+    }
+    .callout-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      color: var(--text-title);
+      font-size: var(--fs-body);
+      line-height: 1.7;
+      white-space: nowrap;
+    }
+    .callout-lamp {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      color: var(--lamp);
+    }
+    .callout-points {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .callout-points li {
+      position: relative;
+      padding-left: 14px;
+      color: var(--text-body);
+      font-size: var(--fs-body);
+      line-height: 1.8;
+    }
+    .callout-points li::before {
+      content: '';
+      position: absolute;
+      left: 3px;
+      top: 11.5px;
+      width: 4px;
+      height: 4px;
+      background: var(--text-body);
+      border-radius: 50%;
+    }
+
+    /* ---------- 章节标题 ---------- */
+    .section { margin-bottom: 36px; }
+    .section-title {
+      font-size: var(--fs-h2);
+      font-weight: 700;
+      color: var(--text-title);
+      margin-bottom: 14px;
+      letter-spacing: -0.005em;
+    }
+
+    /* ---------- 三栏卡片（决议） ---------- */
+    .cards-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    @media (max-width: 760px) {
+      .cards-3 { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--bg-card-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+    }
+    .card.tint-orange { background: var(--tint-orange); border-color: var(--tint-orange-bd); }
+    .card.tint-blue   { background: var(--tint-blue);   border-color: var(--tint-blue-bd); }
+    .card.tint-green  { background: var(--tint-green);  border-color: var(--tint-green-bd); }
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .card-emoji {
+      font-size: 15px;
+      line-height: 1;
+      filter: saturate(0.9);
+    }
+    .card-title {
+      flex: 1;
+      font-weight: 600;
+      color: var(--text-title);
+      font-size: var(--fs-body);
+      line-height: 1.4;
+    }
+    .card-body { font-size: var(--fs-small); color: var(--text-body); line-height: 1.85; }
+    .card-bullets { list-style: none; padding: 0; margin: 0; }
+    .card-bullets li {
+      position: relative;
+      padding-left: 13px;
+      margin-bottom: 4px;
+    }
+    .card-bullets li::before {
+      content: '';
+      position: absolute;
+      left: 3px;
+      top: 10px;
+      width: 4px;
+      height: 4px;
+      background: var(--text-secondary);
+      border-radius: 50%;
+    }
+    .card-bullets li:last-child { margin-bottom: 0; }
+    .card-bullets b, .card-bullets strong { font-weight: 600; color: var(--text-title); }
+
+    /* ---------- 状态徽章 ---------- */
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 8px;
+      height: 22px;
+      border-radius: 4px;
+      font-size: var(--fs-tiny);
+      font-weight: 500;
+      white-space: nowrap;
+      line-height: 1;
+      border: 1px solid transparent;
+    }
+    .tag-warn    { color: var(--warn);    background: var(--warn-bg);    border-color: var(--warn-bd); }
+    .tag-success { color: var(--success); background: var(--success-bg); border-color: var(--success-bd); }
+    .tag-danger  { color: var(--danger);  background: var(--danger-bg);  border-color: var(--danger-bd); }
+    .tag-neutral { color: var(--text-secondary); background: var(--bg-card); border-color: var(--border); }
+
+    /* ---------- 表格 ---------- */
+    .doc-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: var(--fs-small);
+    }
+    .doc-table thead th {
+      background: var(--bg-card);
+      color: var(--text-title);
+      font-weight: 600;
+      font-size: var(--fs-small);
+      padding: 14px 18px;
+      text-align: left;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      line-height: 1.4;
+    }
+    .doc-table thead th:first-child { border-left: 1px solid var(--border); border-top-left-radius: 6px; }
+    .doc-table thead th:last-child  { border-right: 1px solid var(--border); border-top-right-radius: 6px; }
+    .doc-table tbody td {
+      background: var(--bg-page);
+      padding: 18px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border-soft);
+      line-height: 1.7;
+    }
+    .doc-table tbody td:first-child {
+      border-left: 1px solid var(--border);
+      color: var(--text-title);
+      font-weight: 500;
+    }
+    .doc-table tbody td:last-child  { border-right: 1px solid var(--border); }
+    .doc-table tbody tr:last-child td { border-bottom: 1px solid var(--border); }
+    .doc-table tbody tr:last-child td:first-child { border-bottom-left-radius: 6px; }
+    .doc-table tbody tr:last-child td:last-child  { border-bottom-right-radius: 6px; }
+    .doc-table td strong, .doc-table td b { font-weight: 600; color: var(--text-title); }
+    .doc-table td .row-line { display: block; }
+    .doc-table td .row-line + .row-line { margin-top: 4px; }
+
+    /* ---------- 流程图 ---------- */
+    .flow-wrap {
+      background: var(--bg-card-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius);
+      padding: 20px;
+      overflow-x: auto;
+    }
+    .mermaid { text-align: center; min-height: 80px; }
+    .flow-hint {
+      margin-top: 8px;
+      font-size: var(--fs-tiny);
+      color: var(--text-tertiary);
+      text-align: center;
+    }
+
+    /* ---------- 议题 ---------- */
+    .topic { margin-bottom: 22px; }
+    .topic:last-child { margin-bottom: 0; }
+    .topic-head {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .topic-title {
+      font-weight: 600;
+      color: var(--text-title);
+      font-size: var(--fs-h3);
+    }
+    .topic-time {
+      color: var(--text-tertiary);
+      font-size: var(--fs-tiny);
+      font-variant-numeric: tabular-nums;
+    }
+    .topic-points { list-style: none; padding: 0; margin: 0; }
+    .topic-points > li {
+      position: relative;
+      padding-left: 18px;
+      font-size: var(--fs-body);
+      margin-bottom: 4px;
+      line-height: 1.8;
+    }
+    .topic-points > li::before {
+      content: '';
+      position: absolute;
+      left: 5px;
+      top: 12px;
+      width: 5px;
+      height: 5px;
+      background: var(--text-secondary);
+      border-radius: 50%;
+    }
+
+    /* ---------- 完整纪要 markdown ---------- */
+    .md-content { color: var(--text-body); font-size: var(--fs-body); line-height: var(--lh-body); }
+    .md-content > *:first-child { margin-top: 0; }
+    .md-content h1, .md-content h2, .md-content h3, .md-content h4 {
+      color: var(--text-title);
+      font-weight: 600;
+      line-height: 1.4;
+      margin: 24px 0 10px;
+    }
+    .md-content h1 { font-size: var(--fs-h1); }
+    .md-content h2 { font-size: var(--fs-h2); }
+    .md-content h3 { font-size: var(--fs-h3); }
+    .md-content h4 { font-size: var(--fs-body); color: var(--text-secondary); }
+    .md-content p { margin-bottom: 10px; }
+    .md-content ul, .md-content ol {
+      margin: 4px 0 12px;
+      padding-left: 0;
+      list-style: none;
+    }
+    .md-content > ul > li, .md-content > ol > li,
+    .md-content > ul ul > li, .md-content > ol ul > li,
+    .md-content > ul ol > li, .md-content > ol ol > li {
+      position: relative;
+      padding-left: 18px;
+      margin-bottom: 4px;
+    }
+    /* L1: 实心圆 ● */
+    .md-content > ul > li::before, .md-content > ol > li::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 12px;
+      width: 5px;
+      height: 5px;
+      background: var(--text-title);
+      border-radius: 50%;
+    }
+    /* L2: 空心圆 ○ */
+    .md-content > ul ul > li::before, .md-content > ol ul > li::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 11px;
+      width: 6px;
+      height: 6px;
+      background: transparent;
+      border: 1px solid var(--text-secondary);
+      border-radius: 50%;
+    }
+    /* L3: 实心方块 ■ */
+    .md-content > ul ul ul > li::before, .md-content > ol ul ul > li::before,
+    .md-content > ul ul ol > li::before, .md-content > ol ol ul > li::before,
+    .md-content > ul ol ul > li::before, .md-content > ol ul ol > li::before {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 12px;
+      width: 5px;
+      height: 5px;
+      background: var(--text-secondary);
+      border-radius: 1px;
+    }
+    .md-content strong { font-weight: 600; color: var(--text-title); }
+    .md-content code {
+      background: var(--bg-card);
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.92em;
+      color: var(--brand);
+    }
+
+    .empty-hint {
+      color: var(--text-tertiary);
+      font-style: normal;
+      padding: 8px 0;
+      font-size: var(--fs-small);
+    }
+
+    .footer {
+      margin-top: 56px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-soft);
+      color: var(--text-quat);
+      font-size: var(--fs-tiny);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .footer .ai-note { color: var(--text-tertiary); }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- ===== Header ===== -->
+    <h1 class="doc-title">周三例会</h1>
+    <div class="doc-meta">
+      10:00:00 - 10:04:20
+      · 参会人 3：A、B、C
+    </div>
+
+    <!-- ===== Callout (核心结论) ===== -->
+    
+    <div class="callout">
+      <span class="callout-label">
+        <svg class="callout-lamp" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <path d="M8 1.2A4.6 4.6 0 0 0 5.2 9.5v.7c0 .55.45 1 1 1h3.6c.55 0 1-.45 1-1v-.7A4.6 4.6 0 0 0 8 1.2zm-1.4 13c0 .44.36.8.8.8h1.2c.44 0 .8-.36.8-.8v-.4H6.6v.4z"/>
+        </svg>
+        核心结论：
+      </span>
+      <ul class="callout-points">
+        <li><strong>Word 模板</strong> 由 B 负责，<strong>周三前</strong> 出第一版</li><li>Excel 待办 <strong>独立 sheet</strong>，C <strong>周五前</strong> 完成</li><li>PPT 复用 <strong>Anthropic skill</strong> 自带模板</li>
+      </ul>
+    </div>
+    
+
+    <!-- ===== 会议流程 (Mermaid) ===== -->
+    
+    <section class="section">
+      <div class="section-title">会议流程</div>
+      <div class="flow-wrap">
+        <pre class="mermaid">flowchart TD
+  start([会议开始])
+  scope[第二阶段范围对齐]
+  word[Word 模板 B]
+  excel[Excel sheet C]
+  ppt[PPT skill 模板]
+  html[HTML 自有样式]
+  demo{周五前 demo 完整?}
+  staging[周一 staging 部署]
+  start --> scope
+  scope --> word
+  scope --> excel
+  scope --> ppt
+  scope --> html
+  word --> demo
+  excel --> demo
+  ppt --> demo
+  html --> demo
+  demo -->|是| staging</pre>
+      </div>
+      <div class="flow-hint">决策链路</div>
+    </section>
+    
+
+    <!-- ===== 会议决议（按 group 分组的三栏卡片）===== -->
+    <section class="section">
+      <div class="section-title">会议决议</div>
+      
+      <div class="cards-3">
+        
+        <div class="card tint-orange">
+          <div class="card-head">
+            <span class="card-emoji">🎯</span>
+            <div class="card-title">Word 模板</div>
+            
+            <span class="tag tag-warn">重点决议</span>
+            
+          </div>
+          <div class="card-body">
+            <ul class="card-bullets">
+              <li><strong>Word 模板</strong> 由 B 负责，<strong>周三前</strong> 出第一版</li><li>Excel 待办 <strong>独立 sheet</strong>，C <strong>周五前</strong> 完成</li>
+            </ul>
+          </div>
+        </div>
+        
+        <div class="card tint-blue">
+          <div class="card-head">
+            <span class="card-emoji">📌</span>
+            <div class="card-title">Anthropic skill</div>
+            
+            <span class="tag tag-neutral">已确认</span>
+            
+          </div>
+          <div class="card-body">
+            <ul class="card-bullets">
+              <li>PPT 复用 <strong>Anthropic skill</strong> 自带模板</li>
+            </ul>
+          </div>
+        </div>
+        
+        <div class="card tint-green">
+          <div class="card-head">
+            <span class="card-emoji">✅</span>
+            <div class="card-title">周一上午</div>
+            
+            <span class="tag tag-success">推进中</span>
+            
+          </div>
+          <div class="card-body">
+            <ul class="card-bullets">
+              <li><strong>周一上午</strong> 部署 staging</li>
+            </ul>
+          </div>
+        </div>
+        
+      </div>
+      
+    </section>
+
+    <!-- ===== 待办事项 ===== -->
+    <section class="section">
+      <div class="section-title">待办事项</div>
+      
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th>任务</th>
+            <th>负责人</th>
+            <th>截止</th>
+            <th>优先级</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+          <tr>
+            <td>出 Word 模板第一版</td>
+            <td>B</td>
+            <td>周三前</td>
+            <td>
+              
+              <span class="tag tag-danger">高</span>
+              
+            </td>
+          </tr>
+          
+          <tr>
+            <td>Excel 待办 sheet 开发</td>
+            <td>C</td>
+            <td>周五前</td>
+            <td>
+              
+              <span class="tag tag-danger">高</span>
+              
+            </td>
+          </tr>
+          
+          <tr>
+            <td>联系 ops 安排周一 staging 部署</td>
+            <td>A</td>
+            <td>本周内</td>
+            <td>
+              
+              <span class="tag tag-warn">中</span>
+              
+            </td>
+          </tr>
+          
+          <tr>
+            <td>调通 extract_decisions prompt</td>
+            <td>A</td>
+            <td>TBD</td>
+            <td>
+              
+              <span class="tag tag-warn">中</span>
+              
+            </td>
+          </tr>
+          
+        </tbody>
+      </table>
+      
+    </section>
+
+    <!-- ===== 议题展开 ===== -->
+    
+    <section class="section">
+      <div class="section-title">议题展开</div>
+      
+      <div class="topic">
+        <div class="topic-head">
+          <span class="topic-title">产物范围对齐</span>
+          <span class="topic-time">10:00-10:01</span>
+        </div>
+        
+        <ul class="topic-points">
+          <li>四件套：Word/Excel/PPT/HTML</li><li>Word 优先做模板</li>
+        </ul>
+        
+      </div>
+      
+      <div class="topic">
+        <div class="topic-head">
+          <span class="topic-title">分工</span>
+          <span class="topic-time">10:01-10:02</span>
+        </div>
+        
+        <ul class="topic-points">
+          <li>Word B</li><li>Excel C</li><li>PPT 用 skill 模板</li><li>HTML 自有样式</li>
+        </ul>
+        
+      </div>
+      
+      <div class="topic">
+        <div class="topic-head">
+          <span class="topic-title">时间表</span>
+          <span class="topic-time">10:02-10:04</span>
+        </div>
+        
+        <ul class="topic-points">
+          <li>周五前完成 demo</li><li>周一部署 staging</li>
+        </ul>
+        
+      </div>
+      
+    </section>
+    
+
+    <!-- ===== 完整纪要 ===== -->
+    
+    <section class="section">
+      <div class="section-title">完整纪要</div>
+      <div class="md-content">
+        <p>本次会议围绕 <strong>第二阶段产物范围</strong>、任务分工以及交付时间表展开讨论，确定了 <strong>Word/Excel/PPT/HTML 四种载体</strong>的优先级与负责人安排，并就 <strong>周一上午 staging 部署</strong> 达成一致，内容如下：</p>
+<ul>
+<li><strong>产物范围对齐</strong></li>
+<ul>
+<li><strong>四种载体</strong>：Word、Excel、PPT、HTML 四种纪要形态同步推进</li>
+<ul>
+<li><strong>Word 模板</strong>：作为 PPT 与 Excel 复用的样式基础，由 B 负责出 <strong>第一版</strong></li>
+<li><strong>Excel sheet</strong>：待办专属独立 sheet，由 C 牵头</li>
+<li><strong>PPT 模板</strong>：复用 Anthropic skill 自带模板，节省自研成本</li>
+<li><strong>HTML 样式</strong>：使用自有样式，与 Word 设计 token 保持一致</li>
+</ul>
+<li><strong>Word 优先级最高</strong>，原因是模板风格统一会反向影响 PPT/Excel</li>
+</ul>
+<li><strong>分工与时间表</strong></li>
+<ul>
+<li><strong>B 负责 Word</strong>：周三前出第一版，周四组内 review</li>
+<li><strong>C 负责 Excel</strong>：周五前完成 sheet 拆分与待办字段</li>
+<li><strong>A 负责协调</strong>：联系 ops 安排周一 staging 部署窗口</li>
+</ul>
+<li><strong>风险与下一步</strong></li>
+<ul>
+<li>当前 extract_decisions prompt 输出不稳定，A 本周内调通</li>
+<li>周五前完成 demo，周末预留缓冲，周一上午部署 staging</li>
+</ul>
+</ul>
+      </div>
+    </section>
+    
+
+    <div class="footer">
+      <span>2026-05-27T14:03:00 · 24187d78a647</span>
+      <span class="ai-note">AI 生成</span>
+    </div>
+
+  </div>
+
+  
+  <script>(function(){var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';s.onload=function(){  if(window.mermaid){    var d=window.matchMedia('(prefers-color-scheme: dark)').matches;    window.mermaid.initialize({startOnLoad:true,theme:d?'dark':'default',securityLevel:'loose'});  }};document.head.appendChild(s);})();</script>
+  <script>
+    (function () {
+      function tryInit() {
+        if (!window.mermaid) return false;
+        var isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        window.mermaid.initialize({
+          startOnLoad: false,
+          theme: isDark ? 'dark' : 'neutral',
+          securityLevel: 'loose',
+          flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+          sequence: { useMaxWidth: true },
+          mindmap: { useMaxWidth: true },
+          timeline: { useMaxWidth: true },
+          themeVariables: {
+            fontFamily: '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
+            fontSize: '13px'
+          }
+        });
+        if (window.mermaid.run) {
+          window.mermaid.run({ querySelector: '.mermaid' }).catch(function (e) {
+            console.warn('[mermaid] render failed:', e);
+          });
+        }
+        return true;
+      }
+      if (tryInit()) return;
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries += 1;
+        if (tryInit() || tries > 40) clearInterval(timer);
+      }, 250);
+    })();
+  </script>
+  
+</body>
+</html>
