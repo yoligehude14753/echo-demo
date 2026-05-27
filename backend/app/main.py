@@ -18,8 +18,14 @@ from app import __version__
 from app.api.artifacts import router as artifacts_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
-from app.api.deps import aclose_event_bus, aclose_llm_singleton
+from app.api.deps import (
+    aclose_event_bus,
+    aclose_llm_singleton,
+    aclose_repository,
+    get_repository,
+)
 from app.api.intent import router as intent_router
+from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
 from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
@@ -46,6 +52,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.rag_index_dir.mkdir(parents=True, exist_ok=True)
+
+    # SQLite repository：建表 + hydrate 未结束的会议（断电恢复）
+    repo = get_repository(settings)
+    await repo.init()
+    try:
+        pipeline = get_meeting_pipeline_for_lifespan(settings, repo)
+        n_resumed = await pipeline.hydrate_from_repo()
+        if n_resumed:
+            logger.info("hydrated %d in-progress meeting(s) from %s", n_resumed, settings.db_path)
+    except Exception as e:
+        logger.warning("meeting hydrate failed: %s", e)
 
     # 授权工作区：启动后 fire-and-forget 扫描（不阻塞 startup）
     if settings.workspace_scan_on_startup and settings.workspace_dirs_list:
@@ -79,6 +96,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
     await aclose_llm_singleton()
     await aclose_event_bus()
+    await aclose_repository()
     logger.info("echodesk 关闭")
 
 

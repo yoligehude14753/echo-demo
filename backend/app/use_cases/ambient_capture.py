@@ -15,6 +15,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.ports.rag import RagPort
+from app.ports.repository import RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.capture import CaptureChunkResult
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
@@ -30,11 +31,13 @@ class AmbientCapturePipeline:
         stt: STTPort,
         rag: RagPort,
         meeting: MeetingPipeline,
+        repository: RepositoryPort | None = None,
     ) -> None:
         self._settings = settings
         self._stt = stt
         self._rag = rag
         self._meeting = meeting
+        self._repo = repository
         self._ambient_dir = Path(settings.storage_dir).expanduser() / "ambient"
         self._ambient_dir.mkdir(parents=True, exist_ok=True)
 
@@ -67,7 +70,9 @@ class AmbientCapturePipeline:
         texts = [s.text.strip() for s in stt_segs if s.text.strip()]
         if texts:
             ambient_text = " ".join(texts)
-            captured_at = datetime.now(UTC).isoformat()
+            captured_dt = datetime.now(UTC)
+            captured_at = captured_dt.isoformat()
+            duration_ms = max(0, max((s.end_ms for s in stt_segs), default=0))
             try:
                 await self._rag.ingest_ambient_segment(
                     ambient_text,
@@ -77,6 +82,16 @@ class AmbientCapturePipeline:
                 ambient_stored = True
             except Exception as e:
                 logger.warning("ambient RAG ingest failed: %s", e)
+            if self._repo is not None:
+                try:
+                    await self._repo.append_ambient_segment(
+                        audio_ref=audio_ref,
+                        text=ambient_text,
+                        captured_at=captured_dt,
+                        duration_ms=duration_ms,
+                    )
+                except Exception as e:
+                    logger.warning("ambient repo persist failed: %s", e)
 
         meeting_segments = []
         if meeting_id:

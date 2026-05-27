@@ -11,8 +11,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.adapters.rag.bm25 import BM25Rag
 from app.adapters.stt.sensevoice_gpu import SenseVoiceGPUSTT
+from app.api.deps import get_repository
 from app.api.meetings import get_meeting_pipeline
 from app.config import Settings, get_settings
+from app.ports.repository import RepositoryPort
 from app.schemas.capture import CaptureChunkResult
 from app.use_cases.ambient_capture import AmbientCapturePipeline
 from app.use_cases.meeting_pipeline import MeetingPipeline
@@ -25,6 +27,7 @@ _ambient: AmbientCapturePipeline | None = None
 def get_ambient_pipeline(
     settings: Settings = Depends(get_settings),
     meeting: MeetingPipeline = Depends(get_meeting_pipeline),
+    repository: RepositoryPort = Depends(get_repository),
 ) -> AmbientCapturePipeline:
     global _ambient  # noqa: PLW0603
     if _ambient is None:
@@ -33,6 +36,7 @@ def get_ambient_pipeline(
             stt=SenseVoiceGPUSTT(settings),
             rag=BM25Rag(settings),
             meeting=meeting,
+            repository=repository,
         )
     return _ambient
 

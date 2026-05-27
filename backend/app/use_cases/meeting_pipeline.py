@@ -32,6 +32,7 @@ from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
 from app.ports.llm import LLMPort
 from app.ports.rag import RagPort
+from app.ports.repository import RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.events import EchoEvent
 from app.schemas.llm import ChatMessage
@@ -74,6 +75,7 @@ class MeetingPipeline:
         rag: RagPort,
         llm: LLMPort,
         event_bus: EventBusPort | None = None,
+        repository: RepositoryPort | None = None,
     ) -> None:
         self._settings = settings
         self._stt = stt
@@ -81,14 +83,42 @@ class MeetingPipeline:
         self._rag = rag
         self._llm = llm
         self._event_bus = event_bus
+        self._repo = repository
 
         self._segments: dict[str, list[TranscriptSegment]] = defaultdict(list)
         self._speaker_labels: dict[str, dict[str, str]] = defaultdict(dict)
+        # wall-clock start（用于跨重启计算 offset_ms 与显示）
+        self._started_at: dict[str, datetime] = {}
         self._wall_clock_start: dict[str, float] = {}
         self._finalized: set[str] = set()
         self._lock = asyncio.Lock()
         self._transcript_dir = Path(settings.storage_dir).expanduser() / "meetings"
         self._transcript_dir.mkdir(parents=True, exist_ok=True)
+
+    async def hydrate_from_repo(self) -> int:
+        """从 repository 恢复"未 finalized"的会议状态到内存（startup 调）。
+
+        重启后：
+        - state=in_meeting 的会议被加载，可继续 add_chunk / finalize
+        - wall_clock_start 用 monotonic.now() 重置（重启后的 offset_ms 从 0 开始；
+          已有 segments 的 start_ms 不变，新 chunk 用相对重启的偏移叠加进 _segments）
+
+        注意：state=ended 的会议不 hydrate（用户已显式停了，不能再加 chunk）。
+        """
+        if self._repo is None:
+            return 0
+        meetings = await self._repo.list_meetings(state="in_meeting", limit=100)
+        for m in meetings:
+            segs = await self._repo.list_meeting_segments(m.id)
+            labels = await self._repo.get_meeting_speaker_labels(m.id)
+            async with self._lock:
+                self._segments[m.id] = list(segs)
+                self._speaker_labels[m.id] = dict(labels)
+                self._started_at[m.id] = m.started_at
+                # 重启后 monotonic 重置：把 wall-clock 起点对齐到"now"，新 chunk 偏移 0 起算
+                self._wall_clock_start[m.id] = time.monotonic()
+                self._finalized.discard(m.id)
+        return len(meetings)
 
     async def _publish(self, event_type: str, meeting_id: str, payload: dict[str, Any]) -> None:
         if self._event_bus is None:
@@ -97,20 +127,44 @@ class MeetingPipeline:
             EchoEvent(type=event_type, meeting_id=meeting_id, payload=payload)  # type: ignore[arg-type]
         )
 
-    async def start_meeting(self, meeting_id: str) -> None:
+    async def start_meeting(
+        self,
+        meeting_id: str,
+        *,
+        title: str | None = None,
+        auto_started: bool = False,
+    ) -> None:
+        """启动 / 续接一个会议；如果 repo 里已存在 in_meeting 行则保留旧 started_at。"""
+        now = datetime.now(UTC)
         async with self._lock:
-            self._segments[meeting_id] = []
-            self._speaker_labels[meeting_id] = {}
-            self._wall_clock_start[meeting_id] = time.monotonic()
+            self._segments.setdefault(meeting_id, [])
+            self._speaker_labels.setdefault(meeting_id, {})
+            self._started_at.setdefault(meeting_id, now)
+            self._wall_clock_start.setdefault(meeting_id, time.monotonic())
             self._finalized.discard(meeting_id)
-        await self._diarizer.reset()
-        await self._publish("meeting.started", meeting_id, {})
+        # 注意：不再 reset diarizer，避免清掉 ambient 链路累积的 speaker registry
+        if self._repo is not None:
+            await self._repo.create_meeting(
+                meeting_id,
+                started_at=self._started_at[meeting_id],
+                title=title,
+                auto_started=auto_started,
+            )
+        await self._publish(
+            "meeting.started",
+            meeting_id,
+            {"auto_started": auto_started, "title": title},
+        )
 
     async def end_meeting(self, meeting_id: str) -> None:
         """结束会议叠加层（不生成纪要）；ambient 主链路不受影响。"""
         if meeting_id in self._finalized:
             return
         self._finalized.add(meeting_id)
+        if self._repo is not None:
+            await self._repo.update_meeting_state(
+                meeting_id, state="ended", ended_at=datetime.now(UTC)
+            )
         await self._publish("meeting.ended", meeting_id, {})
 
     async def ingest_from_stt(
@@ -130,8 +184,9 @@ class MeetingPipeline:
             await self.start_meeting(meeting_id)
 
         speaker_id = await self._diarizer.identify(audio_bytes, sample_rate=sample_rate)
-        label = self._label_for(meeting_id, speaker_id)
+        label = await self._label_for(meeting_id, speaker_id)
         offset_ms = int((time.monotonic() - self._wall_clock_start[meeting_id]) * 1000)
+        captured = datetime.now(UTC)
         out: list[TranscriptSegment] = []
         async with self._lock:
             for s in stt_segs:
@@ -144,6 +199,9 @@ class MeetingPipeline:
                 )
                 self._segments[meeting_id].append(seg)
                 out.append(seg)
+        if self._repo is not None:
+            for seg in out:
+                await self._repo.append_meeting_segment(meeting_id, seg, captured_at=captured)
         for seg in out:
             await self._publish("meeting.segment", meeting_id, seg.model_dump(mode="json"))
         return out
@@ -173,8 +231,9 @@ class MeetingPipeline:
         if not segs:
             return []
 
-        label = self._label_for(meeting_id, speaker_id)
+        label = await self._label_for(meeting_id, speaker_id)
         offset_ms = int((time.monotonic() - self._wall_clock_start[meeting_id]) * 1000)
+        captured = datetime.now(UTC)
         out: list[TranscriptSegment] = []
         async with self._lock:
             for s in segs:
@@ -187,6 +246,9 @@ class MeetingPipeline:
                 )
                 self._segments[meeting_id].append(seg)
                 out.append(seg)
+        if self._repo is not None:
+            for seg in out:
+                await self._repo.append_meeting_segment(meeting_id, seg, captured_at=captured)
         for seg in out:
             await self._publish("meeting.segment", meeting_id, seg.model_dump(mode="json"))
         return out
@@ -199,19 +261,28 @@ class MeetingPipeline:
         """
         if meeting_id not in self._wall_clock_start:
             await self.start_meeting(meeting_id)
-        label = seg.speaker_label or self._label_for(meeting_id, seg.speaker_id)
+        label = seg.speaker_label or await self._label_for(meeting_id, seg.speaker_id)
         normalized = seg.model_copy(update={"speaker_label": label})
         async with self._lock:
             self._segments[meeting_id].append(normalized)
+        if self._repo is not None:
+            await self._repo.append_meeting_segment(
+                meeting_id, normalized, captured_at=datetime.now(UTC)
+            )
         await self._publish("meeting.segment", meeting_id, normalized.model_dump(mode="json"))
         return normalized
 
-    def _label_for(self, meeting_id: str, speaker_id: str | None) -> str:
+    async def _label_for(self, meeting_id: str, speaker_id: str | None) -> str:
         if speaker_id is None:
             return "未识别"
         mapping = self._speaker_labels[meeting_id]
         if speaker_id not in mapping:
-            mapping[speaker_id] = f"说话人{len(mapping) + 1}"
+            new_label = f"说话人{len(mapping) + 1}"
+            mapping[speaker_id] = new_label
+            if self._repo is not None:
+                await self._repo.upsert_meeting_speaker_label(
+                    meeting_id, speaker_id, new_label
+                )
         return mapping[speaker_id]
 
     def get_segments(self, meeting_id: str) -> list[TranscriptSegment]:
@@ -254,6 +325,15 @@ class MeetingPipeline:
         await self._rag.ingest_meeting(meeting_id, rag_payload, title)
 
         self._finalized.add(meeting_id)
+        if self._repo is not None:
+            await self._repo.update_meeting_state(
+                meeting_id,
+                state="finalized",
+                title=title,
+                finalized_at=datetime.now(UTC),
+                minutes_json=minutes.model_dump_json(),
+                raw_transcript_ref=transcript_ref,
+            )
         await self._publish("meeting.ended", meeting_id, {"duration_sec": duration_sec})
         await self._publish("minutes.ready", meeting_id, minutes.model_dump(mode="json"))
         return minutes

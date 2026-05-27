@@ -15,8 +15,9 @@ from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from app.adapters.rag.bm25 import BM25Rag
 from app.adapters.stt.sensevoice_gpu import SenseVoiceGPUSTT
-from app.api.deps import get_event_bus, get_llm_singleton
+from app.api.deps import get_event_bus, get_llm_singleton, get_repository
 from app.config import Settings, get_settings
+from app.ports.repository import RepositoryPort
 from app.schemas.meeting import MeetingMinutes, TranscriptSegment
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 
@@ -29,6 +30,7 @@ def get_meeting_pipeline(
     settings: Settings = Depends(get_settings),
     llm: OpenAICompatibleLLM = Depends(get_llm_singleton),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
+    repository: RepositoryPort = Depends(get_repository),
 ) -> MeetingPipeline:
     global _pipeline  # noqa: PLW0603
     if _pipeline is None:
@@ -39,6 +41,32 @@ def get_meeting_pipeline(
             rag=BM25Rag(settings),
             llm=llm,
             event_bus=event_bus,
+            repository=repository,
+        )
+    return _pipeline
+
+
+def get_meeting_pipeline_for_lifespan(
+    settings: Settings,
+    repository: RepositoryPort,
+) -> MeetingPipeline:
+    """lifespan 用：不通过 Depends 注入，直接拿单例（无 LLM/STT/RAG 也能 hydrate）。"""
+    from app.adapters.event_bus.inmemory import InMemoryEventBus as _Bus
+    from app.api.deps import get_event_bus as _get_bus
+    from app.api.deps import get_llm_singleton as _get_llm
+
+    global _pipeline  # noqa: PLW0603
+    if _pipeline is None:
+        bus: _Bus = _get_bus()
+        llm = _get_llm(settings)
+        _pipeline = MeetingPipeline(
+            settings=settings,
+            stt=SenseVoiceGPUSTT(settings),
+            diarizer=make_diarizer(settings),
+            rag=BM25Rag(settings),
+            llm=llm,
+            event_bus=bus,
+            repository=repository,
         )
     return _pipeline
 
