@@ -149,14 +149,24 @@ SQLite append_ambient_segment (text, speaker_label, ...)
 
 ## 7. 修复路线图（不一次推完）
 
-| PR | 范围 | 风险 | 阶段 |
-|---|---|---|---|
-| `echodesk-arch-1` | TTS 命名 cosyvoice→qwen3_tts；config 过期注释清理；ambient_capture 撒谎注释修正；删 `_MIN_DUR_FOR_NEW_PROFILE` + `diarizer_min_audio_bytes` 死代码；强制 STT language=zh | 极低 | P0 文档/命名 |
-| `echodesk-spk-1` | embedding 持久化（write）+ 启动 hydrate（read）→ 修 #1 #9 | 中 | P0 |
-| `echodesk-spk-2` | diarizer 调用推迟到 STT-hallu 之后 → 修 #4 | 中 | P0 |
-| `echodesk-spk-3` | 阈值标定 + ring buffer 改 centroid（基于 echo bench） | 高 | P1 |
-| `echodesk-spk-4` | per-chunk VAD 切片 → 每片单独 ECAPA | 高 | P2 |
-| `echodesk-spk-5` | 音频前置门控参数重新标定 | 中 | P1 |
+| PR | 范围 | 风险 | 阶段 | 状态 |
+|---|---|---|---|---|
+| `echodesk-arch-1` | STT 默认切回 FireRed；TTS 命名 cosyvoice→qwen3_tts；config 过期注释清理；ambient_capture 撒谎注释修正；ECAPA 死分支注释标 TODO；SenseVoice language=zh 真传到远程 | 极低 | P0 文档/命名 | ✅ 已完成 (commit `41b8216`) |
+| `echodesk-ui-1` | **TranscriptStream 改成气泡式聊天布局**：非用户输入靠左、用户手动输入靠右；说话人编号当头像（彩色圆点 + 数字）；hover 才显示时间（HH:MM 即可）；气泡间距、字号、阴影抄 Marvis 简化版 | 低 | P0 UI/UX | 🚧 待开始 |
+| `echodesk-ui-2` | **"人"计数与 TranscriptStream 显示同源**：去掉 store 里 raw `speaker_label` Set，统一用前端 remap 后的连续序号 max 作为人数显示；避免"显示到说话人 47 但列表写 86 人"的不一致 | 低 | P0 UI/UX | 🚧 待开始 |
+| `echodesk-spk-1` | embedding 持久化（write）+ 启动 hydrate（read）→ 修 #1 #9 | 中 | P0 | ⏳ |
+| `echodesk-spk-2` | diarizer 触发改为 VAD 句级（而非 6s 固定 chunk）→ 修 #2 #5 | 中 | P0 | ⏳ |
+| `echodesk-spk-3` | 阈值标定 + 把 `_MIN_DUR_FOR_NEW_PROFILE` 改成基于 VAD 活跃秒数门控 | 高 | P1 | ⏳ |
+| `echodesk-spk-4` | ambient gate 收紧（RMS / min_speech_frame_ratio / cps）| 中 | P1 | ⏳ |
+| `echodesk-spk-5` | 清库 + 真实多人音频回归 + 调阈值闭环 | 中 | P1 | ⏳ |
+
+### 新增模块（用户 2026-05-27 反馈）
+
+- 用户截图："175 段 · 86 人"，TranscriptStream 同时显示"说话人 47"
+- 根因：`store.ts` 行 89-90 把后端发来的 raw global label 累加进 `Set`，
+  TranscriptStream 用最近 100 条 ambient 做 remap → **两个数字源不同步**
+- 短期修：ui-2 让人数 = `Math.max(...remappedIdx)`，与气泡上看到的最大编号一致
+- 中期修：spk-1..5 把后端 distinct speaker 数压回真实值（~3-5 人）后，86 自然落回
 
 ---
 

@@ -1,5 +1,6 @@
 import { Empty } from "antd";
 import { useStore } from "@/store";
+import { countDisplaySpeakers } from "@/lib/speakerDisplay";
 import type { MeetingCard } from "@/types";
 
 const dot: Record<MeetingCard["state"], string> = {
@@ -65,7 +66,9 @@ export default function MeetingList(): JSX.Element {
               <span>·</span>
               <span>{m.segments.length} 段</span>
               <span>·</span>
-              <span>{m.speakers.size} 人</span>
+              {/* 与 TranscriptStream 同源：基于 remap 后的 displayIdx
+                  数 distinct，避免"显示到说话人 47 但列表写 86 人" */}
+              <span>{countDisplaySpeakers(m.segments)} 人</span>
             </div>
           </button>
         );

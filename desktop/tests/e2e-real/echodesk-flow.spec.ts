@@ -304,7 +304,103 @@ test.describe("EchoDesk 核心流程", () => {
     }
   });
 
-  test("14. WS 事件计数在交互后真增长", async ({ page }) => {
+  test("14. 转写流气泡布局：头像+气泡可见，时间默认隐藏 hover 后才显示", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    await gotoApp(page);
+
+    // 等转写流出现
+    const rows = page.getByTestId("transcript-row");
+    await page.waitForTimeout(4_000);
+    const rowCount = await rows.count();
+    if (rowCount === 0) {
+      console.log("[skip] 无 ambient 转写数据，跳过气泡布局断言");
+      return;
+    }
+
+    // 1) 至少有一个头像可见（同说话人合并时只显示首条头像，所以 avatar 数 ≤ row 数）
+    const avatars = page.getByTestId("speaker-avatar");
+    expect(await avatars.count()).toBeGreaterThan(0);
+    await expect(avatars.first()).toBeVisible();
+
+    // 2) 头像内容是数字或 "?"（未识别），不是后端 raw label
+    const avatarText = ((await avatars.first().textContent()) ?? "").trim();
+    expect(avatarText).toMatch(/^(\d+|\?)$/);
+
+    // 3) 时间默认 opacity-0（不可见 / 透明）
+    const firstRow = rows.first();
+    const time = firstRow.getByTestId("transcript-time").first();
+    if ((await time.count()) > 0) {
+      const opacity = await time.evaluate((el) => {
+        return window.getComputedStyle(el as HTMLElement).opacity;
+      });
+      expect(parseFloat(opacity)).toBeLessThan(0.5);
+
+      // 4) hover 该 row 后时间出现
+      await firstRow.hover();
+      await page.waitForTimeout(300);
+      const opacityHover = await time.evaluate((el) => {
+        return window.getComputedStyle(el as HTMLElement).opacity;
+      });
+      expect(parseFloat(opacityHover)).toBeGreaterThan(0.5);
+
+      // 5) 时间格式仅 HH:MM（不带秒）
+      const txt = ((await time.textContent()) ?? "").trim();
+      expect(txt).toMatch(/^\d{2}:\d{2}$/);
+    }
+  });
+
+  test("15. 会议列表'N 人'与转写流显示的 distinct speaker tag 数一致（同源计数）", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    await gotoApp(page);
+    await page.waitForTimeout(4_000);
+
+    // 转写流可见 distinct speaker-tag 数（仅"新说话人开头"那一行才有 tag）
+    const tags = page.getByTestId("speaker-tag");
+    const tagCount = await tags.count();
+    if (tagCount === 0) {
+      console.log("[skip] 无转写数据");
+      return;
+    }
+    const distinctDisplayIdxs = new Set<number>();
+    for (let i = 0; i < tagCount; i++) {
+      const t = ((await tags.nth(i).textContent()) ?? "").trim();
+      const m = /^说话人 (\d+)$/.exec(t);
+      if (m) distinctDisplayIdxs.add(parseInt(m[1]!, 10));
+    }
+    const transcriptSpeakerCount = distinctDisplayIdxs.size;
+    if (transcriptSpeakerCount === 0) return;
+
+    // 当前会议在左侧列表里的"N 人"显示
+    // 没在会议中的话，不强求一致（meeting list 只有真实开过会的项）
+    const meetingItems = page.locator("button:has-text('段'):has-text('人')");
+    const meetingCount = await meetingItems.count();
+    if (meetingCount === 0) return;
+
+    // 检查"进行中"会议（如果存在）的人数
+    const inMeeting = page.locator(
+      "button:has-text('进行中'):has-text('段'):has-text('人')",
+    );
+    if ((await inMeeting.count()) > 0) {
+      const text = ((await inMeeting.first().textContent()) ?? "").trim();
+      const m = /(\d+) 人/.exec(text);
+      expect(m, `'N 人' 格式应可解析：${text}`).not.toBeNull();
+      const listCount = parseInt(m![1]!, 10);
+      // 转写流窗口 100 条 vs 会议累计 — 列表数 ≤ 全局，但都来自同一 remap
+      // 关键断言：列表 N 不能远超转写流可见编号最大值 + 容差
+      // （即：不会再出现 "47 vs 86" 的不一致）
+      const maxDisplayIdx = Math.max(...distinctDisplayIdxs);
+      expect(
+        listCount,
+        `会议列表 ${listCount} 人 vs 转写流 max display idx ${maxDisplayIdx}，差距过大说明计数源不同步`,
+      ).toBeLessThanOrEqual(maxDisplayIdx + 5);
+    }
+  });
+
+  test("16. WS 事件计数在交互后真增长", async ({ page }) => {
     test.setTimeout(60_000);
     await gotoApp(page);
 
