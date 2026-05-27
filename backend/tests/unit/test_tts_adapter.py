@@ -8,16 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
-from app.adapters.tts import CosyVoiceTTS, TTSError
+from app.adapters.tts import Qwen3TTS, TTSError
 from app.config import Settings
 
 
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
-        tts_provider="cosyvoice",
-        tts_cosyvoice_url="http://100.87.251.9:8094",
-        tts_cosyvoice_voice="aiden",
+        tts_provider="qwen3_tts",
+        tts_qwen3_url="http://100.87.251.9:8094",
+        tts_qwen3_voice="aiden",
     )
 
 
@@ -47,10 +47,10 @@ def _mock_client_returning_wav(wav: bytes) -> object:
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_synthesize_returns_pcm_for_wav_response(settings: Settings) -> None:
-    tts = CosyVoiceTTS(settings)
+    tts = Qwen3TTS(settings)
     wav = _wav_bytes_of_silence(1600)
     fake = _mock_client_returning_wav(wav)
-    with patch("app.adapters.tts.cosyvoice.httpx.AsyncClient", return_value=fake):
+    with patch("app.adapters.tts.qwen3_tts.httpx.AsyncClient", return_value=fake):
         pcm = await tts.synthesize("你好")
     # 16k PCM 16-bit mono = 2 bytes/sample
     assert isinstance(pcm, bytes)
@@ -60,7 +60,7 @@ async def test_synthesize_returns_pcm_for_wav_response(settings: Settings) -> No
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_synthesize_empty_text_returns_empty(settings: Settings) -> None:
-    tts = CosyVoiceTTS(settings)
+    tts = Qwen3TTS(settings)
     out = await tts.synthesize("  ")
     assert out == b""
 
@@ -68,13 +68,13 @@ async def test_synthesize_empty_text_returns_empty(settings: Settings) -> None:
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_synthesize_http_error_raises_ttserror(settings: Settings) -> None:
-    tts = CosyVoiceTTS(settings)
+    tts = Qwen3TTS(settings)
     fake = MagicMock()
     fake.post = AsyncMock(side_effect=RuntimeError("boom"))
     fake.__aenter__ = AsyncMock(return_value=fake)
     fake.__aexit__ = AsyncMock(return_value=None)
     with (
-        patch("app.adapters.tts.cosyvoice.httpx.AsyncClient", return_value=fake),
-        pytest.raises(TTSError, match="cosyvoice synthesize failed"),
+        patch("app.adapters.tts.qwen3_tts.httpx.AsyncClient", return_value=fake),
+        pytest.raises(TTSError, match="qwen3_tts synthesize failed"),
     ):
         await tts.synthesize("你好")

@@ -76,7 +76,7 @@ async def test_real_audio_meeting_minutes_e2e(tmp_path: Path) -> None:
     """
     wav = await get_audio_fixture("short")
     if wav is None:
-        pytest.skip("真音频 fixture 不可生成（cosyvoice 不可达 + 无 cache）")
+        pytest.skip("真音频 fixture 不可生成（faster-qwen3-tts 不可达 + 无 cache）")
 
     settings = Settings(
         storage_dir=tmp_path / "storage",

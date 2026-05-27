@@ -17,8 +17,13 @@ from typing import Any
 
 from app.config import Settings
 
-_MIN_DUR_FOR_NEW_PROFILE = 4.0
-_OUTLIER_SIM_ALLOW_NEW = 0.30
+# ⚠️ docs/ARCH-AUDIT.md §4 root #2：
+# `_MIN_DUR_FOR_NEW_PROFILE = 4.0` 在 6s 固定 chunk 下是死分支（dur >= 4 永远成立）。
+# 真正想做的是"没有足够语音活跃秒数（VAD active）就不允许注册新人"。
+# 留下常量是为了 PR `echodesk-spk-2/3` 重构成基于 VAD active seconds 的门控；
+# 暂时保留但在 identify() 里加 TODO 提示不要依赖它。
+_MIN_DUR_FOR_NEW_PROFILE = 4.0  # TODO(echodesk-spk-3): replace by VAD active seconds
+_OUTLIER_SIM_ALLOW_NEW = 0.30   # TODO(echodesk-spk-3): re-calibrate from echo bench data
 
 
 class DiarizerError(RuntimeError):

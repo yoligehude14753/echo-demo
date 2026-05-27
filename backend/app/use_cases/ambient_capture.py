@@ -117,7 +117,11 @@ class AmbientCapturePipeline:
                 logger.debug("ambient hallu drop: %s text=%r", why, joined)
                 texts = []
                 stt_segs = []
-                speaker_id = None  # 同时撤销该 chunk 的 speaker（防注册脏档案）
+                # ⚠️ 已知问题（docs/ARCH-AUDIT.md §4 root #4，echodesk-spk-2 修）：
+                # 这里把 speaker_id 置 None 只是不让 registry / DB 写脏 label，但
+                # ECAPA._profiles 在第 94 行已经被并发的 diarizer 写脏（embedding 已注册）。
+                # 真正修法：把 diarize 调用推迟到 hallu 门控之后（破坏并发以换正确性）。
+                speaker_id = None
 
         speaker_label: str | None = None
         if self._registry is not None and texts:

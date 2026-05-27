@@ -1,13 +1,13 @@
-"""真音频 fixture：用 cosyvoice 合成两段中文 → 拼接 → 缓存到 ~/.echodesk/test-audio/。
+"""真音频 fixture：用 faster-qwen3-tts 合成两段中文 → 拼接 → 缓存到 ~/.echodesk/test-audio/。
 
 测试流程：
 1. fixture 已 cached → 直接读取
-2. cosyvoice 可达 → 合成 + 写文件
+2. TTS 可达（heyi-bj :8094 = faster-qwen3-tts）→ 合成 + 写文件
 3. 都不行 → return None → 测试 skip
 
 为什么不入 git：
 - audio binary 大（30s ~ 1MB, 2min ~ 4MB）
-- 中文 + cosyvoice voice 不可逆，binary diff 噪音大
+- 中文 + TTS voice 不可逆，binary diff 噪音大
 """
 
 from __future__ import annotations
@@ -75,11 +75,11 @@ def _silence_pcm16(seconds: float, sample_rate: int = SAMPLE_RATE) -> bytes:
 
 
 async def _synthesize_line(text: str) -> bytes:
-    """调 cosyvoice 合成一句话，返回 PCM16 mono 16k。"""
-    from app.adapters.tts import CosyVoiceTTS
+    """调 faster-qwen3-tts 合成一句话，返回 PCM16 mono 16k。"""
+    from app.adapters.tts import Qwen3TTS
     from app.config import Settings
 
-    tts = CosyVoiceTTS(Settings(), timeout_s=30.0)
+    tts = Qwen3TTS(Settings(), timeout_s=30.0)
     return await tts.synthesize(text, sample_rate=SAMPLE_RATE)
 
 

@@ -11,7 +11,7 @@ import socket
 import numpy as np
 import pytest
 from app.adapters.stt import SenseVoiceGPUSTT
-from app.adapters.tts import CosyVoiceTTS
+from app.adapters.tts import Qwen3TTS
 from app.config import Settings
 
 pytestmark = pytest.mark.integration
@@ -52,11 +52,11 @@ async def test_real_stt_handshake(settings: Settings) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not _can_connect("100.87.251.9", 8094), reason="heyi-bj 8094 (cosyvoice) 不可达"
+    not _can_connect("100.87.251.9", 8094), reason="heyi-bj 8094 (qwen3_tts) 不可达"
 )
 async def test_real_tts_synthesize(settings: Settings) -> None:
     """TTS 真实合成 → 返回非空 PCM 字节（≥ 0.1s 音频）。"""
-    tts = CosyVoiceTTS(settings, timeout_s=30.0)
+    tts = Qwen3TTS(settings, timeout_s=30.0)
     pcm = await tts.synthesize("你好,我是 Echo")
     # 容忍服务返回 wav 或裸 audio bytes；只要不是 0 字节就算 OK
     assert isinstance(pcm, bytes)

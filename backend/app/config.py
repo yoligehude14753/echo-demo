@@ -8,7 +8,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录的 .env（无论从 backend/ 还是项目根启动都能找到）
@@ -49,17 +49,46 @@ class Settings(BaseSettings):
     llm_fast_max_tokens: int = 512
 
     # ── STT ───────────────────────────────────────────────────────
-    stt_backend: str = "sensevoice_gpu"
+    # 当前默认 = firered（@ heyi :8090，判别式无幻觉、中文强）；
+    # echo 实战路径 Deepgram → FireRed → faster-whisper → SenseVoice → 回 FireRed。
+    # 详见 docs/ARCH-AUDIT.md §2 + §4 root #11。
+    stt_backend: str = "firered"
+    stt_firered_url: str = "http://100.87.251.9:8090"
+    # SenseVoice 保留作 fallback / option（stt_backend=sensevoice_gpu 切回）
     stt_sensevoice_gpu_url: str = "http://100.87.251.9:8093"
     stt_sensevoice_device: str = "cpu"
     stt_language: str = "zh"
     stt_llm_correct: bool = False
 
     # ── TTS ───────────────────────────────────────────────────────
+    # 实际跑的是 faster-qwen3-tts 1.7B CustomVoice @ heyi-bj :8094
+    # （echo commit b065547 切换；echo-demo `cosyvoice` 是历史命名遗留）
+    # 详见 docs/ARCH-AUDIT.md §3
     tts_enabled: bool = True
-    tts_provider: str = "cosyvoice"
-    tts_cosyvoice_url: str = "http://100.87.251.9:8094"
-    tts_cosyvoice_voice: str = "aiden"
+    # provider 字符串当前只支持 "qwen3_tts"（含旧别名 "cosyvoice"，路由到同一 adapter）
+    tts_provider: str = Field(
+        default="qwen3_tts",
+        validation_alias=AliasChoices("tts_provider", "TTS_PROVIDER"),
+    )
+    # 兼容旧 env：TTS_COSYVOICE_URL / TTS_COSYVOICE_VOICE 仍能正确加载
+    tts_qwen3_url: str = Field(
+        default="http://100.87.251.9:8094",
+        validation_alias=AliasChoices(
+            "tts_qwen3_url",
+            "TTS_QWEN3_URL",
+            "tts_cosyvoice_url",
+            "TTS_COSYVOICE_URL",
+        ),
+    )
+    tts_qwen3_voice: str = Field(
+        default="aiden",
+        validation_alias=AliasChoices(
+            "tts_qwen3_voice",
+            "TTS_QWEN3_VOICE",
+            "tts_cosyvoice_voice",
+            "TTS_COSYVOICE_VOICE",
+        ),
+    )
 
     # ── Speaker Diarization ──────────────────────────────────────
     diarizer_enabled: bool = True
