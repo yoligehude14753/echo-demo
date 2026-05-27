@@ -19,7 +19,7 @@ from app.ports.stt import STTPort
 from app.schemas.capture import CaptureChunkResult
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 
-logger = logging.getLogger("echo-demo.ambient")
+logger = logging.getLogger("echodesk.ambient")
 
 
 class AmbientCapturePipeline:

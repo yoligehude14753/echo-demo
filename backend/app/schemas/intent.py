@@ -1,10 +1,10 @@
-"""Intent schema：@路由 9 类意图。
+"""Intent schema：@路由 10 类意图。
 
 PR-16 / m5-t5：用户在前端聊天框输入"@查英伟达营收"等，
 调 /intent/route → LLM 分类返回 IntentResult{kind, params, confidence}
 → 前端按 kind 触发对应业务（产物/搜索/会议）。
 
-9 类意图：
+10 类意图：
 - search_web        : @查 / @搜 / @最新（联网检索）
 - search_rag        : @回忆 / @上次会议 / @找文档（本地知识库检索）
 - generate_html     : @生成 HTML / @报告

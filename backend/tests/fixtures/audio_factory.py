@@ -1,4 +1,4 @@
-"""真音频 fixture：用 cosyvoice 合成两段中文 → 拼接 → 缓存到 ~/.echo-demo/test-audio/。
+"""真音频 fixture：用 cosyvoice 合成两段中文 → 拼接 → 缓存到 ~/.echodesk/test-audio/。
 
 测试流程：
 1. fixture 已 cached → 直接读取
@@ -19,7 +19,7 @@ import wave
 from pathlib import Path
 from typing import Final
 
-CACHE_DIR: Final[Path] = Path("~/.echo-demo/test-audio").expanduser()
+CACHE_DIR: Final[Path] = Path("~/.echodesk/test-audio").expanduser()
 SAMPLE_RATE: Final[int] = 16_000
 
 # 两个角色的对话脚本（设计成业务讨论，便于 LLM minutes 生成有意义内容）

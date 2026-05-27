@@ -115,8 +115,9 @@ def test_keyword_route_misses() -> None:
 
 @pytest.mark.unit
 def test_supported_intents_complete() -> None:
-    # 9 类必须齐
-    assert len(SUPPORTED_INTENTS) == 9
+    # 10 类必须齐
+    assert len(SUPPORTED_INTENTS) == 10
+    assert "end_meeting" in SUPPORTED_INTENTS
 
 
 @pytest.mark.unit

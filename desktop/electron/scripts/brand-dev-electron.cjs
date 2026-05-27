@@ -5,12 +5,12 @@
  *
  * 背景：dev 模式跑 `electron electron/main.cjs` 时，macOS Dock / Cmd+Tab 显示的进程名
  * 来自 `node_modules/electron/dist/Electron.app/Contents/Info.plist` 的 CFBundleName / CFBundleIconFile，
- * 跟 `app.setName()` 无关。所以要让 dev 模式 Dock 显示 "Echo (dev)" + 自定义图标，
+ * 跟 `app.setName()` 无关。所以要让 dev 模式 Dock 显示 "EchoDesk (dev)" + 自定义图标，
  * 必须就地补丁 node_modules 里的 Electron.app。
  *
  * 操作：
  *   1. 改 Info.plist 的 CFBundleName / CFBundleDisplayName / CFBundleIconFile
- *   2. 把 desktop/electron/icons/echo.icns 拷成 Resources/echo.icns
+ *   2. 把 desktop/electron/icons/echodesk.icns 拷成 Resources/echodesk.icns
  *
  * 重装 electron 会重置 Info.plist + 删 icon，所以 package.json 的 postinstall 也会调本脚本。
  *
@@ -20,8 +20,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execSync } = require("node:child_process");
 
-const APP_NAME = "Echo (dev)";
-const ICON_FILE = "echo.icns";
+const APP_NAME = "EchoDesk (dev)";
+const ICON_FILE = "echodesk.icns";
 const ROOT = path.resolve(__dirname, "..", "..");
 const ELECTRON_APP = path.join(
   ROOT,

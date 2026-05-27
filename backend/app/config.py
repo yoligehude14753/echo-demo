@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     diarizer_min_audio_bytes: int = 16_000
 
     # ── RAG ───────────────────────────────────────────────────────
-    rag_index_dir: Path = Field(default=Path("~/.echo-demo/rag_index").expanduser())
+    rag_index_dir: Path = Field(default=Path("~/.echodesk/rag_index").expanduser())
     rag_top_k: int = 5
     rag_pdf_chunk_tokens: int = 600
     rag_pdf_chunk_overlap: int = 100
@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     workspace_max_file_mb: float = 20.0
     workspace_scan_on_startup: bool = True
     workspace_state_file: Path = Field(
-        default=Path("~/.echo-demo/workspace_state.json").expanduser()
+        default=Path("~/.echodesk/workspace_state.json").expanduser()
     )
 
     @property
@@ -103,13 +103,13 @@ class Settings(BaseSettings):
     skill_html_tool: str = "single-file-tailwind-cdn"
     skill_fix_max_retries: int = 3
     skill_node_bin: str = "node"
-    skill_executor_build_dir: Path = Field(default=Path("~/.echo-demo/skill_build").expanduser())
+    skill_executor_build_dir: Path = Field(default=Path("~/.echodesk/skill_build").expanduser())
     skill_executor_timeout_s: int = 300
     skill_executor_max_tokens: int = 80_000
 
     # ── DB ────────────────────────────────────────────────────────
-    db_path: Path = Field(default=Path("~/.echo-demo/echo.db").expanduser())
-    storage_dir: Path = Field(default=Path("~/.echo-demo/storage").expanduser())
+    db_path: Path = Field(default=Path("~/.echodesk/echodesk.db").expanduser())
+    storage_dir: Path = Field(default=Path("~/.echodesk/storage").expanduser())
 
     # ── Security ──────────────────────────────────────────────────
     allowed_origins: str = "app://.,http://localhost:5173,http://localhost:8765"

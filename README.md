@@ -1,6 +1,6 @@
-# Echo Demo · 数字分身 (Another Me) 演示版
+# EchoDesk · 数字分身 (Another Me)
 
-> **目标**：会议 + 办公场景的"数字分身"演示 demo。
+> **目标**：会议 + 办公场景的"数字分身"桌面应用。
 > **现状**：D7 · M3 已完成（PR-1 ~ PR-8 + PR-11 合并），全链路 E2E 通过。
 > **快速跑通**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)。
 
@@ -18,7 +18,7 @@
 ## 架构
 
 ```
-echo-demo/
+echodesk/
 ├── README.md
 ├── ARCHITECTURE.md          # 自上而下架构图 + 模块边界
 ├── docs/

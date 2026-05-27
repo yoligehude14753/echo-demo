@@ -174,7 +174,7 @@ export default function WorkspaceBar(): JSX.Element {
           <div>
             <div className="font-medium mb-1">配置方式</div>
             <pre className="bg-paper-100 rounded p-2 text-[11px] leading-snug">
-              {`# 在 echo-demo/.env 中设置（多目录用逗号分隔）
+              {`# 在 .env 中设置（多目录用逗号分隔）
 WORKSPACE_DIRS=~/Documents/work,~/Notes
 WORKSPACE_MAX_FILE_MB=20
 WORKSPACE_SCAN_ON_STARTUP=true`}

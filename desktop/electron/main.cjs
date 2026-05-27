@@ -11,23 +11,22 @@ const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8769", 10);
 const BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
 const SPAWN_BACKEND = process.env.ECHO_SPAWN_BACKEND !== "0";
 
-// 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名固定是 "Electron"（黑紫色 Atom 图标），
-// 因为读的是 node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
-// 只有 electron-builder 打包后才会显示为 "Echo"。app.setName() 只影响 userData 路径，不改 Dock 名。
-// dev 期识别窗口：看窗口内 UI 顶部的 "Echo · echo-demo" brand，或 Cmd+Tab 中的黑紫 Atom 图标。
+// 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
+// node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
+// electron-builder 打包后从 productName=EchoDesk 来。app.setName() 只影响 userData 路径，不改 Dock 名。
+// dev 期识别窗口：看窗口内 UI 顶部的 "EchoDesk" brand 或 Cmd+Tab 中的图标。
 
 let backendProc = null;
 let mainWindow = null;
 
 function projectRoot() {
-  // dev: desktop/electron/main.cjs → desktop/.. = echo-demo
+  // dev: desktop/electron/main.cjs → desktop/.. = echodesk repo root
   return path.resolve(__dirname, "..", "..");
 }
 
 function resolvePython() {
   if (process.env.ECHO_PYTHON) return process.env.ECHO_PYTHON;
   const candidates = [
-    "/Users/yoligehude/Desktop/all/echo/backend/.venv-test/bin/python",
     path.join(projectRoot(), "backend", ".venv", "bin", "python"),
     "/usr/bin/python3",
     "python3",
@@ -113,7 +112,7 @@ function waitForBackend(timeoutMs = 30_000) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    title: IS_DEV ? "Echo (dev)" : "Echo",
+    title: IS_DEV ? "EchoDesk (dev)" : "EchoDesk",
     width: 1280,
     height: 820,
     minWidth: 960,

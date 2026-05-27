@@ -24,7 +24,7 @@ from app.schemas.llm import ChatMessage
 
 logger = logging.getLogger(__name__)
 
-_SYS_PROMPT = """你是 Echo 桌面助手的意图路由器。
+_SYS_PROMPT = """你是 EchoDesk 桌面助手的意图路由器。
 
 把用户输入分类为以下 10 类之一：
 

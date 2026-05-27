@@ -60,8 +60,10 @@ yarn-error.log*
 Thumbs.db
 
 # App data / artifacts
-~/.echo-demo/
-.echo-demo/
+~/.echodesk/
+.echodesk/
+echodesk.db
+echodesk.db-journal
 echo.db
 echo.db-journal
 storage/

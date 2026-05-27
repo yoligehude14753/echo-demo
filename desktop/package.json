@@ -1,5 +1,5 @@
 {
-  "name": "echo-demo-desktop",
+  "name": "echodesk-desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -51,8 +51,8 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.echo.demo",
-    "productName": "Echo",
+    "appId": "com.echodesk.app",
+    "productName": "EchoDesk",
     "directories": {
       "output": "release"
     },
@@ -63,7 +63,7 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "electron/icons/echo.icns",
+      "icon": "electron/icons/echodesk.icns",
       "target": [
         "dmg",
         "zip"

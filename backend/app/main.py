@@ -27,7 +27,7 @@ from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
 
-logger = logging.getLogger("echo-demo")
+logger = logging.getLogger("echodesk")
 
 # 持有 lifespan 期间 fire-and-forget 任务的强引用，避免被 GC
 _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
@@ -37,7 +37,7 @@ _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     logger.info(
-        "echo-demo 启动: version=%s llm_main=%s llm_fast=%s stt=%s tts=%s",
+        "echodesk 启动: version=%s llm_main=%s llm_fast=%s stt=%s tts=%s",
         __version__,
         settings.llm_main_model,
         settings.llm_fast_model,
@@ -79,7 +79,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
     await aclose_llm_singleton()
     await aclose_event_bus()
-    logger.info("echo-demo 关闭")
+    logger.info("echodesk 关闭")
 
 
 def create_app() -> FastAPI:
@@ -90,9 +90,9 @@ def create_app() -> FastAPI:
     )
 
     app = FastAPI(
-        title="echo-demo",
+        title="EchoDesk",
         version=__version__,
-        description="个人数字分身 · 会议+办公 demo（API 后端）",
+        description="个人数字分身 · 会议+办公（API 后端）",
         lifespan=lifespan,
     )
 

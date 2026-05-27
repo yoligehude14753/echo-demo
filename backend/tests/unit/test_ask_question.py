@@ -44,7 +44,7 @@ async def test_ask_question_streams_chunks() -> None:
     assert out == ["你", "好", "！"]
     assert llm.captured_messages is not None
     assert llm.captured_messages[0].role == "system"
-    assert "Echo" in llm.captured_messages[0].content
+    assert "EchoDesk" in llm.captured_messages[0].content
     assert llm.captured_messages[-1].content == "你好"
 
 

@@ -1,6 +1,6 @@
 # desktop
 
-Echo demo 的桌面端（Electron + React + TypeScript）。
+EchoDesk 的桌面端（Electron + React + TypeScript）。
 
 > 当前为 placeholder：将在 **Sprint 4（前端 + WebSocket，PR-10~12）** 中按 `docs/DEV_PLAN.md` 初始化。
 >

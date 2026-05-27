@@ -1,6 +1,6 @@
 # backend
 
-echo-demo 后端：FastAPI + Ports & Adapters。
+EchoDesk 后端：FastAPI + Ports & Adapters。
 
 ## 目录
 

@@ -13,7 +13,7 @@
 # Python 3.12+（项目 CI 用 3.12），Node 20+
 # 一个能调通 Yunwu 的 YUNWU_OPEN_KEY（M2.7 主通道）
 
-cd echo-demo
+cd echodesk
 cp .env.example .env
 $EDITOR .env    # 填 YUNWU_OPEN_KEY=sk-xxxx 和 TAVILY_API_KEY=tvly-xxxx
 ```
@@ -29,7 +29,7 @@ uvicorn app.main:app --port 8765
 ```
 
 期望：
-- 控制台打印 `echo-demo 启动: version=0.1.0 llm_main=MiniMax-M2.7 ...`
+- 控制台打印 `echodesk 启动: version=0.1.0 llm_main=MiniMax-M2.7 ...`
 - `curl http://localhost:8765/healthz` → `{"status":"ok"}`
 - `curl http://localhost:8765/bootstrap` 输出能力开关
 

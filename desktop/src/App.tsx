@@ -26,9 +26,9 @@ export default function App(): JSX.Element {
         <div className="flex items-center gap-2.5">
           <span className="w-2 h-2 rounded-full bg-accent shadow-[0_0_0_3px_rgba(16,163,127,0.18)]" />
           <span className="brand font-semibold text-[15px] text-ink-900">
-            Echo
+            EchoDesk
           </span>
-          <span className="text-[11px] text-ink-500">demo · v0.1</span>
+          <span className="text-[11px] text-ink-500">v0.1</span>
         </div>
         <div className="app-no-drag flex items-center gap-4 text-[11px] text-ink-500">
           <span>事件 {events.length}</span>

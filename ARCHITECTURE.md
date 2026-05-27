@@ -96,7 +96,7 @@
 ```
 每个 PCM chunk
   └─ POST /capture/chunk（主链路，永远执行）
-        ├─ 落盘 ~/.echo-demo/ambient/YYYY-MM-DD/*.wav
+        ├─ 落盘 ~/.echodesk/ambient/YYYY-MM-DD/*.wav
         ├─ STT → 非空则 RAG ingest（ambient-YYYYMMDD）
         └─ 若 meeting_id 且 meeting 未 ended → MeetingPipeline 叠加（同一次 STT 结果）
 ```
@@ -194,8 +194,8 @@ DiarizerPort.identify(audio_chunk) → speaker_id (本会议局部 ID: 1/2/3)
 | Yunwu API | cloud | 按 token 计费 |
 | heyi-bj (STT/TTS/Qwen 1.7B) | 北京 GPU | 已部署稳定 |
 | heyi-91 (M2.7 self-host) | 上海 5090 | **demo 期 SKIP**，host 修好再启用 |
-| SQLite | 本地文件 `~/.echo-demo/data.db` | 单文件 |
-| 上传文件 | 本地 `~/.echo-demo/storage/` | 单机 |
+| SQLite | 本地文件 `~/.echodesk/echodesk.db` | 单文件 |
+| 上传文件 | 本地 `~/.echodesk/storage/` | 单机 |
 
 ## 5. 不可逆决策（已写 ADR）
 
