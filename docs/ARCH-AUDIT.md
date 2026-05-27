@@ -159,8 +159,9 @@ SQLite append_ambient_segment (text, speaker_label, ...)
 | `echodesk-spk-2` | diarizer 触发改为 VAD 句级（而非 6s 固定 chunk）→ 修 #5b。`audio_gate.split_into_voiced_segments` + `ECAPADiarizer.identify_segments` | 中 | P1 | ✅ 已合 (`a00d54b`) |
 | `echodesk-spk-3` | 删 `_MIN_DUR_FOR_NEW_PROFILE`/`_OUTLIER_SIM_ALLOW_NEW` 硬编码 → 改成 settings 可配的 voiced active seconds 门控；短段不允许注册新人，sim 不足直接丢弃（不污染已知 centroid） | 低 | P1 | ✅ 本 PR |
 | `echodesk-spk-4` | ambient pre-gate / hallucination 阈值收紧 → 修 #6 #7 | 低 | P1 | ✅ 已合 (`6aa3d00`) |
-| `echodesk-spk-5` | 提供 `python -m app.tools.reset_speakers --yes --include-segments` 工具一次性清掉 spk-1 之前累积的 157 个 speaker / 494 ambient_segments / 144 speaker_labels 污染 | 低 | P1 | ✅ 本 PR |
-| ~~阈值闭环标定~~ | 推迟到有真实多人录音回归数据后再做 | — | P2 | ⏳ 待数据 |
+| `echodesk-spk-5` | 提供 `python -m app.tools.reset_speakers --yes --include-segments` 工具一次性清掉 spk-1 之前累积的 157 个 speaker / 494 ambient_segments / 144 speaker_labels 污染 | 低 | P1 | ✅ 已合 (`5a6fc77`) |
+| `echodesk-spk-6` | 保守阈值预设：`diarizer_min_voiced_seconds_for_new_profile` 1.5→2.0、`diarizer_outlier_match_threshold` 0.50→0.60。理由：spk-2/3 后还没有真实多人音频回归数据，先选偏严格的预设，宁可漏注册短句新人也不要污染 centroid。 | 低 | P2 | ✅ 本 PR |
+| ~~阈值闭环标定~~ | 拿到真实多人音频回归数据后再调精确（可能升也可能降） | — | P3 | ⏳ 待数据 |
 
 ### 新增模块（用户 2026-05-27 反馈）
 
@@ -172,5 +173,5 @@ SQLite append_ambient_segment (text, speaker_label, ...)
 
 ---
 
-**最后更新**：2026-05-27 by AI assistant after `echodesk-spk-5` lands  
+**最后更新**：2026-05-27 by AI assistant after `echodesk-spk-6` lands  
 **下次更新触发**：真实多人回归出数据后做阈值闭环标定
