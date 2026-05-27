@@ -82,16 +82,27 @@ def _format_web(hits: list[WebHit]) -> str:
 
 
 async def _classify(fast_llm: LLMPort, fast_model: str, question: str) -> str:
-    resp = await fast_llm.chat(
-        [
-            ChatMessage(role="system", content=_CLASSIFIER_PROMPT),
-            ChatMessage(role="user", content=question),
-        ],
-        model=fast_model,
-        max_tokens=20,
-        temperature=0.0,
-        timeout_s=30.0,
-    )
+    # P2.3：fast LLM 失败时不让整条 RAG/web 链路 raise；退到 "either"
+    # 让两条检索路径都跑，最终交给 main_llm 综合。fast LLM 是 heyi-bj
+    # 7860，远端断时这里 timeout / connection error 都算降级。
+    try:
+        resp = await fast_llm.chat(
+            [
+                ChatMessage(role="system", content=_CLASSIFIER_PROMPT),
+                ChatMessage(role="user", content=question),
+            ],
+            model=fast_model,
+            max_tokens=20,
+            temperature=0.0,
+            timeout_s=30.0,
+        )
+    except Exception as e:  # noqa: BLE001 (含 LLMError + asyncio.TimeoutError + httpx.* + network)
+        import logging
+
+        logging.getLogger("echodesk.retrieve").warning(
+            "intent classifier (fast LLM) failed, fallback to 'either': %s", e
+        )
+        return "either"
     out = (resp.content or "").strip().lower()
     # 兼容 LLM 输出标点/解释
     for label in ("rag", "web", "either"):

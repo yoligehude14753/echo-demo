@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
+from app.adapters.llm import LLMError
 from app.adapters.skill import SkillError, SkillExecutor
 from app.api.deps import get_event_bus
 from app.api.deps import get_llm_singleton as get_llm
@@ -72,6 +73,21 @@ async def generate(
             )
         )
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except LLMError as e:
+        # P2.3：LLM 远程不可达（Yunwu/heyi-bj 断）也算 graceful failure，
+        # 否则前端只能看到 500 静默挂。带 reason="remote_llm" 让前端区分这
+        # 类失败（可引导查 StatusBar 云 pill）。
+        await event_bus.publish(
+            EchoEvent(
+                type="artifact.failed",
+                payload={
+                    "artifact_type": body.artifact_type,
+                    "error": f"远程 LLM 不可达：{str(e)[:200]}",
+                    "reason": "remote_llm",
+                },
+            )
+        )
+        raise HTTPException(status_code=502, detail=str(e)) from e
     await event_bus.publish(
         EchoEvent(type="artifact.ready", payload=artifact.model_dump(mode="json"))
     )
