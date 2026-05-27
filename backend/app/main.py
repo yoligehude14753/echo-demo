@@ -34,6 +34,7 @@ from app.api.deps import (
     get_repository,
     get_speaker_registry,
 )
+from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
 from app.api.health import start_prober, stop_prober
 from app.api.intent import router as intent_router
@@ -305,6 +306,8 @@ def create_app() -> FastAPI:
     app.include_router(ws_router)
     # P2.5：数据管理 endpoints（data-dir / meeting export / speaker reset）
     app.include_router(admin_router, prefix="/admin", tags=["admin"])
+    # P2.6：诊断包导出，挂同一 /admin 前缀
+    app.include_router(diagnostics_router, prefix="/admin", tags=["admin"])
     return app
 
 
