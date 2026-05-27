@@ -23,10 +23,7 @@ from app.config import Settings
 
 def _sine_pcm(duration_ms: int, amplitude: int = 4000, freq_hz: int = 440) -> bytes:
     n = int(16_000 * duration_ms / 1000)
-    samples = [
-        int(amplitude * math.sin(2 * math.pi * freq_hz * i / 16_000))
-        for i in range(n)
-    ]
+    samples = [int(amplitude * math.sin(2 * math.pi * freq_hz * i / 16_000)) for i in range(n)]
     return struct.pack(f"<{n}h", *samples)
 
 
@@ -195,13 +192,7 @@ async def test_active_ratio_affects_gate_decision() -> None:
 
     # 600ms sine ×3 / 150ms silence ×2 = 2.1s 段长，active_ratio = 1800/2100 ≈ 0.857
     # voiced_active_s ≈ 1.8s ≥ 1.5 → 注册（验证门控算的是 active_s 不是段长）
-    buf = (
-        _sine_pcm(600)
-        + _silence_pcm(150)
-        + _sine_pcm(600)
-        + _silence_pcm(150)
-        + _sine_pcm(600)
-    )
+    buf = _sine_pcm(600) + _silence_pcm(150) + _sine_pcm(600) + _silence_pcm(150) + _sine_pcm(600)
     with patch.object(d, "_embed", side_effect=_fake_embed):
         out = await d.identify_segments(buf)
 

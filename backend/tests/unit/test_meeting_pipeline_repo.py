@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.config import Settings
 from app.schemas.meeting import TranscriptSegment
@@ -32,7 +31,9 @@ def _build_pipeline(tmp_path: Path, repo: SQLiteRepository) -> MeetingPipeline:
         stt=FakeSTT([[TranscriptSegment(text="hello", start_ms=0, end_ms=400)]]),
         diarizer=FakeDiarizer(["spk_A"]),
         rag=FakeRag(),
-        llm=FakeLLM(json.dumps({"summary": "ok", "sections": [{"heading": "x", "bullets": ["a"]}]})),
+        llm=FakeLLM(
+            json.dumps({"summary": "ok", "sections": [{"heading": "x", "bullets": ["a"]}]})
+        ),
         repository=repo,
     )
 
@@ -136,7 +137,9 @@ async def test_finalize_emits_tts_suggested(tmp_path: Path) -> None:
             diarizer=FakeDiarizer(["spk_A"]),
             rag=FakeRag(),
             llm=FakeLLM(
-                json.dumps({"summary": "Q3 销售上调", "sections": [{"heading": "x", "bullets": ["a"]}]})
+                json.dumps(
+                    {"summary": "Q3 销售上调", "sections": [{"heading": "x", "bullets": ["a"]}]}
+                )
             ),
             event_bus=FakeBus(),  # type: ignore[arg-type]
             repository=repo,
@@ -182,14 +185,16 @@ async def test_hydrate_resumes_in_progress_meetings(tmp_path: Path) -> None:
             diarizer=FakeDiarizer(["spk_A"]),
             rag=FakeRag(),
             llm=FakeLLM(
-                json.dumps({"summary": "after restart", "sections": [{"heading": "x", "bullets": ["a"]}]})
+                json.dumps(
+                    {"summary": "after restart", "sections": [{"heading": "x", "bullets": ["a"]}]}
+                )
             ),
             repository=repo2,
         )
         n = await pipe2.hydrate_from_repo()
         assert n == 1
         assert pipe2.get_segments("m1")[0].text == "hello"
-        assert pipe2._speaker_labels["m1"] == {"spk_A": "说话人1"}  # noqa: SLF001
+        assert pipe2._speaker_labels["m1"] == {"spk_A": "说话人1"}
 
         # 继续追加，labels 不重新编号
         await pipe2.add_audio_chunk("m1", b"\x00\x00" * 16_000)
@@ -212,9 +217,7 @@ async def test_hydrate_ignores_finalized_meetings(tmp_path: Path) -> None:
     await repo1.init()
     try:
         await repo1.create_meeting("done", started_at=datetime.now(UTC))
-        await repo1.update_meeting_state(
-            "done", state="finalized", finalized_at=datetime.now(UTC)
-        )
+        await repo1.update_meeting_state("done", state="finalized", finalized_at=datetime.now(UTC))
     finally:
         await repo1.aclose()
 

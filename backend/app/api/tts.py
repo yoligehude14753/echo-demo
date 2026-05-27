@@ -12,9 +12,10 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
+from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.tts.qwen3_tts import Qwen3TTS, TTSError
-from app.api.deps import get_event_bus, get_settings
-from app.config import Settings
+from app.api.deps import get_event_bus
+from app.config import Settings, get_settings
 from app.use_cases.speak import SpeakUseCase, TtsKind
 
 router = APIRouter(prefix="/tts", tags=["tts"])
@@ -34,7 +35,7 @@ def get_tts_singleton(
 
 def get_speak_use_case(
     tts: Qwen3TTS = Depends(get_tts_singleton),
-    bus=Depends(get_event_bus),  # type: ignore[no-untyped-def]
+    bus: InMemoryEventBus = Depends(get_event_bus),
 ) -> SpeakUseCase:
     return SpeakUseCase(tts=tts, event_bus=bus)
 

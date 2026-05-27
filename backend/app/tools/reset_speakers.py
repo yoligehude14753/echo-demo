@@ -47,15 +47,19 @@ def _exists(con: sqlite3.Connection, table: str) -> bool:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="EchoDesk speakers 表清理工具")
     parser.add_argument(
-        "--yes", action="store_true",
+        "--yes",
+        action="store_true",
         help="实际执行（默认 dry-run）",
     )
     parser.add_argument(
-        "--include-segments", action="store_true",
+        "--include-segments",
+        action="store_true",
         help="同时清 ambient_segments + meeting_speaker_labels（保留 meetings 与 meeting_segments）",
     )
     parser.add_argument(
-        "--db", type=pathlib.Path, default=None,
+        "--db",
+        type=pathlib.Path,
+        default=None,
         help="DB 路径（默认 ~/.echodesk/echodesk.db）",
     )
     args = parser.parse_args(argv)

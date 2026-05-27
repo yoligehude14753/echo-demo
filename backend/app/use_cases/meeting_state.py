@@ -108,11 +108,15 @@ class MeetingState:
                 started_at=datetime.now(UTC),
                 started_by="manual",
             )
-            await self._publish("meeting.state_changed", mid, {
-                "mode": "in_meeting",
-                "started_by": "manual",
-                "reason": "user_clicked",
-            })
+            await self._publish(
+                "meeting.state_changed",
+                mid,
+                {
+                    "mode": "in_meeting",
+                    "started_by": "manual",
+                    "reason": "user_clicked",
+                },
+            )
             return self._current
 
     async def manual_end(self) -> str | None:
@@ -124,16 +128,20 @@ class MeetingState:
             self._current = None
         # finalize 放到 lock 外（LLM 调用耗时，避免堵 ambient 链路）
         try:
-            await self._pipeline.finalize_meeting(cur.meeting_id)
+            await self._pipeline.finalize_meeting(cur.meeting_id, title=cur.meeting_id)
         except Exception as e:
             logger.warning("manual_end finalize failed (still ending): %s", e)
             await self._pipeline.end_meeting(cur.meeting_id)
         # 让 detector 进 cooldown，避免用户结束后立刻又被自动开
         self._detector.force_end(now=datetime.now(UTC), reason="manual_end")
-        await self._publish("meeting.state_changed", cur.meeting_id, {
-            "mode": "idle",
-            "ended_by": "manual",
-        })
+        await self._publish(
+            "meeting.state_changed",
+            cur.meeting_id,
+            {
+                "mode": "idle",
+                "ended_by": "manual",
+            },
+        )
         return cur.meeting_id
 
     # ── ambient 链路调用：每 chunk 喂一次 ───────────────────────────
@@ -183,11 +191,15 @@ class MeetingState:
             )
         await self._pipeline.start_meeting(meeting_id, auto_started=True)
         await self._publish("meeting.auto_detected", meeting_id, {"reason": reason})
-        await self._publish("meeting.state_changed", meeting_id, {
-            "mode": "in_meeting",
-            "started_by": "auto",
-            "reason": reason,
-        })
+        await self._publish(
+            "meeting.state_changed",
+            meeting_id,
+            {
+                "mode": "in_meeting",
+                "started_by": "auto",
+                "reason": reason,
+            },
+        )
 
     async def _apply_auto_end(self, meeting_id: str, *, reason: str) -> None:
         async with self._lock:
@@ -196,18 +208,22 @@ class MeetingState:
                 return
             self._current = None
         try:
-            await self._pipeline.finalize_meeting(meeting_id)
+            await self._pipeline.finalize_meeting(meeting_id, title=meeting_id)
         except Exception as e:
             logger.warning("auto-end finalize failed: %s; fallback to end_meeting", e)
             await self._pipeline.end_meeting(meeting_id)
         await self._publish("meeting.auto_ended", meeting_id, {"reason": reason})
-        await self._publish("meeting.state_changed", meeting_id, {
-            "mode": "idle",
-            "ended_by": "auto",
-            "reason": reason,
-        })
+        await self._publish(
+            "meeting.state_changed",
+            meeting_id,
+            {
+                "mode": "idle",
+                "ended_by": "auto",
+                "reason": reason,
+            },
+        )
 
-    async def _publish(self, event_type: str, meeting_id: str, payload: dict) -> None:
+    async def _publish(self, event_type: str, meeting_id: str, payload: dict[str, object]) -> None:
         if self._event_bus is None:
             return
         try:
@@ -218,4 +234,4 @@ class MeetingState:
             logger.warning("publish %s failed: %s", event_type, e)
 
 
-__all__ = ["MeetingState", "CurrentMeeting", "MeetingMode", "StartReason"]
+__all__ = ["CurrentMeeting", "MeetingMode", "MeetingState", "StartReason"]

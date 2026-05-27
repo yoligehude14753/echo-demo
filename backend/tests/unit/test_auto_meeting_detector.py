@@ -5,9 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from app.use_cases.auto_meeting_detector import AutoMeetingDetector
-
 
 T0 = datetime(2026, 5, 27, 10, 0, 0, tzinfo=UTC)
 
@@ -77,9 +75,7 @@ def test_silence_timeout_ends_auto_meeting() -> None:
 
 @pytest.mark.unit
 def test_cooldown_prevents_immediate_retrigger() -> None:
-    det = AutoMeetingDetector(
-        silence_timeout_s=10.0, min_active_seconds=6.0, cooldown_s=60.0
-    )
+    det = AutoMeetingDetector(silence_timeout_s=10.0, min_active_seconds=6.0, cooldown_s=60.0)
     det.observe(speaker_id="spk_A", duration_ms=4_000, now=_at(0))
     det.observe(speaker_id="spk_B", duration_ms=4_000, now=_at(4))
     # 11s 后静默结束

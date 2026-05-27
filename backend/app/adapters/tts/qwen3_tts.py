@@ -92,4 +92,4 @@ class Qwen3TTS:
 # Deprecated since 2026-05-27. 新代码请用 Qwen3TTS。
 CosyVoiceTTS = Qwen3TTS
 
-__all__ = ["Qwen3TTS", "CosyVoiceTTS", "TTSError"]
+__all__ = ["CosyVoiceTTS", "Qwen3TTS", "TTSError"]

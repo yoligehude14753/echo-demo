@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.use_cases.speaker_registry import SpeakerRegistry
 

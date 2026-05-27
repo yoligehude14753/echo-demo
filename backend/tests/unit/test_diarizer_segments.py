@@ -21,10 +21,7 @@ from app.config import Settings
 
 def _sine_pcm(duration_ms: int, amplitude: int = 4000, freq_hz: int = 440) -> bytes:
     n = int(16_000 * duration_ms / 1000)
-    samples = [
-        int(amplitude * math.sin(2 * math.pi * freq_hz * i / 16_000))
-        for i in range(n)
-    ]
+    samples = [int(amplitude * math.sin(2 * math.pi * freq_hz * i / 16_000)) for i in range(n)]
     return struct.pack(f"<{n}h", *samples)
 
 
@@ -78,9 +75,7 @@ async def test_two_speakers_in_one_chunk_get_distinct_ids() -> None:
     async def _fake_embed(_b: bytes, _sr: int) -> object:
         return feed.pop(0)
 
-    buf = _sine_pcm(2_100, freq_hz=440) + _silence_pcm(500) + _sine_pcm(
-        2_100, freq_hz=880
-    )
+    buf = _sine_pcm(2_100, freq_hz=440) + _silence_pcm(500) + _sine_pcm(2_100, freq_hz=880)
     with patch.object(d, "_embed", side_effect=_fake_embed):
         out = await d.identify_segments(buf)
 

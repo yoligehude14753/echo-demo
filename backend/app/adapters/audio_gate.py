@@ -98,9 +98,7 @@ def pre_stt_gate(
         frame_rms_threshold=frame_rms_threshold,
     )
     if ratio < min_speech_frame_ratio:
-        return GateDecision(
-            pass_=False, reason="speech_ratio_too_low", rms=rms, speech_ratio=ratio
-        )
+        return GateDecision(pass_=False, reason="speech_ratio_too_low", rms=rms, speech_ratio=ratio)
     return GateDecision(pass_=True, reason="ok", rms=rms, speech_ratio=ratio)
 
 
@@ -226,13 +224,12 @@ def split_into_voiced_segments(
                 start_f = fi
             last_active_f = fi
             silence_run = 0
-        else:
-            if in_voice:
-                silence_run += 1
-                if silence_run >= max_silence_frames:
-                    _emit(start_f, last_active_f + 1)
-                    in_voice = False
-                    silence_run = 0
+        elif in_voice:
+            silence_run += 1
+            if silence_run >= max_silence_frames:
+                _emit(start_f, last_active_f + 1)
+                in_voice = False
+                silence_run = 0
     if in_voice:
         _emit(start_f, last_active_f + 1)
 
@@ -243,8 +240,8 @@ __all__ = [
     "GateDecision",
     "VoicedSegment",
     "integer_rms",
-    "speech_frame_ratio",
-    "pre_stt_gate",
     "is_likely_hallucination",
+    "pre_stt_gate",
+    "speech_frame_ratio",
     "split_into_voiced_segments",
 ]

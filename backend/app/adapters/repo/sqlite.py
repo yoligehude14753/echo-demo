@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 
@@ -254,8 +255,7 @@ class SQLiteRepository(RepositoryPort):
         async with self._lock:
             conn = self._require_conn()
             cur = await conn.execute(
-                "SELECT speaker_id, label FROM meeting_speaker_labels "
-                "WHERE meeting_id = ?",
+                "SELECT speaker_id, label FROM meeting_speaker_labels WHERE meeting_id = ?",
                 (meeting_id,),
             )
             rows = await cur.fetchall()
@@ -410,7 +410,7 @@ class SQLiteRepository(RepositoryPort):
         return [_speaker_from_row(r) for r in rows]
 
 
-def _meeting_from_row(row: aiosqlite.Row | tuple) -> MeetingRecord:
+def _meeting_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> MeetingRecord:
     return MeetingRecord(
         id=row[0],
         title=row[1],
@@ -424,7 +424,7 @@ def _meeting_from_row(row: aiosqlite.Row | tuple) -> MeetingRecord:
     )
 
 
-def _speaker_from_row(row: aiosqlite.Row | tuple) -> SpeakerProfileRecord:
+def _speaker_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> SpeakerProfileRecord:
     return SpeakerProfileRecord(
         speaker_id=row[0],
         label=row[1],

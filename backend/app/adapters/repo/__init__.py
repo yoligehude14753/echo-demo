@@ -15,4 +15,4 @@ def make_repository(settings: Settings) -> RepositoryPort:
     return SQLiteRepository(settings.db_path)
 
 
-__all__ = ["make_repository", "SQLiteRepository"]
+__all__ = ["SQLiteRepository", "make_repository"]

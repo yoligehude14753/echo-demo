@@ -32,9 +32,10 @@ jobs:
               - 'backend/**'
               - 'pyproject.toml'
               - '.github/workflows/**'
+            # desktop e2e 只在 desktop/ 代码改动时跑；
+            # workflow 改 e2e 配置时如需重跑，请显式 workflow_dispatch
             desktop:
               - 'desktop/**'
-              - '.github/workflows/**'
 
   backend-lint:
     name: backend / lint
@@ -79,7 +80,8 @@ jobs:
             tenacity==9.0.0 \
             numpy==2.1.1 \
             jieba==0.42.1 \
-            rank-bm25==0.2.2
+            rank-bm25==0.2.2 \
+            aiosqlite==0.20.0
       - run: mypy backend/app
 
   backend-test:
@@ -109,6 +111,7 @@ jobs:
             numpy==2.1.1 \
             jieba==0.42.1 \
             rank-bm25==0.2.2 \
+            aiosqlite==0.20.0 \
             pytest==8.3.3 \
             pytest-asyncio==0.24.0 \
             pytest-cov==5.0.0 \

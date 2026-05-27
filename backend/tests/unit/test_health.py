@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from app.api.health import (
     ProbeResult,
     _db_status,
@@ -86,9 +85,7 @@ class TestDbStatus:
         assert d["size_mb"] == 0.001  # 1KB
         assert d["path"] == str(db)
 
-    def test_expands_tilde(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_expands_tilde(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # 把 HOME 指向 tmp，写一个 ~/.foo/bar.db，验证 expand 后能找到
         monkeypatch.setenv("HOME", str(tmp_path))
         (tmp_path / ".foo").mkdir()

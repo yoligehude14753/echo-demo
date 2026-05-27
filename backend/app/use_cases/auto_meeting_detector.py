@@ -140,9 +140,7 @@ class AutoMeetingDetector:
         """外部强制结束（例如 ambient 端检测到长时间无任何 chunk）。"""
         if self._active_meeting_id is None:
             return None
-        ev = DetectorEvent(
-            kind="end", meeting_id=self._active_meeting_id, reason=reason
-        )
+        ev = DetectorEvent(kind="end", meeting_id=self._active_meeting_id, reason=reason)
         self._active_meeting_id = None
         self._last_end_at = now
         return ev
