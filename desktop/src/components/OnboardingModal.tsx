@@ -1,0 +1,334 @@
+/**
+ * OnboardingModal：首次启动的 3 步引导（P3.1）。
+ *
+ * 步骤：
+ *   1. 欢迎 — 简介 EchoDesk 能做什么 + 数据存放位置（~/.echodesk/）
+ *   2. 麦克风权限 — 自动探测；引导用户点"允许录音"或"打开系统设置"
+ *   3. 完成 — 简单提示 @ 命令栏 + 录音按钮位置
+ *
+ * 持久化：完成或跳过都 markCompleted() 写 localStorage，下次启动不再弹。
+ * 用户后续想重看，在 SettingsPanel 触发 resetForDebug() 即可。
+ */
+
+import { useEffect, useState } from "react";
+import { Button, Modal, Steps } from "antd";
+import { CheckCircle2, FolderOpen, Mic, Sparkles } from "lucide-react";
+import { apiUrl } from "@/runtime";
+
+type StepKey = "welcome" | "mic" | "done";
+
+const STEPS: StepKey[] = ["welcome", "mic", "done"];
+
+interface Props {
+  open: boolean;
+  onClose: () => void;
+}
+
+export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
+  const [stepIdx, setStepIdx] = useState(0);
+  const stepKey: StepKey = STEPS[stepIdx] ?? "welcome";
+
+  const [dataDirPath, setDataDirPath] = useState<string | null>(null);
+  const [micState, setMicState] = useState<"unknown" | "granted" | "denied" | "prompt">(
+    "unknown",
+  );
+  const [requesting, setRequesting] = useState(false);
+
+  // 拉数据目录路径（让用户知道数据存在哪）
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const u = await apiUrl("/admin/data-dir");
+        const r = await fetch(u);
+        if (!r.ok) return;
+        const d = (await r.json()) as { path?: string };
+        if (!cancelled && d.path) setDataDirPath(d.path);
+      } catch {
+        /* 让用户看到 path 是 nice-to-have，失败就显示 ~/.echodesk/ */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  // 拉麦克风权限初值（mic 步骤进入时再查一次以拿最新值）
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      const s = await probeMicState();
+      if (!cancelled) setMicState(s);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, stepIdx]);
+
+  const onRequestMic = async () => {
+    setRequesting(true);
+    try {
+      // Electron: askForMediaAccess 触发系统弹窗（macOS）；其它环境走 getUserMedia
+      if (window.echo?.requestMic) {
+        const ok = await window.echo.requestMic();
+        setMicState(ok ? "granted" : "denied");
+      } else {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach((t) => t.stop());
+          setMicState("granted");
+        } catch {
+          setMicState("denied");
+        }
+      }
+    } finally {
+      setRequesting(false);
+    }
+  };
+
+  const onOpenSysPrefs = async () => {
+    if (window.echo?.openMicSystemPrefs) {
+      await window.echo.openMicSystemPrefs();
+    }
+  };
+
+  const next = () => {
+    if (stepIdx >= STEPS.length - 1) onClose();
+    else setStepIdx(stepIdx + 1);
+  };
+  const prev = () => {
+    if (stepIdx > 0) setStepIdx(stepIdx - 1);
+  };
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      closable={false}
+      maskClosable={false}
+      footer={null}
+      width={520}
+      title={null}
+      destroyOnClose
+    >
+      <div className="py-2">
+        <Steps
+          current={stepIdx}
+          size="small"
+          items={[
+            { title: "欢迎" },
+            { title: "麦克风" },
+            { title: "完成" },
+          ]}
+        />
+
+        <div className="mt-5 min-h-[200px]">
+          {stepKey === "welcome" && (
+            <WelcomeStep dataDirPath={dataDirPath} />
+          )}
+          {stepKey === "mic" && (
+            <MicStep
+              state={micState}
+              requesting={requesting}
+              onRequest={onRequestMic}
+              onOpenSysPrefs={onOpenSysPrefs}
+            />
+          )}
+          {stepKey === "done" && <DoneStep />}
+        </div>
+
+        <div className="mt-4 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[12px] text-ink-400 hover:text-ink-600"
+            data-testid="onboarding-skip"
+          >
+            跳过
+          </button>
+          <div className="flex gap-2">
+            {stepIdx > 0 && (
+              <Button onClick={prev} data-testid="onboarding-prev">
+                上一步
+              </Button>
+            )}
+            <Button
+              type="primary"
+              onClick={next}
+              data-testid="onboarding-next"
+              disabled={stepKey === "mic" && requesting}
+            >
+              {stepIdx === STEPS.length - 1 ? "开始使用" : "下一步"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function WelcomeStep({ dataDirPath }: { dataDirPath: string | null }): JSX.Element {
+  return (
+    <div className="space-y-3 text-[13px] text-ink-700">
+      <div className="flex items-center gap-2 text-base font-medium text-ink-900">
+        <Sparkles className="w-4 h-4 text-accent" />
+        欢迎来到 EchoDesk
+      </div>
+      <div className="text-ink-600">
+        EchoDesk 是一个本地优先的会议与办公助理：环境音转写、会议纪要、
+        基于工作区的检索问答、文档/PPT/Excel 生成都跑在你自己的电脑上。
+      </div>
+      <div className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]">
+        <div className="flex items-center gap-1.5 font-medium mb-1">
+          <FolderOpen className="w-3.5 h-3.5 text-ink-500" />
+          数据存放位置
+        </div>
+        <div className="text-ink-500 font-mono text-[11px] break-all">
+          {dataDirPath ?? "~/.echodesk/"}
+        </div>
+        <div className="text-ink-400 mt-1.5">
+          会议数据库、录音、RAG 索引、日志全部都在这里。可在「设置 → 数据」
+          里查看占用 / 一键导出 / 卸载。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MicStep({
+  state,
+  requesting,
+  onRequest,
+  onOpenSysPrefs,
+}: {
+  state: "unknown" | "granted" | "denied" | "prompt";
+  requesting: boolean;
+  onRequest: () => void;
+  onOpenSysPrefs: () => void;
+}): JSX.Element {
+  return (
+    <div className="space-y-3 text-[13px] text-ink-700">
+      <div className="flex items-center gap-2 text-base font-medium text-ink-900">
+        <Mic className="w-4 h-4 text-accent" />
+        授权麦克风
+      </div>
+      <div className="text-ink-600">
+        EchoDesk 需要麦克风权限才能转写会议。所有音频只发送给你配置的
+        STT 服务（默认是 heyi-bj 内网，不出公网）。
+      </div>
+
+      <div className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-ink-500">当前权限</span>
+          <span
+            className={
+              state === "granted"
+                ? "text-accent font-medium"
+                : state === "denied"
+                  ? "text-err font-medium"
+                  : "text-amber-500 font-medium"
+            }
+            data-testid="onboarding-mic-state"
+          >
+            {state === "granted"
+              ? "已允许"
+              : state === "denied"
+                ? "已拒绝"
+                : state === "prompt"
+                  ? "尚未授权"
+                  : "未知"}
+          </span>
+        </div>
+        {state === "granted" && (
+          <div className="flex items-center gap-1.5 text-accent text-[12px]">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            可以继续到下一步
+          </div>
+        )}
+        {(state === "prompt" || state === "unknown") && (
+          <Button
+            type="primary"
+            size="small"
+            onClick={onRequest}
+            loading={requesting}
+            data-testid="onboarding-mic-request"
+          >
+            允许麦克风
+          </Button>
+        )}
+        {state === "denied" && (
+          <div className="space-y-1.5">
+            <div className="text-err text-[12px]">
+              系统已记住"拒绝"。请到 系统设置 → 隐私与安全 → 麦克风 勾选 EchoDesk。
+            </div>
+            {window.echo?.openMicSystemPrefs && (
+              <Button
+                size="small"
+                onClick={onOpenSysPrefs}
+                data-testid="onboarding-mic-open-prefs"
+              >
+                打开系统设置
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="text-ink-400 text-[11px]">
+        提示：跳过也没关系，第一次按下录音键时系统还会再弹一次。
+      </div>
+    </div>
+  );
+}
+
+function DoneStep(): JSX.Element {
+  return (
+    <div className="space-y-3 text-[13px] text-ink-700">
+      <div className="flex items-center gap-2 text-base font-medium text-ink-900">
+        <CheckCircle2 className="w-4 h-4 text-accent" />
+        准备就绪
+      </div>
+      <div className="text-ink-600">三个关键交互点：</div>
+      <ul className="list-disc pl-5 space-y-1.5 text-[12px] text-ink-600">
+        <li>
+          底部 CommandBar 输入 <b>@生成 PPT / @报告 / @查 …</b> 触发 LLM 流程
+        </li>
+        <li>
+          左上「开始会议」启动录音；侧边录音状态条会显示当前会议
+        </li>
+        <li>
+          右上「设置 ⚙」可查数据占用、导出诊断包、重置说话人
+        </li>
+      </ul>
+      <div className="text-ink-400 text-[11px]">
+        随时可以在 设置 → 重新看一次引导 回到这里。
+      </div>
+    </div>
+  );
+}
+
+async function probeMicState(): Promise<"unknown" | "granted" | "denied" | "prompt"> {
+  // 优先用 Electron 的 systemPreferences（更准确，区分 not-determined）
+  if (window.echo?.getMicStatus) {
+    const s = await window.echo.getMicStatus();
+    if (s === "granted") return "granted";
+    if (s === "denied" || s === "restricted") return "denied";
+    if (s === "not-determined") return "prompt";
+    // fallthrough to navigator
+  }
+  if (typeof navigator !== "undefined" && navigator.permissions) {
+    try {
+      const r = await navigator.permissions.query({
+        name: "microphone" as PermissionName,
+      });
+      if (r.state === "granted") return "granted";
+      if (r.state === "denied") return "denied";
+      return "prompt";
+    } catch {
+      return "unknown";
+    }
+  }
+  return "unknown";
+}

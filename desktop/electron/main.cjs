@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
-const { app, BrowserWindow, shell, ipcMain } = require("electron");
+const { app, BrowserWindow, shell, ipcMain, systemPreferences } = require("electron");
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
 const http = require("node:http");
@@ -497,6 +497,55 @@ function createWindow() {
 // ---------- IPC handlers ----------
 
 ipcMain.handle("echo:backend-host", () => BACKEND_HOST);
+
+// ---------- 麦克风权限 IPC（P3.5） ----------
+//
+// 浏览器 navigator.permissions.query 在 Electron 下 granted/denied/prompt 已经够用，
+// 但有两件事它做不到：
+// 1) 区分 macOS 的 "not-determined"（用户从未被问过）vs "denied"（曾点过拒绝）
+// 2) 当 denied 时直接打开系统设置-隐私-麦克风（用户只能口头被引导，体验差）
+//
+// 这两个 IPC：
+// - mic:status 用 systemPreferences.getMediaAccessStatus("microphone")
+//   返回 'not-determined'|'granted'|'denied'|'restricted'|'unknown'（非 mac 直接 unknown）
+// - mic:open-system-prefs shell.openExternal 一键打开 macOS 隐私设置-麦克风分页
+
+ipcMain.handle("mic:status", () => {
+  if (process.platform !== "darwin") return "unknown";
+  try {
+    return systemPreferences.getMediaAccessStatus("microphone");
+  } catch (e) {
+    log("[mic] getMediaAccessStatus failed:", e?.message ?? e);
+    return "unknown";
+  }
+});
+
+ipcMain.handle("mic:request", async () => {
+  if (process.platform !== "darwin") return false;
+  try {
+    return await systemPreferences.askForMediaAccess("microphone");
+  } catch (e) {
+    log("[mic] askForMediaAccess failed:", e?.message ?? e);
+    return false;
+  }
+});
+
+ipcMain.handle("mic:open-system-prefs", async () => {
+  if (process.platform !== "darwin") {
+    return { ok: false, reason: "non-darwin" };
+  }
+  // x-apple.systempreferences URL scheme 直接定位到「隐私与安全 → 麦克风」
+  // 兼容 macOS 13+；旧版本会落回 System Preferences 顶层（仍可接受）
+  try {
+    await shell.openExternal(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+    );
+    return { ok: true };
+  } catch (e) {
+    log("[mic] openExternal failed:", e?.message ?? e);
+    return { ok: false, reason: String(e?.message ?? e) };
+  }
+});
 
 // 让 renderer 在 degraded UI 上按钮触发一次干净重启：清 backoff 计数 + 重新 spawn
 ipcMain.handle("backend:manual-restart", async () => {

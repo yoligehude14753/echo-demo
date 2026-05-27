@@ -14,6 +14,10 @@ export interface EchoMockOptions {
    *  匹配规则：path.startsWith(key)。
    */
   errorPaths?: Record<string, number>;
+  /** P3.1：默认会把 onboarding 标志预设为 completed（避免 Modal 遮挡）。
+   *  专门测引导流程的 spec 传 true 关掉这个默认行为。
+   */
+  keepOnboarding?: boolean;
 }
 
 export interface EchoMock {
@@ -28,6 +32,20 @@ export async function installEchoMock(
   options: EchoMockOptions = {},
 ): Promise<EchoMock> {
   const errorPaths = options.errorPaths ?? {};
+
+  // P3.1：onboarding 默认在 e2e 跳过，避免 Modal 遮挡所有交互；
+  // 想专门测引导流程的 spec 用 `disableOnboardingSkip` opt-out（注：放在 addInitScript
+  // 之前 page-scope 标志位 + 条件，让默认 spec 不用改）
+  if (!options.keepOnboarding) {
+    await page.addInitScript(() => {
+      try {
+        window.localStorage.setItem("echodesk.onboarding.completed", "1");
+      } catch {
+        /* ignore */
+      }
+    });
+  }
+
   await page.addInitScript((errorPaths: Record<string, number>) => {
     type MockWs = {
       readyState: number;

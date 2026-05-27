@@ -50,6 +50,8 @@ interface SpeakerResetResponse {
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** P3.1：让用户在设置里"重新看一次引导"。可选，缺省时不显示按钮。 */
+  onReplayOnboarding?: () => void;
 }
 
 function fmtBytes(n: number): string {
@@ -71,7 +73,11 @@ const BREAKDOWN_LABELS: Array<{
   { key: "skill_build", label: "Skill 工作目录", hint: "@生成 临时构建目录" },
 ];
 
-export default function SettingsPanel({ open, onClose }: Props): JSX.Element {
+export default function SettingsPanel({
+  open,
+  onClose,
+  onReplayOnboarding,
+}: Props): JSX.Element {
   const [dataDir, setDataDir] = useState<DataDirResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [diagBusy, setDiagBusy] = useState(false);
@@ -271,12 +277,40 @@ export default function SettingsPanel({ open, onClose }: Props): JSX.Element {
           </div>
         </section>
 
+        {onReplayOnboarding && (
+          <section>
+            <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
+              <RefreshCw className="w-4 h-4" />
+              <span>引导</span>
+            </div>
+            <Button
+              block
+              onClick={() => {
+                onReplayOnboarding();
+                onClose();
+              }}
+              data-testid="replay-onboarding"
+            >
+              重新看一次引导
+            </Button>
+            <div className="text-[11px] text-ink-500 mt-1.5">
+              重新打开欢迎引导（数据目录、麦克风权限、@命令使用提示）。
+            </div>
+          </section>
+        )}
+
         <section className="pt-3 border-t border-paper-300">
           <div className="text-[11px] text-ink-500 leading-relaxed">
             <div>EchoDesk · 独立桌面 AI 会议助手</div>
             <div className="mt-1">
               配置文件：
               <span className="font-mono text-ink-600">~/.echodesk/config.json</span>
+            </div>
+            <div className="mt-1">
+              卸载：终端运行
+              <span className="font-mono text-ink-600 ml-1">
+                bash scripts/install-backend.sh --uninstall
+              </span>
             </div>
           </div>
         </section>

@@ -7,12 +7,24 @@
 
 // SupervisorStatus 的具体形状定义在 hooks/useBackendHealth.ts；
 // 这里用宽松 unknown 让 runtime.ts 不强耦合 health hook，且 hook 内做窄化
+/** macOS systemPreferences.getMediaAccessStatus("microphone") 的全部可能值 */
+export type ElectronMicStatus =
+  | "not-determined"
+  | "granted"
+  | "denied"
+  | "restricted"
+  | "unknown";
+
 interface ElectronEchoBridge {
   isElectron?: boolean;
   getBackendHost?: () => Promise<string>;
   // Phase 1 P1.5/P1.6 BackendSupervisor IPC
   onBackendStatus?: (cb: (status: unknown) => void) => () => void;
   manualRestartBackend?: () => Promise<{ ok: boolean }>;
+  // Phase 3 P3.5 麦克风权限
+  getMicStatus?: () => Promise<ElectronMicStatus>;
+  requestMic?: () => Promise<boolean>;
+  openMicSystemPrefs?: () => Promise<{ ok: boolean; reason?: string }>;
 }
 
 declare global {
