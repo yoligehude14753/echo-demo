@@ -116,7 +116,7 @@ async def test_same_speaker_twice_in_chunk_returns_same_id() -> None:
 async def test_identify_fallback_returns_dominant_segment_id() -> None:
     """老 identify 接口走切片 → 选最长段的 speaker。
 
-    [A 短 1s | 静 0.5s | B 长 2.5s] → 返回 B 的 id。
+    [A 1.6s | 静 0.5s | B 2.5s] → 返回 B 的 id（两段都过 spk-3 门控 1.5s）。
     """
     d = ECAPADiarizer(_settings())
     vec_a = np.array([1.0, 0.0, 0.0], dtype=np.float32)
@@ -126,7 +126,7 @@ async def test_identify_fallback_returns_dominant_segment_id() -> None:
     async def _fake_embed(_b: bytes, _sr: int) -> object:
         return feed.pop(0)
 
-    buf = _sine_pcm(1_000) + _silence_pcm(500) + _sine_pcm(2_500)
+    buf = _sine_pcm(1_600) + _silence_pcm(500) + _sine_pcm(2_500)
     with patch.object(d, "_embed", side_effect=_fake_embed):
         sid = await d.identify(buf)
     # B 是 speaker_2（A 先注册成 speaker_1）；最长段是 B
