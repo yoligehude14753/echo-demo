@@ -29,6 +29,7 @@ from app.api.intent import router as intent_router
 from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
 from app.api.speakers import router as speakers_router
+from app.api.tts import router as tts_router
 from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
 from app.api.workspace import router as workspace_router
@@ -156,6 +157,7 @@ def create_app() -> FastAPI:
     app.include_router(meetings_router)
     app.include_router(speakers_router)
     app.include_router(intent_router)
+    app.include_router(tts_router)
     app.include_router(ws_router)
     return app
 

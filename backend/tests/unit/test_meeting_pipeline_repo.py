@@ -120,6 +120,43 @@ async def test_finalize_persists_minutes(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_finalize_emits_tts_suggested(tmp_path: Path) -> None:
+    repo = SQLiteRepository(tmp_path / "echo.db")
+    await repo.init()
+    events: list = []
+
+    class FakeBus:
+        async def publish(self, ev) -> None:  # type: ignore[no-untyped-def]
+            events.append(ev)
+
+    try:
+        pipe = MeetingPipeline(
+            settings=_settings(tmp_path),
+            stt=FakeSTT([[TranscriptSegment(text="hi", start_ms=0, end_ms=400)]]),
+            diarizer=FakeDiarizer(["spk_A"]),
+            rag=FakeRag(),
+            llm=FakeLLM(
+                json.dumps({"summary": "Q3 销售上调", "sections": [{"heading": "x", "bullets": ["a"]}]})
+            ),
+            event_bus=FakeBus(),  # type: ignore[arg-type]
+            repository=repo,
+        )
+        await pipe.start_meeting("m1")
+        await pipe.add_audio_chunk("m1", b"\x00\x00" * 16_000)
+        await pipe.finalize_meeting("m1", title="Q3 例会")
+
+        tts_evs = [e for e in events if e.type == "tts.suggested"]
+        assert len(tts_evs) == 1
+        assert tts_evs[0].meeting_id == "m1"
+        assert "Q3 例会" in tts_evs[0].payload["text"]
+        assert "Q3 销售上调" in tts_evs[0].payload["text"]
+        assert tts_evs[0].payload["kind"] == "minutes"
+    finally:
+        await repo.aclose()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_hydrate_resumes_in_progress_meetings(tmp_path: Path) -> None:
     """模拟断电：进程 1 写入，进程 2 hydrate 后能 finalize。"""
     db_path = tmp_path / "echo.db"

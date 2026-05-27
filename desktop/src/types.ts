@@ -1,5 +1,7 @@
 export type BusinessEventType =
   | "meeting.started"
+  | "meeting.auto_detected"
+  | "meeting.auto_ended"
   | "meeting.segment"
   | "meeting.ended"
   | "minutes.ready"
@@ -11,6 +13,7 @@ export type BusinessEventType =
   | "rag.answer.done"
   | "chat.delta"
   | "chat.done"
+  | "tts.suggested"
   | "error";
 
 export type ProtocolEventType =

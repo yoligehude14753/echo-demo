@@ -30,6 +30,7 @@ import {
 } from "@/api";
 import { useStore } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
+import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 
 interface PendingDoc {
   doc_id: string;
@@ -90,6 +91,7 @@ export default function CommandBar(): JSX.Element {
   const applyEvent = useStore((s) => s.applyEvent);
   const upsertMeeting = useStore((s) => s.upsertMeeting);
   const selectMeeting = useStore((s) => s.selectMeeting);
+  const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleFiles = useCallback(async (files: FileList | File[]): Promise<void> => {
@@ -279,6 +281,7 @@ export default function CommandBar(): JSX.Element {
               } as unknown as Record<string, unknown>,
             });
             message.success("已返回检索结果（见事件流）");
+            void tts.speak(ans.answer);
           })
           .catch((e) => {
             const msg = e instanceof Error ? e.message : String(e);
@@ -287,10 +290,11 @@ export default function CommandBar(): JSX.Element {
         return;
       }
       case "chat":
-      default:
-        message.info(
-          `chat 兜底：${(r.params.text as string | undefined) ?? originalText}`,
-        );
+      default: {
+        const reply = (r.params.text as string | undefined) ?? originalText;
+        message.info(`chat 兜底：${reply}`);
+        void tts.speak(reply);
+      }
     }
   }
 

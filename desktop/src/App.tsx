@@ -1,5 +1,5 @@
-import { Layout } from "antd";
-import { MessageSquare, Mic } from "lucide-react";
+import { Layout, Tooltip } from "antd";
+import { MessageSquare, Mic, Volume2, VolumeX } from "lucide-react";
 import MeetingList from "@/components/MeetingList";
 import TranscriptStream from "@/components/TranscriptStream";
 import ArtifactPanel from "@/components/ArtifactPanel";
@@ -10,12 +10,14 @@ import WorkspaceBar from "@/components/WorkspaceBar";
 import { useEchoCapture } from "@/capture/useEchoCapture";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
+import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 
 const { Header, Sider, Content } = Layout;
 
 export default function App(): JSX.Element {
   useEchoWS();
   const captureStatus = useEchoCapture();
+  const tts = useTtsPlayer();
   const connected = useStore((s) => s.connected);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const events = useStore((s) => s.events);
@@ -31,6 +33,28 @@ export default function App(): JSX.Element {
           <span className="text-[11px] text-ink-500">v0.1</span>
         </div>
         <div className="app-no-drag flex items-center gap-4 text-[11px] text-ink-500">
+          <Tooltip
+            title={tts.enabled ? "TTS 已开：会议纪要/回答会语音播报" : "TTS 已关"}
+          >
+            <button
+              type="button"
+              onClick={() => tts.setEnabled(!tts.enabled)}
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${
+                tts.enabled
+                  ? "text-accent hover:bg-paper-200"
+                  : "text-ink-400 hover:bg-paper-200"
+              }`}
+              data-testid="tts-toggle"
+              aria-label="TTS 开关"
+            >
+              {tts.enabled ? (
+                <Volume2 className="w-3.5 h-3.5" />
+              ) : (
+                <VolumeX className="w-3.5 h-3.5" />
+              )}
+              <span>{tts.isSpeaking ? "播放中" : tts.enabled ? "TTS" : "静音"}</span>
+            </button>
+          </Tooltip>
           <span>事件 {events.length}</span>
           <span className="flex items-center gap-1.5">
             <span

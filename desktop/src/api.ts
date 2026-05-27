@@ -288,3 +288,52 @@ export async function workspaceClear(): Promise<{ n_removed: number }> {
   const r = await fetch(u, { method: "POST" });
   return asJson(r);
 }
+
+// ── TTS ─────────────────────────────────────────────────────
+
+/**
+ * 拉取 PCM bytes（16kHz 16-bit mono）。前端用 AudioContext 解码播放。
+ */
+export async function ttsSpeak(
+  text: string,
+  voice?: string,
+): Promise<ArrayBuffer> {
+  const u = await apiUrl("/tts/speak");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice }),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`tts ${r.status}: ${t}`);
+  }
+  return await r.arrayBuffer();
+}
+
+export async function listSpeakers(): Promise<
+  Array<{
+    speaker_id: string;
+    label: string | null;
+    n_samples: number;
+    first_seen_at: string;
+    last_seen_at: string;
+  }>
+> {
+  const u = await apiUrl("/speakers");
+  const r = await fetch(u);
+  return asJson(r);
+}
+
+export async function renameSpeaker(
+  speakerId: string,
+  label: string,
+): Promise<void> {
+  const u = await apiUrl(`/speakers/${encodeURIComponent(speakerId)}/rename`);
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  if (!r.ok) throw new Error(`rename ${r.status}`);
+}

@@ -29,6 +29,7 @@ EventType = Literal[
     "rag.answer.done",
     "chat.delta",
     "chat.done",
+    "tts.suggested",
     "error",
 ]
 
@@ -55,6 +56,7 @@ EchoEventType = Literal[
     "rag.answer.done",
     "chat.delta",
     "chat.done",
+    "tts.suggested",
     "error",
     "server_hello",
     "server_ping",
