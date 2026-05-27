@@ -12,6 +12,7 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests/e2e-real",
+  testIgnore: /demo-recording\.spec\.ts$/, // demo 录屏单独通过 demo:record 跑
   fullyParallel: false,
   workers: 1,
   reporter: "list",

@@ -12,8 +12,6 @@ import { test, expect } from "@playwright/test";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
-const COMMAND_BAR_TA = "textarea[placeholder*='生成']";
-
 function makeMdFile(content: string, name = "echo-test.md"): string {
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "echo-e2e-"));
   const p = path.join(dir, name);

@@ -8,6 +8,14 @@
  */
 import type { Page } from "@playwright/test";
 
+export interface EchoMockOptions {
+  /** 让指定路径返回非 2xx，触发前端 sad path 处理。
+   *  键为 path 前缀（如 "/artifacts/generate"、"/rag/ask"），值为 HTTP 状态码。
+   *  匹配规则：path.startsWith(key)。
+   */
+  errorPaths?: Record<string, number>;
+}
+
 export interface EchoMock {
   publish(event: Record<string, unknown>): Promise<void>;
   closeWs(code?: number, reason?: string): Promise<void>;
@@ -15,8 +23,12 @@ export interface EchoMock {
   fetchLog(): Promise<Array<{ url: string; method: string; bodyText?: string }>>;
 }
 
-export async function installEchoMock(page: Page): Promise<EchoMock> {
-  await page.addInitScript(() => {
+export async function installEchoMock(
+  page: Page,
+  options: EchoMockOptions = {},
+): Promise<EchoMock> {
+  const errorPaths = options.errorPaths ?? {};
+  await page.addInitScript((errorPaths: Record<string, number>) => {
     type MockWs = {
       readyState: number;
       onopen?: (() => void) | null;
@@ -85,9 +97,47 @@ export async function installEchoMock(page: Page): Promise<EchoMock> {
       ctrl.fetchLog.push({ url, method, bodyText });
 
       const path = url.replace(/^https?:\/\/[^/]+/, "");
+      // sad path 注入：匹配 errorPaths 前缀的请求直接返错误码
+      for (const prefix of Object.keys(errorPaths)) {
+        if (path.startsWith(prefix) || path.startsWith(`/api${prefix}`)) {
+          const status = errorPaths[prefix];
+          return new Response(
+            JSON.stringify({ detail: `mocked failure ${status} for ${prefix}` }),
+            { status, headers: { "Content-Type": "application/json" } },
+          );
+        }
+      }
       // 健康检查 / 占位
       if (path.startsWith("/healthz")) {
         return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      // workspace / rag/docs 默认返空（WorkspaceBar 30s 轮询调用）
+      if (path.startsWith("/workspace/status") || path.startsWith("/api/workspace/status")) {
+        return new Response(
+          JSON.stringify({
+            configured_dirs: [],
+            authorized_dirs: [],
+            n_indexed: 0,
+            max_file_mb: 20,
+            scan_on_startup: true,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (path.startsWith("/rag/docs") || path.startsWith("/api/rag/docs")) {
+        if (method === "GET") {
+          return new Response(JSON.stringify({ total: 0, by_source: {}, docs: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+      // 通用 ingest 默认 mock：返回伪 doc_id（除非 errorPaths 已拦截）
+      if (path.startsWith("/rag/ingest") || path.startsWith("/api/rag/ingest")) {
+        return new Response(
+          JSON.stringify({ doc_id: `mock-${Date.now()}`, title: "mock" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
       // 生成产物：先 ack 200，UI 显示生成中；2 步：测试触发 ws artifact.ready
       if (path === "/artifacts/generate" && method === "POST") {
@@ -114,7 +164,7 @@ export async function installEchoMock(page: Page): Promise<EchoMock> {
       // 其它走真实 fetch
       return realFetch(input, init);
     };
-  });
+  }, errorPaths);
 
   // 在 Node 上下文返回简单的 controller proxy
   const ctrl: EchoMock = {
