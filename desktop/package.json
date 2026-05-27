@@ -16,7 +16,8 @@
     "app:dist": "npm run build && electron-builder --mac",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
-    "e2e:real": "playwright test --config=playwright.real.config.ts"
+    "e2e:real": "playwright test --config=playwright.real.config.ts",
+    "demo:record": "playwright test --config=playwright.demo.config.ts"
   },
   "dependencies": {
     "antd": "^5.19.4",
