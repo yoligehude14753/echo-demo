@@ -107,3 +107,83 @@ export async function routeIntent(
   });
   return asJson<IntentResult>(r);
 }
+
+// ── RAG 文档（M6：聊天框拖入 + 工作区） ──────────────────────────
+
+export interface RagDocSummary {
+  doc_id: string;
+  title: string;
+  kind: string;
+  source: string; // upload / workspace / meeting
+  source_path: string | null;
+  n_chunks: number;
+}
+
+export interface RagDocsResponse {
+  total: number;
+  by_source: Record<string, RagDocSummary[]>;
+  docs: RagDocSummary[];
+}
+
+export async function ingestFile(
+  file: File,
+  title?: string,
+): Promise<{ doc_id: string; title: string }> {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  if (title) fd.append("title", title);
+  const u = await apiUrl("/rag/ingest");
+  const r = await fetch(u, { method: "POST", body: fd });
+  return asJson(r);
+}
+
+export async function listRagDocs(): Promise<RagDocsResponse> {
+  const u = await apiUrl("/rag/docs");
+  const r = await fetch(u);
+  return asJson<RagDocsResponse>(r);
+}
+
+export async function deleteRagDoc(docId: string): Promise<void> {
+  const u = await apiUrl(`/rag/docs/${encodeURIComponent(docId)}`);
+  const r = await fetch(u, { method: "DELETE" });
+  if (!r.ok) throw new Error(`delete ${r.status}`);
+}
+
+// ── 授权工作区 ─────────────────────────────────────────────
+
+export interface WorkspaceStatus {
+  configured_dirs: string[];
+  authorized_dirs: string[];
+  n_indexed: number;
+  max_file_mb: number;
+  scan_on_startup: boolean;
+}
+
+export interface WorkspaceScanResult {
+  n_total: number;
+  n_added: number;
+  n_updated: number;
+  n_removed: number;
+  n_skipped: number;
+  n_failed: number;
+  duration_s: number;
+  errors: string[];
+}
+
+export async function workspaceStatus(): Promise<WorkspaceStatus> {
+  const u = await apiUrl("/workspace/status");
+  const r = await fetch(u);
+  return asJson<WorkspaceStatus>(r);
+}
+
+export async function workspaceScan(): Promise<WorkspaceScanResult> {
+  const u = await apiUrl("/workspace/scan");
+  const r = await fetch(u, { method: "POST" });
+  return asJson<WorkspaceScanResult>(r);
+}
+
+export async function workspaceClear(): Promise<{ n_removed: number }> {
+  const u = await apiUrl("/workspace/clear");
+  const r = await fetch(u, { method: "POST" });
+  return asJson(r);
+}

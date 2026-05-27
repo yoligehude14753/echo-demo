@@ -6,6 +6,7 @@ import ArtifactPanel from "@/components/ArtifactPanel";
 import MinutesView from "@/components/MinutesView";
 import CommandBar from "@/components/CommandBar";
 import MicRecorder from "@/components/MicRecorder";
+import WorkspaceBar from "@/components/WorkspaceBar";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 
@@ -39,6 +40,8 @@ export default function App(): JSX.Element {
           </span>
         </div>
       </Header>
+
+      <WorkspaceBar />
 
       <Layout className="!bg-paper-50">
         <Sider
