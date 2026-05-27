@@ -1,6 +1,9 @@
-"""Integration: 真实访问 heyi-bj STT (8093) / TTS (8094) / FAST LLM (7860)。
+"""Integration: 真实访问 heyi-bj STT (8090 firered) / TTS (8094) / FAST LLM (7860)。
 
 不可达自动 skip（demo 网络下 heyi-bj 经常分阶段拉起）。
+
+PR `echodesk-remove-sensevoice`：原本测的是 :8093 SenseVoice，删除后改测主
+STT backend :8090 FireRed。
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ import socket
 
 import numpy as np
 import pytest
-from app.adapters.stt import SenseVoiceGPUSTT
+from app.adapters.stt import FireRedSTT
 from app.adapters.tts import Qwen3TTS
 from app.config import Settings
 
@@ -39,11 +42,11 @@ def settings() -> Settings:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not _can_connect("100.87.251.9", 8093), reason="heyi-bj 8093 (sensevoice_gpu) 不可达"
+    not _can_connect("100.87.251.9", 8090), reason="heyi-bj 8090 (firered) 不可达"
 )
 async def test_real_stt_handshake(settings: Settings) -> None:
     """STT 接口可达且能接受合法 WAV（不强求识别质量，只验证 HTTP 协议握手）。"""
-    stt = SenseVoiceGPUSTT(settings, timeout_s=15.0)
+    stt = FireRedSTT(settings, timeout_s=15.0)
     pcm = _sine_pcm16(dur_s=2.0)
     segs = await stt.transcribe(pcm, sample_rate=16_000)
     # 纯正弦波可能转空文本；这里只验证不抛 STTError

@@ -97,8 +97,8 @@ python scripts/demo_run.py
 如果要演示「持续采集→ASR→纪要」完整链路，需要：
 
 ```bash
-# STT: sensevoice_gpu @ heyi-bj :8093
-curl http://100.87.251.9:8093/v1/audio/transcriptions ...
+# STT: firered (FireRedASR2-AED) @ heyi-bj :8090
+curl http://100.87.251.9:8090/v1/audio/transcriptions ...
 # TTS: faster-qwen3-tts @ heyi-bj :8094
 # Diarizer: 本地 speechbrain（首次启动会拉 ~80MB 模型缓存）
 ```
