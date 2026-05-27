@@ -1,6 +1,12 @@
 """集中式配置：所有外部依赖与运行参数走这里，业务层只读 Settings。
 
 源码层级：infra（最底层），可被任何层 import；不得反向 import 任何上层模块。
+
+P1.2（独立产品 Phase 1）：配置三层化
+  优先级 高→低：env > ~/.echodesk/config.json (user) > <repo>/.env (dev) > code default
+  打包到 /Applications/EchoDesk.app 后，cwd 找不到 .env 也能跑 —— 用户配置走
+  ~/.echodesk/config.json（由 install-backend.sh 写入默认值，UI 设置面板可改）。
+  详见 app/config_io.py。
 """
 
 from __future__ import annotations
@@ -9,9 +15,15 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic import AliasChoices, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
-# 项目根目录的 .env（无论从 backend/ 还是项目根启动都能找到）
+from app.config_io import JsonConfigSource
+
+# 项目根目录的 .env（dev 期兜底；prod 装机后不强求存在）
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ENV_FILES = (_PROJECT_ROOT / ".env", Path(".env"))
 
@@ -24,12 +36,37 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """注入 ~/.echodesk/config.json 作为第二优先级 source。
+
+        顺序：init kwargs > env > user.json > .env (dev) > file secrets > code default
+        """
+        return (
+            init_settings,
+            env_settings,
+            JsonConfigSource(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
+
     # ── Server ────────────────────────────────────────────────────
-    port: int = 8765
+    # P1.1（独立产品 Phase 1）：canonical port = 8769。
+    # 历史上 backend default 是 8765、Electron main.cjs / runtime.ts 是 8769，
+    # 两者通过 .env / shell 命令 --port 对齐 —— 拼凑、易出错。统一到 8769。
+    # 改 default 不影响显式传 --port 的部署。
+    port: int = 8769
     log_level: str = "INFO"
 
-    public_ws_url: str = "ws://localhost:8765/ws/echo"
-    public_http_url: str = "http://localhost:8765"
+    public_ws_url: str = "ws://localhost:8769/ws/echo"
+    public_http_url: str = "http://localhost:8769"
     app_version: str = "demo-0.1.0"
 
     # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
@@ -192,7 +229,7 @@ class Settings(BaseSettings):
     storage_dir: Path = Field(default=Path("~/.echodesk/storage").expanduser())
 
     # ── Security ──────────────────────────────────────────────────
-    allowed_origins: str = "app://.,http://localhost:5173,http://localhost:8765"
+    allowed_origins: str = "app://.,http://localhost:5173,http://localhost:8769"
     debug_token: str = ""
 
     @property

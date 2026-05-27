@@ -6,7 +6,7 @@
 
 跑法：
   cd backend
-  uvicorn app.main:app --port 8765 &
+  uvicorn app.main:app --port 8769 &
   cd ..
   python scripts/demo_run.py
 
@@ -37,8 +37,8 @@ for _k in (
 ):
     os.environ.pop(_k, None)
 
-BASE = os.environ.get("ECHO_DEMO_BASE", "http://localhost:8765")
-WS_URL = os.environ.get("ECHO_DEMO_WS", "ws://localhost:8765/ws/echo")
+BASE = os.environ.get("ECHO_DEMO_BASE", "http://localhost:8769")
+WS_URL = os.environ.get("ECHO_DEMO_WS", "ws://localhost:8769/ws/echo")
 
 CHUNKS = [
     "今天讨论 Q3 预算，原方案 100 万元。",

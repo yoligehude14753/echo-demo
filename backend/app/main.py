@@ -1,13 +1,18 @@
 """FastAPI 入口：仅做装配，不写业务逻辑。
 
-启动：
-    cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8765 --reload
+启动（canonical）：
+    cd backend && uvicorn app.main:app --host 127.0.0.1 --port 8769
+
+注：8769 是 EchoDesk 统一端口（P1.1 Phase 1 收口），main.cjs / runtime.ts
+/ vite.config / playwright 配置 / install-backend.sh 都对齐这个值。改前先
+确认所有地方一起改。
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import logging.handlers
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -26,6 +31,8 @@ from app.api.deps import (
     get_repository,
     get_speaker_registry,
 )
+from app.api.health import router as health_router
+from app.api.health import start_prober, stop_prober
 from app.api.intent import router as intent_router
 from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
@@ -36,8 +43,73 @@ from app.api.retrieval import router as retrieval_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
+from app.config_io import user_config_dir
 
 logger = logging.getLogger("echodesk")
+
+
+def _setup_logging(level: str) -> None:
+    """P1.3：backend log 同时写 stdout + ~/.echodesk/logs/backend-YYYYMMDD.log。
+
+    rotate：按天滚动，保留 14 天；超出自动删。stdout 仍然有（dev / Electron
+    spawn 时能看实时输出），落盘是为了 Phase 2 诊断包导出 + 用户事后查问题。
+
+    幂等：多次调用只会保留最后一次配置（清旧 handlers 再加）。
+    """
+    log_dir = user_config_dir() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "backend.log"
+
+    root = logging.getLogger()
+    # 清掉之前 basicConfig 加的 stream handler，避免重复行
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.setLevel(level)
+
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    stream = logging.StreamHandler()
+    stream.setFormatter(fmt)
+    root.addHandler(stream)
+
+    file_h = logging.handlers.TimedRotatingFileHandler(
+        log_path,
+        when="midnight",
+        backupCount=14,
+        encoding="utf-8",
+        utc=False,
+    )
+    file_h.setFormatter(fmt)
+    root.addHandler(file_h)
+
+    logger.info("logging: stdout + %s (rotate daily, keep 14 days)", log_path)
+
+
+def _sweep_macos_dotfiles(target: object) -> None:
+    """P1.8：用户数据目录里清掉 mac 自己写进去的 .DS_Store。
+
+    Spotlight / Finder 在用户进入 ~/.echodesk/ 时会自动创建 .DS_Store；
+    它对数据无害但污染目录列表（用户截图里能看到），启动时静默清掉。
+    """
+    from pathlib import Path
+    target_path = target if isinstance(target, Path) else Path(str(target))
+    if not target_path.exists():
+        return
+    cleaned = 0
+    try:
+        for dotfile in target_path.rglob(".DS_Store"):
+            try:
+                dotfile.unlink()
+                cleaned += 1
+            except OSError:
+                pass
+    except OSError:
+        return
+    if cleaned:
+        logger.info(".DS_Store sweep: removed %d files under %s", cleaned, target_path)
 
 # 持有 lifespan 期间 fire-and-forget 任务的强引用，避免被 GC
 _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
@@ -47,8 +119,9 @@ _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     logger.info(
-        "echodesk 启动: version=%s llm_main=%s llm_fast=%s stt=%s tts=%s",
+        "echodesk 启动: version=%s port=%d llm_main=%s llm_fast=%s stt=%s tts=%s",
         __version__,
+        settings.port,
         settings.llm_main_model,
         settings.llm_fast_model,
         settings.stt_backend,
@@ -56,6 +129,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.rag_index_dir.mkdir(parents=True, exist_ok=True)
+    # P1.8：清理 mac Finder 在 ~/.echodesk/ 里写的 .DS_Store
+    _sweep_macos_dotfiles(user_config_dir())
 
     # SQLite repository：建表 + hydrate 未结束的会议 + 加载已知说话人
     repo = get_repository(settings)
@@ -137,7 +212,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             [str(d) for d in settings.workspace_dirs_list],
         )
 
+    # P1.4：启动远程依赖探针后台 task
+    try:
+        await start_prober()
+    except Exception as e:
+        logger.warning("health prober start failed: %s", e)
+
     yield
+
+    # 顺序：探针先停（避免拿 settings 时 lifespan 已经清完）→ LLM → bus → repo
+    await stop_prober()
     await aclose_llm_singleton()
     await aclose_event_bus()
     await aclose_repository()
@@ -146,10 +230,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    logging.basicConfig(
-        level=settings.log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    # P1.3：取代 basicConfig，让日志同时进文件
+    _setup_logging(settings.log_level)
 
     app = FastAPI(
         title="EchoDesk",
@@ -182,6 +264,7 @@ def create_app() -> FastAPI:
             "web_search_enabled": settings.web_search_enabled,
         }
 
+    app.include_router(health_router)
     app.include_router(capture_router)
     app.include_router(chat_router)
     app.include_router(retrieval_router)

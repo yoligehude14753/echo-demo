@@ -33,12 +33,12 @@ pip install -r requirements-dev.txt
 cp ../.env.example ../.env
 # 确保 YUNWU_OPEN_KEY / TAVILY_API_KEY 已填
 
-# 3. 启动
-uvicorn app.main:app --host 0.0.0.0 --port 8765 --reload
+# 3. 启动（canonical port = 8769，与 Electron / vite / playwright 对齐）
+uvicorn app.main:app --host 127.0.0.1 --port 8769
 
 # 4. 自检
-curl http://localhost:8765/healthz
-curl http://localhost:8765/bootstrap
+curl http://localhost:8769/healthz
+curl http://localhost:8769/bootstrap
 ```
 
 ## 测试
