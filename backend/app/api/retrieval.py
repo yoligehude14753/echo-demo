@@ -1,8 +1,9 @@
 """HTTP API: RAG 入库 + 检索式问答。
 
-POST /rag/ingest        — multipart 上传 PDF 入库
+POST /rag/ingest        — multipart 上传任意文档入库（PDF/docx/pptx/xlsx/md/txt/csv/...）
 POST /rag/ask           — 检索式问答（SSE 流式）
 GET  /rag/stats         — 索引诊断
+GET  /rag/docs          — 列出所有已入库文档
 """
 
 from __future__ import annotations
@@ -65,15 +66,40 @@ async def rag_ingest(
     file: UploadFile = File(...),
     title: str | None = None,
     rag: RagPort = Depends(get_rag),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
-    suffix = Path(file.filename or "doc.pdf").suffix or ".pdf"
-    if suffix.lower() != ".pdf":
-        raise HTTPException(status_code=400, detail="only PDF supported in PR-4")
+    """通用文档入库。支持的扩展名见 `parsers.SUPPORTED_EXTS`。
+
+    上限：settings.upload_max_file_mb（默认 50 MB）。
+    """
+    from app.adapters.rag.parsers import SUPPORTED_EXTS
+
+    filename = file.filename or "document"
+    suffix = Path(filename).suffix.lower() or ""
+    if suffix not in SUPPORTED_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"unsupported file type: {suffix or '(no extension)'}; "
+                f"supported: {', '.join(sorted(SUPPORTED_EXTS))}"
+            ),
+        )
+    max_bytes = int(settings.upload_max_file_mb * 1024 * 1024)
+    content = await file.read()
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"file too large: {len(content) / 1e6:.1f}MB > {settings.upload_max_file_mb}MB",
+        )
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(content)
         tmp_path = tmp.name
     try:
-        doc_id = await rag.ingest_pdf(tmp_path, doc_title=title or file.filename)
+        doc_id = await rag.ingest_file(
+            tmp_path,
+            doc_title=title or filename,
+            source="upload",
+        )
     except RagError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     finally:
@@ -88,6 +114,22 @@ async def rag_stats(rag: RagPort = Depends(get_rag)) -> dict[str, object]:
     if stats is None:
         return {"n_chunks": -1, "n_docs": -1}
     return stats()  # type: ignore[no-any-return]
+
+
+@router.get("/rag/docs")
+async def rag_docs(rag: RagPort = Depends(get_rag)) -> dict[str, object]:
+    """列出所有已入库文档（按 source 分组前端展示）。"""
+    docs = await rag.list_docs()
+    by_source: dict[str, list[dict[str, object]]] = {}
+    for d in docs:
+        by_source.setdefault(str(d.get("source", "unknown")), []).append(d)
+    return {"total": len(docs), "by_source": by_source, "docs": docs}
+
+
+@router.delete("/rag/docs/{doc_id}")
+async def rag_doc_delete(doc_id: str, rag: RagPort = Depends(get_rag)) -> dict[str, str]:
+    await rag.delete(doc_id)
+    return {"doc_id": doc_id, "status": "deleted"}
 
 
 async def _sse(retrieval_json: str, chunks: AsyncIterator[str]) -> AsyncIterator[bytes]:
