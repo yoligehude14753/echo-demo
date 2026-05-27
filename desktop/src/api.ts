@@ -73,9 +73,24 @@ export function artifactDownloadUrl(artifactId: string): string {
   return `/api/artifacts/${encodeURIComponent(artifactId)}/download`;
 }
 
+/**
+ * 解析后端 /rag/ask 的 SSE 响应。
+ *
+ * 协议（见 backend/app/api/retrieval.py _sse）：
+ *   - 第 1 帧：`data: {"meta": {...citations...}}`
+ *   - 中间帧：`data: {"delta": "..."}` 多次
+ *   - 结束帧：`data: [DONE]`
+ */
 export async function ragAsk(question: string): Promise<{
   answer: string;
-  citations: Array<{ doc_id: string; title: string; snippet: string }>;
+  citations: Array<{
+    kind: string;
+    doc_id?: string;
+    title?: string;
+    url?: string;
+    snippet?: string;
+    score?: number;
+  }>;
   arbitration: string;
 }> {
   const u = await apiUrl("/rag/ask");
@@ -84,7 +99,68 @@ export async function ragAsk(question: string): Promise<{
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
   });
-  return asJson(r);
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${r.status} ${r.statusText}: ${text}`);
+  }
+  // 兼容：若后端非 SSE（如 mock 测试返 JSON），直接 json() 解析
+  const ct = r.headers.get("content-type") ?? "";
+  if (!ct.includes("text/event-stream")) {
+    return (await r.json()) as Awaited<ReturnType<typeof ragAsk>>;
+  }
+
+  const reader = r.body?.getReader();
+  if (!reader) throw new Error("rag/ask: response body unreadable");
+  const decoder = new TextDecoder("utf-8");
+  let buf = "";
+  let answer = "";
+  let citations: Array<Record<string, unknown>> = [];
+  let arbitration = "rag";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    let nl: number;
+    while ((nl = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, nl);
+      buf = buf.slice(nl + 2);
+      const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
+      if (!dataLine) continue;
+      const payload = dataLine.slice("data: ".length);
+      if (payload === "[DONE]") continue;
+      try {
+        const obj = JSON.parse(payload) as Record<string, unknown>;
+        if ("delta" in obj && typeof obj.delta === "string") {
+          answer += obj.delta;
+        } else if ("meta" in obj && obj.meta && typeof obj.meta === "object") {
+          const meta = obj.meta as Record<string, unknown>;
+          if (Array.isArray(meta.citations)) {
+            citations = meta.citations as Array<Record<string, unknown>>;
+          }
+          if (typeof meta.chosen_source === "string") {
+            arbitration = meta.chosen_source;
+          }
+        }
+      } catch {
+        // 单帧解析失败不致命，继续
+      }
+    }
+  }
+
+  return {
+    answer,
+    citations: citations as Array<{
+      kind: string;
+      doc_id?: string;
+      title?: string;
+      url?: string;
+      snippet?: string;
+      score?: number;
+    }>,
+    arbitration,
+  };
 }
 
 // 用于预热缓存（main.tsx 调）
