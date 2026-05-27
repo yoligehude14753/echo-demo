@@ -14,10 +14,9 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.config import Settings, get_settings
 from app.main import create_app
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
