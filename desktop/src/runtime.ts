@@ -5,12 +5,19 @@
  *  3. Electron 打包后加载 file://dist/index.html → 直接打 ECHO_BACKEND_HOST
  */
 
+// SupervisorStatus 的具体形状定义在 hooks/useBackendHealth.ts；
+// 这里用宽松 unknown 让 runtime.ts 不强耦合 health hook，且 hook 内做窄化
+interface ElectronEchoBridge {
+  isElectron?: boolean;
+  getBackendHost?: () => Promise<string>;
+  // Phase 1 P1.5/P1.6 BackendSupervisor IPC
+  onBackendStatus?: (cb: (status: unknown) => void) => () => void;
+  manualRestartBackend?: () => Promise<{ ok: boolean }>;
+}
+
 declare global {
   interface Window {
-    echo?: {
-      isElectron?: boolean;
-      getBackendHost?: () => Promise<string>;
-    };
+    echo?: ElectronEchoBridge;
   }
 }
 
