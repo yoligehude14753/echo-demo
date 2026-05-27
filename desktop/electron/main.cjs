@@ -11,6 +11,11 @@ const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8769", 10);
 const BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
 const SPAWN_BACKEND = process.env.ECHO_SPAWN_BACKEND !== "0";
 
+// 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名固定是 "Electron"（黑紫色 Atom 图标），
+// 因为读的是 node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
+// 只有 electron-builder 打包后才会显示为 "Echo"。app.setName() 只影响 userData 路径，不改 Dock 名。
+// dev 期识别窗口：看窗口内 UI 顶部的 "Echo · echo-demo" brand，或 Cmd+Tab 中的黑紫 Atom 图标。
+
 let backendProc = null;
 let mainWindow = null;
 
@@ -108,6 +113,7 @@ function waitForBackend(timeoutMs = 30_000) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
+    title: IS_DEV ? "Echo (dev)" : "Echo",
     width: 1280,
     height: 820,
     minWidth: 960,

@@ -8,7 +8,7 @@ import { test, expect } from "@playwright/test";
 // 真实可见的 CommandBar textarea（绕开 AntD hiddenTextarea）
 const COMMAND_BAR_TA = "textarea[placeholder*='生成']";
 
-test("smoke: page loads, ws connects, mic recorder visible", async ({ page }) => {
+test("smoke: page loads, ws connects, capture status visible", async ({ page }) => {
   test.setTimeout(60_000);
 
   await page.goto("/");
@@ -19,8 +19,9 @@ test("smoke: page loads, ws connects, mic recorder visible", async ({ page }) =>
   // 2. CommandBar 输入框存在
   await expect(page.locator(COMMAND_BAR_TA)).toBeVisible();
 
-  // 3. 录音按钮可见
-  await expect(page.getByRole("button", { name: /开始录音/ })).toBeVisible();
+  // 3. CaptureSession 状态（持续采集，无手动按钮）
+  await expect(page.getByTestId("capture-status")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("capture-status")).toContainText(/持续采集|初始化麦克风|ambient/);
 
   // 4. ArtifactPanel 的"生成"按钮可见（首页右下角）
   await expect(page.getByRole("button", { name: /^生成/ }).first()).toBeVisible();

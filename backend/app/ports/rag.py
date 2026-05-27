@@ -30,6 +30,15 @@ class RagPort(Protocol):
     async def ingest_meeting(self, meeting_id: str, transcript: str, title: str) -> str:
         """会议结束后把纪要+逐字稿入库。返回 doc_id。"""
 
+    async def ingest_ambient_segment(
+        self,
+        text: str,
+        *,
+        captured_at: str,
+        audio_ref: str,
+    ) -> str:
+        """ambient 主链路：按日追加 STT 文本段。返回 doc_id（ambient-YYYYMMDD）。"""
+
     async def query(self, query: str, *, top_k: int = 5) -> list[RagChunk]: ...
 
     async def delete(self, doc_id: str) -> None: ...

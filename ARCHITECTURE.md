@@ -84,18 +84,24 @@
 
 ## 2. 数据流（核心 user journey）
 
-### 2.1 会议纪要
+### 2.1 音频采集 vs 会议（两个正交域 · 方案 2）
+
+| 域 | 组件 | 生命周期 | 用户控制 | 数据去向 |
+|---|---|---|---|---|
+| **CaptureSession** | `capture/AudioCapture` + `POST /capture/chunk` | App 启动 → 退出 | **无**（24h 持续） | 落盘 `ambient/` + STT + RAG（`source=ambient`） |
+| **MeetingSession** | CommandBar `@开始/结束/总结会议` | idle → in_meeting → ended | **手动** | 叠加：转写流 + diarization + 纪要 |
+
+路由规则（`capture/captureChunkRouter.ts` 唯一写入点）：
 
 ```
-[麦克风录音] → desktop AudioCapture
-            → WS chunk → backend
-            → STTPort (heyi-bj FireRedASR2-AED)
-            → 文本片段流回 desktop (ChatView 流式追加)
-            → 段落聚合 + DiarizerPort 标 speaker_1/2
-            → 触发 M2.7 总结（每 N 段或会议结束）
-            → 纪要 JSON → broadcast WS → NotesCard
-            → 用户点导出 → SkillPort.gen_word(notes) → docx 下载
+每个 PCM chunk
+  └─ POST /capture/chunk（主链路，永远执行）
+        ├─ 落盘 ~/.echo-demo/ambient/YYYY-MM-DD/*.wav
+        ├─ STT → 非空则 RAG ingest（ambient-YYYYMMDD）
+        └─ 若 meeting_id 且 meeting 未 ended → MeetingPipeline 叠加（同一次 STT 结果）
 ```
+
+会议外音频**不丢弃**，是个人数字分身的 ambient 记忆层。
 
 ### 2.2 文档 Q&A + Web 仲裁
 

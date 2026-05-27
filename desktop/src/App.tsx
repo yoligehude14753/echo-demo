@@ -5,8 +5,9 @@ import TranscriptStream from "@/components/TranscriptStream";
 import ArtifactPanel from "@/components/ArtifactPanel";
 import MinutesView from "@/components/MinutesView";
 import CommandBar from "@/components/CommandBar";
-import MicRecorder from "@/components/MicRecorder";
+import CaptureStatus from "@/components/CaptureStatus";
 import WorkspaceBar from "@/components/WorkspaceBar";
+import { useEchoCapture } from "@/capture/useEchoCapture";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 
@@ -14,6 +15,7 @@ const { Header, Sider, Content } = Layout;
 
 export default function App(): JSX.Element {
   useEchoWS();
+  const captureStatus = useEchoCapture();
   const connected = useStore((s) => s.connected);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const events = useStore((s) => s.events);
@@ -68,7 +70,7 @@ export default function App(): JSX.Element {
                 </span>
               )}
               <div className="ml-auto">
-                <MicRecorder />
+                <CaptureStatus status={captureStatus} />
               </div>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">

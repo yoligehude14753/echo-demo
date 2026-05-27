@@ -96,3 +96,24 @@ async def test_ingest_nonexistent_pdf_raises(tmp_path: Path) -> None:
     rag = BM25Rag(_settings(tmp_path))
     with pytest.raises(RagError):
         await rag.ingest_pdf("/nonexistent/path.pdf")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ingest_ambient_segment_appends_by_day(tmp_path: Path) -> None:
+    rag = BM25Rag(_settings(tmp_path))
+    doc_id = await rag.ingest_ambient_segment(
+        "刚才讨论了 Q3 预算",
+        captured_at="2026-05-27T10:00:00+00:00",
+        audio_ref="/tmp/a.wav",
+    )
+    assert doc_id == "ambient-20260527"
+    doc_id2 = await rag.ingest_ambient_segment(
+        "补充一句关于 Nvidia",
+        captured_at="2026-05-27T10:06:00+00:00",
+        audio_ref="/tmp/b.wav",
+    )
+    assert doc_id2 == doc_id
+    hits = await rag.query("Nvidia 预算")
+    assert hits
+    assert hits[0].metadata.get("kind") == "ambient"

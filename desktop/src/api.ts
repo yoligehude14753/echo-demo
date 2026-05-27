@@ -20,6 +20,31 @@ export async function startMeeting(meetingId: string): Promise<void> {
   if (!r.ok && r.status !== 204) throw new Error(`start ${r.status}`);
 }
 
+export async function uploadCaptureChunk(
+  blob: Blob,
+  sampleRate = 16000,
+  meetingId?: string,
+): Promise<{
+  ambient_stored: boolean;
+  ambient_text: string | null;
+  audio_ref: string;
+  meeting_segments: TranscriptSegment[];
+}> {
+  const fd = new FormData();
+  fd.append("audio", blob, "chunk.wav");
+  fd.append("sample_rate", String(sampleRate));
+  if (meetingId) fd.append("meeting_id", meetingId);
+  const u = await apiUrl("/capture/chunk");
+  const r = await fetch(u, { method: "POST", body: fd });
+  return asJson(r);
+}
+
+export async function endMeeting(meetingId: string): Promise<void> {
+  const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/end`);
+  const r = await fetch(u, { method: "POST" });
+  if (!r.ok) throw new Error(`end ${r.status}`);
+}
+
 export async function uploadChunk(
   meetingId: string,
   blob: Blob,

@@ -85,6 +85,7 @@ class MeetingPipeline:
         self._segments: dict[str, list[TranscriptSegment]] = defaultdict(list)
         self._speaker_labels: dict[str, dict[str, str]] = defaultdict(dict)
         self._wall_clock_start: dict[str, float] = {}
+        self._finalized: set[str] = set()
         self._lock = asyncio.Lock()
         self._transcript_dir = Path(settings.storage_dir).expanduser() / "meetings"
         self._transcript_dir.mkdir(parents=True, exist_ok=True)
@@ -101,8 +102,51 @@ class MeetingPipeline:
             self._segments[meeting_id] = []
             self._speaker_labels[meeting_id] = {}
             self._wall_clock_start[meeting_id] = time.monotonic()
+            self._finalized.discard(meeting_id)
         await self._diarizer.reset()
         await self._publish("meeting.started", meeting_id, {})
+
+    async def end_meeting(self, meeting_id: str) -> None:
+        """结束会议叠加层（不生成纪要）；ambient 主链路不受影响。"""
+        if meeting_id in self._finalized:
+            return
+        self._finalized.add(meeting_id)
+        await self._publish("meeting.ended", meeting_id, {})
+
+    async def ingest_from_stt(
+        self,
+        meeting_id: str,
+        audio_bytes: bytes,
+        stt_segs: list[TranscriptSegment],
+        *,
+        sample_rate: int = 16_000,
+    ) -> list[TranscriptSegment]:
+        """Meeting 叠加层：复用 ambient 主链路已跑的 STT 结果，只补 diarization + WS。"""
+        if meeting_id in self._finalized:
+            raise MeetingPipelineError(f"meeting {meeting_id} already ended")
+        if not stt_segs:
+            return []
+        if meeting_id not in self._wall_clock_start:
+            await self.start_meeting(meeting_id)
+
+        speaker_id = await self._diarizer.identify(audio_bytes, sample_rate=sample_rate)
+        label = self._label_for(meeting_id, speaker_id)
+        offset_ms = int((time.monotonic() - self._wall_clock_start[meeting_id]) * 1000)
+        out: list[TranscriptSegment] = []
+        async with self._lock:
+            for s in stt_segs:
+                seg = TranscriptSegment(
+                    text=s.text,
+                    start_ms=offset_ms + s.start_ms,
+                    end_ms=offset_ms + s.end_ms,
+                    speaker_id=speaker_id,
+                    speaker_label=label,
+                )
+                self._segments[meeting_id].append(seg)
+                out.append(seg)
+        for seg in out:
+            await self._publish("meeting.segment", meeting_id, seg.model_dump(mode="json"))
+        return out
 
     async def add_audio_chunk(
         self,
@@ -112,6 +156,8 @@ class MeetingPipeline:
         sample_rate: int = 16_000,
     ) -> list[TranscriptSegment]:
         """单 chunk 入流：并发跑 STT + Diarizer。返回这段产生的 segments。"""
+        if meeting_id in self._finalized:
+            raise MeetingPipelineError(f"meeting {meeting_id} already ended")
         if meeting_id not in self._wall_clock_start:
             await self.start_meeting(meeting_id)
 
@@ -177,6 +223,8 @@ class MeetingPipeline:
         *,
         title: str,
     ) -> MeetingMinutes:
+        if meeting_id in self._finalized:
+            raise MeetingPipelineError(f"meeting {meeting_id} already ended")
         segs = self.get_segments(meeting_id)
         if not segs:
             raise MeetingPipelineError(f"meeting {meeting_id} has no segments")
@@ -205,6 +253,7 @@ class MeetingPipeline:
         rag_payload = "【纪要】\n" + minutes.summary + "\n\n【逐字稿】\n" + transcript_text
         await self._rag.ingest_meeting(meeting_id, rag_payload, title)
 
+        self._finalized.add(meeting_id)
         await self._publish("meeting.ended", meeting_id, {"duration_sec": duration_sec})
         await self._publish("minutes.ready", meeting_id, minutes.model_dump(mode="json"))
         return minutes

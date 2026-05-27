@@ -272,6 +272,44 @@ class BM25Rag:
         self._persist_doc(doc_id, title, chunks)
         return doc_id
 
+    async def ingest_ambient_segment(
+        self,
+        text: str,
+        *,
+        captured_at: str,
+        audio_ref: str,
+    ) -> str:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._ingest_ambient_segment_sync, text, captured_at, audio_ref
+            )
+
+    def _ingest_ambient_segment_sync(self, text: str, captured_at: str, audio_ref: str) -> str:
+        """按日追加 ambient STT 段（主链路记忆层）。"""
+        day = captured_at[:10].replace("-", "")
+        doc_id = f"ambient-{day}"
+        title = f"Ambient {captured_at[:10]}"
+        existing = [c for c in self._chunks if c.doc_id == doc_id]
+        seq = len(existing)
+        chunk = RagChunk(
+            doc_id=doc_id,
+            doc_title=title,
+            chunk_id=f"{doc_id}-c{seq:04d}",
+            text=text.strip(),
+            metadata={
+                "kind": "ambient",
+                "source": "ambient",
+                "captured_at": captured_at,
+                "audio_ref": audio_ref,
+            },
+        )
+        self._chunks.append(chunk)
+        self._tokens.append(_tokenize_cn_en(chunk.text))
+        self._rebuild_bm25()
+        all_doc_chunks = [c for c in self._chunks if c.doc_id == doc_id]
+        self._persist_doc(doc_id, title, all_doc_chunks)
+        return doc_id
+
     async def query(self, query: str, *, top_k: int = 5) -> list[RagChunk]:
         async with self._lock:
             if self._bm25 is None or not self._chunks:

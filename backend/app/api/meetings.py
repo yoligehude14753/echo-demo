@@ -87,6 +87,16 @@ async def finalize(
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 
+@router.post("/{meeting_id}/end")
+async def end_meeting(
+    meeting_id: str,
+    pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+) -> dict[str, str]:
+    """结束会议叠加层（不生成纪要）；ambient 主链路继续。"""
+    await pipeline.end_meeting(meeting_id)
+    return {"meeting_id": meeting_id, "status": "ended"}
+
+
 @router.get("/{meeting_id}/segments", response_model=list[TranscriptSegment])
 async def list_segments(
     meeting_id: str,

@@ -13,6 +13,7 @@ PR-16 / m5-t5：用户在前端聊天框输入"@查英伟达营收"等，
 - generate_word     : @生成 Word / @文档
 - summarize_meeting : @总结当前会议 / @生成纪要
 - start_meeting     : @开始会议 / @新建会议
+- end_meeting       : @结束会议 / @停会（不生成纪要）
 - chat              : 兜底，不带 @ 或不匹配上述意图
 """
 
@@ -31,6 +32,7 @@ IntentKind = Literal[
     "generate_word",
     "summarize_meeting",
     "start_meeting",
+    "end_meeting",
     "chat",
 ]
 
@@ -44,6 +46,7 @@ SUPPORTED_INTENTS: frozenset[str] = frozenset(
         "generate_word",
         "summarize_meeting",
         "start_meeting",
+        "end_meeting",
         "chat",
     ]
 )
@@ -104,6 +107,9 @@ _KEYWORD_HINTS: dict[str, IntentKind] = {
     "纪要": "summarize_meeting",
     "开始会议": "start_meeting",
     "新建会议": "start_meeting",
+    "结束会议": "end_meeting",
+    "结束当前": "end_meeting",
+    "停会": "end_meeting",
 }
 
 

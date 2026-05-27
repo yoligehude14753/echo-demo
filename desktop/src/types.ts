@@ -80,6 +80,7 @@ export type IntentKind =
   | "generate_word"
   | "summarize_meeting"
   | "start_meeting"
+  | "end_meeting"
   | "chat";
 
 export interface IntentResult {
@@ -89,7 +90,9 @@ export interface IntentResult {
   rationale: string;
 }
 
-export type MeetingState = "idle" | "in_meeting" | "ended";
+import type { MeetingState } from "@/domain/session";
+
+export type { MeetingState };
 
 export interface MeetingCard {
   meeting_id: string;

@@ -10,8 +10,10 @@
     "preview": "vite preview --port 4173",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "typecheck": "tsc -b --noEmit",
-    "electron:dev": "concurrently -k -n vite,electron -c blue,magenta \"vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_DEV=1 electron electron/main.cjs\"",
-    "electron:start": "cross-env ELECTRON_DEV=1 electron electron/main.cjs",
+    "electron:brand": "node electron/scripts/brand-dev-electron.cjs",
+    "electron:dev": "npm run electron:brand && concurrently -k -n vite,electron -c blue,magenta \"vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_DEV=1 electron electron/main.cjs\"",
+    "electron:start": "npm run electron:brand && cross-env ELECTRON_DEV=1 electron electron/main.cjs",
+    "postinstall": "node electron/scripts/brand-dev-electron.cjs || true",
     "app:build": "npm run build && electron-builder --mac --dir",
     "app:dist": "npm run build && electron-builder --mac",
     "e2e": "playwright test",
@@ -61,6 +63,7 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
+      "icon": "electron/icons/echo.icns",
       "target": [
         "dmg",
         "zip"
