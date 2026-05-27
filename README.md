@@ -1,19 +1,20 @@
 # EchoDesk · 数字分身 (Another Me)
 
-> **目标**：会议 + 办公场景的"数字分身"桌面应用。
-> **现状**：D7 · M3 已完成（PR-1 ~ PR-8 + PR-11 合并），全链路 E2E 通过。
-> **快速跑通**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)。
+> **目标**：会议 + 办公场景的"数字分身"桌面应用，**本地优先，数据不出机**。
+> **当前版本**：v0.2.0（详见 [`CHANGELOG.md`](CHANGELOG.md)）
+> **快速安装**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
+> **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
 
-## 状态摘要 (2026-05-26)
+## 状态摘要 (2026-05-28)
 
 | 阶段 | 范围 | 状态 |
 |---|---|---|
-| M1 | 脚手架 + LLM/STT/TTS/Diarizer/RAG/Web 6 adapter | ✅ 4 PR 合并 |
-| M2 | Skill 执行器（Word/Excel/HTML）+ 会议 pipeline | ✅ PR-5/6 合并 |
-| M3 | WS 事件总线 + desktop 清单式 UI | ✅ PR-7/8 合并 |
-| M4 | 全链路 E2E + demo 脚本 + 截图 | ✅ PR-11 合并 |
+| Phase 1 (0.1.0) | 持续监听 + 会议 + 9 类 intent + 一键产物 + 一键 install | ✅ released |
+| Phase 2 (0.2.0) | 状态可视化 + artifact.failed + 远端降级 + DB migration + 管理 API + 诊断打包 | ✅ released |
+| Phase 3 (0.2.0) | 首次启动引导 + 远端 endpoint 配置 + mac mic 权限补救 + CHANGELOG/About | 🚧 PR #42 / #44 / 本 PR |
+| Phase 4 | Keychain 集成 + 自动更新 + Universal Binary | 计划中 |
 
-测试：88 unit + 4 真服务 integration 全过，ruff/mypy 0 错误。
+测试：290+ unit + 9 e2e + 4 真服务 integration 全过，ruff/mypy 0 错误。
 
 ## 架构
 
