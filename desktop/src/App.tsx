@@ -1,5 +1,6 @@
 import { Layout, Tooltip } from "antd";
-import { MessageSquare, Mic, Volume2, VolumeX } from "lucide-react";
+import { MessageSquare, Mic, Settings, Volume2, VolumeX } from "lucide-react";
+import { useState } from "react";
 import MeetingList from "@/components/MeetingList";
 import TranscriptStream from "@/components/TranscriptStream";
 import ArtifactPanel from "@/components/ArtifactPanel";
@@ -9,6 +10,7 @@ import CaptureStatus from "@/components/CaptureStatus";
 import MeetingStatusBar from "@/components/MeetingStatusBar";
 import WorkspaceBar from "@/components/WorkspaceBar";
 import StatusBar from "@/components/StatusBar";
+import SettingsPanel from "@/components/SettingsPanel";
 import { useEchoCapture } from "@/capture/useEchoCapture";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
@@ -23,6 +25,7 @@ export default function App(): JSX.Element {
   const connected = useStore((s) => s.connected);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const events = useStore((s) => s.events);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <Layout className="!h-screen !bg-paper-50 !overflow-hidden">
@@ -69,8 +72,24 @@ export default function App(): JSX.Element {
             />
             {connected ? "已连接" : "断线"}
           </span>
+          <Tooltip title="设置">
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              className="flex items-center rounded px-1.5 py-0.5 text-ink-500 hover:text-ink-700 hover:bg-paper-200 transition"
+              data-testid="open-settings"
+              aria-label="打开设置"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+          </Tooltip>
         </div>
       </Header>
+
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
 
       <WorkspaceBar />
 
