@@ -80,3 +80,24 @@ async def capture_chunk(
         sample_rate=sample_rate,
         meeting_id=mid or None,
     )
+
+
+@router.get("/recent")
+async def list_recent_ambient(
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    """最近 N 条 ambient 转写片段（待机时 UI 转写流的数据源）。"""
+    recs = await repository.list_ambient_segments(limit=limit)
+    # 按时间正序（旧 → 新），符合用户阅读习惯
+    recs_sorted = sorted(recs, key=lambda r: r.captured_at)
+    return [
+        {
+            "text": r.text,
+            "captured_at": r.captured_at.isoformat(),
+            "speaker_id": r.speaker_id,
+            "speaker_label": r.speaker_label,
+            "duration_ms": r.duration_ms,
+        }
+        for r in recs_sorted
+    ]

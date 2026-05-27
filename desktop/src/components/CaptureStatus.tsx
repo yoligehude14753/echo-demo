@@ -45,14 +45,14 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
       <span className="inline-flex items-center gap-1.5">
         <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
         持续采集
-        <span className="text-[10px] opacity-80">· ambient {ambientChunks}</span>
+        <span className="text-[10px] opacity-80">· 已转 {ambientChunks}</span>
         {meetingOverlayId ? (
           <span className="text-[10px] opacity-80">
-            · 会议 {meetingChunks} → {meetingOverlayId}
+            · 会议中 · 段 {meetingChunks}
           </span>
         ) : (
           <span className="text-[10px] opacity-70">
-            · 待命（@开始会议 叠加转写）
+            · 静音/底噪自动过滤
           </span>
         )}
       </span>

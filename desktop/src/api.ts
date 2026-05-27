@@ -94,6 +94,24 @@ export async function manualEndMeeting(): Promise<MeetingStateSnapshot> {
   return asJson<MeetingStateSnapshot>(r);
 }
 
+// ── 待机时持续显示 ambient 转写片段 ──────────────────────────
+
+export interface AmbientSegment {
+  text: string;
+  captured_at: string;
+  speaker_id: string | null;
+  speaker_label: string | null;
+  duration_ms: number;
+}
+
+export async function listRecentAmbient(
+  limit = 50,
+): Promise<AmbientSegment[]> {
+  const u = await apiUrl(`/capture/recent?limit=${limit}`);
+  const r = await fetch(u);
+  return asJson<AmbientSegment[]>(r);
+}
+
 export type ArtifactKind = "word" | "xlsx" | "excel" | "pptx" | "ppt" | "html";
 
 export async function generateArtifact(req: {
