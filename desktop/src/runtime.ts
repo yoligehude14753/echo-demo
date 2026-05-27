@@ -31,6 +31,8 @@ declare global {
   interface Window {
     echo?: ElectronEchoBridge;
   }
+  // 由 vite.config.ts define 注入；编译时替换为 "0.2.0" 字面量
+  const __APP_VERSION__: string;
 }
 
 let cachedBase: string | null = null;

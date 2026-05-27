@@ -126,8 +126,31 @@ export async function installEchoMock(
         }
       }
       // 健康检查 / 占位
+      if (path === "/healthz/full" || path === "/api/healthz/full") {
+        return new Response(
+          JSON.stringify({
+            backend: { ok: true, version: "0.2.0-mock", port: 8769, uptime_s: 12.3 },
+            db: { ok: true },
+            remote: {},
+            mic: { ok: "unknown" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (path.startsWith("/healthz")) {
         return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      // P2.5 管理 API：data-dir
+      if (path === "/admin/data-dir" || path === "/api/admin/data-dir") {
+        return new Response(
+          JSON.stringify({
+            path: "/Users/test/.echodesk",
+            exists: true,
+            subdirs: { logs: true, storage: true, rag_index: true },
+            db_path: "/Users/test/.echodesk/echodesk.db",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
       // workspace / rag/docs 默认返空（WorkspaceBar 30s 轮询调用）
       if (path.startsWith("/workspace/status") || path.startsWith("/api/workspace/status")) {

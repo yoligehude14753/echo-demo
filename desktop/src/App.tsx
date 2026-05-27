@@ -12,6 +12,7 @@ import WorkspaceBar from "@/components/WorkspaceBar";
 import StatusBar from "@/components/StatusBar";
 import SettingsPanel from "@/components/SettingsPanel";
 import OnboardingModal from "@/components/OnboardingModal";
+import AboutModal from "@/components/AboutModal";
 import { useEchoCapture } from "@/capture/useEchoCapture";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
@@ -28,6 +29,7 @@ export default function App(): JSX.Element {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const events = useStore((s) => s.events);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const onboarding = useOnboarding();
 
   return (
@@ -38,7 +40,17 @@ export default function App(): JSX.Element {
           <span className="brand font-semibold text-[15px] text-ink-900">
             EchoDesk
           </span>
-          <span className="text-[11px] text-ink-500">v0.1</span>
+          <Tooltip title="关于 / 版本">
+            <button
+              type="button"
+              onClick={() => setAboutOpen(true)}
+              className="app-no-drag text-[11px] text-ink-500 hover:text-accent transition cursor-pointer"
+              data-testid="open-about"
+              aria-label="关于 EchoDesk"
+            >
+              v{__APP_VERSION__}
+            </button>
+          </Tooltip>
         </div>
         <div className="app-no-drag flex items-center gap-3 text-[11px] text-ink-500">
           <StatusBar />
@@ -99,6 +111,8 @@ export default function App(): JSX.Element {
         open={onboarding.shouldShow}
         onClose={onboarding.markCompleted}
       />
+
+      <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
       <WorkspaceBar />
 
