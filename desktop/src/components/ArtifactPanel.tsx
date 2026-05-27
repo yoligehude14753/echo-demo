@@ -43,8 +43,8 @@ export default function ArtifactPanel(): JSX.Element {
     useState<GeneratedArtifact | null>(null);
 
   return (
-    <div className="flex-1 flex flex-col bg-paper-50">
-      <div className="flex items-center justify-between px-6 h-11 border-b border-paper-300">
+    <div className="flex-1 min-h-0 flex flex-col bg-paper-50">
+      <div className="flex items-center justify-between px-6 h-11 border-b border-paper-300 shrink-0">
         <span className="text-[13px] text-ink-700 font-medium lowercase tracking-wider">
           outputs
         </span>

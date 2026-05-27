@@ -49,7 +49,10 @@ export default function TranscriptStream(): JSX.Element {
   const meeting = useStore((s) =>
     currentMeetingId ? s.meetings[currentMeetingId] : undefined,
   );
-  const endRef = useRef<HTMLDivElement>(null);
+  // 滚动容器（自身），不能用 scrollIntoView 否则会顶整个 App body 滚
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  // 用户是否处在底部附近：未滚到底时不自动追，避免打断阅读
+  const stickyToBottomRef = useRef(true);
 
   // 时间窗：选中会议时高亮该窗内的 segments
   const winStart = meeting?.started_at
@@ -91,13 +94,30 @@ export default function TranscriptStream(): JSX.Element {
     }
   }, [events]);
 
+  // 监听滚动：记录用户是否处在底部附近（容差 40px）
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const el = scrollerRef.current;
+    if (!el) return;
+    const onScroll = (): void => {
+      const distFromBottom =
+        el.scrollHeight - el.clientHeight - el.scrollTop;
+      stickyToBottomRef.current = distFromBottom < 40;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [segs.length === 0]);
+
+  // 新片段到达时，仅当用户停在底部附近才自动追，且只在容器内 scrollTop
+  useEffect(() => {
+    if (!stickyToBottomRef.current) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [segs.length]);
 
   if (segs.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
+      <div className="flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
         <div>等待环境音转写…</div>
         <div className="text-[10px] text-ink-300">
           开口说话即可触发；环境静音/底噪会被自动过滤
@@ -107,9 +127,13 @@ export default function TranscriptStream(): JSX.Element {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-6">
+    <div
+      ref={scrollerRef}
+      className="flex-1 min-h-0 overflow-y-auto px-8 py-6"
+      data-testid="transcript-scroller"
+    >
       <div className="max-w-3xl mx-auto space-y-3">
-        <div className="text-[11px] text-ink-400 mb-2 px-1 flex items-center gap-2">
+        <div className="text-[11px] text-ink-400 mb-2 px-1 flex items-center gap-2 sticky top-0 bg-paper-50/90 backdrop-blur-sm py-1 z-10">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           <span>ambient 持续转写 · {segs.length} 条 · 每 3s 刷新</span>
           {meeting && (
@@ -147,7 +171,6 @@ export default function TranscriptStream(): JSX.Element {
             </div>
           );
         })}
-        <div ref={endRef} />
       </div>
     </div>
   );

@@ -237,7 +237,34 @@ test.describe("EchoDesk 核心流程", () => {
     await expect(page.getByTestId("workspace-clear-btn")).toBeVisible();
   });
 
-  test("12. WS 事件计数在交互后真增长", async ({ page }) => {
+  test("12. 转写流在区域内滚动，不会撑高整个 App body", async ({ page }) => {
+    test.setTimeout(60_000);
+    await gotoApp(page);
+
+    // body 视口不应可滚动（document.scrollingElement.scrollHeight 不大于 clientHeight + 1）
+    const overflow = await page.evaluate(() => {
+      const root = document.scrollingElement || document.documentElement;
+      return {
+        scrollHeight: root.scrollHeight,
+        clientHeight: root.clientHeight,
+      };
+    });
+    // 允许 1px 浮点误差
+    expect(overflow.scrollHeight).toBeLessThanOrEqual(overflow.clientHeight + 1);
+
+    // 转写流容器存在且自己 overflow auto（有 segments 时）
+    // 如果空态文案显示中，跳过 scroller 检查
+    const scroller = page.getByTestId("transcript-scroller");
+    if ((await scroller.count()) > 0) {
+      const isScrollable = await scroller.evaluate((el) => {
+        const css = window.getComputedStyle(el as HTMLElement);
+        return css.overflowY === "auto" || css.overflowY === "scroll";
+      });
+      expect(isScrollable).toBe(true);
+    }
+  });
+
+  test("13. WS 事件计数在交互后真增长", async ({ page }) => {
     test.setTimeout(60_000);
     await gotoApp(page);
 
