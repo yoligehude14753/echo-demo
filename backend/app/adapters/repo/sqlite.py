@@ -1,13 +1,17 @@
 """SQLite 实现 RepositoryPort，单文件 ``~/.echodesk/echodesk.db``。
 
 特性：
-- 启动时 ``init()`` 自动建表（CREATE IF NOT EXISTS），无需 alembic
+- 启动时 ``init()`` 打开连接 + 设 PRAGMA（WAL + foreign_keys）+ 跑 schema migration
+- schema DDL 由 ``app.adapters.repo.migrator.run_migrations`` 负责（P2.4）；
+  本类不再维护 inline ``CREATE TABLE`` 字面值——破坏性变更通过新增
+  ``migrations/NNN_*.sql`` 加 schema_version 来推进
 - 所有写路径串行通过 ``asyncio.Lock``，规避 sqlite 的"database is locked"
 - aiosqlite 单连接（开 WAL），单进程并发足够
 - 时间戳统一存 ISO-8601 UTC
 - speaker_id / speaker_label 全程可空（旧数据兼容）
 
 不在本类做的事：
+- DDL / schema migration（→ ``migrator.py`` + ``migrations/NNN_*.sql``）
 - 业务校验、事件发布（留给 use_case 层）
 - 大对象（音频文件本体）→ 文件系统存，DB 只存 ref
 """
@@ -20,6 +24,7 @@ from pathlib import Path
 
 import aiosqlite
 
+from app.adapters.repo.migrator import run_migrations
 from app.ports.repository import (
     AmbientSegmentRecord,
     MeetingRecord,
@@ -28,65 +33,6 @@ from app.ports.repository import (
     SpeakerProfileRecord,
 )
 from app.schemas.meeting import TranscriptSegment
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS meetings (
-    id TEXT PRIMARY KEY,
-    title TEXT,
-    state TEXT NOT NULL CHECK(state IN ('in_meeting','ended','finalized')),
-    started_at TEXT NOT NULL,
-    ended_at TEXT,
-    finalized_at TEXT,
-    auto_started INTEGER NOT NULL DEFAULT 0,
-    minutes_json TEXT,
-    raw_transcript_ref TEXT
-);
-
-CREATE TABLE IF NOT EXISTS meeting_segments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    meeting_id TEXT NOT NULL,
-    text TEXT NOT NULL,
-    start_ms INTEGER NOT NULL,
-    end_ms INTEGER NOT NULL,
-    speaker_id TEXT,
-    speaker_label TEXT,
-    captured_at TEXT NOT NULL,
-    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_meeting_segments_meeting
-    ON meeting_segments(meeting_id, start_ms);
-
-CREATE TABLE IF NOT EXISTS meeting_speaker_labels (
-    meeting_id TEXT NOT NULL,
-    speaker_id TEXT NOT NULL,
-    label TEXT NOT NULL,
-    PRIMARY KEY (meeting_id, speaker_id),
-    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS ambient_segments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    audio_ref TEXT NOT NULL,
-    text TEXT NOT NULL,
-    speaker_id TEXT,
-    speaker_label TEXT,
-    duration_ms INTEGER NOT NULL DEFAULT 0,
-    captured_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_ambient_segments_captured
-    ON ambient_segments(captured_at);
-CREATE INDEX IF NOT EXISTS idx_ambient_segments_speaker
-    ON ambient_segments(speaker_id);
-
-CREATE TABLE IF NOT EXISTS speakers (
-    speaker_id TEXT PRIMARY KEY,
-    label TEXT,
-    n_samples INTEGER NOT NULL DEFAULT 0,
-    first_seen_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL,
-    embedding_blob BLOB
-);
-"""
 
 
 def _to_iso(dt: datetime) -> str:
@@ -106,14 +52,27 @@ class SQLiteRepository(RepositoryPort):
         self._lock = asyncio.Lock()
 
     async def init(self) -> None:
+        """打开连接 + 设 PRAGMA + 跑 schema migration（P2.4）。
+
+        lifespan 已会先调一次 ``run_migrations`` 拿到结构化结果用于日志/早失败；
+        这里再跑一次做兜底，覆盖直接构造 ``SQLiteRepository`` 的调用方
+        （主要是 unit test ``SQLiteRepository(tmp_path / "echo.db"); await repo.init()``）。
+        已应用的版本会被 skip，幂等，无副作用。
+
+        若 migration 失败抛 ``RuntimeError``——半成品 schema 不如直接停。
+        """
         async with self._lock:
             if self._conn is not None:
                 return
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        # migration 走独立连接（不抢 self._conn 的 lock）
+        result = await run_migrations(self._db_path)
+        if result.errors:
+            raise RuntimeError(f"sqlite migrations failed: {result.errors}")
+        async with self._lock:
             self._conn = await aiosqlite.connect(str(self._db_path))
             await self._conn.execute("PRAGMA journal_mode=WAL")
             await self._conn.execute("PRAGMA foreign_keys=ON")
-            await self._conn.executescript(_SCHEMA)
             await self._conn.commit()
 
     async def aclose(self) -> None:

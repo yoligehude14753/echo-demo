@@ -15,11 +15,13 @@ import logging
 import logging.handlers
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.adapters.repo.migrator import run_migrations
 from app.api.artifacts import router as artifacts_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
@@ -36,10 +38,10 @@ from app.api.health import start_prober, stop_prober
 from app.api.intent import router as intent_router
 from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
-from app.api.speakers import router as speakers_router
-from app.api.tts import router as tts_router
 from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
+from app.api.speakers import router as speakers_router
+from app.api.tts import router as tts_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
@@ -111,6 +113,23 @@ def _sweep_macos_dotfiles(target: object) -> None:
     if cleaned:
         logger.info(".DS_Store sweep: removed %d files under %s", cleaned, target_path)
 
+async def _run_db_migrations(db_path: Path) -> None:
+    """P2.4：跑 schema migration，失败直接 RuntimeError。
+
+    抽成独立函数让 lifespan 里只占一行调用，避免拉爆 PLR0915 阈值。
+    """
+    mig = await run_migrations(db_path)
+    if mig.errors:
+        logger.error("db migrations failed: %s", mig.errors)
+        raise RuntimeError(f"db migrations failed: {mig.errors}")
+    logger.info(
+        "db migrations: applied=%s skipped=%s current_version=%d",
+        mig.applied,
+        mig.skipped,
+        mig.current_version,
+    )
+
+
 # 持有 lifespan 期间 fire-and-forget 任务的强引用，避免被 GC
 _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
 
@@ -132,7 +151,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # P1.8：清理 mac Finder 在 ~/.echodesk/ 里写的 .DS_Store
     _sweep_macos_dotfiles(user_config_dir())
 
-    # SQLite repository：建表 + hydrate 未结束的会议 + 加载已知说话人
+    # P2.4：DB schema migration 必须在 repo.init / hydrate 之前跑完，
+    # 否则 hydrate 会基于半成品 schema 读到旧字段。
+    await _run_db_migrations(settings.db_path)
+
+    # SQLite repository：连接 + hydrate 未结束的会议 + 加载已知说话人
     repo = get_repository(settings)
     await repo.init()
     try:
