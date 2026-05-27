@@ -13,7 +13,7 @@
 # Python 3.12+（项目 CI 用 3.12），Node 20+
 # 一个能调通 Yunwu 的 YUNWU_OPEN_KEY（M2.7 主通道）
 
-cd echo-demo
+cd echodesk
 cp .env.example .env
 $EDITOR .env    # 填 YUNWU_OPEN_KEY=sk-xxxx 和 TAVILY_API_KEY=tvly-xxxx
 ```
@@ -29,7 +29,7 @@ uvicorn app.main:app --port 8765
 ```
 
 期望：
-- 控制台打印 `echo-demo 启动: version=0.1.0 llm_main=MiniMax-M2.7 ...`
+- 控制台打印 `echodesk 启动: version=0.1.0 llm_main=MiniMax-M2.7 ...`
 - `curl http://localhost:8765/healthz` → `{"status":"ok"}`
 - `curl http://localhost:8765/bootstrap` 输出能力开关
 
@@ -92,16 +92,18 @@ python scripts/demo_run.py
 
 ## 4. 真音频 → 真转写（可选，需 STT 服务）
 
-如果要演示「录音→ASR→纪要」完整链路，需要：
+前端麦克风在 App 根挂载 `useEchoCapture()`，**持续采集、无手动开关**；会议写入由 `@开始会议` / `@总结会议` 控制。
+
+如果要演示「持续采集→ASR→纪要」完整链路，需要：
 
 ```bash
 # STT: sensevoice_gpu @ heyi-bj :8093
 curl http://100.87.251.9:8093/v1/audio/transcriptions ...
-# TTS: cosyvoice @ heyi-bj :8094
+# TTS: faster-qwen3-tts @ heyi-bj :8094
 # Diarizer: 本地 speechbrain（首次启动会拉 ~80MB 模型缓存）
 ```
 
-前端没有原生录音模块（demo 范围内未集成）；本地测试可用：
+前端没有单独的「开始录音」按钮（CaptureSession 应用启动即采集）；本地测试 chunk 可用：
 
 ```bash
 # 30s 切片喂 chunk 端点

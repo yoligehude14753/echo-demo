@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.adapters.stt import SenseVoiceGPUSTT, STTError
+from app.adapters.stt import SenseVoiceGPUSTT
+from app.adapters.stt.sensevoice_gpu import STTError
 from app.config import Settings
 
 
@@ -72,7 +72,7 @@ async def test_transcribe_http_error_raises_stterror(settings: Settings) -> None
     fake.__aexit__ = AsyncMock(return_value=None)
     with (
         patch("app.adapters.stt.sensevoice_gpu.httpx.AsyncClient", return_value=fake),
-        pytest.raises(STTError, match=re.compile(r"sensevoice_gpu transcribe failed")),
+        pytest.raises(STTError, match=r"sensevoice_gpu transcribe failed"),
     ):
         await stt.transcribe(b"\x00\x01" * 8000)
 

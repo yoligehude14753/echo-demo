@@ -27,7 +27,7 @@ from app.adapters.rag.parsers import SUPPORTED_EXTS
 from app.config import Settings
 from app.ports.rag import RagPort
 
-log = logging.getLogger("echo-demo.workspace")
+log = logging.getLogger("echodesk.workspace")
 
 
 @dataclass

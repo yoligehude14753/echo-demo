@@ -29,6 +29,9 @@ class SenseVoiceGPUSTT:
     def __init__(self, settings: Settings, *, timeout_s: float = 60.0) -> None:
         self._settings = settings
         self._base = settings.stt_sensevoice_gpu_url.rstrip("/")
+        # 默认语言从 settings 读取（修复 2026-05-27 发现的 silent config bug：
+        # 之前 transcribe(language="zh") 是方法签名硬编码，settings.stt_language 静默失效）
+        self._default_language = settings.stt_language
         self._timeout = timeout_s
         self._fail_count = 0
         self._last_fail: float = 0.0
@@ -48,8 +51,10 @@ class SenseVoiceGPUSTT:
         audio_bytes: bytes,
         *,
         sample_rate: int = 16_000,
-        language: str = "zh",
+        language: str | None = None,
     ) -> list[TranscriptSegment]:
+        # 调用方不传 language 时用 settings 默认（避免历史硬编码 "zh" 让配置失效）
+        lang = language or self._default_language
         if self._circuit_open():
             raise STTError("sensevoice_gpu circuit open (3 consecutive failures)")
         if not audio_bytes:
@@ -65,7 +70,7 @@ class SenseVoiceGPUSTT:
                     headers={"Authorization": "Bearer x"},
                     data={
                         "model": "sensevoice-small",
-                        "language": language,
+                        "language": lang,
                         "response_format": "json",
                     },
                     files={"file": ("audio.wav", wav, "audio/wav")},

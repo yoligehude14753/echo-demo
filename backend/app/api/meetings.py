@@ -10,15 +10,23 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from app.adapters.diarizer import make_diarizer
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from app.adapters.rag.bm25 import BM25Rag
-from app.adapters.stt.sensevoice_gpu import SenseVoiceGPUSTT
-from app.api.deps import get_event_bus, get_llm_singleton
+from app.adapters.stt import make_stt
+from app.api.deps import (
+    get_diarizer_singleton,
+    get_event_bus,
+    get_llm_singleton,
+    get_meeting_state,
+    get_repository,
+)
 from app.config import Settings, get_settings
+from app.ports.diarizer import DiarizerPort
+from app.ports.repository import RepositoryPort
 from app.schemas.meeting import MeetingMinutes, TranscriptSegment
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
+from app.use_cases.meeting_state import MeetingState
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -29,16 +37,51 @@ def get_meeting_pipeline(
     settings: Settings = Depends(get_settings),
     llm: OpenAICompatibleLLM = Depends(get_llm_singleton),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
+    repository: RepositoryPort = Depends(get_repository),
+    diarizer: DiarizerPort = Depends(get_diarizer_singleton),
 ) -> MeetingPipeline:
     global _pipeline  # noqa: PLW0603
     if _pipeline is None:
         _pipeline = MeetingPipeline(
             settings=settings,
-            stt=SenseVoiceGPUSTT(settings),
-            diarizer=make_diarizer(settings),
+            stt=make_stt(settings),
+            diarizer=diarizer,
             rag=BM25Rag(settings),
             llm=llm,
             event_bus=event_bus,
+            repository=repository,
+        )
+    return _pipeline
+
+
+def get_meeting_pipeline_for_lifespan(
+    settings: Settings,
+    repository: RepositoryPort,
+) -> MeetingPipeline:
+    """lifespan 用：不通过 Depends 注入，直接拿单例（无 LLM/STT/RAG 也能 hydrate）。"""
+    from app.api.deps import (
+        get_diarizer_singleton as _get_diar,
+    )
+    from app.api.deps import (
+        get_event_bus as _get_bus,
+    )
+    from app.api.deps import (
+        get_llm_singleton as _get_llm,
+    )
+
+    global _pipeline  # noqa: PLW0603
+    if _pipeline is None:
+        bus = _get_bus()
+        llm = _get_llm(settings)
+        diar = _get_diar(settings)
+        _pipeline = MeetingPipeline(
+            settings=settings,
+            stt=make_stt(settings),
+            diarizer=diar,
+            rag=BM25Rag(settings),
+            llm=llm,
+            event_bus=bus,
+            repository=repository,
         )
     return _pipeline
 
@@ -49,12 +92,52 @@ def reset_meeting_pipeline() -> None:
     _pipeline = None
 
 
+@router.get("/current")
+async def get_current_meeting(
+    state: Annotated[MeetingState, Depends(get_meeting_state)],
+) -> dict[str, object]:
+    """全局会议状态机当前状态：idle 或 in_meeting。"""
+    cur = state.current
+    if cur is None:
+        return {"mode": "idle", "meeting_id": None, "started_at": None, "started_by": None}
+    return {
+        "mode": "in_meeting",
+        "meeting_id": cur.meeting_id,
+        "started_at": cur.started_at.isoformat(),
+        "started_by": cur.started_by,
+    }
+
+
+@router.post("/manual_start")
+async def manual_start_meeting(
+    state: Annotated[MeetingState, Depends(get_meeting_state)],
+    title: str | None = Form(None),
+) -> dict[str, object]:
+    """用户点击状态栏：手动开始会议。已在会议中则原样返回。"""
+    cur = await state.manual_start(title=title)
+    return {
+        "mode": "in_meeting",
+        "meeting_id": cur.meeting_id,
+        "started_at": cur.started_at.isoformat(),
+        "started_by": cur.started_by,
+    }
+
+
+@router.post("/manual_end")
+async def manual_end_meeting(
+    state: Annotated[MeetingState, Depends(get_meeting_state)],
+) -> dict[str, object]:
+    """用户点击状态栏：手动结束会议（含 finalize 纪要）。"""
+    ended = await state.manual_end()
+    return {"mode": "idle", "meeting_id": ended}
+
+
 @router.post("/{meeting_id}/start")
 async def start_meeting(
     meeting_id: str,
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
 ) -> dict[str, str]:
-    """启动会议。返回 {meeting_id, status: 'started'}。"""
+    """启动会议（low-level；建议走 /meetings/manual_start）。"""
     await pipeline.start_meeting(meeting_id)
     return {"meeting_id": meeting_id, "status": "started"}
 
@@ -85,6 +168,16 @@ async def finalize(
         return await pipeline.finalize_meeting(meeting_id, title=title)
     except MeetingPipelineError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@router.post("/{meeting_id}/end")
+async def end_meeting(
+    meeting_id: str,
+    pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+) -> dict[str, str]:
+    """结束会议叠加层（不生成纪要）；ambient 主链路继续。"""
+    await pipeline.end_meeting(meeting_id)
+    return {"meeting_id": meeting_id, "status": "ended"}
 
 
 @router.get("/{meeting_id}/segments", response_model=list[TranscriptSegment])

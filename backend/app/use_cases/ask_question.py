@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 from app.ports.llm import LLMPort
 from app.schemas.llm import ChatMessage
 
-SYSTEM_PROMPT = """你是 Echo，会议+办公场景下的个人数字分身。
+SYSTEM_PROMPT = """你是 EchoDesk，会议+办公场景下的个人数字分身。
 特点：
 - 中文优先，回答简洁清晰，必要时分点
 - 不知道就说不知道，不要编造

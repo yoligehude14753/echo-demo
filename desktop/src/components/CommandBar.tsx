@@ -25,10 +25,10 @@ import {
   ingestFile,
   ragAsk,
   routeIntent,
-  startMeeting,
 } from "@/api";
 import { useStore } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
+import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 
 interface PendingDoc {
   doc_id: string;
@@ -44,7 +44,6 @@ const kindLabel: Record<IntentKind, string> = {
   generate_xlsx: "生成 Excel",
   generate_word: "生成 Word",
   summarize_meeting: "总结会议",
-  start_meeting: "开始会议",
   chat: "对话",
 };
 
@@ -56,7 +55,6 @@ const kindColor: Record<IntentKind, string> = {
   generate_xlsx: "green",
   generate_word: "cyan",
   summarize_meeting: "geekblue",
-  start_meeting: "lime",
   chat: "default",
 };
 
@@ -85,6 +83,7 @@ export default function CommandBar(): JSX.Element {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
+  const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleFiles = useCallback(async (files: FileList | File[]): Promise<void> => {
@@ -211,20 +210,12 @@ export default function CommandBar(): JSX.Element {
       case "summarize_meeting": {
         const mid = (r.params.meeting_id as string | undefined) ?? currentMeetingId;
         if (!mid) {
-          message.warning("当前没有选中的会议");
+          message.warning("当前没有进行中的会议");
           return;
         }
         message.info(`正在总结会议 ${mid}…`);
         const minutes = await finalizeMeeting(mid, `会议 ${mid}`);
         message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
-        return;
-      }
-      case "start_meeting": {
-        const mid =
-          (r.params.meeting_id as string | undefined) ||
-          `m-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}`;
-        await startMeeting(mid);
-        message.success(`会议 ${mid} 已开启`);
         return;
       }
       case "search_web":
@@ -250,6 +241,7 @@ export default function CommandBar(): JSX.Element {
               } as unknown as Record<string, unknown>,
             });
             message.success("已返回检索结果（见事件流）");
+            void tts.speak(ans.answer);
           })
           .catch((e) => {
             const msg = e instanceof Error ? e.message : String(e);
@@ -258,10 +250,11 @@ export default function CommandBar(): JSX.Element {
         return;
       }
       case "chat":
-      default:
-        message.info(
-          `chat 兜底：${(r.params.text as string | undefined) ?? originalText}`,
-        );
+      default: {
+        const reply = (r.params.text as string | undefined) ?? originalText;
+        message.info(`chat 兜底：${reply}`);
+        void tts.speak(reply);
+      }
     }
   }
 

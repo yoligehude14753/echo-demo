@@ -2,6 +2,7 @@ import type {
   GeneratedArtifact,
   IntentResult,
   MeetingMinutes,
+  MeetingStateSnapshot,
   TranscriptSegment,
 } from "@/types";
 import { apiUrl, backendBase } from "@/runtime";
@@ -18,6 +19,31 @@ export async function startMeeting(meetingId: string): Promise<void> {
   const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/start`);
   const r = await fetch(u, { method: "POST" });
   if (!r.ok && r.status !== 204) throw new Error(`start ${r.status}`);
+}
+
+export async function uploadCaptureChunk(
+  blob: Blob,
+  sampleRate = 16000,
+  meetingId?: string,
+): Promise<{
+  ambient_stored: boolean;
+  ambient_text: string | null;
+  audio_ref: string;
+  meeting_segments: TranscriptSegment[];
+}> {
+  const fd = new FormData();
+  fd.append("audio", blob, "chunk.wav");
+  fd.append("sample_rate", String(sampleRate));
+  if (meetingId) fd.append("meeting_id", meetingId);
+  const u = await apiUrl("/capture/chunk");
+  const r = await fetch(u, { method: "POST", body: fd });
+  return asJson(r);
+}
+
+export async function endMeeting(meetingId: string): Promise<void> {
+  const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/end`);
+  const r = await fetch(u, { method: "POST" });
+  if (!r.ok) throw new Error(`end ${r.status}`);
 }
 
 export async function uploadChunk(
@@ -42,6 +68,54 @@ export async function finalizeMeeting(
   const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/finalize`);
   const r = await fetch(u, { method: "POST", body: fd });
   return asJson<MeetingMinutes>(r);
+}
+
+// ── 全局会议状态机（PRD：自动开/结 + 手动覆盖） ──────────────────
+
+export async function getCurrentMeeting(): Promise<MeetingStateSnapshot> {
+  const u = await apiUrl("/meetings/current");
+  const r = await fetch(u);
+  return asJson<MeetingStateSnapshot>(r);
+}
+
+export async function manualStartMeeting(
+  title?: string,
+): Promise<MeetingStateSnapshot> {
+  const u = await apiUrl("/meetings/manual_start");
+  // 不带 title 时直接发空 POST，避免空 multipart body 被 backend 拒绝
+  // （Fastapi Form(None) 仍要求 Content-Type: multipart，且必须有边界内容）
+  let init: RequestInit = { method: "POST" };
+  if (title && title.trim()) {
+    const fd = new FormData();
+    fd.append("title", title);
+    init = { method: "POST", body: fd };
+  }
+  const r = await fetch(u, init);
+  return asJson<MeetingStateSnapshot>(r);
+}
+
+export async function manualEndMeeting(): Promise<MeetingStateSnapshot> {
+  const u = await apiUrl("/meetings/manual_end");
+  const r = await fetch(u, { method: "POST" });
+  return asJson<MeetingStateSnapshot>(r);
+}
+
+// ── 待机时持续显示 ambient 转写片段 ──────────────────────────
+
+export interface AmbientSegment {
+  text: string;
+  captured_at: string;
+  speaker_id: string | null;
+  speaker_label: string | null;
+  duration_ms: number;
+}
+
+export async function listRecentAmbient(
+  limit = 50,
+): Promise<AmbientSegment[]> {
+  const u = await apiUrl(`/capture/recent?limit=${limit}`);
+  const r = await fetch(u);
+  return asJson<AmbientSegment[]>(r);
 }
 
 export type ArtifactKind = "word" | "xlsx" | "excel" | "pptx" | "ppt" | "html";
@@ -262,4 +336,53 @@ export async function workspaceClear(): Promise<{ n_removed: number }> {
   const u = await apiUrl("/workspace/clear");
   const r = await fetch(u, { method: "POST" });
   return asJson(r);
+}
+
+// ── TTS ─────────────────────────────────────────────────────
+
+/**
+ * 拉取 PCM bytes（16kHz 16-bit mono）。前端用 AudioContext 解码播放。
+ */
+export async function ttsSpeak(
+  text: string,
+  voice?: string,
+): Promise<ArrayBuffer> {
+  const u = await apiUrl("/tts/speak");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice }),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`tts ${r.status}: ${t}`);
+  }
+  return await r.arrayBuffer();
+}
+
+export async function listSpeakers(): Promise<
+  Array<{
+    speaker_id: string;
+    label: string | null;
+    n_samples: number;
+    first_seen_at: string;
+    last_seen_at: string;
+  }>
+> {
+  const u = await apiUrl("/speakers");
+  const r = await fetch(u);
+  return asJson(r);
+}
+
+export async function renameSpeaker(
+  speakerId: string,
+  label: string,
+): Promise<void> {
+  const u = await apiUrl(`/speakers/${encodeURIComponent(speakerId)}/rename`);
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  if (!r.ok) throw new Error(`rename ${r.status}`);
 }

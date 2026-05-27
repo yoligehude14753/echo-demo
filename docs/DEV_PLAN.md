@@ -2,7 +2,7 @@
 
 > **基准**：PRD v6.7.1 + ARCHITECTURE.md
 > **节奏**：2 周 14 PR
-> **commit 规范**：`feat(echo-demo-<task-id>): 中文描述`
+> **commit 规范**：`feat(echodesk-<task-id>): 中文描述`
 > **每个 PR ≤ 400 行 diff，self-review + AI review 后合并 main**
 
 ## PR 顺序（自上而下 + 自底向上交织）

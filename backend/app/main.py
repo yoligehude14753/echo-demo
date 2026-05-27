@@ -16,17 +16,28 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.artifacts import router as artifacts_router
+from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
-from app.api.deps import aclose_event_bus, aclose_llm_singleton
+from app.api.deps import (
+    aclose_event_bus,
+    aclose_llm_singleton,
+    aclose_repository,
+    get_diarizer_singleton,
+    get_repository,
+    get_speaker_registry,
+)
 from app.api.intent import router as intent_router
+from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
+from app.api.speakers import router as speakers_router
+from app.api.tts import router as tts_router
 from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
 
-logger = logging.getLogger("echo-demo")
+logger = logging.getLogger("echodesk")
 
 # 持有 lifespan 期间 fire-and-forget 任务的强引用，避免被 GC
 _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
@@ -36,7 +47,7 @@ _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     logger.info(
-        "echo-demo 启动: version=%s llm_main=%s llm_fast=%s stt=%s tts=%s",
+        "echodesk 启动: version=%s llm_main=%s llm_fast=%s stt=%s tts=%s",
         __version__,
         settings.llm_main_model,
         settings.llm_fast_model,
@@ -45,6 +56,57 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.rag_index_dir.mkdir(parents=True, exist_ok=True)
+
+    # SQLite repository：建表 + hydrate 未结束的会议 + 加载已知说话人
+    repo = get_repository(settings)
+    await repo.init()
+    try:
+        registry = get_speaker_registry(repo)
+        await registry.hydrate()
+        n_speakers = len(registry.known_speaker_ids())
+        if n_speakers:
+            logger.info("speaker registry: hydrated %d known speakers", n_speakers)
+    except Exception as e:
+        logger.warning("speaker registry hydrate failed: %s", e)
+
+    # ECAPA diarizer：从 speakers.embedding_blob 恢复内存 centroids + counter
+    # 修 ARCH-AUDIT §4 root #1 #9（embedding 不再随重启丢光）
+    try:
+        diarizer = get_diarizer_singleton(settings, repo)
+        if hasattr(diarizer, "hydrate"):
+            await diarizer.hydrate()  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.warning("diarizer hydrate failed: %s", e)
+    try:
+        pipeline = get_meeting_pipeline_for_lifespan(settings, repo)
+        n_resumed = await pipeline.hydrate_from_repo()
+        if n_resumed:
+            logger.info("hydrated %d in-progress meeting(s) from %s", n_resumed, settings.db_path)
+    except Exception as e:
+        logger.warning("meeting hydrate failed: %s", e)
+
+    try:
+        from app.api.deps import (
+            get_auto_meeting_detector as _get_det,
+        )
+        from app.api.deps import (
+            get_event_bus as _get_bus,
+        )
+        from app.api.deps import (
+            get_meeting_state as _get_state,
+        )
+        detector = _get_det(settings)
+        bus = _get_bus()
+        state = _get_state(settings, repo, bus, detector)
+        await state.hydrate()
+        if state.current is not None:
+            logger.info(
+                "meeting-state hydrated: %s started_by=%s",
+                state.current.meeting_id,
+                state.current.started_by,
+            )
+    except Exception as e:
+        logger.warning("meeting-state hydrate failed: %s", e)
 
     # 授权工作区：启动后 fire-and-forget 扫描（不阻塞 startup）
     if settings.workspace_scan_on_startup and settings.workspace_dirs_list:
@@ -78,7 +140,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
     await aclose_llm_singleton()
     await aclose_event_bus()
-    logger.info("echo-demo 关闭")
+    await aclose_repository()
+    logger.info("echodesk 关闭")
 
 
 def create_app() -> FastAPI:
@@ -89,9 +152,9 @@ def create_app() -> FastAPI:
     )
 
     app = FastAPI(
-        title="echo-demo",
+        title="EchoDesk",
         version=__version__,
-        description="个人数字分身 · 会议+办公 demo（API 后端）",
+        description="个人数字分身 · 会议+办公（API 后端）",
         lifespan=lifespan,
     )
 
@@ -119,12 +182,15 @@ def create_app() -> FastAPI:
             "web_search_enabled": settings.web_search_enabled,
         }
 
+    app.include_router(capture_router)
     app.include_router(chat_router)
     app.include_router(retrieval_router)
     app.include_router(workspace_router)
     app.include_router(artifacts_router)
     app.include_router(meetings_router)
+    app.include_router(speakers_router)
     app.include_router(intent_router)
+    app.include_router(tts_router)
     app.include_router(ws_router)
     return app
 

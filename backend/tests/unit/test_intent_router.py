@@ -115,8 +115,11 @@ def test_keyword_route_misses() -> None:
 
 @pytest.mark.unit
 def test_supported_intents_complete() -> None:
-    # 9 类必须齐
-    assert len(SUPPORTED_INTENTS) == 9
+    # 8 类（2026-05 起：删除 start_meeting/end_meeting，会议由状态机控制）
+    assert len(SUPPORTED_INTENTS) == 8
+    assert "start_meeting" not in SUPPORTED_INTENTS
+    assert "end_meeting" not in SUPPORTED_INTENTS
+    assert "summarize_meeting" in SUPPORTED_INTENTS
 
 
 @pytest.mark.unit

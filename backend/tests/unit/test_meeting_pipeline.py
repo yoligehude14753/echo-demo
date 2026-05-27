@@ -236,3 +236,20 @@ async def test_pipeline_isolates_meetings(tmp_path: Path) -> None:
     assert len(pipe.get_segments("m7")) == 1
     assert len(pipe.get_segments("m8")) == 1
     assert pipe.get_segments("m7")[0].text == "m7-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_end_meeting_blocks_further_chunks(tmp_path: Path) -> None:
+    pipe = MeetingPipeline(
+        settings=_settings(tmp_path),
+        stt=FakeSTT([[TranscriptSegment(text="before", start_ms=0, end_ms=500)]]),
+        diarizer=FakeDiarizer(["spk-A"]),
+        rag=FakeRag(),
+        llm=FakeLLM("{}"),
+    )
+    await pipe.start_meeting("m-end")
+    await pipe.add_audio_chunk("m-end", b"\x00" * 16_000)
+    await pipe.end_meeting("m-end")
+    with pytest.raises(MeetingPipelineError, match="already ended"):
+        await pipe.add_audio_chunk("m-end", b"\x00" * 16_000)

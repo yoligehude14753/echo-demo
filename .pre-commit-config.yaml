@@ -26,7 +26,7 @@ repos:
         stages: [commit-msg]
 
   # 本地 hook：检测裸 openai / anthropic / sqlalchemy.Base 使用（alld 06-platforms 硬约束）
-  # echo-demo 暂未引入中台 yoli_*，但保留检测，违规即报警以便后续切换
+  # echodesk 暂未引入中台 yoli_*，但保留检测，违规即报警以便后续切换
   - repo: local
     hooks:
       - id: no-direct-llm-imports

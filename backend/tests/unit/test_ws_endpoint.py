@@ -177,25 +177,26 @@ def test_ws_server_resync_when_history_expired(tmp_path: Path) -> None:
     app.dependency_overrides[get_meeting_pipeline] = lambda: pipe
     c = TestClient(app)
 
-    # 先生成 4 个事件，但 replay_buffer=2 → 只保留 seq=3,4
+    # 生成 5 个事件（meeting.started/segment/ended/minutes.ready/tts.suggested），
+    # replay_buffer=2 → 只保留 seq=4,5
     c.post("/meetings/resync/start")
     c.post(
         "/meetings/resync/chunk",
         files={"audio": ("c.wav", b"\x00" * 16_000, "audio/wav")},
     )
     c.post("/meetings/resync/finalize", data={"title": "x"})
-    assert bus.max_seq == 4
-    assert bus.oldest_history_seq == 3
+    assert bus.max_seq == 5
+    assert bus.oldest_history_seq == 4
 
     with c.websocket_connect("/ws/echo") as ws:
         ws.send_text(json.dumps({"type": "client_hello", "last_seq": 1}))
         msg1 = json.loads(ws.receive_text())
         assert msg1["type"] == "server_resync", msg1
-        assert msg1["payload"]["oldest_seq"] == 3
+        assert msg1["payload"]["oldest_seq"] == 4
         assert msg1["payload"]["client_last_seq"] == 1
         msg2 = json.loads(ws.receive_text())
         assert msg2["type"] == "server_hello"
-        # 然后是 history 内剩余的 seq=3, 4
-        m3 = json.loads(ws.receive_text())
+        # 然后是 history 内剩余的 seq=4, 5
         m4 = json.loads(ws.receive_text())
-        assert m3["seq"] == 3 and m4["seq"] == 4
+        m5 = json.loads(ws.receive_text())
+        assert m4["seq"] == 4 and m5["seq"] == 5

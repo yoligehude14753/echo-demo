@@ -1,0 +1,164 @@
+"""Repository Port：本地持久化的抽象接口（meeting / ambient / speakers）。
+
+业务（use_cases）只依赖此 Protocol；adapter（如 SQLite）在 adapters/repo 实现。
+
+设计原则：
+- repository 是**可选**依赖（None 时退化为纯内存，保持现有测试通过）
+- 所有方法 async（即使 SQLite 是同步驱动）便于 adapter 使用 aiosqlite
+- 不暴露 DB cursor / connection，只暴露领域操作
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal, Protocol
+
+from pydantic import BaseModel, Field
+
+from app.schemas.meeting import TranscriptSegment
+
+MeetingState = Literal["in_meeting", "ended", "finalized"]
+
+
+class MeetingRecord(BaseModel):
+    """落库的 meeting 行（不含 segments）。"""
+
+    id: str
+    title: str | None = None
+    state: MeetingState
+    started_at: datetime
+    ended_at: datetime | None = None
+    finalized_at: datetime | None = None
+    auto_started: bool = False
+    minutes_json: str | None = None
+    raw_transcript_ref: str | None = None
+
+
+class AmbientSegmentRecord(BaseModel):
+    """ambient_segments 单行。"""
+
+    id: int = 0
+    audio_ref: str
+    text: str
+    speaker_id: str | None = None
+    speaker_label: str | None = None
+    duration_ms: int = 0
+    captured_at: datetime
+
+
+class SpeakerProfileRecord(BaseModel):
+    """全局 speaker registry 行。"""
+
+    speaker_id: str
+    label: str | None = None
+    n_samples: int = 0
+    first_seen_at: datetime
+    last_seen_at: datetime
+    embedding_blob: bytes | None = Field(default=None, exclude=True)
+
+
+class RepositoryPort(Protocol):
+    """本地持久化抽象。
+
+    Lifecycle:
+    - ``init()`` 在 FastAPI lifespan startup 调
+    - ``aclose()`` 在 shutdown 调
+    """
+
+    async def init(self) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+    # ── Meetings ─────────────────────────────────────────────────
+    async def create_meeting(
+        self,
+        meeting_id: str,
+        *,
+        started_at: datetime,
+        title: str | None = None,
+        auto_started: bool = False,
+    ) -> None: ...
+
+    async def update_meeting_state(
+        self,
+        meeting_id: str,
+        *,
+        state: MeetingState,
+        title: str | None = None,
+        ended_at: datetime | None = None,
+        finalized_at: datetime | None = None,
+        minutes_json: str | None = None,
+        raw_transcript_ref: str | None = None,
+    ) -> None: ...
+
+    async def get_meeting(self, meeting_id: str) -> MeetingRecord | None: ...
+
+    async def list_meetings(
+        self,
+        *,
+        state: MeetingState | None = None,
+        limit: int = 50,
+    ) -> list[MeetingRecord]: ...
+
+    # ── Meeting segments ────────────────────────────────────────
+    async def append_meeting_segment(
+        self,
+        meeting_id: str,
+        seg: TranscriptSegment,
+        *,
+        captured_at: datetime,
+    ) -> None: ...
+
+    async def list_meeting_segments(
+        self,
+        meeting_id: str,
+    ) -> list[TranscriptSegment]: ...
+
+    # ── Per-meeting speaker label map（与 meeting 内 _speaker_labels 镜像）─
+    async def upsert_meeting_speaker_label(
+        self,
+        meeting_id: str,
+        speaker_id: str,
+        label: str,
+    ) -> None: ...
+
+    async def get_meeting_speaker_labels(
+        self,
+        meeting_id: str,
+    ) -> dict[str, str]: ...
+
+    # ── Ambient segments ────────────────────────────────────────
+    async def append_ambient_segment(
+        self,
+        *,
+        audio_ref: str,
+        text: str,
+        captured_at: datetime,
+        speaker_id: str | None = None,
+        speaker_label: str | None = None,
+        duration_ms: int = 0,
+    ) -> int: ...
+
+    async def list_ambient_segments(
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 100,
+    ) -> list[AmbientSegmentRecord]: ...
+
+    async def count_ambient_segments(self) -> int: ...
+
+    # ── Global speakers registry ────────────────────────────────
+    async def upsert_speaker(
+        self,
+        speaker_id: str,
+        *,
+        captured_at: datetime,
+        label: str | None = None,
+        embedding_blob: bytes | None = None,
+    ) -> None: ...
+
+    async def get_speaker(self, speaker_id: str) -> SpeakerProfileRecord | None: ...
+
+    async def list_speakers(self) -> list[SpeakerProfileRecord]: ...
