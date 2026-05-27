@@ -31,6 +31,7 @@ funasr==1.1.14            # SenseVoice in-process fallback
 torch==2.4.1              # CPU 版即可（声纹 + STT fallback）
 torchaudio==2.4.1
 speechbrain==1.0.0        # ECAPA-TDNN 声纹
+huggingface_hub<0.30      # speechbrain 1.0.0 仍用 use_auth_token；hf_hub 0.30+ 移除该形参
 
 # ── Web Search ──────────────────────────────────────────────
 tavily-python==0.5.0
