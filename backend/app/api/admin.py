@@ -199,7 +199,6 @@ async def export_meeting(
 
 @router.post("/speakers/reset", summary="清空 speakers + 段表 speaker 字段")
 async def reset_speakers(
-    repository: Annotated[RepositoryPort, Depends(get_repository)],  # noqa: ARG001
     diarizer: Annotated[DiarizerPort, Depends(get_diarizer_singleton)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, Any]:
@@ -223,9 +222,11 @@ async def reset_speakers(
       ``segments_cleared``: 受影响段总数 = ambient + meeting（被改成 NULL 的行）
       ``diarizer_reset``:   diarizer 内存 ``_profiles`` 是否成功清空
     """
-    # repository 通过 Depends 注入是为了和 lifespan 单例共享同一 db 文件并
-    # 在使用 dependency_overrides 的测试场景中走 override 的 repo；这里直接
-    # 读 settings.db_path 即可，不需要在调用方手动传 path。
+    # 直接读 settings.db_path 而不是经 RepositoryPort：
+    # 1) 写操作需 DELETE/UPDATE，RepositoryPort 当前不暴露这些，
+    #    不想为 admin 单点扩 port。
+    # 2) 用独立 sqlite3 连接 + asyncio.to_thread，沿用 WAL 多写者协调，
+    #    不抢 SQLiteRepository._lock。
     db_path = Path(settings.db_path).expanduser()
     if not db_path.exists():
         # idempotent：空库 / 还没启动过 → 0/0/diarizer reset 仍执行

@@ -30,7 +30,6 @@ from app.main import create_app
 from app.schemas.meeting import MeetingMinutes, MinutesSection, TranscriptSegment
 from fastapi.testclient import TestClient
 
-
 # ─────────────────────── helpers ───────────────────────
 
 
