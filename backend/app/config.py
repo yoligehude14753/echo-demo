@@ -100,16 +100,29 @@ class Settings(BaseSettings):
     diarizer_centroid_ema_alpha: float = 0.1
 
     # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
+    # 对齐基线：echo `backend/app/pipeline.py:570-577`（生产值 600 / 400 / 0.05 / 12）。
+    # echodesk-spk-4 在 echo 基线之上"再收紧一档"，原因见 docs/ARCH-AUDIT.md §4 root #7：
+    #   echo 在 ServerVAD 切句级 + 700ms silence-trim 链路里，5% 帧活跃率配合够用；
+    #   echo-demo 的 ambient 链路仍是 6s 定长 chunk（spk-2 才切 VAD），
+    #   5% × 6s ≈ 0.3s 偶发噪声就能放行 → 实测大量"嗯。"/英文幻觉漏入。
+    # 收紧的预算：宁可漏过低语，也不要让底噪上 RAG / 污染 speaker registry。
+    #
     # 整段 RMS 门控：低于此值视为底噪 → 跳过 STT/diarizer，整 chunk 丢弃
-    ambient_rms_gate: int = 600
+    # 600 → 800：远场底噪 30-60、近场底噪 200-400、正常说话 2000-8000+，提高安全余量
+    ambient_rms_gate: int = 800
     # 帧级 VAD：20ms 帧统计；帧 RMS > 阈值算"活跃"
-    ambient_frame_rms_threshold: int = 400
+    # 400 → 500：把"活跃帧"门槛抬到底噪与正常说话之间更靠近正常说话
+    ambient_frame_rms_threshold: int = 500
     # 活跃帧比例 < 此值 → 跳过 STT
-    ambient_min_speech_frame_ratio: float = 0.05
+    # 0.05 → 0.15：6s chunk 至少 ~0.9s 真正活跃帧；闭合 ARCH-AUDIT §4 root #7
+    ambient_min_speech_frame_ratio: float = 0.15
     # STT 后 cps 门控：字符速率 > 此值视为幻觉/复读丢弃
-    ambient_max_cps: float = 12.0
+    # 12 → 10：中文正常 4-8 cps，>10 大概率复读/幻觉（仅对 ≥3s 且 ≥12 chars 文本生效）
+    ambient_max_cps: float = 10.0
     # STT 输出最短字符数（小于此值丢弃，防止单字幻觉污染 RAG/speaker registry）
-    ambient_min_stt_chars: int = 4
+    # 4 → 5：echo 路由层用 3（router）+ 下游 dream consolidator 用 8 双重过滤；
+    # echo-demo 单点过滤，取中位数 5 → 拦截 "嗯。" / "Yeah" / "ですね" 等短幻觉
+    ambient_min_stt_chars: int = 5
 
     # ── 会议自动检测（与 PRD §自动开会/自动结束 对齐） ──────────
     # 检测窗口；distinct speakers 需 ≥ min_distinct 且总语音 ≥ min_active_s
