@@ -64,3 +64,26 @@ pytest -m e2e
 - `schemas/` 只允许依赖 pydantic + stdlib
 
 跑 `pytest tests/arch -v` 验证。
+
+## 运维工具
+
+### 清空 speakers 表（spk-1..5 修复后一次性清污染）
+
+如果你的 `~/.echodesk/echodesk.db` 是 spk-1 之前跑过的（speakers 表行数 > 30、
+embedding_blob 多为 NULL），先 dry-run 看影响范围，再加 `--yes` 执行：
+
+```bash
+cd backend
+
+# dry-run 只统计行数
+python -m app.tools.reset_speakers
+
+# 实际执行（只清 speakers）
+python -m app.tools.reset_speakers --yes
+
+# 一并清 ambient_segments + meeting_speaker_labels（保留 meetings 本身）
+python -m app.tools.reset_speakers --yes --include-segments
+```
+
+下次 backend 启动时 ECAPA hydrate 读到 0 profile，计数从 1 重新开始。
+详见 `docs/ARCH-AUDIT.md` §4 root #1 / #9。
