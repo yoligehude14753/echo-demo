@@ -32,9 +32,10 @@ jobs:
               - 'backend/**'
               - 'pyproject.toml'
               - '.github/workflows/**'
+            # desktop e2e 只在 desktop/ 代码改动时跑；
+            # workflow 改 e2e 配置时如需重跑，请显式 workflow_dispatch
             desktop:
               - 'desktop/**'
-              - '.github/workflows/**'
 
   backend-lint:
     name: backend / lint
