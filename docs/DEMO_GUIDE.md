@@ -25,15 +25,15 @@ $EDITOR .env    # 填 YUNWU_OPEN_KEY=sk-xxxx 和 TAVILY_API_KEY=tvly-xxxx
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --port 8765
+uvicorn app.main:app --port 8769
 ```
 
 期望：
 - 控制台打印 `echodesk 启动: version=0.1.0 llm_main=MiniMax-M2.7 ...`
-- `curl http://localhost:8765/healthz` → `{"status":"ok"}`
-- `curl http://localhost:8765/bootstrap` 输出能力开关
+- `curl http://localhost:8769/healthz` → `{"status":"ok"}`
+- `curl http://localhost:8769/bootstrap` 输出能力开关
 
-> 端口 8765 被占时换其它端口，前端 dev 也对应改 `VITE_API_TARGET`。
+> canonical port = 8769（P1.1 起统一）。被占时换端口需同步改 Electron `ECHO_BACKEND_PORT` 与 vite `VITE_API_TARGET`。
 
 ---
 
@@ -109,10 +109,10 @@ curl http://100.87.251.9:8090/v1/audio/transcriptions ...
 # 30s 切片喂 chunk 端点
 ffmpeg -i meeting.wav -f wav -ar 16000 -ac 1 - | split -b 960000 - chunk_
 for f in chunk_*; do
-  curl -X POST http://localhost:8765/meetings/real-1/chunk \
+  curl -X POST http://localhost:8769/meetings/real-1/chunk \
     -F "audio=@${f}" -F "sample_rate=16000"
 done
-curl -X POST http://localhost:8765/meetings/real-1/finalize \
+curl -X POST http://localhost:8769/meetings/real-1/finalize \
   -F "title=真实会议"
 ```
 
