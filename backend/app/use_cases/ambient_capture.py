@@ -202,9 +202,41 @@ class AmbientCapturePipeline:
             return []
 
     async def _safe_diarize(self, audio_bytes: bytes, sample_rate: int) -> str | None:
+        """声纹识别 ambient 入口（spk-2 改为走句级切片接口）。
+
+        改前：整段 6s chunk 一次 embed → 多人混音 / 噪声主导时被判新人。
+        改后：identify_segments 在内部按 VAD 切段、每段独立 embed + EMA；本函数取
+              "时长加权主导 speaker"（也即整 chunk 里说得最久的人）作为 chunk 的代表。
+
+        若 diarizer 没实现 identify_segments（NullDiarizer 之外）则降级回老 identify。
+        """
         if self._diarizer is None:
             return None
         try:
+            if hasattr(self._diarizer, "identify_segments"):
+                segs = await self._diarizer.identify_segments(
+                    audio_bytes, sample_rate=sample_rate
+                )
+                if not segs:
+                    return None
+                # 时长加权聚合：同一 sid 累加 duration，取最长
+                by_id: dict[str, int] = {}
+                for s in segs:
+                    sid = getattr(s, "speaker_id", None)
+                    if sid is None:
+                        continue
+                    by_id[sid] = by_id.get(sid, 0) + int(
+                        getattr(s, "end_ms", 0) - getattr(s, "start_ms", 0)
+                    )
+                if not by_id:
+                    return None
+                dominant = max(by_id.items(), key=lambda kv: kv[1])
+                if len(by_id) > 1:
+                    logger.debug(
+                        "ambient diarize: %d voiced segs, %d distinct sids, dominant=%s",
+                        len(segs), len(by_id), dominant[0],
+                    )
+                return dominant[0]
             return await self._diarizer.identify(audio_bytes, sample_rate=sample_rate)
         except Exception as e:
             logger.warning("ambient diarizer failed: %s", e)

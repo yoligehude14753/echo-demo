@@ -155,11 +155,11 @@ SQLite append_ambient_segment (text, speaker_label, ...)
 | `echodesk-arch-1` | STT 默认切回 FireRed；TTS 命名 cosyvoice→qwen3_tts；config 过期注释清理；ambient_capture 撒谎注释修正；ECAPA 死分支注释标 TODO；SenseVoice language=zh 真传到远程 | 极低 | P0 文档/命名 | ✅ 已完成 (commit `41b8216`) |
 | `echodesk-ui-1` | TranscriptStream 改 Marvis 风格气泡（数字头像 + hover 时间） | 低 | P0 UI/UX | ✅ 已完成 (`46af67a`) |
 | `echodesk-ui-2` | "人"计数与 TranscriptStream 显示同源（共享 `lib/speakerDisplay.ts`） | 低 | P0 UI/UX | ✅ 已完成 (`46af67a`) |
-| `echodesk-spk-1` | **大包** 修 ARCH-AUDIT §4 root **#1 #3 #4 #5 #8 #9**：embedding 持久化+hydrate；EMA centroid（α=0.1）；阈值 0.65→0.70；diarize 串行到 STT-hallu 之后；删 `diarizer_min_audio_bytes` config，硬编码 1.0s | 中 | P0 | 🚧 本 PR |
-| `echodesk-spk-2` | diarizer 触发改为 VAD 句级（而非 6s 固定 chunk）→ 修 #2 #6 | 中 | P1 | ⏳ |
-| `echodesk-spk-3` | 把 `_MIN_DUR_FOR_NEW_PROFILE` 改成基于 VAD 活跃秒数门控 → 配合 spk-2 | 中 | P1 | ⏳ |
-| `echodesk-spk-4` | ambient gate 收紧（RMS / min_speech_frame_ratio / cps）→ 修 #7 | 中 | P1 | ⏳ |
-| `echodesk-spk-5` | 清库 + 真实多人音频回归 + 阈值闭环标定 | 中 | P1 | ⏳ |
+| `echodesk-spk-1` | **大包** 修 ARCH-AUDIT §4 root **#1 #3 #4 #5 #8 #9**：embedding 持久化+hydrate；EMA centroid（α=0.1）；阈值 0.65→0.70；diarize 串行到 STT-hallu 之后；删 `diarizer_min_audio_bytes` config，硬编码 1.0s | 中 | P0 | ✅ 已完成 (`c468fc1`) |
+| `echodesk-spk-2` | diarizer 触发改为 VAD 句级（而非 6s 固定 chunk）→ 修 #5b（单 chunk 多人混音 → 注册新人）。`audio_gate.split_into_voiced_segments` + `ECAPADiarizer.identify_segments`，每段独立 embed + EMA + 持久化 | 中 | P1 | ✅ 本 PR |
+| `echodesk-spk-3` | 把 `_MIN_DUR_FOR_NEW_PROFILE` 改成基于 VAD 活跃秒数门控 → 配合 spk-2 | 中 | P1 | ⏳ 待 spk-2 合后 |
+| `echodesk-spk-4` | ambient pre-gate / hallucination 阈值收紧（RMS / min_speech_frame_ratio / cps / min_chars）→ 修 #6 #7 | 低 | P1 | 🚧 并行 PR #22 |
+| `echodesk-spk-5` | 清库 + 真实多人音频回归 + 阈值闭环标定 | 中 | P1 | ⏳ 待 spk-2/3/4 全合 |
 
 ### 新增模块（用户 2026-05-27 反馈）
 
@@ -171,5 +171,5 @@ SQLite append_ambient_segment (text, speaker_label, ...)
 
 ---
 
-**最后更新**：2026-05-27 by AI assistant after archaeology  
-**下次更新触发**：subagent 0def 考古报告回来 / 任何 PR 改了上面任何一行
+**最后更新**：2026-05-27 by AI assistant after `echodesk-spk-2` lands  
+**下次更新触发**：spk-3 / spk-4 / spk-5 任一合入
