@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -19,11 +20,16 @@ from app.api.chat import router as chat_router
 from app.api.deps import aclose_event_bus, aclose_llm_singleton
 from app.api.intent import router as intent_router
 from app.api.meetings import router as meetings_router
+from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
+from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
 
 logger = logging.getLogger("echo-demo")
+
+# 持有 lifespan 期间 fire-and-forget 任务的强引用，避免被 GC
+_LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
 
 
 @asynccontextmanager
@@ -39,6 +45,36 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.rag_index_dir.mkdir(parents=True, exist_ok=True)
+
+    # 授权工作区：启动后 fire-and-forget 扫描（不阻塞 startup）
+    if settings.workspace_scan_on_startup and settings.workspace_dirs_list:
+        from app.adapters.rag.workspace_scanner import WorkspaceScanner
+
+        rag = get_rag(settings)
+        scanner = WorkspaceScanner(settings, rag)
+
+        async def _bg_scan() -> None:
+            try:
+                r = await scanner.scan()
+                logger.info(
+                    "workspace startup scan done: added=%d updated=%d skipped=%d removed=%d failed=%d",
+                    r.n_added,
+                    r.n_updated,
+                    r.n_skipped,
+                    r.n_removed,
+                    r.n_failed,
+                )
+            except Exception as e:
+                logger.warning("workspace startup scan failed: %s", e)
+
+        task = asyncio.create_task(_bg_scan())
+        _LIFESPAN_TASKS.add(task)
+        task.add_done_callback(_LIFESPAN_TASKS.discard)
+        logger.info(
+            "workspace startup scan kicked off: dirs=%s",
+            [str(d) for d in settings.workspace_dirs_list],
+        )
+
     yield
     await aclose_llm_singleton()
     await aclose_event_bus()
@@ -85,6 +121,7 @@ def create_app() -> FastAPI:
 
     app.include_router(chat_router)
     app.include_router(retrieval_router)
+    app.include_router(workspace_router)
     app.include_router(artifacts_router)
     app.include_router(meetings_router)
     app.include_router(intent_router)
