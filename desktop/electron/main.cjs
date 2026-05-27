@@ -9,7 +9,15 @@ const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
 const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8769", 10);
 const BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
-const SPAWN_BACKEND = process.env.ECHO_SPAWN_BACKEND !== "0";
+// 打包后默认不 spawn backend：用户在 echo-demo 仓库里有自己的 venv + .env，
+// 装在 /Applications/ 的 .app 包里找不到那些资源。让用户自己 `uvicorn app.main:app --port 8769`，
+// 这个 app 只负责 UI；如果要强制 spawn 可设 ECHO_SPAWN_BACKEND=1。
+const SPAWN_BACKEND = (() => {
+  const raw = process.env.ECHO_SPAWN_BACKEND;
+  if (raw === "0") return false;
+  if (raw === "1") return true;
+  return IS_DEV; // 默认：dev 自动起；打包后不起
+})();
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
 // node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
@@ -18,6 +26,15 @@ const SPAWN_BACKEND = process.env.ECHO_SPAWN_BACKEND !== "0";
 
 let backendProc = null;
 let mainWindow = null;
+
+// 防御：任何主进程未捕获异常都不应弹 fatal dialog 把 UI 整个 kill 掉。
+// 后端没起 / 端口冲突 / spawn 失败 → 让 UI 自己显示"断线"由用户处理。
+process.on("uncaughtException", (err) => {
+  console.error("[main] uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[main] unhandled rejection:", reason);
+});
 
 function projectRoot() {
   // dev: desktop/electron/main.cjs → desktop/.. = echodesk repo root
@@ -51,23 +68,33 @@ function startBackend() {
   log(`[backend] spawn ${py} -m uvicorn app.main:app --port ${BACKEND_PORT}`);
   log(`[backend] cwd=${cwd}`);
 
-  backendProc = spawn(
-    py,
-    ["-m", "uvicorn", "app.main:app", "--port", String(BACKEND_PORT), "--log-level", "warning"],
-    {
-      cwd,
-      env: {
-        ...process.env,
-        HTTP_PROXY: "",
-        HTTPS_PROXY: "",
-        ALL_PROXY: "",
-        http_proxy: "",
-        https_proxy: "",
-        all_proxy: "",
+  try {
+    backendProc = spawn(
+      py,
+      ["-m", "uvicorn", "app.main:app", "--port", String(BACKEND_PORT), "--log-level", "warning"],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          HTTP_PROXY: "",
+          HTTPS_PROXY: "",
+          ALL_PROXY: "",
+          http_proxy: "",
+          https_proxy: "",
+          all_proxy: "",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
       },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+    );
+  } catch (e) {
+    log(`[backend] spawn threw: ${e.message}（继续，假定 backend 已在外部运行）`);
+    backendProc = null;
+    return;
+  }
+  // ENOENT / EACCES 走 'error' 事件而不是 throw → 必须挂监听否则 electron 报 fatal
+  backendProc.on("error", (err) => {
+    log(`[backend] spawn error: ${err.message}（继续启动 UI）`);
+  });
   backendProc.stdout?.on("data", (b) =>
     process.stdout.write(`[backend] ${b.toString()}`),
   );
