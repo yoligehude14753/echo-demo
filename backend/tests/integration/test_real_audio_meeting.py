@@ -1,7 +1,7 @@
 """PR-13: 真音频 → STT → diarize → minutes E2E。
 
 依赖：
-- heyi-bj :8093 STT 在线（不可达 → skip）
+- heyi-bj :8090 STT (FireRed) 在线（不可达 → skip）
 - heyi-bj :8094 TTS 在线（生成 audio fixture，不可达 + 无 cache → skip）
 - yunwu LLM 可达（生成 minutes）
 """
@@ -16,7 +16,7 @@ import pytest
 from app.adapters.diarizer.ecapa import ECAPADiarizer
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from app.adapters.rag.bm25 import BM25Rag
-from app.adapters.stt import SenseVoiceGPUSTT
+from app.adapters.stt import FireRedSTT
 from app.config import Settings
 from app.use_cases.meeting_pipeline import MeetingPipeline
 
@@ -44,8 +44,8 @@ def _yunwu_alive() -> bool:
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not _can_connect("100.87.251.9", 8093),
-        reason="heyi-bj :8093 STT 不可达",
+        not _can_connect("100.87.251.9", 8090),
+        reason="heyi-bj :8090 STT (FireRed) 不可达",
     ),
     pytest.mark.skipif(not _yunwu_alive(), reason="Yunwu LLM 不可达"),
 ]
@@ -85,7 +85,7 @@ async def test_real_audio_meeting_minutes_e2e(tmp_path: Path) -> None:
         diarizer_enabled=False,  # 单 speaker fixture，关闭 diarize 提速
     )
     llm = OpenAICompatibleLLM(settings)
-    stt = SenseVoiceGPUSTT(settings)
+    stt = FireRedSTT(settings)
     rag = BM25Rag(settings)
     diarizer = ECAPADiarizer(settings) if settings.diarizer_enabled else _NoopDiarizer()
     pipeline = MeetingPipeline(

@@ -2,40 +2,36 @@
 
 echo-demo 部署：STT 走远程 GPU（heyi-bj tailscale）。
 
-当前默认 = **FireRed**（`firered` @ :8090）——见 docs/ARCH-AUDIT.md §2。
-SenseVoice 保留作可选 backend（`sensevoice_gpu` @ :8093），但实测 6s ambient
-上短碎片 + 日英乱码严重，不推荐。
+当前**唯一**支持的 STT backend = **FireRed**（`firered` @ :8090）——见
+docs/ARCH-AUDIT.md §2。SenseVoice 历史上作为 fallback 存在，已在 PR
+`echodesk-remove-sensevoice` 删除，原因：架构判断时多 backend 选项会让人误判
+"换 backend 能修 X"——实际所有 speaker explosion / ambient 幻觉问题都是
+ambient_capture + diarizer 链路问题，跟 STT 模型无关。
 
 未来本地化（demo 阶段需要离线运行时）保持 Ports & Adapters 模式以便扩展。
 """
 
-from app.adapters.stt.firered import FireRedSTT
-from app.adapters.stt.firered import STTError as _FireRedSTTError
-from app.adapters.stt.sensevoice_gpu import SenseVoiceGPUSTT
-from app.adapters.stt.sensevoice_gpu import STTError as _SenseVoiceSTTError
+from app.adapters.stt.firered import FireRedSTT, STTError
 from app.config import Settings
 from app.ports.stt import STTPort
 
-# 两个 adapter 各自抛同名 STTError；统一对外用 FireRed 那个（运行时它们语义一样）
-STTError = _FireRedSTTError
-assert _SenseVoiceSTTError.__name__ == "STTError"  # 同名校验
-
 
 def make_stt(settings: Settings) -> STTPort:
-    """按 settings.stt_backend 选 STT 适配器。
+    """目前固定返回 FireRedSTT；保留 settings.stt_backend 字段供未来扩展。
 
-    - `firered`（默认）→ FireRedASR2-AED @ heyi :8090
-    - `sensevoice_gpu` → SenseVoice GPU ASR @ heyi :8093（保留作 fallback）
+    向后兼容：旧 .env 里 `STT_BACKEND=sensevoice_gpu` 会被忽略（不再支持），
+    回退到 firered 并打日志（在 adapter 实例化处不显式 warn，以免 boot 时刷屏）。
     """
-    backend = settings.stt_backend.lower().strip()
-    if backend == "firered":
-        return FireRedSTT(settings)
-    if backend in ("sensevoice_gpu", "sensevoice"):
-        return SenseVoiceGPUSTT(settings)
-    raise ValueError(
-        f"unknown stt_backend={settings.stt_backend!r}; "
-        "expected one of: firered, sensevoice_gpu"
-    )
+    backend = (settings.stt_backend or "").lower().strip()
+    if backend and backend != "firered":
+        # 旧值如 sensevoice_gpu / sensevoice / deepgram / whisper 等 → 统一忽略，
+        # 走 firered。不抛错以免老 .env 升级时 backend 启动失败。
+        import logging
+        logging.getLogger("echodesk.stt").warning(
+            "stt_backend=%r 已不再支持，统一回退到 firered（PR remove-sensevoice）",
+            settings.stt_backend,
+        )
+    return FireRedSTT(settings)
 
 
-__all__ = ["STTError", "FireRedSTT", "SenseVoiceGPUSTT", "make_stt"]
+__all__ = ["STTError", "FireRedSTT", "make_stt"]

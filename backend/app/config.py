@@ -49,14 +49,13 @@ class Settings(BaseSettings):
     llm_fast_max_tokens: int = 512
 
     # ── STT ───────────────────────────────────────────────────────
-    # 当前默认 = firered（@ heyi :8090，判别式无幻觉、中文强）；
+    # 当前**唯一** = firered（@ heyi :8090，判别式无幻觉、中文强）；
     # echo 实战路径 Deepgram → FireRed → faster-whisper → SenseVoice → 回 FireRed。
-    # 详见 docs/ARCH-AUDIT.md §2 + §4 root #11。
+    # SenseVoice GPU 在 PR `echodesk-remove-sensevoice` 删除（理由：多 backend
+    # 选项老让人误判"换 backend 能修 X"）。详见 docs/ARCH-AUDIT.md §2。
+    # 保留 stt_backend 字段供未来扩展（如本地化离线 STT）。
     stt_backend: str = "firered"
     stt_firered_url: str = "http://100.87.251.9:8090"
-    # SenseVoice 保留作 fallback / option（stt_backend=sensevoice_gpu 切回）
-    stt_sensevoice_gpu_url: str = "http://100.87.251.9:8093"
-    stt_sensevoice_device: str = "cpu"
     stt_language: str = "zh"
     stt_llm_correct: bool = False
 

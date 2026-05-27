@@ -1,4 +1,4 @@
-"""STT Port：sensevoice_gpu(主) / sensevoice in-process(备)。"""
+"""STT Port：firered (FireRedASR2-AED @ heyi :8090) 唯一 backend。"""
 
 from __future__ import annotations
 

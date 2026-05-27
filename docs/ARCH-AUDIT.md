@@ -17,8 +17,8 @@
 | 端口 | echo-demo `config.py` 命名 | swagger 实际服务 | 用途 | 状态 |
 |---|---|---|---|---|
 | `:7860` | `llm_fast_*` | `Qwen3-1.7B` (FastAPI) | 快速通道意图分类 + 短任务 | ✓ 活，名实相符 |
-| `:8090` | `stt_firered_url` | `FireRedASR2-AED` | **主 STT**（默认 backend，arch-1 切回） | ✓ 活，名实相符 |
-| `:8093` | `stt_sensevoice_gpu_url` | `SenseVoice GPU ASR` | STT fallback（`STT_BACKEND=sensevoice_gpu` 切回） | ✓ 活，名实相符 |
+| `:8090` | `stt_firered_url` | `FireRedASR2-AED` | **唯一 STT**（PR `echodesk-remove-sensevoice` 起） | ✓ 活，名实相符 |
+| ~~`:8093`~~ | — | ~~SenseVoice GPU ASR~~ | 已删除（PR `echodesk-remove-sensevoice`：多 backend 选项干扰架构判断） | ✗ 不再使用 |
 | `:8094` | `tts_qwen3_url`（alias `tts_cosyvoice_url`） | `faster-qwen3-tts CustomVoice` | 主 TTS | ✓ 活，命名已修正（arch-1） |
 
 外部云：
@@ -160,7 +160,8 @@ SQLite append_ambient_segment (text, speaker_label, ...)
 | `echodesk-spk-3` | 删 `_MIN_DUR_FOR_NEW_PROFILE`/`_OUTLIER_SIM_ALLOW_NEW` 硬编码 → 改成 settings 可配的 voiced active seconds 门控；短段不允许注册新人，sim 不足直接丢弃（不污染已知 centroid） | 低 | P1 | ✅ 本 PR |
 | `echodesk-spk-4` | ambient pre-gate / hallucination 阈值收紧 → 修 #6 #7 | 低 | P1 | ✅ 已合 (`6aa3d00`) |
 | `echodesk-spk-5` | 提供 `python -m app.tools.reset_speakers --yes --include-segments` 工具一次性清掉 spk-1 之前累积的 157 个 speaker / 494 ambient_segments / 144 speaker_labels 污染 | 低 | P1 | ✅ 已合 (`5a6fc77`) |
-| `echodesk-spk-6` | 保守阈值预设：`diarizer_min_voiced_seconds_for_new_profile` 1.5→2.0、`diarizer_outlier_match_threshold` 0.50→0.60。理由：spk-2/3 后还没有真实多人音频回归数据，先选偏严格的预设，宁可漏注册短句新人也不要污染 centroid。 | 低 | P2 | ✅ 本 PR |
+| `echodesk-spk-6` | 保守阈值预设：`diarizer_min_voiced_seconds_for_new_profile` 1.5→2.0、`diarizer_outlier_match_threshold` 0.50→0.60。理由：spk-2/3 后还没有真实多人音频回归数据，先选偏严格的预设，宁可漏注册短句新人也不要污染 centroid。 | 低 | P2 | ✅ 已合 |
+| `echodesk-remove-sensevoice` | 彻底删 SenseVoice (`:8093` GPU adapter + in-process `funasr`)：`stt/sensevoice_gpu.py`、config `stt_sensevoice_gpu_url` / `stt_sensevoice_device`、`requirements.txt funasr==1.1.14`、`.env*` 相关 env、单测/集成测改测 FireRed。`make_stt` 对老 `STT_BACKEND=sensevoice_gpu` 值不再报错，warn 后回退 firered（向后兼容）。理由：多 STT backend 选项让架构判断时反复怀疑"换 STT 能修 X"，但 ambient 幻觉 + speaker explosion 全是 ambient_capture/diarizer 链路问题，跟 STT 模型无关。 | 极低 | P2 后置清理 | ✅ 本 PR |
 | ~~阈值闭环标定~~ | 拿到真实多人音频回归数据后再调精确（可能升也可能降） | — | P3 | ⏳ 待数据 |
 
 ### 新增模块（用户 2026-05-27 反馈）
@@ -173,5 +174,5 @@ SQLite append_ambient_segment (text, speaker_label, ...)
 
 ---
 
-**最后更新**：2026-05-27 by AI assistant after `echodesk-spk-6` lands  
+**最后更新**：2026-05-27 by AI assistant after `echodesk-remove-sensevoice` lands  
 **下次更新触发**：真实多人回归出数据后做阈值闭环标定
