@@ -87,13 +87,12 @@ class AmbientCapturePipeline:
 
         stt_segs: list = []
         speaker_id: str | None = None
+        # 串行 STT → hallu 门控 → diarize（修 ARCH-AUDIT §4 root #4）。
+        # 之前是 asyncio.gather(stt, diarize)，并发能省 ~50ms 但代价是幻觉
+        # chunk 上 diarizer 仍然会注册新 profile → ECAPA._profiles 累积污染。
+        # echo `pipeline.py:652-678` 也是串行：先 STT，文本通过 → 再 diarize。
         if gate.pass_:
-            stt_task = asyncio.create_task(self._safe_stt(audio_bytes, sample_rate))
-            diar_task: asyncio.Task[str | None] | None = None
-            if self._diarizer is not None:
-                diar_task = asyncio.create_task(self._safe_diarize(audio_bytes, sample_rate))
-            stt_segs = await stt_task
-            speaker_id = await diar_task if diar_task is not None else None
+            stt_segs = await self._safe_stt(audio_bytes, sample_rate)
         else:
             logger.debug(
                 "ambient gated: %s rms=%.0f ratio=%.2f",
@@ -105,6 +104,7 @@ class AmbientCapturePipeline:
         texts = [s.text.strip() for s in stt_segs if s.text.strip()]
 
         # ── 后置 STT 幻觉门控 ──
+        hallu_drop = False
         if texts:
             joined = " ".join(texts)
             hallu, why = is_likely_hallucination(
@@ -117,11 +117,11 @@ class AmbientCapturePipeline:
                 logger.debug("ambient hallu drop: %s text=%r", why, joined)
                 texts = []
                 stt_segs = []
-                # ⚠️ 已知问题（docs/ARCH-AUDIT.md §4 root #4，echodesk-spk-2 修）：
-                # 这里把 speaker_id 置 None 只是不让 registry / DB 写脏 label，但
-                # ECAPA._profiles 在第 94 行已经被并发的 diarizer 写脏（embedding 已注册）。
-                # 真正修法：把 diarize 调用推迟到 hallu 门控之后（破坏并发以换正确性）。
-                speaker_id = None
+                hallu_drop = True
+
+        # 仅在 STT 通过 + 非幻觉时才 diarize（避免 _profiles 被噪声/幻觉污染）
+        if gate.pass_ and texts and not hallu_drop and self._diarizer is not None:
+            speaker_id = await self._safe_diarize(audio_bytes, sample_rate)
 
         speaker_label: str | None = None
         if self._registry is not None and texts:

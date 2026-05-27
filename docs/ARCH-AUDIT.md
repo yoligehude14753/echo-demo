@@ -17,8 +17,9 @@
 | 端口 | echo-demo `config.py` 命名 | swagger 实际服务 | 用途 | 状态 |
 |---|---|---|---|---|
 | `:7860` | `llm_fast_*` | `Qwen3-1.7B` (FastAPI) | 快速通道意图分类 + 短任务 | ✓ 活，名实相符 |
-| `:8093` | `stt_sensevoice_gpu_url` | `SenseVoice GPU ASR` | 主 STT | ✓ 活，名实相符 |
-| `:8094` | `tts_cosyvoice_url` ⚠️ | `faster-qwen3-tts CustomVoice` | 主 TTS | ✓ 活，**名字误导** |
+| `:8090` | `stt_firered_url` | `FireRedASR2-AED` | **主 STT**（默认 backend，arch-1 切回） | ✓ 活，名实相符 |
+| `:8093` | `stt_sensevoice_gpu_url` | `SenseVoice GPU ASR` | STT fallback（`STT_BACKEND=sensevoice_gpu` 切回） | ✓ 活，名实相符 |
+| `:8094` | `tts_qwen3_url`（alias `tts_cosyvoice_url`） | `faster-qwen3-tts CustomVoice` | 主 TTS | ✓ 活，命名已修正（arch-1） |
 
 外部云：
 - Yunwu / MiniMax-M2.7：会议纪要 / RAG / @生成 重路径 LLM
@@ -152,13 +153,13 @@ SQLite append_ambient_segment (text, speaker_label, ...)
 | PR | 范围 | 风险 | 阶段 | 状态 |
 |---|---|---|---|---|
 | `echodesk-arch-1` | STT 默认切回 FireRed；TTS 命名 cosyvoice→qwen3_tts；config 过期注释清理；ambient_capture 撒谎注释修正；ECAPA 死分支注释标 TODO；SenseVoice language=zh 真传到远程 | 极低 | P0 文档/命名 | ✅ 已完成 (commit `41b8216`) |
-| `echodesk-ui-1` | **TranscriptStream 改成气泡式聊天布局**：非用户输入靠左、用户手动输入靠右；说话人编号当头像（彩色圆点 + 数字）；hover 才显示时间（HH:MM 即可）；气泡间距、字号、阴影抄 Marvis 简化版 | 低 | P0 UI/UX | 🚧 待开始 |
-| `echodesk-ui-2` | **"人"计数与 TranscriptStream 显示同源**：去掉 store 里 raw `speaker_label` Set，统一用前端 remap 后的连续序号 max 作为人数显示；避免"显示到说话人 47 但列表写 86 人"的不一致 | 低 | P0 UI/UX | 🚧 待开始 |
-| `echodesk-spk-1` | embedding 持久化（write）+ 启动 hydrate（read）→ 修 #1 #9 | 中 | P0 | ⏳ |
-| `echodesk-spk-2` | diarizer 触发改为 VAD 句级（而非 6s 固定 chunk）→ 修 #2 #5 | 中 | P0 | ⏳ |
-| `echodesk-spk-3` | 阈值标定 + 把 `_MIN_DUR_FOR_NEW_PROFILE` 改成基于 VAD 活跃秒数门控 | 高 | P1 | ⏳ |
-| `echodesk-spk-4` | ambient gate 收紧（RMS / min_speech_frame_ratio / cps）| 中 | P1 | ⏳ |
-| `echodesk-spk-5` | 清库 + 真实多人音频回归 + 调阈值闭环 | 中 | P1 | ⏳ |
+| `echodesk-ui-1` | TranscriptStream 改 Marvis 风格气泡（数字头像 + hover 时间） | 低 | P0 UI/UX | ✅ 已完成 (`46af67a`) |
+| `echodesk-ui-2` | "人"计数与 TranscriptStream 显示同源（共享 `lib/speakerDisplay.ts`） | 低 | P0 UI/UX | ✅ 已完成 (`46af67a`) |
+| `echodesk-spk-1` | **大包** 修 ARCH-AUDIT §4 root **#1 #3 #4 #5 #8 #9**：embedding 持久化+hydrate；EMA centroid（α=0.1）；阈值 0.65→0.70；diarize 串行到 STT-hallu 之后；删 `diarizer_min_audio_bytes` config，硬编码 1.0s | 中 | P0 | 🚧 本 PR |
+| `echodesk-spk-2` | diarizer 触发改为 VAD 句级（而非 6s 固定 chunk）→ 修 #2 #6 | 中 | P1 | ⏳ |
+| `echodesk-spk-3` | 把 `_MIN_DUR_FOR_NEW_PROFILE` 改成基于 VAD 活跃秒数门控 → 配合 spk-2 | 中 | P1 | ⏳ |
+| `echodesk-spk-4` | ambient gate 收紧（RMS / min_speech_frame_ratio / cps）→ 修 #7 | 中 | P1 | ⏳ |
+| `echodesk-spk-5` | 清库 + 真实多人音频回归 + 阈值闭环标定 | 中 | P1 | ⏳ |
 
 ### 新增模块（用户 2026-05-27 反馈）
 

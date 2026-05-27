@@ -93,8 +93,11 @@ class Settings(BaseSettings):
     # ── Speaker Diarization ──────────────────────────────────────
     diarizer_enabled: bool = True
     diarizer_backend: str = "ecapa"
-    diarizer_match_threshold: float = 0.65
-    diarizer_min_audio_bytes: int = 16_000
+    # 0.70 对齐 echo `config.py:306`（实测推荐）；之前 0.65 在 6s 含噪 chunk 上
+    # 过严 → 同人被切成多人。详见 docs/ARCH-AUDIT.md §4 root #3。
+    diarizer_match_threshold: float = 0.70
+    # EMA centroid 融合系数（命中匹配时）；α=0.1 抄 echo backend/app/speaker/diarizer.py
+    diarizer_centroid_ema_alpha: float = 0.1
 
     # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
     # 整段 RMS 门控：低于此值视为底噪 → 跳过 STT/diarizer，整 chunk 丢弃

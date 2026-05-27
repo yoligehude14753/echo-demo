@@ -22,6 +22,7 @@ from app.api.deps import (
     aclose_event_bus,
     aclose_llm_singleton,
     aclose_repository,
+    get_diarizer_singleton,
     get_repository,
     get_speaker_registry,
 )
@@ -67,6 +68,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logger.info("speaker registry: hydrated %d known speakers", n_speakers)
     except Exception as e:
         logger.warning("speaker registry hydrate failed: %s", e)
+
+    # ECAPA diarizer：从 speakers.embedding_blob 恢复内存 centroids + counter
+    # 修 ARCH-AUDIT §4 root #1 #9（embedding 不再随重启丢光）
+    try:
+        diarizer = get_diarizer_singleton(settings, repo)
+        if hasattr(diarizer, "hydrate"):
+            await diarizer.hydrate()  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.warning("diarizer hydrate failed: %s", e)
     try:
         pipeline = get_meeting_pipeline_for_lifespan(settings, repo)
         n_resumed = await pipeline.hydrate_from_repo()

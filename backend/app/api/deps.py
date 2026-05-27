@@ -54,11 +54,16 @@ def get_repository(
 
 def get_diarizer_singleton(
     settings: Settings = Depends(get_settings),
+    repository: RepositoryPort = Depends(get_repository),
 ) -> DiarizerPort:
-    """声纹单例：meeting 与 ambient 共享，保证 speaker_id 跨链路一致。"""
+    """声纹单例：meeting 与 ambient 共享，保证 speaker_id 跨链路一致。
+
+    接 repository 让 ECAPA 把 centroid embedding 持久化到 speakers 表，
+    重启后通过 ``await diarizer.hydrate()`` 恢复（修 ARCH-AUDIT §4 root #1 #9）。
+    """
     global _diarizer_singleton  # noqa: PLW0603
     if _diarizer_singleton is None:
-        _diarizer_singleton = make_diarizer(settings)
+        _diarizer_singleton = make_diarizer(settings, repository=repository)
     return _diarizer_singleton
 
 
