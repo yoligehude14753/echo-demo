@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.adapters.repo.migrator import run_migrations
+from app.api.admin import router as admin_router
 from app.api.artifacts import router as artifacts_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
@@ -299,7 +300,9 @@ def create_app() -> FastAPI:
     app.include_router(intent_router)
     app.include_router(tts_router)
     app.include_router(ws_router)
-    # P2.6：诊断包导出，挂 /admin 前缀
+    # P2.5 + P2.6：admin（数据目录/会议导出/speakers reset）+ diagnostics（诊断包导出），
+    # 统一挂 /admin 前缀（两 router 内部路由不带 /admin）。
+    app.include_router(admin_router, prefix="/admin", tags=["admin"])
     app.include_router(diagnostics_router, prefix="/admin", tags=["admin"])
     return app
 
