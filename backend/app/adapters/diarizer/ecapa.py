@@ -1,6 +1,6 @@
 """声纹识别 adapter: SpeechBrain ECAPA-TDNN 192-dim。
 
-设计（v2，对齐 echo backend/app/speaker/diarizer.py，docs/ARCH-AUDIT.md §4）：
+设计（v3，PR echodesk-spk-2 引入 VAD 句级切片）：
 - 每个 speaker_id 维护**一个 centroid embedding**（不再是 list/ring buffer）
 - 命中匹配 → EMA 融合：`centroid = (1-α) * centroid + α * new`，α=0.1
 - 阈值 0.70（之前 0.65 在 6s 含噪 chunk 上过严，触发 speaker explosion）
@@ -8,10 +8,18 @@
 - **启动 hydrate**：从 repo 读所有已知 centroids → `_profiles`，恢复 `_counter`
 - speechbrain lazy load；CI 无 speechbrain 也能跑（_embed 单测用 mock）
 
+v3 新增（spk-2 / ARCH-AUDIT §4 root #5b）：
+- `identify_segments(audio_bytes)` 接收整段 6s ambient chunk，内部按 VAD 切成多个
+  voiced 段，每段独立 embed + match + EMA。**这是 speaker explosion 的关键修法**：
+  之前 6s chunk 里 A、B 交替说话时整段 embed 是混合向量，被判为新人；现在按句切。
+- 原 `identify(audio_bytes)` 仍可用（向后兼容 + 单段路径），但 ambient 主链路统一走
+  `identify_segments`；老接口转发到 segments 实现并聚合返回最长段的 speaker。
+
 修法对应根因（ARCH-AUDIT §4）：
 - #1 / #9 → 持久化 + hydrate 解决 _profiles 重启丢光、跨进程 counter 漂移
 - #3 → 阈值 0.65 → 0.70
-- #5 → ring buffer + 单 vec → EMA centroid 融合
+- #5a → ring buffer + 单 vec → EMA centroid 融合
+- #5b → 单 chunk 整段 embed → VAD 句级切片 + 逐段 embed（v3）
 - #8 → 删 settings.diarizer_min_audio_bytes，硬编码 1.0s (32000 bytes) 跳过
 
 spike 数据（echo experiments/2026-05-25_m27-on-91-deploy/RESULTS.md §6.15-6.16）：
@@ -23,9 +31,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from app.adapters.audio_gate import split_into_voiced_segments
 from app.config import Settings
 from app.ports.repository import RepositoryPort
 
@@ -42,6 +52,22 @@ _MIN_DUR_FOR_NEW_PROFILE = 4.0  # TODO(echodesk-spk-3): replace by VAD active se
 _OUTLIER_SIM_ALLOW_NEW = 0.30   # TODO(echodesk-spk-3): re-calibrate from echo bench data
 
 _SPEAKER_ID_RE = re.compile(r"^speaker_(\d+)$")
+
+
+@dataclass(slots=True, frozen=True)
+class SegmentSpeaker:
+    """`identify_segments` 单段结果。
+
+    - speaker_id 为 None 表示该段太短/embed 失败，被跳过（不计入主导 speaker）
+    """
+
+    start_ms: int
+    end_ms: int
+    speaker_id: str | None
+
+    @property
+    def duration_ms(self) -> int:
+        return self.end_ms - self.start_ms
 
 
 class DiarizerError(RuntimeError):
@@ -212,43 +238,117 @@ class ECAPADiarizer:
         except Exception as e:  # pragma: no cover
             logger.warning("ecapa persist %s failed: %s", sid, e)
 
+    async def _identify_one(
+        self, audio_bytes: bytes, sample_rate: int, dur_sec: float
+    ) -> str | None:
+        """单段 embed + match + EMA（已持 self._lock）。
+
+        提取自原 `identify` 主体，给 `identify_segments` 复用。dur_sec 由调用方传入，
+        因为 voiced 段是切片，duration 由 audio_gate 给出比从 bytes 反推更准。
+        """
+        vec = await self._embed(audio_bytes, sample_rate)
+        best_id, best_sim = self._best_match(vec)
+
+        if best_id is not None and best_sim >= self._threshold:
+            new_centroid = self._ema_update(best_id, vec)
+            await self._persist(best_id, new_centroid)
+            return best_id
+
+        # 短片段回退命中已知人（dead branch 在 6s 定长 chunk 下，留作 spk-3 重构成
+        # VAD active seconds 门控）
+        if (
+            dur_sec < _MIN_DUR_FOR_NEW_PROFILE
+            and best_id is not None
+            and best_sim >= _OUTLIER_SIM_ALLOW_NEW
+        ):
+            new_centroid = self._ema_update(best_id, vec)
+            await self._persist(best_id, new_centroid)
+            return best_id
+
+        self._counter += 1
+        new_id = f"speaker_{self._counter}"
+        self._profiles[new_id] = vec
+        await self._persist(new_id, vec)
+        return new_id
+
     async def identify(
         self,
         audio_bytes: bytes,
         *,
         sample_rate: int = 16_000,
     ) -> str | None:
+        """单段 identify（向后兼容；ambient 主链路用 identify_segments）。
+
+        改写为：内部走 identify_segments → 取最长段的 speaker_id。
+        若整段没切出任何 voiced 段（噪声/静音），返回 None。
+
+        对极短的 buffer 仍直接走老路（不切片），保留单段 ECAPA 行为，因为：
+        - 调用方可能传 < min_segment_ms 的样本（测试 + 老代码）
+        - 切了 → []，但单段 embed 其实是 fail-soft 的，按老逻辑跑能匹配上就行
+        """
         if not self._enabled:
             return None
         if len(audio_bytes) < _MIN_BYTES_FOR_EMBED:
             return None
 
+        # 走句级切片
+        segs = await self.identify_segments(audio_bytes, sample_rate=sample_rate)
+        if segs:
+            valid = [s for s in segs if s.speaker_id is not None]
+            if not valid:
+                return None
+            valid.sort(key=lambda s: s.duration_ms, reverse=True)
+            return valid[0].speaker_id
+
+        # 切片切不出（但 buffer 足够长）→ 兜底走单段
         async with self._lock:
-            vec = await self._embed(audio_bytes, sample_rate)
-            best_id, best_sim = self._best_match(vec)
             dur = self._duration_sec(audio_bytes, sample_rate)
+            return await self._identify_one(audio_bytes, sample_rate, dur)
 
-            if best_id is not None and best_sim >= self._threshold:
-                new_centroid = self._ema_update(best_id, vec)
-                await self._persist(best_id, new_centroid)
-                return best_id
+    async def identify_segments(
+        self,
+        audio_bytes: bytes,
+        *,
+        sample_rate: int = 16_000,
+    ) -> list[SegmentSpeaker]:
+        """按 VAD 切句 → 每段独立 embed + match + EMA → 返回逐段结果。
 
-            # 短片段不准注册新人（dead branch 在 6s 定长 chunk 下，留作 spk-3 重构）
-            if (
-                dur < _MIN_DUR_FOR_NEW_PROFILE
-                and best_id is not None
-                and best_sim >= _OUTLIER_SIM_ALLOW_NEW
-            ):
-                # 短片段回退命中已知人，也要 EMA 更新 + 落盘（保持 centroid 新鲜）
-                new_centroid = self._ema_update(best_id, vec)
-                await self._persist(best_id, new_centroid)
-                return best_id
+        spk-2 修法核心：避免单 chunk 内多人混音被 embed 成混合向量。
+        """
+        if not self._enabled:
+            return []
+        if len(audio_bytes) < _MIN_BYTES_FOR_EMBED:
+            return []
 
-            self._counter += 1
-            new_id = f"speaker_{self._counter}"
-            self._profiles[new_id] = vec
-            await self._persist(new_id, vec)
-            return new_id
+        voiced = split_into_voiced_segments(
+            audio_bytes,
+            frame_rms_threshold=self._settings.ambient_frame_rms_threshold,
+        )
+        if not voiced:
+            return []
+
+        results: list[SegmentSpeaker] = []
+        async with self._lock:
+            for seg in voiced:
+                # 段长不够稳定 embed（< 1s）→ 跳过，但保留 start/end 给调用方
+                seg_dur_sec = seg.duration_ms / 1000.0
+                if len(seg.audio_bytes) < _MIN_BYTES_FOR_EMBED:
+                    results.append(
+                        SegmentSpeaker(seg.start_ms, seg.end_ms, None)
+                    )
+                    continue
+                try:
+                    sid = await self._identify_one(
+                        seg.audio_bytes, sample_rate, seg_dur_sec
+                    )
+                except Exception as e:  # pragma: no cover
+                    logger.warning(
+                        "ecapa segment embed failed at [%d,%d]ms: %s",
+                        seg.start_ms, seg.end_ms, e,
+                    )
+                    sid = None
+                results.append(SegmentSpeaker(seg.start_ms, seg.end_ms, sid))
+        return results
 
     async def reset(self) -> None:
         """清空内存 profile + counter（不动 DB；测试与显式 demo reset 用）。"""
@@ -270,6 +370,14 @@ class NullDiarizer:
         sample_rate: int = 16_000,
     ) -> str | None:
         return None
+
+    async def identify_segments(
+        self,
+        audio_bytes: bytes,
+        *,
+        sample_rate: int = 16_000,
+    ) -> list[SegmentSpeaker]:
+        return []
 
     async def reset(self) -> None:
         return None
