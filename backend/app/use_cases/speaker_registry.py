@@ -80,8 +80,7 @@ class SpeakerRegistry:
             if label.startswith("说话人"):
                 try:
                     n = int(label[len("说话人") :])
-                    if n > max_n:
-                        max_n = n
+                    max_n = max(max_n, n)
                 except ValueError:
                     continue
         # 启动时若没 hydrate，第一次分配前补一下（避免重启后从 1 重新开始）
@@ -91,8 +90,7 @@ class SpeakerRegistry:
                 if r.label and r.label.startswith("说话人"):
                     try:
                         n = int(r.label[len("说话人") :])
-                        if n > max_n:
-                            max_n = n
+                        max_n = max(max_n, n)
                     except ValueError:
                         continue
                 if r.label:

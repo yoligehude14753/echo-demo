@@ -8,7 +8,7 @@ import pytest
 from app.tools.reset_speakers import main
 
 
-def _make_db(tmp_path) -> "tuple":  # type: ignore[type-arg]
+def _make_db(tmp_path) -> tuple:  # type: ignore[type-arg]
     db = tmp_path / "test.db"
     con = sqlite3.connect(db)
     con.executescript(

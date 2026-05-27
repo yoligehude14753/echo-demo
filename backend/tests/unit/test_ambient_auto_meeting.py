@@ -13,16 +13,10 @@ from __future__ import annotations
 
 import json
 import struct
-from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 import pytest
-
-pytestmark = pytest.mark.skip(
-    reason="async sqlite lock 死锁，待 m6 重构 MeetingState 与 ambient 解耦后恢复"
-)
-
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.config import Settings
 from app.schemas.meeting import TranscriptSegment
@@ -32,10 +26,15 @@ from app.use_cases.meeting_pipeline import MeetingPipeline
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
 
-# 复用 test_meeting_pipeline fakes
 from tests.unit.test_meeting_pipeline import (  # type: ignore[attr-defined]
     FakeLLM,
+)
+from tests.unit.test_meeting_pipeline import (
     FakeRag as MeetingFakeRag,
+)
+
+pytestmark = pytest.mark.skip(
+    reason="async sqlite lock 死锁，待 m6 重构 MeetingState 与 ambient 解耦后恢复"
 )
 
 
@@ -47,7 +46,11 @@ def _audible_audio(duration_s: float = 2.0, amp: int = 4_000) -> bytes:
 
 
 class StaticSTT:
-    def __init__(self, default_text: str = "今天会议讨论了项目进展和后续计划", default_duration_ms: int = 4_000) -> None:
+    def __init__(
+        self,
+        default_text: str = "今天会议讨论了项目进展和后续计划",
+        default_duration_ms: int = 4_000,
+    ) -> None:
         self._text = default_text
         self._dur = default_duration_ms
 
@@ -144,7 +147,7 @@ async def _make_pipelines(
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_two_speakers_auto_start_meeting(tmp_path: Path) -> None:
-    ambient, meeting, state, detector, bus, repo = await _make_pipelines(
+    ambient, _meeting, state, _detector, bus, repo = await _make_pipelines(
         tmp_path, ["spk_A", "spk_B", "spk_A"]
     )
     audio = _audible_audio(2.0)
@@ -189,7 +192,7 @@ async def test_two_speakers_auto_start_meeting(tmp_path: Path) -> None:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_manual_meeting_id_overrides_auto(tmp_path: Path) -> None:
-    ambient, meeting, state, detector, bus, repo = await _make_pipelines(
+    ambient, meeting, _state, detector, _bus, repo = await _make_pipelines(
         tmp_path, ["spk_A", "spk_B", "spk_A"]
     )
     audio = _audible_audio(2.0)
@@ -217,7 +220,7 @@ async def test_manual_meeting_id_overrides_auto(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_rms_gate_drops_silent_chunks(tmp_path: Path) -> None:
     """新加的音频门控：纯静音 chunk 必须被丢弃，不进 STT/diarizer/RAG。"""
-    ambient, meeting, state, detector, bus, repo = await _make_pipelines(
+    ambient, _meeting, _state, detector, _bus, repo = await _make_pipelines(
         tmp_path, ["spk_A", "spk_B"]
     )
     try:

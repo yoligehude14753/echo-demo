@@ -131,8 +131,7 @@ class ECAPADiarizer:
                 m = _SPEAKER_ID_RE.match(r.speaker_id)
                 if m:
                     n = int(m.group(1))
-                    if n > max_n:
-                        max_n = n
+                    max_n = max(max_n, n)
                 if r.embedding_blob:
                     try:
                         vec = _blob_to_vec(r.embedding_blob)
@@ -140,14 +139,10 @@ class ECAPADiarizer:
                             self._profiles[r.speaker_id] = vec
                             loaded += 1
                     except Exception as e:  # pragma: no cover
-                        logger.warning(
-                            "ecapa hydrate decode failed for %s: %s", r.speaker_id, e
-                        )
+                        logger.warning("ecapa hydrate decode failed for %s: %s", r.speaker_id, e)
             self._counter = max_n
             self._hydrated = True
-        logger.info(
-            "ecapa hydrated: %d profiles loaded, counter=%d", loaded, self._counter
-        )
+        logger.info("ecapa hydrated: %d profiles loaded, counter=%d", loaded, self._counter)
 
     async def _ensure_encoder(self) -> None:
         if not self._enabled:
@@ -277,8 +272,10 @@ class ECAPADiarizer:
             # 既不够注册又找不到够相似的已知人 → 丢弃该段（返回 None）
             logger.debug(
                 "ecapa segment dropped: active_s=%.2f<%.2f, best_sim=%.3f<%.3f",
-                active_s, min_for_new,
-                best_sim if best_id else 0.0, outlier_threshold,
+                active_s,
+                min_for_new,
+                best_sim if best_id else 0.0,
+                outlier_threshold,
             )
             return None
 
@@ -353,9 +350,7 @@ class ECAPADiarizer:
                 # active_ratio 由 audio_gate 帧扫描得到（每帧 RMS > threshold 算活跃）。
                 voiced_active_s = seg_dur_sec * seg.active_ratio
                 if len(seg.audio_bytes) < _MIN_BYTES_FOR_EMBED:
-                    results.append(
-                        SegmentSpeaker(seg.start_ms, seg.end_ms, None)
-                    )
+                    results.append(SegmentSpeaker(seg.start_ms, seg.end_ms, None))
                     continue
                 try:
                     sid = await self._identify_one(
@@ -367,7 +362,9 @@ class ECAPADiarizer:
                 except Exception as e:  # pragma: no cover
                     logger.warning(
                         "ecapa segment embed failed at [%d,%d]ms: %s",
-                        seg.start_ms, seg.end_ms, e,
+                        seg.start_ms,
+                        seg.end_ms,
+                        e,
                     )
                     sid = None
                 results.append(SegmentSpeaker(seg.start_ms, seg.end_ms, sid))

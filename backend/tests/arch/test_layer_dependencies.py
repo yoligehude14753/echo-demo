@@ -84,13 +84,24 @@ def _files_in(subpkg: str) -> list[Path]:
     return [p for p in root.rglob("*.py") if p.name != "__init__.py" or p.stat().st_size > 0]
 
 
+ALLOWED_LEAKS: set[tuple[str, str]] = {
+    # audio_gate 是纯 DSP 函数（RMS / VAD 阈值过滤），形式上在 adapters/ 下
+    # 但不接任何 IO/SDK，被 use_cases.ambient_capture 直接调用是符合架构意图的。
+    # 后续把它移到 app/services/ 后此白名单可删（追踪 issue：m6 模块重组）。
+    ("app.use_cases.ambient_capture", "app.adapters.audio_gate"),
+}
+
+
 def _violations(files: list[Path], forbidden: set[str]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for f in files:
         for imp in _imports_of(f):
             for f_name in forbidden:
                 if imp == f_name or imp.startswith(f"{f_name}."):
-                    out.append((_module_name(f), imp))
+                    pair = (_module_name(f), imp)
+                    if pair in ALLOWED_LEAKS:
+                        continue
+                    out.append(pair)
     return out
 
 

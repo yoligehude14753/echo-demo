@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.config import Settings
 from app.schemas.meeting import TranscriptSegment

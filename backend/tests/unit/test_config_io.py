@@ -9,9 +9,7 @@ import json
 from pathlib import Path
 
 import pytest
-
 from app.config_io import (
-    JsonConfigSource,
     load_user_config_json,
     user_config_path,
     write_user_config_json,
@@ -60,10 +58,8 @@ class TestLoadUserConfigJson:
 @pytest.mark.unit
 class TestWriteUserConfigJson:
     def test_creates_parent_dir(self, isolated_user_dir: Path) -> None:
-        # 故意指向不存在的子目录
-        deep = isolated_user_dir / "nested" / "deeper"
-        cfg = deep / "config.json"
         # ECHO_USER_DIR 指向 isolated_user_dir，所以 write 走 isolated_user_dir 直接
+        # （此前残留的 deep/cfg 变量仅作 doc，已删除以满足 F841）
         write_user_config_json({"port": 9999})
         assert (isolated_user_dir / "config.json").exists()
 

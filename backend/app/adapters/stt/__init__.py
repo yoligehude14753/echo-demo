@@ -27,6 +27,7 @@ def make_stt(settings: Settings) -> STTPort:
         # 旧值如 sensevoice_gpu / sensevoice / deepgram / whisper 等 → 统一忽略，
         # 走 firered。不抛错以免老 .env 升级时 backend 启动失败。
         import logging
+
         logging.getLogger("echodesk.stt").warning(
             "stt_backend=%r 已不再支持，统一回退到 firered（PR remove-sensevoice）",
             settings.stt_backend,
@@ -34,4 +35,4 @@ def make_stt(settings: Settings) -> STTPort:
     return FireRedSTT(settings)
 
 
-__all__ = ["STTError", "FireRedSTT", "make_stt"]
+__all__ = ["FireRedSTT", "STTError", "make_stt"]

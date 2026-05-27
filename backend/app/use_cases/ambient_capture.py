@@ -21,6 +21,7 @@ from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.capture import CaptureChunkResult
+from app.schemas.meeting import TranscriptSegment
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
@@ -63,7 +64,7 @@ class AmbientCapturePipeline:
         path.write_bytes(audio_bytes)
         return str(path)
 
-    async def ingest_chunk(
+    async def ingest_chunk(  # noqa: PLR0912, PLR0915
         self,
         audio_bytes: bytes,
         *,
@@ -85,7 +86,7 @@ class AmbientCapturePipeline:
             min_speech_frame_ratio=self._settings.ambient_min_speech_frame_ratio,
         )
 
-        stt_segs: list = []
+        stt_segs: list[TranscriptSegment] = []
         speaker_id: str | None = None
         # 串行 STT → hallu 门控 → diarize（修 ARCH-AUDIT §4 root #4）。
         # 之前是 asyncio.gather(stt, diarize)，并发能省 ~50ms 但代价是幻觉
@@ -96,7 +97,9 @@ class AmbientCapturePipeline:
         else:
             logger.debug(
                 "ambient gated: %s rms=%.0f ratio=%.2f",
-                gate.reason, gate.rms, gate.speech_ratio,
+                gate.reason,
+                gate.rms,
+                gate.speech_ratio,
             )
 
         ambient_stored = False
@@ -158,9 +161,7 @@ class AmbientCapturePipeline:
         # ambient 主链路只负责"喂观测"，状态/落库由 MeetingState 全权决定。
         effective_meeting_id: str | None = meeting_id
         if self._state is not None and meeting_id is None:
-            duration_ms_obs = (
-                max((s.end_ms for s in stt_segs), default=0) if stt_segs else 0
-            )
+            duration_ms_obs = max((s.end_ms for s in stt_segs), default=0) if stt_segs else 0
             try:
                 effective_meeting_id = await self._state.observe_chunk(
                     speaker_id=speaker_id,
@@ -192,9 +193,7 @@ class AmbientCapturePipeline:
             meeting_segments=meeting_segments,
         )
 
-    async def _safe_stt(
-        self, audio_bytes: bytes, sample_rate: int
-    ) -> list:  # type: ignore[type-arg]
+    async def _safe_stt(self, audio_bytes: bytes, sample_rate: int) -> list:  # type: ignore[type-arg]
         try:
             return await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
         except Exception as e:
@@ -214,9 +213,7 @@ class AmbientCapturePipeline:
             return None
         try:
             if hasattr(self._diarizer, "identify_segments"):
-                segs = await self._diarizer.identify_segments(
-                    audio_bytes, sample_rate=sample_rate
-                )
+                segs = await self._diarizer.identify_segments(audio_bytes, sample_rate=sample_rate)
                 if not segs:
                     return None
                 # 时长加权聚合：同一 sid 累加 duration，取最长
@@ -234,7 +231,9 @@ class AmbientCapturePipeline:
                 if len(by_id) > 1:
                     logger.debug(
                         "ambient diarize: %d voiced segs, %d distinct sids, dominant=%s",
-                        len(segs), len(by_id), dominant[0],
+                        len(segs),
+                        len(by_id),
+                        dominant[0],
                     )
                 return dominant[0]
             return await self._diarizer.identify(audio_bytes, sample_rate=sample_rate)

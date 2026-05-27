@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.schemas.meeting import TranscriptSegment
 

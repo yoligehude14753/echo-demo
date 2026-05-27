@@ -96,7 +96,7 @@ async def _classify(fast_llm: LLMPort, fast_model: str, question: str) -> str:
             temperature=0.0,
             timeout_s=30.0,
         )
-    except Exception as e:  # noqa: BLE001 (含 LLMError + asyncio.TimeoutError + httpx.* + network)
+    except Exception as e:
         import logging
 
         logging.getLogger("echodesk.retrieve").warning(

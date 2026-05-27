@@ -97,6 +97,7 @@ def _sweep_macos_dotfiles(target: object) -> None:
     它对数据无害但污染目录列表（用户截图里能看到），启动时静默清掉。
     """
     from pathlib import Path
+
     target_path = target if isinstance(target, Path) else Path(str(target))
     if not target_path.exists():
         return
@@ -112,6 +113,7 @@ def _sweep_macos_dotfiles(target: object) -> None:
         return
     if cleaned:
         logger.info(".DS_Store sweep: removed %d files under %s", cleaned, target_path)
+
 
 async def _run_db_migrations(db_path: Path) -> None:
     """P2.4：跑 schema migration，失败直接 RuntimeError。
@@ -135,7 +137,7 @@ _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
     settings = get_settings()
     logger.info(
         "echodesk 启动: version=%s port=%d llm_main=%s llm_fast=%s stt=%s tts=%s",
@@ -171,8 +173,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # 修 ARCH-AUDIT §4 root #1 #9（embedding 不再随重启丢光）
     try:
         diarizer = get_diarizer_singleton(settings, repo)
-        if hasattr(diarizer, "hydrate"):
-            await diarizer.hydrate()  # type: ignore[attr-defined]
+        hydrate_fn = getattr(diarizer, "hydrate", None)
+        if callable(hydrate_fn):
+            await hydrate_fn()
     except Exception as e:
         logger.warning("diarizer hydrate failed: %s", e)
     try:
@@ -193,6 +196,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         from app.api.deps import (
             get_meeting_state as _get_state,
         )
+
         detector = _get_det(settings)
         bus = _get_bus()
         state = _get_state(settings, repo, bus, detector)

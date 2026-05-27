@@ -280,9 +280,7 @@ class MeetingPipeline:
             new_label = f"说话人{len(mapping) + 1}"
             mapping[speaker_id] = new_label
             if self._repo is not None:
-                await self._repo.upsert_meeting_speaker_label(
-                    meeting_id, speaker_id, new_label
-                )
+                await self._repo.upsert_meeting_speaker_label(meeting_id, speaker_id, new_label)
         return mapping[speaker_id]
 
     def get_segments(self, meeting_id: str) -> list[TranscriptSegment]:

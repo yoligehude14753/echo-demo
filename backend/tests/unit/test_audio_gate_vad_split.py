@@ -13,8 +13,7 @@ import math
 import struct
 
 import pytest
-
-from app.adapters.audio_gate import VoicedSegment, split_into_voiced_segments
+from app.adapters.audio_gate import split_into_voiced_segments
 
 
 def _sine_pcm(duration_ms: int, amplitude: int = 4000, freq_hz: int = 440) -> bytes:
@@ -23,10 +22,7 @@ def _sine_pcm(duration_ms: int, amplitude: int = 4000, freq_hz: int = 440) -> by
     amp=4000 → RMS ≈ 2830，远高于默认 frame_rms_threshold=400。
     """
     n = int(16_000 * duration_ms / 1000)
-    samples = [
-        int(amplitude * math.sin(2 * math.pi * freq_hz * i / 16_000))
-        for i in range(n)
-    ]
+    samples = [int(amplitude * math.sin(2 * math.pi * freq_hz * i / 16_000)) for i in range(n)]
     return struct.pack(f"<{n}h", *samples)
 
 
@@ -136,15 +132,11 @@ def test_audio_bytes_slice_aligns_with_offsets() -> None:
 @pytest.mark.parametrize(
     "frame_rms_threshold,expected_count",
     [
-        (400, 2),   # 默认阈值能识别两段
+        (400, 2),  # 默认阈值能识别两段
         (10_000, 0),  # 阈值高过 sin 波 RMS，无段
     ],
 )
-def test_threshold_parameter_takes_effect(
-    frame_rms_threshold: int, expected_count: int
-) -> None:
+def test_threshold_parameter_takes_effect(frame_rms_threshold: int, expected_count: int) -> None:
     buf = _concat(_sine_pcm(1_000), _silence_pcm(500), _sine_pcm(1_000))
-    segs = split_into_voiced_segments(
-        buf, frame_rms_threshold=frame_rms_threshold
-    )
+    segs = split_into_voiced_segments(buf, frame_rms_threshold=frame_rms_threshold)
     assert len(segs) == expected_count
