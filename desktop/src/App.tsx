@@ -18,11 +18,13 @@ import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 import { useOnboarding } from "@/hooks/useOnboarding";
+import { useMeetingHistory } from "@/hooks/useMeetingHistory";
 
 const { Header, Sider, Content } = Layout;
 
 export default function App(): JSX.Element {
   useEchoWS();
+  useMeetingHistory();
   const captureStatus = useEchoCapture();
   const tts = useTtsPlayer();
   const connected = useStore((s) => s.connected);
