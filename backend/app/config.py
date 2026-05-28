@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # ── LLM 快速通道（Qwen3-1.7B on heyi-bj） ────────────────────
     llm_fast_provider: str = "heyi-local"
     llm_fast_model: str = "Qwen3-1.7B"
-    llm_fast_base_url: str = "http://100.87.251.9:7860/v1"
+    llm_fast_base_url: str = "https://llm-fast.yoliyoli.uk/v1"
     llm_local_api_key: str = "EMPTY"
     llm_fast_max_tokens: int = 512
 
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     # 选项老让人误判"换 backend 能修 X"）。详见 docs/ARCH-AUDIT.md §2。
     # 保留 stt_backend 字段供未来扩展（如本地化离线 STT）。
     stt_backend: str = "firered"
-    stt_firered_url: str = "http://100.87.251.9:8090"
+    stt_firered_url: str = "https://stt.yoliyoli.uk"
     stt_language: str = "zh"
     stt_llm_correct: bool = False
 
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     )
     # 兼容旧 env：TTS_COSYVOICE_URL / TTS_COSYVOICE_VOICE 仍能正确加载
     tts_qwen3_url: str = Field(
-        default="http://100.87.251.9:8094",
+        default="https://tts.yoliyoli.uk",
         validation_alias=AliasChoices(
             "tts_qwen3_url",
             "TTS_QWEN3_URL",
