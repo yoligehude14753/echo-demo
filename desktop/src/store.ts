@@ -147,6 +147,12 @@ export const useStore = create<Store>((set, get) => ({
           get().upsertMeeting(mid, {
             state: "ended",
             ended_at: e.ts,
+            // 后端会紧跟着发 minutes.ready / minutes.failed，先把状态标为 generating
+            // 避免短时间内 UI 显示「没有纪要」（in_meeting 文案）误导用户。
+            // 已经有 minutes 的不覆盖（重试场景：先 ready 后 ended 不应回退）。
+            minutes_status: get().meetings[mid]?.minutes
+              ? "ok"
+              : (get().meetings[mid]?.minutes_status ?? "generating"),
           });
         break;
       case "minutes.ready": {
@@ -156,6 +162,18 @@ export const useStore = create<Store>((set, get) => ({
           minutes: m,
           title: m.title,
           state: "ended",
+          minutes_status: "ok",
+          minutes_error: null,
+        });
+        break;
+      }
+      case "minutes.failed": {
+        if (!mid) break;
+        const p = (e.payload ?? {}) as { error?: string };
+        get().upsertMeeting(mid, {
+          state: "ended",
+          minutes_status: "generation_failed",
+          minutes_error: p.error ?? "未知错误",
         });
         break;
       }

@@ -6,6 +6,7 @@ export type BusinessEventType =
   | "meeting.segment"
   | "meeting.ended"
   | "minutes.ready"
+  | "minutes.failed"
   | "artifact.generating"
   | "artifact.ready"
   | "artifact.failed"
@@ -101,11 +102,25 @@ export type IntentKind =
 export type MeetingMode = "idle" | "in_meeting";
 export type StartReason = "auto" | "manual";
 
+/**
+ * 纪要生成生命周期（与后端 ``app.schemas.meeting.MinutesStatus`` 对齐）。
+ *
+ * - null：会议进行中（state="in_meeting"）或后端尚未尝试 finalize
+ * - "generating"：finalize 正在跑（兜底，正常情况会议结束后直接跳到 ok/failed）
+ * - "ok"：已成功生成（与 state="finalized" 同步）
+ * - "generation_failed"：LLM 失败 / JSON 校验失败；UI 应展示「重试」入口
+ */
+export type MinutesStatus = "generating" | "ok" | "generation_failed";
+
 export interface MeetingStateSnapshot {
   mode: MeetingMode;
   meeting_id: string | null;
   started_at: string | null;
   started_by: StartReason | null;
+  /** 最近一条 meeting 的纪要状态（idle 时；in_meeting 时为 null） */
+  minutes_status?: MinutesStatus | null;
+  /** generation_failed 时的具体错误（截断后给用户看） */
+  minutes_error?: string | null;
 }
 
 export interface IntentResult {
@@ -126,6 +141,13 @@ export interface MeetingCard {
   segments: TranscriptSegment[];
   speakers: Set<string>;
   minutes?: MeetingMinutes;
+  /**
+   * 纪要生成状态（仅 state="ended" / "in_meeting" 时有意义；
+   * "ok" 通常与 minutes 字段共同存在）。
+   */
+  minutes_status?: MinutesStatus | null;
+  /** generation_failed 时透传后端 minutes_error */
+  minutes_error?: string | null;
   artifacts: GeneratedArtifact[];
   started_at?: string;
   ended_at?: string;

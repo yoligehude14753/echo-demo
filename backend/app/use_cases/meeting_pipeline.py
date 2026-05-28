@@ -120,6 +120,32 @@ class MeetingPipeline:
                 self._finalized.discard(m.id)
         return len(meetings)
 
+    async def load_meeting_for_retry(self, meeting_id: str) -> bool:
+        """把已 ended（含 generation_failed）会议的 segments 重新装回内存。
+
+        用于 ``POST /meetings/{id}/finalize`` 的重试场景：
+        - 重启后 hydrate_from_repo 不会捞 state="ended" 的会议（按设计）
+        - 但 minutes_status="generation_failed" 的需要被重新喂给 LLM 一次
+
+        返回 True 表示已加载 segments（>0 条），可以接着调 ``finalize_meeting``；
+        False 表示 repo 里查不到 / 没有 segments。
+        """
+        if self._repo is None:
+            return False
+        segs = await self._repo.list_meeting_segments(meeting_id)
+        if not segs:
+            return False
+        labels = await self._repo.get_meeting_speaker_labels(meeting_id)
+        rec = await self._repo.get_meeting(meeting_id)
+        started_at = rec.started_at if rec else datetime.now(UTC)
+        async with self._lock:
+            self._segments[meeting_id] = list(segs)
+            self._speaker_labels[meeting_id] = dict(labels)
+            self._started_at.setdefault(meeting_id, started_at)
+            self._wall_clock_start.setdefault(meeting_id, time.monotonic())
+            self._finalized.discard(meeting_id)  # 允许重试
+        return True
+
     async def _publish(self, event_type: str, meeting_id: str, payload: dict[str, Any]) -> None:
         if self._event_bus is None:
             return
@@ -292,17 +318,33 @@ class MeetingPipeline:
         *,
         title: str,
     ) -> MeetingMinutes:
-        if meeting_id in self._finalized:
-            raise MeetingPipelineError(f"meeting {meeting_id} already ended")
+        """会议结束 → LLM 生成纪要 → 落 DB + 发 ``minutes.ready``。
+
+        失败语义（2026-05-28 修：之前 LLM 失败会让会议卡在 ``state=ended`` 且
+        ``minutes_json=NULL``，UI 永远显示「纪要尚未生成」）：
+
+        - LLM / JSON 解析失败 → repo 写 ``state="ended"`` + ``minutes_status="generation_failed"``
+          + ``minutes_error=<msg>``；发 ``minutes.failed`` 事件；抛 ``MeetingPipelineError``
+        - 无 segments → 同上（写 generation_failed）。这样 UI 始终有明确状态可展示。
+        - 重试（``state=finalized`` 且 ``meeting_id in _finalized``）：放行，重新跑 LLM；
+          原 minutes_json 会被新结果覆盖（POST /meetings/{id}/finalize 的幂等语义）。
+        """
         segs = self.get_segments(meeting_id)
         if not segs:
+            await self._mark_minutes_failed(meeting_id, "no segments to summarize")
             raise MeetingPipelineError(f"meeting {meeting_id} has no segments")
 
         transcript_text = self._render_transcript(segs)
         speakers = sorted({s.speaker_label for s in segs if s.speaker_label})
         duration_sec = max(1, segs[-1].end_ms // 1000)
 
-        minutes_payload = await self._llm_minutes(transcript_text, title)
+        try:
+            minutes_payload = await self._llm_minutes(transcript_text, title)
+        except Exception as e:
+            # LLM / JSON / schema 任一失败：把状态置为 generation_failed，让 UI 给「重试」入口
+            await self._mark_minutes_failed(meeting_id, str(e))
+            raise
+
         minutes = MeetingMinutes(
             meeting_id=meeting_id,
             title=title,
@@ -319,8 +361,18 @@ class MeetingPipeline:
         minutes.raw_transcript_ref = transcript_ref
 
         # RAG 入库（纪要 summary + 逐字稿一起检索）
-        rag_payload = "【纪要】\n" + minutes.summary + "\n\n【逐字稿】\n" + transcript_text
-        await self._rag.ingest_meeting(meeting_id, rag_payload, title)
+        try:
+            rag_payload = "【纪要】\n" + minutes.summary + "\n\n【逐字稿】\n" + transcript_text
+            await self._rag.ingest_meeting(meeting_id, rag_payload, title)
+        except Exception as e:
+            # RAG 失败不视为纪要失败：纪要已生成，仅检索功能少一条。日志告警即可。
+            import logging
+
+            logging.getLogger("echodesk.meeting_pipeline").warning(
+                "rag.ingest_meeting failed for %s: %s (minutes will still be persisted)",
+                meeting_id,
+                e,
+            )
 
         self._finalized.add(meeting_id)
         if self._repo is not None:
@@ -331,6 +383,9 @@ class MeetingPipeline:
                 finalized_at=datetime.now(UTC),
                 minutes_json=minutes.model_dump_json(),
                 raw_transcript_ref=transcript_ref,
+                minutes_status="ok",
+                # 显式覆盖之前可能写下的失败信息；空串而非 None 触发 SET（None 会被 SQL 跳过）
+                minutes_error="",
             )
         await self._publish("meeting.ended", meeting_id, {"duration_sec": duration_sec})
         await self._publish("minutes.ready", meeting_id, minutes.model_dump(mode="json"))
@@ -342,6 +397,35 @@ class MeetingPipeline:
             {"text": ack_text[:400], "kind": "minutes"},
         )
         return minutes
+
+    async def _mark_minutes_failed(self, meeting_id: str, error: str) -> None:
+        """把纪要状态置为 ``generation_failed``，让 UI 给「重试」入口。
+
+        - state → "ended"（哪怕之前是 "in_meeting"；用户已经主动结束/会议已断）
+        - minutes_status → "generation_failed"
+        - minutes_error → 一行 LLM/JSON 报错摘要（截断 500 字）
+        - 发 ``minutes.failed`` 事件让前端 toast/横幅展示
+        """
+        if self._repo is not None:
+            try:
+                await self._repo.update_meeting_state(
+                    meeting_id,
+                    state="ended",
+                    ended_at=datetime.now(UTC),
+                    minutes_status="generation_failed",
+                    minutes_error=error[:500] if error else "unknown error",
+                )
+            except Exception as e:  # pragma: no cover - repo 异常只日志
+                import logging
+
+                logging.getLogger("echodesk.meeting_pipeline").warning(
+                    "mark_minutes_failed: repo update failed for %s: %s", meeting_id, e
+                )
+        await self._publish(
+            "minutes.failed",
+            meeting_id,
+            {"error": error[:500] if error else "unknown error"},
+        )
 
     @staticmethod
     def _render_transcript(segs: list[TranscriptSegment]) -> str:

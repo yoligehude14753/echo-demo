@@ -209,6 +209,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
                 state.current.meeting_id,
                 state.current.started_by,
             )
+
+        # fire-and-forget：上次 finalize 失败留下的「ended 但纪要空」会议，主动重试一次
+        async def _bg_recover_minutes() -> None:
+            try:
+                n = await state.recover_stuck_minutes()
+                if n:
+                    logger.info("recover_stuck_minutes: attempted retry on %d meeting(s)", n)
+            except Exception as e:
+                logger.warning("recover_stuck_minutes failed: %s", e)
+
+        rec_task = asyncio.create_task(_bg_recover_minutes())
+        _LIFESPAN_TASKS.add(rec_task)
+        rec_task.add_done_callback(_LIFESPAN_TASKS.discard)
     except Exception as e:
         logger.warning("meeting-state hydrate failed: %s", e)
 

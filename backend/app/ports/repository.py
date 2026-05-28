@@ -19,6 +19,13 @@ from app.schemas.meeting import TranscriptSegment
 
 MeetingState = Literal["in_meeting", "ended", "finalized"]
 
+# 纪要生成状态（meetings.minutes_status 列；migration 003）
+# - None：会议进行中或从未尝试 finalize
+# - "generating"：finalize 正在跑（兜底，正常情况下从 in_meeting 直接进 ok/failed）
+# - "ok"：已成功生成（与 state="finalized" 同步）
+# - "generation_failed"：LLM 失败 / JSON 校验失败，用户可重试
+MinutesStatus = Literal["generating", "ok", "generation_failed"]
+
 
 class MeetingRecord(BaseModel):
     """落库的 meeting 行（不含 segments）。"""
@@ -32,6 +39,8 @@ class MeetingRecord(BaseModel):
     auto_started: bool = False
     minutes_json: str | None = None
     raw_transcript_ref: str | None = None
+    minutes_status: MinutesStatus | None = None
+    minutes_error: str | None = None
 
 
 class AmbientSegmentRecord(BaseModel):
@@ -89,6 +98,8 @@ class RepositoryPort(Protocol):
         finalized_at: datetime | None = None,
         minutes_json: str | None = None,
         raw_transcript_ref: str | None = None,
+        minutes_status: MinutesStatus | None = None,
+        minutes_error: str | None = None,
     ) -> None: ...
 
     async def get_meeting(self, meeting_id: str) -> MeetingRecord | None: ...

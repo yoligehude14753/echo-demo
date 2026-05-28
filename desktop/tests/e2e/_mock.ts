@@ -281,6 +281,35 @@ export async function publishMinutesReady(mock: EchoMock, meetingId: string, seq
   });
 }
 
+export async function publishMinutesFailed(
+  mock: EchoMock,
+  meetingId: string,
+  error: string,
+  seq = 2,
+): Promise<void> {
+  await mock.publish({
+    type: "minutes.failed",
+    seq,
+    ts: new Date().toISOString(),
+    meeting_id: meetingId,
+    payload: { error },
+  });
+}
+
+export async function publishMeetingEnded(
+  mock: EchoMock,
+  meetingId: string,
+  seq = 2,
+): Promise<void> {
+  await mock.publish({
+    type: "meeting.ended",
+    seq,
+    ts: new Date().toISOString(),
+    meeting_id: meetingId,
+    payload: { duration_sec: 60 },
+  });
+}
+
 export async function publishArtifactReady(
   mock: EchoMock,
   artifactType: string,
