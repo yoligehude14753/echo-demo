@@ -6,12 +6,29 @@
 
 ## 1. Endpoint 一览
 
-| 服务 | Tailscale（默认）| 公网 HTTPS（可选） | 背后实现 |
+> **2026-05-28 起默认翻转**：`.env.example` 默认值改为公网 HTTPS endpoint，Tailscale IP 改为可选注释。原因见 §1.1。
+
+| 服务 | 公网 HTTPS（**默认**） | Tailscale（可选备选） | 背后实现 |
 |---|---|---|---|
-| FireRedASR2 STT | `http://100.87.251.9:8090` | **`https://stt.yoliyoli.uk`** | heyi-bj :8090 (FireRedASR2-AED) |
-| Qwen3-1.7B fast LLM | `http://100.87.251.9:7860/v1` | **`https://llm-fast.yoliyoli.uk/v1`** | heyi-bj :7860 (sglang vLLM) |
-| Qwen3-TTS | `http://100.87.251.9:8094` | **`https://tts.yoliyoli.uk`** | heyi-bj :8094 |
-| Echo backend (老 echo 项目) | — | `https://echo.yoliyoli.uk` | heyi-bj :8765（**与本文无关，不要混用**）|
+| FireRedASR2 STT | **`https://stt.yoliyoli.uk`** | `http://100.87.251.9:8090` | heyi-bj :8090 (FireRedASR2-AED) |
+| Qwen3-1.7B fast LLM | **`https://llm-fast.yoliyoli.uk/v1`** | `http://100.87.251.9:7860/v1` | heyi-bj :7860 (sglang vLLM) |
+| Qwen3-TTS | **`https://tts.yoliyoli.uk`** | `http://100.87.251.9:8094` | heyi-bj :8094 |
+| Echo backend (老 echo 项目) | `https://echo.yoliyoli.uk` | — | heyi-bj :8765（**与本文无关，不要混用**）|
+
+## 1.1 为什么默认走公网 HTTPS（而不是 Tailscale）
+
+**触发事件**：2026-05-28 凌晨 Mac Tailscale daemon 异常停止 8 小时，期间 4495 个 STT 请求全部失败，但用户毫无察觉——`utun` 网卡假回环让 ICMP/TCP 探测仍然"看似可达"，错误堆积在客户端日志里没有任何前端报警。
+
+**结构性问题**：
+- **Tailscale 是 mesh + 客户端 daemon 模式**：daemon 异常时**故障静默**——表象是连接超时/重置，没有明确"这是 Tailscale 挂了"的信号
+- **公网 HTTPS 是显式 DNS + TLS 链路**：链路任一环节出问题都会抛出明确的错误码（`SSLError` / `ConnectionRefused` / `502/503/504`），日志可观测、监控可触发、用户可察觉
+
+**翻转决策（2026-05-28，PR 本次）**：
+- `.env.example` 默认值 = 公网 HTTPS（容错优先于延迟）
+- Tailscale IP 保留为注释，BJ wifi 局域网内追求最低延迟时手工切换
+- 延迟 trade-off：公网 ~300-1000ms vs Tailscale ~30ms。日常对话/会议级延迟用户感知阈值约 500ms，可接受；STT/LLM 一次调用本身就是秒级，公网附加延迟占比 < 30%
+
+**结论**：可观测性 > 极致延迟。默认走公网，Tailscale 当显式优化档位。
 
 **链路**：
 
@@ -28,23 +45,36 @@ cloudflared tunnel 是 outbound persistent connection（heyi-bj 主动连到 Clo
 
 ## 2. 切换方法（用户视角）
 
-### 方式 A：改 `.env`（持久生效）
+### 默认状态：已经走公网 HTTPS，无需任何改动
 
-在 `~/Desktop/all/echo-demo/.env` 里找到 STT/LLM_FAST/TTS 三段，**任选**需要走公网的服务替换：
+`cp .env.example .env` 后，STT / LLM_FAST / TTS 三个 base url **默认就是公网 HTTPS**。`uvicorn` 启动后即生效，无需手动切换。
+
+如果想切到 Tailscale（仅在 BJ wifi 局域网内 + 追求 < 50ms 延迟时推荐，且确认 Mac Tailscale daemon 健康），见下文方式 A / B / C 之一。
+
+### 方式 A：回切到 Tailscale（持久，改 `.env`）
+
+在 `~/Desktop/all/echo-demo/.env` 里找到 STT / LLM_FAST / TTS 三段，把**默认 HTTPS 注释掉、把备选 Tailscale 行解开注释**：
 
 ```bash
-# 注释掉原 Tailscale IP
-# STT_FIRERED_URL=http://100.87.251.9:8090
-STT_FIRERED_URL=https://stt.yoliyoli.uk
+# 公网 HTTPS endpoint（默认）
+# STT_FIRERED_URL=https://stt.yoliyoli.uk
+# 备选：Tailscale 内网
+STT_FIRERED_URL=http://100.87.251.9:8090
 
-# LLM_FAST_BASE_URL=http://100.87.251.9:7860/v1
-LLM_FAST_BASE_URL=https://llm-fast.yoliyoli.uk/v1
+# LLM_FAST_BASE_URL=https://llm-fast.yoliyoli.uk/v1
+LLM_FAST_BASE_URL=http://100.87.251.9:7860/v1
 
-# TTS_QWEN3_URL=http://100.87.251.9:8094
-TTS_QWEN3_URL=https://tts.yoliyoli.uk
+# TTS_QWEN3_URL=https://tts.yoliyoli.uk
+TTS_QWEN3_URL=http://100.87.251.9:8094
 ```
 
 然后重启 backend（`pkill -f 'uvicorn.*echodesk'` 或 EchoDesk 桌面端 Settings → Restart Backend）。
+
+**回切前自检（2 步）**：
+1. `tailscale status` 看 `100.87.251.9` 是否 online（不是 `expired` / `offline`）
+2. `nc -zv 100.87.251.9 8090` 在 1 秒内返回 `succeeded`
+
+任一不过 → **不要切回 Tailscale**，留在默认公网。
 
 ### 方式 B：改 `~/.echodesk/config.json`（运行时覆盖）
 
@@ -52,30 +82,33 @@ EchoDesk 桌面端 Settings Panel（Phase 3 已上线，PR #44）支持远端配
 
 ```json
 {
-  "stt_firered_url": "https://stt.yoliyoli.uk",
-  "llm_fast_base_url": "https://llm-fast.yoliyoli.uk/v1",
-  "tts_qwen3_url": "https://tts.yoliyoli.uk"
+  "stt_firered_url": "http://100.87.251.9:8090",
+  "llm_fast_base_url": "http://100.87.251.9:7860/v1",
+  "tts_qwen3_url": "http://100.87.251.9:8094"
 }
 ```
 
-EchoDesk 启动时会优先读这个文件并 override `.env`（详见 `backend/app/config.py` 加载顺序）。
+EchoDesk 启动时会优先读这个文件并 override `.env`（详见 `backend/app/config.py` 加载顺序）。删除该文件即恢复默认（公网 HTTPS）。
 
 ### 方式 C：单条 endpoint 临时切（debug）
 
 ```bash
-STT_FIRERED_URL=https://stt.yoliyoli.uk \
+STT_FIRERED_URL=http://100.87.251.9:8090 \
   uvicorn echodesk.main:app --reload --port 8769
 ```
 
 只对当前进程生效，不动 `.env`。
 
-## 3. Tailscale vs 公网：什么时候选哪个
+## 3. 公网 HTTPS vs Tailscale：什么时候选哪个
+
+> **新默认（2026-05-28）**：默认公网 HTTPS。下表只在「主动想要更低延迟且能保证 Tailscale 健康」时才切回 Tailscale。
 
 | 场景 | 推荐 | 理由 |
 |---|---|---|
-| **在 BJ wifi 局域网内 + heyi-bj 也在 BJ** | Tailscale | 走 LAN，RTT < 1ms，没有 CF 入口环节 |
+| **任何场景的安全默认** | 公网 HTTPS | 故障可观测、错误可见、没有客户端 daemon 隐式依赖 |
+| **BJ wifi 局域网 + Tailscale 已确认健康 + 追求最低延迟** | Tailscale | 走 LAN，RTT ~30ms，省掉 CF 边缘 |
 | **出差/外地 + Tailscale 当 derp 走 hkg** | 公网 HTTPS | Tailscale relay 增加 ~300ms，CF 全球 anycast 边缘通常更近 |
-| **Tailscale daemon 不稳/重启中** | 公网 HTTPS | 不依赖本地 daemon，能立刻定位故障 |
+| **Tailscale daemon 不稳/重启中/状态可疑** | 公网 HTTPS | 不依赖本地 daemon，故障时有明确 DNS/TLS/HTTP 错误码 |
 | **CI / 任何容器 / 临时机器** | 公网 HTTPS | 不用装 Tailscale + 登录 |
 
 **延迟参考**（2026-05-28 测，单次 curl 包含 TCP + TLS 握手）：
@@ -86,46 +119,45 @@ STT_FIRERED_URL=https://stt.yoliyoli.uk \
 | Mac BJ wifi → 100.87.251.9 (Tailscale LAN) | 本地 | ~0.02s（直连）|
 | Mac BJ wifi → stt.yoliyoli.uk (Tailscale DNS 异常时) | 本地 | DNS / TLS 失败，明确报错 |
 
-**结论**：日常 BJ wifi 用 Tailscale，外地 / Tailscale 异常时切公网。
+**结论**：默认公网 HTTPS（容错优先）；只在确认 Tailscale 健康且想要 < 50ms 延迟时手工切回。
 
 ## 4. 故障切换 SOP
 
-### 触发条件
-任一以下症状：
-- 桌面端连续 ≥ 3 次 STT/LLM/TTS 请求超时
-- `~/.echodesk/logs/backend.log` 出现大量 `requests.exceptions.ConnectionError` 指向 `100.87.251.9`
-- `tailscale status` 报 `state=NoState` 或 `Stopped`
-- `nc -zv 100.87.251.9 8090` 30 秒不响应
+> 因为新默认已经是公网 HTTPS，「Tailscale 异常」不再需要切换 SOP——默认状态下不依赖 Tailscale。这里保留两个仍可能发生的故障场景的 SOP。
 
-### 步骤（5 分钟切换）
+### 4.1 公网 endpoint 异常（heyi-bj 端 cloudflared / 公网链路故障）
 
-1. **验证公网链路是否健康**（**从手机热点或外网**，因为 Mac Tailscale 异常时本机 DNS 可能也被劫持）：
+**触发条件**：任一症状
+- 桌面端连续 ≥ 3 次 STT/LLM/TTS 请求收到 `502 / 503 / 504` 或 DNS 解析失败
+- `~/.echodesk/logs/backend.log` 出现大量 `SSLError` / `ConnectionError` 指向 `*.yoliyoli.uk`
+- `curl -m 10 https://stt.yoliyoli.uk/docs` 直接超时
+
+**切换步骤（回到 Tailscale 当备用，约 5 分钟）**：
+
+1. **先确认 Tailscale 链路本身健康**：
    ```bash
-   curl -m 10 https://stt.yoliyoli.uk/docs | head -c 100
-   curl -m 10 https://llm-fast.yoliyoli.uk/v1/models
-   curl -m 10 https://tts.yoliyoli.uk/  # 返回 404 root path 即正常
+   tailscale status                       # 看 100.87.251.9 是否 online
+   nc -zv 100.87.251.9 8090               # 1 秒内 succeeded 才 OK
+   curl -m 5 http://100.87.251.9:8090/docs | head -c 100
    ```
 
-2. **改 `.env`**（替换为公网 URL，见上文方式 A）。
+   如果 Tailscale 也异常 → 公网和 Tailscale 都断了，去查 heyi-bj（机器宕机 / 断电 / 断网）。
+
+2. **改 `.env`**（按上文 §2 方式 A，把公网注释、Tailscale 解开注释）。
 
 3. **重启 backend**：
    ```bash
-   # EchoDesk 桌面端 Settings → Restart Backend
-   # 或命令行
-   pkill -f 'uvicorn.*echodesk'
+   pkill -f 'uvicorn.*echodesk'   # 或 EchoDesk 桌面端 Settings → Restart Backend
    ```
 
 4. **验证桌面端 4 类调用恢复**：触发一次会议录音 → 看 STT 落字、LLM 路由、TTS 播报。
 
-5. **修复 Tailscale 后切回（可选）**：把 `.env` 改回 Tailscale IP，再重启 backend。
+5. **cloudflared 修好后切回默认**：把 `.env` 中两段注释翻回去（公网解开、Tailscale 注释），重启 backend。或者直接 `cp .env.example .env` 重置默认值（注意先备份个人密钥）。
 
-### 回退到 Tailscale（heyi-bj 端 cloudflared 故障时）
+### 4.2 Tailscale 异常（已是默认状态，无需切换）
 
-如果 cloudflared 那边挂了（curl `stt.yoliyoli.uk` 超时），但 Tailscale 正常：
-
-```bash
-# 在 echo-demo/.env 把所有 https://... 那 3 行注释回去，恢复 http://100.87.251.9:...
-```
+新默认下，`.env` 默认值已经是公网 HTTPS，**Tailscale daemon 异常不会影响 backend**。
+仅当**手动切到 Tailscale 后**遇到 daemon 异常，才需要按上文 §2 方式 A 切回公网（即把 `.env` 还原为 `.env.example` 默认值）。
 
 ## 5. heyi-bj 端配置（实施记录，2026-05-28）
 
