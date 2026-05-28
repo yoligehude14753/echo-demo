@@ -1,8 +1,43 @@
 import { useState } from "react";
 import { Button, Empty, Spin, message } from "antd";
-import { AlertCircle, FileText, RefreshCw } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, FileText, RefreshCw } from "lucide-react";
 import { retryMinutesGeneration } from "@/api";
 import { useStore } from "@/store";
+
+function friendlyMinutesError(raw: string | null | undefined): {
+  headline: string;
+  hint: string;
+} {
+  const s = (raw ?? "").trim();
+  if (!s) {
+    return { headline: "未知错误", hint: "请点击重新生成纪要再试一次" };
+  }
+  if (/JSON parse failed|delimiter|Expecting/i.test(s)) {
+    return {
+      headline: "LLM 输出格式不规范",
+      hint: "MiniMax-M2.7 偶发会返回非标准 JSON。点击重新生成通常可解决",
+    };
+  }
+  if (/timeout|timed out/i.test(s)) {
+    return {
+      headline: "LLM 调用超时",
+      hint: "云端模型当前响应较慢，稍后点击重新生成即可",
+    };
+  }
+  if (/connect refused|connection refused|read timed out/i.test(s)) {
+    return {
+      headline: "连不上模型服务",
+      hint: "检查 Tailscale / 网络后点击重新生成",
+    };
+  }
+  if (/rate limit|429/i.test(s)) {
+    return {
+      headline: "触发了模型限流",
+      hint: "稍等片刻后点击重新生成",
+    };
+  }
+  return { headline: "纪要生成失败", hint: "点击下方按钮重新生成；如反复失败请展开详情排查" };
+}
 
 /**
  * MinutesView · 区分 4 个状态（2026-05-28 修：之前只有「无 / 有」两种）
@@ -48,37 +83,11 @@ export default function MinutesView(): JSX.Element {
   // 2) 失败：给重试按钮 + 错误消息
   if (meeting?.minutes_status === "generation_failed") {
     return (
-      <div className="px-6 py-6 border-b border-paper-300">
-        <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
-          <FileText className="w-3.5 h-3.5 text-ink-500" />
-          <span>会议纪要</span>
-        </div>
-        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-3">
-          <div className="flex items-start gap-2 mb-2">
-            <AlertCircle className="w-3.5 h-3.5 text-rose-600 mt-0.5 shrink-0" />
-            <div className="text-[12.5px] text-rose-800 leading-5">
-              <div className="font-medium mb-0.5">生成失败</div>
-              <div
-                className="text-[11.5px] text-rose-700/80 break-all"
-                data-testid="minutes-error-msg"
-              >
-                {meeting.minutes_error ?? "未知错误"}
-              </div>
-            </div>
-          </div>
-          <Button
-            type="primary"
-            danger
-            size="small"
-            icon={<RefreshCw className="w-3 h-3" />}
-            loading={retrying}
-            onClick={onRetry}
-            data-testid="minutes-retry-btn"
-          >
-            重新生成纪要
-          </Button>
-        </div>
-      </div>
+      <MinutesErrorCard
+        rawError={meeting.minutes_error}
+        retrying={retrying}
+        onRetry={onRetry}
+      />
     );
   }
 
@@ -129,6 +138,81 @@ export default function MinutesView(): JSX.Element {
           </span>
         }
       />
+    </div>
+  );
+}
+
+function MinutesErrorCard({
+  rawError,
+  retrying,
+  onRetry,
+}: {
+  rawError: string | null | undefined;
+  retrying: boolean;
+  onRetry: () => void;
+}): JSX.Element {
+  const [showDetail, setShowDetail] = useState(false);
+  const { headline, hint } = friendlyMinutesError(rawError);
+  const hasDetail = Boolean((rawError ?? "").trim());
+  return (
+    <div className="px-6 py-6 border-b border-paper-300">
+      <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
+        <FileText className="w-3.5 h-3.5 text-ink-500" />
+        <span>会议纪要</span>
+      </div>
+      <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-3">
+        <div className="flex items-start gap-2 mb-3">
+          <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0 text-rose-800 leading-5">
+            <div
+              className="text-[13px] font-medium mb-0.5"
+              data-testid="minutes-error-headline"
+            >
+              {headline}
+            </div>
+            <div className="text-[12px] text-rose-700/85 leading-5 break-words">
+              {hint}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mb-2">
+          <Button
+            type="primary"
+            danger
+            size="small"
+            icon={<RefreshCw className="w-3 h-3" />}
+            loading={retrying}
+            onClick={onRetry}
+            data-testid="minutes-retry-btn"
+          >
+            重新生成纪要
+          </Button>
+          {hasDetail && (
+            <Button
+              type="text"
+              size="small"
+              className="!text-rose-600 hover:!bg-rose-100/60 !px-2 inline-flex items-center"
+              onClick={() => setShowDetail((v) => !v)}
+              data-testid="minutes-error-toggle"
+            >
+              {showDetail ? (
+                <ChevronDown className="w-3 h-3 mr-0.5" />
+              ) : (
+                <ChevronRight className="w-3 h-3 mr-0.5" />
+              )}
+              {showDetail ? "收起详情" : "查看详情"}
+            </Button>
+          )}
+        </div>
+        {showDetail && hasDetail && (
+          <pre
+            className="mt-2 max-h-32 overflow-auto rounded bg-rose-100/70 border border-rose-200 px-2 py-1.5 text-[11px] text-rose-900/80 leading-4 whitespace-pre-wrap break-words font-mono"
+            data-testid="minutes-error-detail"
+          >
+            {rawError}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }
