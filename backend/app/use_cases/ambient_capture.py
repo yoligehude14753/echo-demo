@@ -18,6 +18,7 @@ from app.adapters.audio_gate import is_likely_hallucination, pre_stt_gate
 from app.config import Settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
+from app.ports.punctuator import TextPunctuatorPort
 from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
 from app.ports.stt import STTPort
@@ -93,6 +94,7 @@ class AmbientCapturePipeline:
         speaker_registry: SpeakerRegistry | None = None,
         meeting_state: MeetingState | None = None,
         event_bus: EventBusPort | None = None,
+        punctuator: TextPunctuatorPort | None = None,
     ) -> None:
         self._settings = settings
         self._stt = stt
@@ -103,6 +105,7 @@ class AmbientCapturePipeline:
         self._registry = speaker_registry
         self._state = meeting_state
         self._event_bus = event_bus
+        self._punctuator = punctuator
         self._ambient_dir = Path(settings.storage_dir).expanduser() / "ambient"
         self._ambient_dir.mkdir(parents=True, exist_ok=True)
         self._stats = AmbientStats()
@@ -215,6 +218,18 @@ class AmbientCapturePipeline:
                 # 语义（"STT 调用成功且有内容，只是被下游过滤了"）让前端能区分
                 # "STT 健康但被过滤" vs "STT 没听到"。计数器单独记。
                 self._stats.hallu_dropped += 1
+
+        # ── STT 后处理：LLM 加标点 + 分段（fail-soft） ──
+        # 仅当：通过幻觉门控（确认 STT 文本有意义）+ punctuator 注入 + flag 打开 时执行。
+        # 失败 / 超时 → 退回原 stt_segs，不影响 counter / 主链路。
+        # 不动 stored counter 语义：本步只重写 `.text`，不删段、不加段。
+        if texts and not hallu_drop and self._punctuator is not None and self._punctuator.enabled:
+            try:
+                stt_segs = await self._punctuator.punctuate(stt_segs)
+                texts = [s.text.strip() for s in stt_segs if s.text.strip()]
+            except Exception as e:
+                # 多一道兜底：punctuator 内部已有 try/except，但仍守住主链路。
+                logger.warning("ambient punctuator pipeline error: %s", e)
 
         # 仅在 STT 通过 + 非幻觉时才 diarize（避免 _profiles 被噪声/幻觉污染）
         if gate.pass_ and texts and not hallu_drop and self._diarizer is not None:

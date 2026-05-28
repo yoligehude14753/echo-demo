@@ -96,6 +96,18 @@ class Settings(BaseSettings):
     stt_language: str = "zh"
     stt_llm_correct: bool = False
 
+    # ── STT 后处理：LLM 补标点 + 分段 ──────────────────────────────
+    # 用户痛点（2026-05-28）：FireRedASR2 :8090 OpenAPI 只接受
+    # file/model/language/response_format/timestamp_granularities，**没有 punc 开关**；
+    # 6s ambient chunk 出来是一气呵成 30+ 字无标点的整行（截图 m-bdd1da4e7e21），
+    # 用户读不下去。STT 服务端无法直出标点 → ambient 主链路加 Qwen3-1.7B (LLM_FAST)
+    # 后处理批量加标点 + 自然分段。
+    # 详见 `app/adapters/stt/llm_punctuator.py` 文件头。
+    ambient_llm_punctuate: bool = True
+    # 单次 batch（一个 chunk 1-3 段）超时上限；超时 → 退回原文本不阻塞主链路。
+    # Qwen3-1.7B local p50 < 700ms，2s 是宽松上限。
+    ambient_punctuator_timeout_s: float = 2.0
+
     # ── TTS ───────────────────────────────────────────────────────
     # 实际跑的是 faster-qwen3-tts 1.7B CustomVoice @ heyi-bj :8094
     # （echo commit b065547 切换；echo-demo `cosyvoice` 是历史命名遗留）
@@ -129,9 +141,23 @@ class Settings(BaseSettings):
     # ── Speaker Diarization ──────────────────────────────────────
     diarizer_enabled: bool = True
     diarizer_backend: str = "ecapa"
-    # 0.70 对齐 echo `config.py:306`（实测推荐）；之前 0.65 在 6s 含噪 chunk 上
-    # 过严 → 同人被切成多人。详见 docs/ARCH-AUDIT.md §4 root #3。
-    diarizer_match_threshold: float = 0.70
+    # ── threshold 演进史 ──────────────────────────────────────────
+    # 0.65 (init) → 0.70 (spk-1 抄 echo prod) → 0.55 (text-clarity PR, 本次)
+    #
+    # 用户痛点（2026-05-28，会议 m-bdd1da4e7e21）：实际 3 个真人说话，后端
+    # ECAPA 在一个会议内创建了 14 个 speaker_id（说话人 11-16 跨段乱跳）。
+    # 根因（最可能）：0.70 对单声道远场 + 麦克风距离/姿态变化 + 房间混响过严 ——
+    # 同一个人在不同 chunk 上的 instantaneous embedding 与其 centroid 的 cos
+    # 相似度经常落在 0.55-0.70 区间被判新人；EMA α=0.1 的慢融合也追不上。
+    #
+    # 把 default 降到 0.55，trade-off：
+    #   + 同一说话人跨 chunk 抖动（0.55-0.70 区间）→ 正确合并，speaker 不再爆炸
+    #   - 真有 5+ 人的会议里，两个音色相近的人（如同性别同年龄段）可能合并；
+    #     ECAPA 上陌生人 cos 普遍 < 0.45，> 0.55 的"误中"概率不高
+    # 仍可通过 DIARIZER_MATCH_THRESHOLD env 覆盖。0.65/0.70 留作回退基线。
+    #
+    # 详见 docs/ARCH-AUDIT.md §4 root #3。
+    diarizer_match_threshold: float = 0.55
     # EMA centroid 融合系数（命中匹配时）；α=0.1 抄 echo backend/app/speaker/diarizer.py
     diarizer_centroid_ema_alpha: float = 0.1
     # spk-3：基于 VAD active seconds 决定"段够不够长可以注册新人"。
@@ -144,10 +170,10 @@ class Settings(BaseSettings):
     diarizer_min_voiced_seconds_for_new_profile: float = 2.0
     # 短段强制回退已知人时的相似度兜底阈值；低于此值即使是最相似的人也不命中
     # （宁可丢这段也不要污染最相似人的 centroid）。
-    # spk-6 保守预设：0.50 → 0.60。trade-off：短段更难"回退已知人"，多段被丢
-    # （丢段无害，文本仍由 STT 出，只是没 speaker_label） vs 拉飘 centroid（污染）。
-    # 仍 < diarizer_match_threshold (0.70) 维持"短段比正常段更严"语义。
-    diarizer_outlier_match_threshold: float = 0.60
+    # text-clarity PR：0.60 → 0.50。配合主阈值 0.55 维持"短段比正常段更宽容"
+    # 语义（短段更易回退到已知人，少新增碎片化 ID）；丢段会让 ambient text
+    # 没 speaker_label，体验比"算作新人"更友好。
+    diarizer_outlier_match_threshold: float = 0.50
 
     # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
     # 对齐基线：echo `backend/app/pipeline.py:570-577`（生产值 600 / 400 / 0.05 / 12）。
