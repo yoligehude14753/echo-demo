@@ -50,11 +50,13 @@ class MeetingState:
         detector: AutoMeetingDetector,
         repository: RepositoryPort | None = None,
         event_bus: EventBusPort | None = None,
+        max_meeting_duration_s: float = 1800.0,
     ) -> None:
         self._pipeline = pipeline
         self._detector = detector
         self._repo = repository
         self._event_bus = event_bus
+        self._max_meeting_duration_s = max_meeting_duration_s
         self._current: CurrentMeeting | None = None
         self._lock = asyncio.Lock()
 
@@ -71,6 +73,12 @@ class MeetingState:
 
         旧 bug：detector reset 后新 chunk 又开新 auto-meeting → sqlite 里堆出
         几十个 auto-XXX。修复办法：启动时强制清理 in_meeting > 1 的状态。
+
+        2026-05 新增：若保留下来的"最新会议"是 auto-* 且 started_at 已超过
+        ``max_meeting_duration_s``，也强制结束并清空 _current。
+        这条规则关掉的结构性 bug 是：detector 进程崩溃 / 进程被杀重启时，
+        sqlite 里残留的 auto-* in_meeting 行会让顶栏继续显示"会议中"，
+        但 detector 已经丢了内存状态，永远不会再 emit silence_timeout。
         """
         if self._repo is None:
             return
@@ -87,6 +95,27 @@ class MeetingState:
                 logger.warning("hydrate: forced-end stale meeting %s", stale.id)
             except Exception as e:
                 logger.warning("hydrate: failed to force-end %s: %s", stale.id, e)
+
+        now = datetime.now(UTC)
+        kept_started_at = keep.started_at
+        # tz-aware 兜底：sqlite naive datetime 在 macOS Python 上偶尔回来无 tzinfo
+        if kept_started_at.tzinfo is None:
+            kept_started_at = kept_started_at.replace(tzinfo=UTC)
+        age_s = (now - kept_started_at).total_seconds()
+        if keep.id.startswith("auto-") and age_s > self._max_meeting_duration_s:
+            try:
+                await self._repo.update_meeting_state(keep.id, state="ended", ended_at=now)
+            except Exception as e:
+                logger.warning("hydrate: failed to force-end stale auto-meeting %s: %s", keep.id, e)
+            logger.warning(
+                "hydrate: stale auto-meeting force-ended %s (age=%.1fs > max=%.1fs)",
+                keep.id,
+                age_s,
+                self._max_meeting_duration_s,
+            )
+            self._current = None
+            return
+
         self._current = CurrentMeeting(
             meeting_id=keep.id,
             started_at=keep.started_at,

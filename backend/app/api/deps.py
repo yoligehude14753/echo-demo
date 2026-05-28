@@ -89,6 +89,7 @@ def get_auto_meeting_detector(
             min_active_seconds=settings.automeet_min_active_seconds,
             silence_timeout_s=settings.automeet_silence_timeout_s,
             cooldown_s=settings.automeet_cooldown_s,
+            max_meeting_duration_s=settings.automeet_max_meeting_duration_s,
         )
     return _auto_detector_singleton
 
@@ -113,6 +114,7 @@ def get_meeting_state(
             detector=detector,
             repository=repository,
             event_bus=event_bus,
+            max_meeting_duration_s=settings.automeet_max_meeting_duration_s,
         )
     return _meeting_state_singleton
 

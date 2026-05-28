@@ -6,8 +6,19 @@
 - 当前没在 meeting 中（手动 @开始 优先；用户手动开会时 detector 自动让步）
 - 触发后进入 ``auto_meeting`` 状态，meeting_id = ``auto-<unix_ts>``
 
-结束规则：
-- 静默 ≥ ``silence_timeout_s``（默认 30s）→ 自动 end
+结束规则（任意一条命中即 end auto-meeting）：
+- 静默 ≥ ``silence_timeout_s``（默认 30s） → reason="silence_timeout"
+- 距 start 超过 ``max_meeting_duration_s``（默认 30 min 硬上限）
+    → reason="max_duration_exceeded"
+    （兜底：避免持续环境音 / 单人独白 / 电视背景音让会议永远不结束。
+     2026-05 echodesk 顶栏「会议中 562:53」9h+ bug 的结构性修复。）
+- 退化为独白：窗口内 distinct speakers ≤ 1 且距上次有 ≥2 人活跃
+  超过 ``silence_timeout_s / 2`` → reason="degenerated_to_monolog"
+    （会议本来就要"≥2 人"才会自动开；一旦长时间只剩一个人说话，
+     就算不静默也应该回到 idle，让 ambient 链路继续归档，
+     而不是让顶栏一直亮"会议中"。）
+
+冷却：
 - cooldown：刚 end 后 ``cooldown_s``（默认 60s）内不再触发，避免抖动
 
 与手动 @开始会议 合并策略：
@@ -46,17 +57,23 @@ class AutoMeetingDetector:
         min_active_seconds: float = 6.0,
         silence_timeout_s: float = 30.0,
         cooldown_s: float = 60.0,
+        max_meeting_duration_s: float = 1800.0,
     ) -> None:
         self._window_s = window_s
         self._min_distinct = min_distinct_speakers
         self._min_active = min_active_seconds
         self._silence = silence_timeout_s
         self._cooldown = cooldown_s
+        self._max_meeting_duration_s = max_meeting_duration_s
 
         self._window: list[tuple[datetime, str, int]] = []  # (t, speaker_id, dur_ms)
         self._active_meeting_id: str | None = None
         self._last_voice_at: datetime | None = None
         self._last_end_at: datetime | None = None
+        # 会议开始时间：用于 max_meeting_duration_s 兜底
+        self._meeting_started_at: datetime | None = None
+        # 上次"窗口内 distinct ≥ min_distinct"的时刻：用于检测 degenerated_to_monolog
+        self._distinct_active_at: datetime | None = None
 
     @property
     def active_meeting_id(self) -> str | None:
@@ -90,8 +107,7 @@ class AutoMeetingDetector:
                         reason="manual_meeting_started",
                     )
                 )
-                self._active_meeting_id = None
-                self._last_end_at = now
+                self._clear_active(now)
             if speaker_id:
                 self._last_voice_at = now
             return out
@@ -102,36 +118,33 @@ class AutoMeetingDetector:
             self._window.append((now, speaker_id, duration_ms))
             self._last_voice_at = now
 
-        # 3. 已在 auto_meeting：检查静默 → end
+        # 窗口内 distinct ≥ min_distinct → 刷新"多人活跃时刻"（用于 monolog 退化判定）
+        distinct_now = {s for (_, s, _) in self._window}
+        if len(distinct_now) >= self._min_distinct:
+            self._distinct_active_at = now
+
+        # 3. 已在 auto_meeting：检查三类 end 触发
         if self._active_meeting_id is not None:
-            if self._last_voice_at is not None and (
-                (now - self._last_voice_at).total_seconds() > self._silence
-            ):
-                out.append(
-                    DetectorEvent(
-                        kind="end",
-                        meeting_id=self._active_meeting_id,
-                        reason="silence_timeout",
-                    )
-                )
-                self._active_meeting_id = None
-                self._last_end_at = now
+            ended = self._maybe_end_active(now, out)
+            if ended:
+                return out
             return out
 
         # 4. idle 状态：检查触发条件
         if self._in_cooldown(now):
             return out
 
-        distinct = {s for (_, s, _) in self._window}
         active_ms = sum(d for (_, _, d) in self._window)
-        if len(distinct) >= self._min_distinct and active_ms >= self._min_active * 1000:
+        if len(distinct_now) >= self._min_distinct and active_ms >= self._min_active * 1000:
             new_id = f"auto-{int(now.timestamp())}"
             self._active_meeting_id = new_id
+            self._meeting_started_at = now
+            self._distinct_active_at = now
             out.append(
                 DetectorEvent(
                     kind="start",
                     meeting_id=new_id,
-                    reason=f"distinct_speakers={len(distinct)} active_ms={active_ms}",
+                    reason=f"distinct_speakers={len(distinct_now)} active_ms={active_ms}",
                 )
             )
         return out
@@ -141,8 +154,7 @@ class AutoMeetingDetector:
         if self._active_meeting_id is None:
             return None
         ev = DetectorEvent(kind="end", meeting_id=self._active_meeting_id, reason=reason)
-        self._active_meeting_id = None
-        self._last_end_at = now
+        self._clear_active(now)
         return ev
 
     def reset(self) -> None:
@@ -150,6 +162,72 @@ class AutoMeetingDetector:
         self._active_meeting_id = None
         self._last_voice_at = None
         self._last_end_at = None
+        self._meeting_started_at = None
+        self._distinct_active_at = None
+
+    def _clear_active(self, now: datetime) -> None:
+        """end auto meeting 时统一清状态（保留 _last_end_at 进 cooldown）。"""
+        self._active_meeting_id = None
+        self._last_end_at = now
+        self._meeting_started_at = None
+        self._distinct_active_at = None
+
+    def _maybe_end_active(self, now: datetime, out: list[DetectorEvent]) -> bool:
+        """三类 end 触发判定；按优先级依次检查，命中即返回 True 并 append 事件。
+
+        优先级：max_duration > silence_timeout > degenerated_to_monolog
+        （max_duration 是兜底硬上限，需要最先生效；silence 是用户最直观的"散会"语义；
+         monolog 是补充规则，触发频率较低）
+        """
+        assert self._active_meeting_id is not None
+
+        # 3.1 硬上限（防止任意原因导致会议永不结束的兜底）
+        if (
+            self._meeting_started_at is not None
+            and (now - self._meeting_started_at).total_seconds() > self._max_meeting_duration_s
+        ):
+            out.append(
+                DetectorEvent(
+                    kind="end",
+                    meeting_id=self._active_meeting_id,
+                    reason="max_duration_exceeded",
+                )
+            )
+            self._clear_active(now)
+            return True
+
+        # 3.2 静默超时
+        if self._last_voice_at is not None and (
+            (now - self._last_voice_at).total_seconds() > self._silence
+        ):
+            out.append(
+                DetectorEvent(
+                    kind="end",
+                    meeting_id=self._active_meeting_id,
+                    reason="silence_timeout",
+                )
+            )
+            self._clear_active(now)
+            return True
+
+        # 3.3 退化为独白（窗口内 ≤ 1 个 speaker，且距上次"多人活跃"已超过 silence/2）
+        distinct = {s for (_, s, _) in self._window}
+        if (
+            len(distinct) <= 1
+            and self._distinct_active_at is not None
+            and (now - self._distinct_active_at).total_seconds() > self._silence / 2
+        ):
+            out.append(
+                DetectorEvent(
+                    kind="end",
+                    meeting_id=self._active_meeting_id,
+                    reason="degenerated_to_monolog",
+                )
+            )
+            self._clear_active(now)
+            return True
+
+        return False
 
     def _prune_window(self, now: datetime) -> None:
         cutoff = now - timedelta(seconds=self._window_s)
