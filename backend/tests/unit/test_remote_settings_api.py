@@ -21,18 +21,38 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def isolated_user_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """让 user_config_dir() 指向 tmp_path，避免污染 ~/.echodesk/。"""
+    """让 user_config_dir() 指向 tmp_path，避免污染 ~/.echodesk/。
+
+    同时清掉 repo 根 .env 里 dev 用的 endpoint 覆盖（dev .env 把 LLM_FAST/STT/TTS
+    指向 Tailscale IP）—— 否则本地跑会污染"default vs user"的 source 判定。
+    """
     monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
+    for k in (
+        "LLM_FAST_BASE_URL",
+        "STT_FIRERED_URL",
+        "TTS_QWEN3_URL",
+        "TTS_COSYVOICE_URL",
+        "LLM_MAIN_BASE_URL",
+    ):
+        monkeypatch.delenv(k, raising=False)
     # Settings 单例可能在 fixture 之前 import；重置一下让测试拿到隔离的 path
     get_settings.cache_clear()  # type: ignore[attr-defined]
     return tmp_path
 
 
 @pytest.fixture
-def client(isolated_user_dir: Path) -> TestClient:
-    """避免 lifespan 真启动 RAG / repo 等长时副作用：直接构造 app 但不进 lifespan。"""
+def client(isolated_user_dir: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """避免 lifespan 真启动 RAG / repo 等长时副作用：直接构造 app 但不进 lifespan。
+
+    把 get_settings 临时换成 `_env_file=None` 版本，绕过 repo 根 .env 加载，
+    让测试看到的 default 就是 config.py 里写的 default（hermetic）。
+    """
+
+    def _no_env_settings() -> Settings:
+        return Settings(_env_file=None)  # type: ignore[call-arg]
+
+    monkeypatch.setattr("app.api.admin.get_settings", _no_env_settings)
     app = create_app()
-    # TestClient 默认会触发 lifespan，加 use_app_lifespan=False 让 startup 跳过
     return TestClient(app, raise_server_exceptions=True)
 
 
@@ -93,7 +113,8 @@ def test_get_remote_settings_returns_masked_keys(
     # 未被 user 覆盖的字段 source=default
     stt = fields_by_key["stt_firered_url"]
     assert stt["source"] == "default"
-    assert stt["value"].startswith("http://")
+    # default 切到 Cloudflare HTTPS（2026-05-28 fix/llm-fast-cloudflare-default）
+    assert stt["value"].startswith("https://")
 
 
 @pytest.mark.unit
