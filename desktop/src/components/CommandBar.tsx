@@ -18,14 +18,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Input, Tag, Tooltip, message } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
-import { FileText, Loader2, Paperclip, Send, Sparkles, Upload, Wand2, X } from "lucide-react";
+import { FileText, Loader2, Paperclip, Send, Upload, Wand2, X } from "lucide-react";
 
 import {
   chatAsk,
   finalizeMeeting,
-  generateArtifact,
+  generateArtifactStream,
   ingestFile,
   listRagDocs,
+  listRecentAmbient,
   ragAsk,
   routeIntent,
   workspaceStatus,
@@ -53,21 +54,6 @@ const kindLabel: Record<IntentKind, string> = {
   chat: "对话",
 };
 
-const kindColor: Record<IntentKind, string> = {
-  search_web: "blue",
-  search_rag: "purple",
-  generate_html: "magenta",
-  generate_pptx: "gold",
-  generate_xlsx: "green",
-  generate_word: "cyan",
-  generate_markdown: "geekblue",
-  generate_pdf: "red",
-  generate_txt: "default",
-  summarize_meeting: "geekblue",
-  chat_no_rag: "default",
-  chat: "default",
-};
-
 // 与后端 parsers.SUPPORTED_EXTS 保持一致的子集（最常用的；其他扩展名走 markitdown 也支持）
 const ACCEPT_EXT =
   ".pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.html,.htm,.csv,.epub,.msg,.eml," +
@@ -89,7 +75,6 @@ export default function CommandBar(): JSX.Element {
   const [uploading, setUploading] = useState(0);
   const [dropActive, setDropActive] = useState(false);
   const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
-  const [lastIntent, setLastIntent] = useState<IntentResult | null>(null);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
@@ -97,6 +82,7 @@ export default function CommandBar(): JSX.Element {
   const appendUserCommand = useStore((s) => s.appendUserCommand);
   const appendAssistantReply = useStore((s) => s.appendAssistantReply);
   const patchConversationStatus = useStore((s) => s.patchConversationStatus);
+  const patchAssistantReply = useStore((s) => s.patchAssistantReply);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<TextAreaRef | null>(null);
 
@@ -224,6 +210,28 @@ export default function CommandBar(): JSX.Element {
     return false;
   }
 
+  /**
+   * 拼接喂给 echo 的 inline_context：当前会议 segments + 最近 ambient（最多 30 条）。
+   *
+   * 用户 2026-05-28：「Echo 的回复显然没有带上下文和知识库或者网络搜索」——
+   * RAG 索引只覆盖结束的会议 / 上传的 PDF，进行中的转录还没进索引。这里前端
+   * 把最近 30 条转录拼成可读字符串作为 inline_context 透传给 retrieve_and_answer，
+   * 让 Echo 答题时能感知"我们刚才在聊什么"。
+   */
+  async function buildInlineContext(): Promise<string> {
+    try {
+      const recent = await listRecentAmbient(30);
+      if (recent.length === 0) return "";
+      const lines = recent.map((s) => {
+        const tag = s.speaker_label ?? s.speaker_id ?? "?";
+        return `${tag} · ${s.text}`;
+      });
+      return lines.join("\n");
+    } catch {
+      return "";
+    }
+  }
+
   async function onSubmit(): Promise<void> {
     if (busy || uploading > 0) return;
     const trimmed = text.trim();
@@ -234,15 +242,27 @@ export default function CommandBar(): JSX.Element {
           ? `请基于附件回答（${pendingDocs.map((d) => d.filename).join("、")}）`
           : "";
     if (!value) return;
-    // 用户 2026-05-28 反馈：「我输入的命令也要进转写流（右边）」——
-    // 立刻 append 一条 user_command 事件，TranscriptStream 渲染为右侧气泡。
-    // 拿到的 cmdId 在 dispatch 结束时 patch status="done"/"failed"。
-    const cmdId = appendUserCommand(value);
+    // 用户 2026-05-28 反馈：「我输入的命令也要进转写流（右边）」+ 「这里 @ 应
+    // 该是 @echo，不是空着」——立刻 append 一条 user_command 事件，文本前补
+    // `@echo`（如果用户没主动打前缀），让气泡明确显示"在问 echo"。
+    // TranscriptStream 渲染为右侧气泡。拿到的 cmdId 在 dispatch 结束时 patch
+    // status="done"/"failed"。
+    const displayValue = value.startsWith("@") ? value : `@echo ${value}`;
+    const cmdId = appendUserCommand(displayValue);
+    // P4-fix（2026-05-28）：提交瞬间在左侧预插一个 status="pending" 的空 Echo 气泡，
+    // dispatch 各分支拿到回答后 patchAssistantReply(replyId, {...})。
+    // 这样 TranscriptStream 的"Echo 思考中…"spinner 落在 Echo 回复气泡（左），
+    // 而不是用户命令气泡（右）。
+    const replyId = appendAssistantReply(
+      "",
+      "assistant_reply",
+      undefined,
+      "pending",
+    );
     setBusy(true);
     try {
       const r = await routeIntent(value, currentMeetingId);
-      setLastIntent(r);
-      await dispatch(r, value, cmdId);
+      await dispatch(r, value, cmdId, replyId);
       setText("");
       if (trimmed.length === 0 && pendingDocs.length > 0) {
         setPendingDocs([]);
@@ -250,7 +270,10 @@ export default function CommandBar(): JSX.Element {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       patchConversationStatus(cmdId, "failed");
-      appendAssistantReply(`发送失败：${msg}`);
+      patchAssistantReply(replyId, {
+        text: `发送失败：${msg}`,
+        status: "failed",
+      });
     } finally {
       setBusy(false);
     }
@@ -260,6 +283,7 @@ export default function CommandBar(): JSX.Element {
     r: IntentResult,
     originalText: string,
     cmdId: string,
+    replyId: string,
   ): Promise<void> {
     switch (r.kind) {
       case "generate_html":
@@ -273,51 +297,118 @@ export default function CommandBar(): JSX.Element {
         const brief = (r.params.brief as string | undefined) ?? originalText;
         if (!brief) {
           patchConversationStatus(cmdId, "failed");
-          appendAssistantReply("brief 为空，无法生成产物");
+          patchAssistantReply(replyId, {
+            text: "brief 为空，无法生成产物",
+            status: "failed",
+          });
           return;
         }
-        appendAssistantReply(`已派发：${kindLabel[r.kind]}，后台生成中…`);
-        void generateArtifact({
-          artifact_type: kind as
-            | "html"
-            | "pptx"
-            | "xlsx"
-            | "word"
-            | "markdown"
-            | "pdf"
-            | "txt",
-          brief,
-        })
-          .then((art) => {
-            addArtifact(art);
-            patchConversationStatus(cmdId, "done");
-            appendAssistantReply(`已生成 ${art.artifact_type}：${art.title ?? art.artifact_id}`);
-          })
-          .catch((e) => {
-            const raw = e instanceof Error ? e.message : String(e);
-            patchConversationStatus(cmdId, "failed");
-            appendAssistantReply(`生成失败：${raw}`);
+        // 让 pending Echo 气泡继续转 spinner，同时把"已派发"文案 patch 进 text，
+        // 用户能看到"任务被识别 → 正在生成"两层进度。
+        patchAssistantReply(replyId, {
+          text: `已派发：${kindLabel[r.kind]}，准备 prompt 中…`,
+        });
+        // 用户原话："不管调用什么工具或者 skill，最好也能流式输出一些过程性的内容"。
+        // 走 SSE 版 /artifacts/generate/stream：把每个阶段（phase / llm_chunk /
+        // done / error）实时 patch 到 Echo 气泡，让用户看见生成全过程而不是 5
+        // 分钟 spinner。stream 函数本身只会因 fetch 失败抛错；业务错误走 onError。
+        let finalLabel = kindLabel[r.kind];
+        void generateArtifactStream(
+          {
+            artifact_type: kind as
+              | "html"
+              | "pptx"
+              | "xlsx"
+              | "word"
+              | "markdown"
+              | "pdf"
+              | "txt",
+            brief,
+          },
+          {
+            onPhase: (p) => {
+              // phase 类事件直接把 msg 当文案；缺 msg 时回退到 phase 名。
+              const human = p.msg ?? p.phase;
+              patchAssistantReply(replyId, {
+                text: `${kindLabel[r.kind]} · ${human}`,
+                status: "pending",
+              });
+            },
+            onLLMChunk: ({ text, total_chars }) => {
+              // 只显示尾部 ~300 字预览，避免气泡膨胀到几千字（HTML one-pager
+              // 6000+ chars，PPT JSON 27 字段 + 解释也常 2000+ chars）。
+              const tail = text.length > 300 ? text.slice(-300) : text;
+              patchAssistantReply(replyId, {
+                text: `${kindLabel[r.kind]} · 生成中（已收到 ${total_chars} 字符）…\n\n${tail}`,
+                status: "pending",
+              });
+            },
+            onDone: (art) => {
+              addArtifact(art);
+              finalLabel = art.artifact_type;
+              patchConversationStatus(cmdId, "done");
+              const sizeKb = (art.size_bytes / 1024).toFixed(1);
+              const title = art.title?.trim() ? art.title : art.artifact_id;
+              patchAssistantReply(replyId, {
+                text: `已生成 ${finalLabel} · ${title}（${sizeKb} KB）`,
+                status: "done",
+              });
+            },
+            onError: ({ error, stage }) => {
+              patchConversationStatus(cmdId, "failed");
+              const where = stage ? `（阶段 ${stage}）` : "";
+              patchAssistantReply(replyId, {
+                text: `生成失败${where}：${error}`,
+                status: "failed",
+              });
+            },
+          },
+        ).catch((e) => {
+          const raw = e instanceof Error ? e.message : String(e);
+          patchConversationStatus(cmdId, "failed");
+          patchAssistantReply(replyId, {
+            text: `生成失败（连接异常）：${raw}`,
+            status: "failed",
           });
+        });
         return;
       }
       case "summarize_meeting": {
         const mid = (r.params.meeting_id as string | undefined) ?? currentMeetingId;
         if (!mid) {
           patchConversationStatus(cmdId, "failed");
-          appendAssistantReply("当前没有进行中的会议");
+          patchAssistantReply(replyId, {
+            text: "当前没有进行中的会议",
+            status: "failed",
+          });
           return;
         }
-        appendAssistantReply(`正在总结会议 ${mid}…`);
-        const minutes = await finalizeMeeting(mid, `会议 ${mid}`);
-        patchConversationStatus(cmdId, "done");
-        appendAssistantReply(`会议纪要已生成，共 ${minutes.sections.length} 节`);
+        patchAssistantReply(replyId, { text: `正在总结会议 ${mid}…` });
+        try {
+          const minutes = await finalizeMeeting(mid, `会议 ${mid}`);
+          patchConversationStatus(cmdId, "done");
+          patchAssistantReply(replyId, {
+            text: `会议纪要已生成，共 ${minutes.sections.length} 节`,
+            status: "done",
+          });
+        } catch (e) {
+          const raw = e instanceof Error ? e.message : String(e);
+          patchConversationStatus(cmdId, "failed");
+          patchAssistantReply(replyId, {
+            text: `总结失败：${raw}`,
+            status: "failed",
+          });
+        }
         return;
       }
       case "chat_no_rag": {
         const question = (r.params.text as string | undefined) ?? originalText;
         if (!question) {
           patchConversationStatus(cmdId, "failed");
-          appendAssistantReply("text 为空");
+          patchAssistantReply(replyId, {
+            text: "text 为空",
+            status: "failed",
+          });
           return;
         }
         void chatAsk(question)
@@ -332,14 +423,20 @@ export default function CommandBar(): JSX.Element {
               } as unknown as Record<string, unknown>,
             });
             patchConversationStatus(cmdId, "done");
-            appendAssistantReply(answer);
+            patchAssistantReply(replyId, {
+              text: answer,
+              status: "done",
+            });
             // 用户 2026-05-28 反馈：自动播放且关不掉。默认不再 auto-speak，
             // 用户想听就点 StatusBar 的 TTS 按钮，或后续在 Echo 气泡上点 🔊。
           })
           .catch((e) => {
             const raw = e instanceof Error ? e.message : String(e);
             patchConversationStatus(cmdId, "failed");
-            appendAssistantReply(`闲聊失败：${raw}`);
+            patchAssistantReply(replyId, {
+              text: `闲聊失败：${raw}`,
+              status: "failed",
+            });
           });
         return;
       }
@@ -364,14 +461,21 @@ export default function CommandBar(): JSX.Element {
           ?? originalText;
         if (!question) {
           patchConversationStatus(cmdId, "failed");
-          appendAssistantReply("question 为空");
+          patchAssistantReply(replyId, {
+            text: "question 为空",
+            status: "failed",
+          });
           return;
         }
         // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
         // 不阻塞 ragAsk 主链路（并发触发）。
         void maybePromptWorkspaceConfig();
 
-        void ragAsk(question)
+        // 拼最近 ambient 转录作为 inline_context 喂给 Echo（用户 2026-05-28 反馈
+        // "回复没带上下文"）。buildInlineContext 失败返回 ""，不阻塞主链路
+        const inlineContext = await buildInlineContext();
+
+        void ragAsk(question, { inlineContext })
           .then((ans) => {
             applyEvent({
               type: "rag.answer.done",
@@ -395,13 +499,21 @@ export default function CommandBar(): JSX.Element {
                 chunk_id: (c as unknown as { chunk_id?: string }).chunk_id,
                 score: c.score,
               }));
-            appendAssistantReply(ans.answer, "rag_answer", cites);
+            patchAssistantReply(replyId, {
+              text: ans.answer,
+              kind: "rag_answer",
+              citations: cites,
+              status: "done",
+            });
             // 用户 2026-05-28：默认不 auto-speak（见上文 chat 分支注释）。
           })
           .catch((e) => {
             const raw = e instanceof Error ? e.message : String(e);
             patchConversationStatus(cmdId, "failed");
-            appendAssistantReply(`检索失败：${raw}`);
+            patchAssistantReply(replyId, {
+              text: `检索失败：${raw}`,
+              status: "failed",
+            });
           });
         return;
       }
@@ -426,36 +538,9 @@ export default function CommandBar(): JSX.Element {
         </div>
       )}
 
-      {lastIntent && (
-        <div
-          className="flex items-center gap-2 mb-1.5 text-[11px] text-ink-500"
-          data-testid="intent-status"
-        >
-          <Sparkles className="w-3 h-3" />
-          <span>意图：</span>
-          <Tag color={kindColor[lastIntent.kind]} className="!m-0">
-            {kindLabel[lastIntent.kind]}
-          </Tag>
-          <span>·</span>
-          {typeof lastIntent.confidence === "number" ? (
-            // P4-fix（2026-05-28）：只在分类器真的产生了置信度时显示百分比；
-            // 纯规则匹配路径（无 @ 前缀）返回 null，改显 "规则匹配"，
-            // 避免把虚假的 "100%" 当成模型决策。
-            <span data-testid="intent-confidence">
-              置信度 {(lastIntent.confidence * 100).toFixed(0)}%
-            </span>
-          ) : (
-            <span data-testid="intent-rule-matched">规则匹配</span>
-          )}
-          {lastIntent.rationale && (
-            <Tooltip title={lastIntent.rationale}>
-              <span className="truncate max-w-[280px]">
-                · {lastIntent.rationale}
-              </span>
-            </Tooltip>
-          )}
-        </div>
-      )}
+      {/* 用户 2026-05-28：「置信度/关键字命中 这些后台信息不要显示」——
+          移除 intent-status 行；意图标签 / rationale / confidence 现在仅
+          作为内部状态用于 dispatch，不渲染到 UI。 */}
 
       {(pendingDocs.length > 0 || uploading > 0) && (
         <div
@@ -500,7 +585,7 @@ export default function CommandBar(): JSX.Element {
             }
           }}
           onPaste={onPaste}
-          placeholder="直接打字问 Echo 智能问答 · @生成 PPT / @查 / 拖入文件入库 RAG · Shift+Enter 换行"
+          placeholder="问 Echo（默认带知识库 + 网络 + 当前会议上下文）· @生成 PPT / @生成 HTML / @chat 闲聊 · 拖入文件入库 RAG · Shift+Enter 换行"
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={busy}
           className="!rounded-md"

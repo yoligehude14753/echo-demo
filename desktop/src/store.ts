@@ -110,14 +110,31 @@ interface Store {
 
   /** CommandBar 用户提交时插入「右侧」气泡 + 返回 event id 供后续 patch（done / failed）。 */
   appendUserCommand(text: string): string;
-  /** chat / rag 返回 LLM 回答时插入「左侧」Echo 气泡。 */
+  /** chat / rag 返回 LLM 回答时插入「左侧」Echo 气泡。
+   *
+   * 用户 2026-05-28：「Echo 思考中」应该在 Echo 气泡里，不是用户气泡里。
+   * 所以 CommandBar 在 submit 时可立刻 append 一条 status="pending" 的空回复，
+   * 让 TranscriptStream 在 Echo 气泡里渲染思考中 spinner；答复回来后调
+   * ``patchAssistantReply`` 把 text / citations / status 一次性 patch 进去。
+   */
   appendAssistantReply(
     text: string,
     kind?: "assistant_reply" | "rag_answer",
     citations?: ConversationEvent["citations"],
+    status?: ConversationEvent["status"],
   ): string;
   /** 标记某条 user_command 已完成 / 失败（仅切 status，不动 text）。 */
   patchConversationStatus(id: string, status: "done" | "failed"): void;
+  /** 答复回来后给 Echo 气泡填充 text / citations / status；其它字段不动。 */
+  patchAssistantReply(
+    id: string,
+    patch: {
+      text?: string;
+      citations?: ConversationEvent["citations"];
+      kind?: "assistant_reply" | "rag_answer";
+      status?: "pending" | "done" | "failed";
+    },
+  ): void;
   /** 清空会话事件（顶栏「清空」按钮用，避免会议结束时残留）。 */
   clearConversationEvents(): void;
 
@@ -164,7 +181,7 @@ export const useStore = create<Store>((set, get) => ({
     }));
     return id;
   },
-  appendAssistantReply: (text, kind = "assistant_reply", citations) => {
+  appendAssistantReply: (text, kind = "assistant_reply", citations, status = "done") => {
     const id = `reply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const ev: ConversationEvent = {
       id,
@@ -172,7 +189,7 @@ export const useStore = create<Store>((set, get) => ({
       kind,
       text,
       citations,
-      status: "done",
+      status,
     };
     set((s) => ({
       conversationEvents: [...s.conversationEvents.slice(-200), ev],
@@ -183,6 +200,20 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({
       conversationEvents: s.conversationEvents.map((e) =>
         e.id === id ? { ...e, status } : e,
+      ),
+    })),
+  patchAssistantReply: (id, patch) =>
+    set((s) => ({
+      conversationEvents: s.conversationEvents.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              ...(patch.text !== undefined ? { text: patch.text } : {}),
+              ...(patch.citations !== undefined ? { citations: patch.citations } : {}),
+              ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+              ...(patch.status !== undefined ? { status: patch.status } : {}),
+            }
+          : e,
       ),
     })),
   clearConversationEvents: () => set({ conversationEvents: [] }),

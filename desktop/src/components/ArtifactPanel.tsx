@@ -73,7 +73,7 @@ export default function ArtifactPanel(): JSX.Element {
     useState<GeneratedArtifact | null>(null);
 
   // 选中具体会议 → 仅展示该会议的产物（meeting.artifacts 由 ws 事件维护，
-  // 详见 store.ts 的 artifact.ready handler）。"待机时段"（currentMeetingId
+  // 详见 store.ts 的 artifact.ready handler）。"伴随时段"（currentMeetingId
   // === null）走全局视图，与历史一致。
   const scopedToMeeting = currentMeetingId !== null && meeting !== undefined;
   const artifacts = scopedToMeeting ? meeting.artifacts : globalArtifacts;
@@ -136,7 +136,7 @@ export default function ArtifactPanel(): JSX.Element {
             <div>{scopedToMeeting ? "该会议暂无产物" : "暂无产物"}</div>
             <div className="text-ink-300">
               {scopedToMeeting
-                ? "切到「待机时段」查看全部历史产物"
+                ? "切到「伴随时段」查看全部历史产物"
                 : "在输入框输入 @生成 PPT / @报告 / @Excel … 触发"}
             </div>
           </div>

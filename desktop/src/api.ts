@@ -235,6 +235,7 @@ export async function listRecentAmbient(
   return asJson<AmbientSegment[]>(r);
 }
 
+
 export type ArtifactKind =
   | "word"
   | "docx"
@@ -268,6 +269,150 @@ export async function generateArtifact(req: {
   return asJson<GeneratedArtifact>(r);
 }
 
+/**
+ * SSE 事件：与 backend/app/api/artifacts.py 的 _progress_to_sse_frames 一一对应。
+ *
+ * - phase: 后端进度阶段（prompt_build / llm_stream_start / llm_stream_done /
+ *          invariants_check / executor_run / saved）。data.phase 是 stage 名，
+ *          data.msg 是中文短描述（可缺）。
+ * - llm_chunk: LLM 累积每 ~200 chars 推一次。data.text 是累积全文（前端只显示
+ *              尾部 ~300 字避免气泡过长），data.total_chars 是累积字符数。
+ * - done: 终态成功。data 是 GeneratedArtifact JSON。
+ * - error: 终态失败。data.error 是错误文案，data.stage 是失败前最后一个 stage。
+ */
+export interface ArtifactStreamPhase {
+  phase: string;
+  msg?: string;
+  total_chars?: number;
+  latency_ms?: number;
+  tool?: string;
+}
+
+export interface ArtifactStreamLLMChunk {
+  text: string;
+  total_chars: number;
+}
+
+export interface ArtifactStreamError {
+  error: string;
+  stage?: string;
+}
+
+export interface GenerateArtifactStreamCallbacks {
+  onPhase?: (phase: ArtifactStreamPhase) => void;
+  onLLMChunk?: (chunk: ArtifactStreamLLMChunk) => void;
+  onDone?: (artifact: GeneratedArtifact) => void;
+  onError?: (err: ArtifactStreamError) => void;
+}
+
+/**
+ * 流式生成产物。SSE event 协议见 backend/app/api/artifacts.py 的注释。
+ *
+ * 与阻塞版 ``generateArtifact`` 的区别：
+ *  - 阻塞版返回 Promise<GeneratedArtifact>，几分钟才 resolve（前端只能转 spinner）
+ *  - 流式版返回 ``Promise<void>``，过程中通过 callbacks 流式 push 进度
+ *
+ * 失败：onError 触发后函数 resolve，不抛异常（让调用方自己决定 toast / 更新气泡）。
+ * 唯一可能 throw 的是 fetch 本身（网络不通 / 后端不可达）。
+ *
+ * 用户原话："不管调用什么工具或者 skill，最好也能流式输出一些过程性的内容"。
+ */
+export async function generateArtifactStream(
+  req: {
+    artifact_type: ArtifactKind;
+    brief: string;
+    extra_instructions?: string;
+    meeting_id?: string;
+    todo_id?: string;
+  },
+  callbacks: GenerateArtifactStreamCallbacks,
+): Promise<void> {
+  const u = await apiUrl("/artifacts/generate/stream");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    callbacks.onError?.({
+      error: `HTTP ${r.status} ${r.statusText}: ${text}`,
+      stage: "http",
+    });
+    return;
+  }
+  const reader = r.body?.getReader();
+  if (!reader) {
+    callbacks.onError?.({
+      error: "generate/stream: response body unreadable",
+      stage: "fetch",
+    });
+    return;
+  }
+  const decoder = new TextDecoder("utf-8");
+  let buf = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    // SSE 帧以 \n\n 分隔；每帧含一行 ``event: <type>`` + 一行 ``data: <json>``
+    let nl: number;
+    while ((nl = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, nl);
+      buf = buf.slice(nl + 2);
+      let eventName = "message";
+      let dataPayload = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event: ")) eventName = line.slice("event: ".length).trim();
+        else if (line.startsWith("data: ")) dataPayload = line.slice("data: ".length);
+      }
+      if (!dataPayload) continue;
+      try {
+        const data = JSON.parse(dataPayload) as Record<string, unknown>;
+        switch (eventName) {
+          case "phase":
+            callbacks.onPhase?.({
+              phase: String(data.phase ?? ""),
+              msg: typeof data.msg === "string" ? data.msg : undefined,
+              total_chars:
+                typeof data.total_chars === "number" ? data.total_chars : undefined,
+              latency_ms:
+                typeof data.latency_ms === "number" ? data.latency_ms : undefined,
+              tool: typeof data.tool === "string" ? data.tool : undefined,
+            });
+            break;
+          case "llm_chunk":
+            callbacks.onLLMChunk?.({
+              text: typeof data.text === "string" ? data.text : "",
+              total_chars:
+                typeof data.total_chars === "number" ? data.total_chars : 0,
+            });
+            break;
+          case "done":
+            callbacks.onDone?.(data as unknown as GeneratedArtifact);
+            break;
+          case "error":
+            callbacks.onError?.({
+              error: typeof data.error === "string" ? data.error : "",
+              stage: typeof data.stage === "string" ? data.stage : undefined,
+            });
+            break;
+          default:
+            // 未知事件类型：静默忽略（保留前后端协议演进余量）
+            break;
+        }
+      } catch {
+        // 单帧解析失败不致命，继续解析下一帧
+      }
+    }
+  }
+}
+
 export function artifactDownloadUrl(artifactId: string): string {
   // 同步版本：浏览器 / vite dev 用相对路径；Electron file:// 下用 sync sentinel
   // 由于 backendBase() 是异步的，但下载/预览只在前端运行时拼接，简单起见在 file:// 下回退默认 host。
@@ -289,7 +434,10 @@ export function artifactDownloadUrl(artifactId: string): string {
  *   - 中间帧：`data: {"delta": "..."}` 多次
  *   - 结束帧：`data: [DONE]`
  */
-export async function ragAsk(question: string): Promise<{
+export async function ragAsk(
+  question: string,
+  options?: { inlineContext?: string },
+): Promise<{
   answer: string;
   citations: Array<{
     kind: string;
@@ -302,10 +450,17 @@ export async function ragAsk(question: string): Promise<{
   arbitration: string;
 }> {
   const u = await apiUrl("/rag/ask");
+  const body: Record<string, unknown> = { question };
+  // 2026-05-28：把当前会议 / 最近 ambient 转录作为 inline_context 喂 echo，
+  // 让回答能看见"我们刚才在聊什么"。后端把这块拼到 prompt 的「当前会议
+  // 上下文」段，不进 RAG 索引（避免污染检索）。
+  if (options?.inlineContext && options.inlineContext.trim().length > 0) {
+    body.inline_context = options.inlineContext;
+  }
   const r = await fetch(u, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     const text = await r.text();

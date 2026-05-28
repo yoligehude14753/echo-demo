@@ -16,13 +16,13 @@ import type { EchoEvent, MeetingStateSnapshot } from "@/types";
  * - 一个时刻只能有 0 或 1 个会议；状态由后端 MeetingState 单例机决定
  * - 自动检测开/结：后端 detector 触发，通过 WS `meeting.state_changed` 推送
  * - 手动覆盖：用户点击本组件 → manual_start / manual_end
- * - 不展示 meeting_id（用户不关心），只显示「待机 / 会议中（manual）/ 持续监听（auto）」
+ * - 不展示 meeting_id（用户不关心），只显示「待机 / 会议中（manual）/ 持续陪伴（auto）」
  *
  * Auto vs Manual 区分（2026-05 phase4-meeting-deadlock 修复）：
  * - manual：用户主动开始，会议中明确性强 → rose 红 + mm:ss 计时 + Square 图标
  * - auto：环境音被识别为持续对话；计时容易让用户误以为是"正常会议"，
  *   导致顶栏出现"会议中 562:53"这类 9h+ 假象。改为：
- *   amber 暖色 + 文案"持续监听" + Mic 图标 + 不显示计时
+ *   amber 暖色 + 文案"持续陪伴" + Mic 图标 + 不显示计时
  *   （计时由 hover tooltip 提供"已持续 X 分钟"参考用，不挂主视觉）
  */
 function fmtElapsed(startedAt?: string | null): string {
@@ -183,7 +183,7 @@ export default function MeetingStatusBar(): JSX.Element {
         ) : isAuto ? (
           <>
             <Mic className="w-3 h-3" />
-            <span>持续监听</span>
+            <span>持续陪伴</span>
           </>
         ) : (
           <>

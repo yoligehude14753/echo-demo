@@ -17,16 +17,16 @@ const label: Record<MeetingCard["state"], string> = {
 };
 
 /**
- * 列表第一项是虚拟"待机时段（自由对话）"——非会议状态的 ambient 转写聚合。
+ * 列表第一项是虚拟"伴随时段（自由对话）"——非会议状态的 ambient 转写聚合。
  *
  * 产品决策（2026-05-28）：ambient_segments 表没有 meeting_id 列，所有非会议
  * 时段的语音段共用一个全局 lane。把它当作一条特殊"会议"放在列表顶端，让
  * 用户能：
- *   a) 看到"待机时段"也是受关注的内容（有图标 + 持续转写中提示）
+ *   a) 看到"伴随时段"也是受关注的内容（有图标 + 持续转写中提示）
  *   b) 切回它时中间面板显示全局 ambient feed（TranscriptStream 早就支持）
  *   c) 右侧 minutes / outputs 显示空态（待机不产生会议级产物）
  *
- * 用 currentMeetingId === null 表达"选中待机时段"，避免新增 sentinel 字符串
+ * 用 currentMeetingId === null 表达"选中伴随时段"，避免新增 sentinel 字符串
  * 污染 store 类型。
  */
 export default function MeetingList(): JSX.Element {
@@ -65,7 +65,7 @@ export default function MeetingList(): JSX.Element {
       <div className="flex items-center gap-2">
         <Radio className="w-3 h-3 shrink-0 text-accent" aria-hidden="true" />
         <span className="text-[13px] font-medium truncate flex-1">
-          待机时段
+          伴随时段
         </span>
       </div>
       <div className="mt-1 text-[11px] text-ink-400 flex items-center gap-2 pl-[18px]">

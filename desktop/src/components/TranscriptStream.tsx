@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
-import { listRecentAmbient, type AmbientSegment } from "@/api";
+import { Loader2, Pencil } from "lucide-react";
+import { Tooltip, message } from "antd";
+import { listRecentAmbient, renameSpeaker, type AmbientSegment } from "@/api";
 import { useStore, type ConversationEvent } from "@/store";
 import type { TranscriptSegment } from "@/types";
 import {
@@ -19,7 +20,7 @@ function fmtClockShort(iso: string): string {
  * 转写流主面板（v2 气泡布局，参考 Marvis 简化）。
  *
  * 数据源切换（P4 M_meeting_history，2026-05-28）：
- * - currentMeetingId === null（"待机时段"）→ 显示全局 ambient feed（3s 轮询）
+ * - currentMeetingId === null（"伴随时段"）→ 显示全局 ambient feed（3s 轮询）
  * - currentMeetingId 已选 + 会议 ended/finalized → 显示 meeting.segments（DB 历史）
  * - currentMeetingId 已选 + 会议 in_meeting → 显示 ambient + 时间窗高亮（兼容当前
  *   ambient pipeline：会议中 chunk 既写 ambient_segments 也走 meeting overlay；
@@ -39,11 +40,14 @@ interface DisplaySegment {
   text: string;
   captured_at: string;
   speaker_label: string | null;
+  // 用户 2026-05-28：speaker_id 沿着 STT → ambient/meeting → display 一路带下来
+  // 让 speaker_tag 点击改名时知道改的是哪个全局 ID（rename API 需要）。
+  speaker_id?: string | null;
   /**
    * 用户 2026-05-28 反馈：CommandBar 输入要进转写流（右），Echo / RAG 回复
    * 要在转写流（左）。同源合并：所有 conversation events 转成 DisplaySegment，
    * convKind 决定渲染样式：
-   *   - user_command → 右侧 + 紫色 "我" 头像
+   *   - user_command → 右侧 + 紫色 "用户" 头像（2026-05-28：原来叫"我"，改"用户"）
    *   - assistant_reply → 左侧 + Echo "E" 头像 + 高亮气泡
    *   - rag_answer → 左侧 + Echo "E" 头像 + 引用列表
    * undefined → STT 真实 segment（保持原路径）
@@ -71,6 +75,7 @@ function ambientToDisplay(s: AmbientSegment): DisplaySegment {
     text: s.text,
     captured_at: s.captured_at,
     speaker_label: s.speaker_label,
+    speaker_id: s.speaker_id,
   };
 }
 
@@ -89,6 +94,7 @@ function meetingSegmentToDisplay(
     text: s.text,
     captured_at: captured,
     speaker_label: s.speaker_label ?? null,
+    speaker_id: s.speaker_id ?? null,
   };
 }
 
@@ -101,6 +107,14 @@ export default function TranscriptStream(): JSX.Element {
   );
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickyToBottomRef = useRef(true);
+
+  // 用户 2026-05-28：所有 speaker label 可改名。
+  // 本地 overrides 优先：刚改完不等 ws 事件就能显示新名字；同时立刻 POST /speakers/{id}/rename
+  // 持久化到 repo（label_user_set=1），下次同声纹再来或重启后能识别。
+  // key = speaker_id（全局唯一），value = 用户起的名字
+  const [speakerOverrides, setSpeakerOverrides] = useState<
+    Record<string, string>
+  >({});
 
   // 是否走"会议历史"分支：会议已选 + 已结束（ended/finalized 等）+ 有 segments
   // 进行中会议仍走 ambient 分支保持实时性（ambient 是 chunk 写入的最近 100 条）
@@ -264,21 +278,33 @@ export default function TranscriptStream(): JSX.Element {
               prev.speaker_label === s.speaker_label;
 
           const containerSpacing = sameSpeakerAsPrev ? "mt-1" : "mt-4";
+
+          // 用户起的名字（本地 override 或来自 backend label）优先于「说话人 N」
+          // 即使没有 speaker_id（旧 ambient 记录）也按 speaker_label 兜底匹配
+          const sttUserName =
+            (s.speaker_id && speakerOverrides[s.speaker_id]) || null;
+
           const displayLabel = isUserCmd
-            ? "我"
+            // 用户 2026-05-28："我" → "用户"，"用户"语义更对称
+            ? "用户"
             : isEchoReply
               ? "Echo"
-              : displayIdx > 0
-                ? `说话人 ${displayIdx}`
-                : "未识别";
+              : sttUserName
+                ? sttUserName
+                : displayIdx > 0
+                  ? `说话人 ${displayIdx}`
+                  : "未识别";
 
           const avatarLetter = isUserCmd
-            ? "我"
+            // 用户头像同样 "我" → "用"
+            ? "用"
             : isEchoReply
               ? "E"
-              : displayIdx > 0
-                ? String(displayIdx)
-                : "?";
+              : sttUserName
+                ? sttUserName.slice(0, 1)
+                : displayIdx > 0
+                  ? String(displayIdx)
+                  : "?";
           const avatar = (
             <div
               className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none"
@@ -305,6 +331,38 @@ export default function TranscriptStream(): JSX.Element {
             <div className="shrink-0 w-8 h-8" aria-hidden="true" />
           );
 
+          // STT 说话人可改名（user_command / echo_reply 不需改）
+          const canRename = !isConv && Boolean(s.speaker_id);
+          const handleRenameClick = (): void => {
+            if (!s.speaker_id) return;
+            const next = window.prompt(
+              `给 ${displayLabel} 起个名字（如：陈志鹏）：`,
+              sttUserName ?? "",
+            );
+            if (next === null) return;
+            const trimmed = next.trim();
+            if (!trimmed) return;
+            // 本地 override 立刻生效，避免等 ws
+            setSpeakerOverrides((prev) => ({
+              ...prev,
+              [s.speaker_id as string]: trimmed,
+            }));
+            void renameSpeaker(s.speaker_id, trimmed)
+              .then(() => {
+                message.success(`已重命名为「${trimmed}」`);
+              })
+              .catch((e: unknown) => {
+                const msg = e instanceof Error ? e.message : String(e);
+                message.error(`改名失败：${msg}`);
+                // 回滚 override
+                setSpeakerOverrides((prev) => {
+                  const rest = { ...prev };
+                  delete rest[s.speaker_id as string];
+                  return rest;
+                });
+              });
+          };
+
           return (
             <div
               key={`${s.captured_at}-${idx}`}
@@ -321,13 +379,32 @@ export default function TranscriptStream(): JSX.Element {
               >
                 {!sameSpeakerAsPrev && (
                   <div
-                    className={`text-[11px] mb-0.5 px-1 ${
-                      isSelf ? "text-right" : "text-left"
+                    className={`text-[11px] mb-0.5 px-1 inline-flex items-center gap-1 ${
+                      isSelf ? "text-right justify-end" : "text-left"
                     }`}
                     style={{ color: c.fg }}
                     data-testid="speaker-tag"
                   >
-                    {displayLabel}
+                    <span>{displayLabel}</span>
+                    {canRename && (
+                      <Tooltip
+                        title={
+                          sttUserName
+                            ? "改名（声纹将永久关联此名字）"
+                            : "起个名字（声纹将永久关联此名字）"
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={handleRenameClick}
+                          className="opacity-0 group-hover:opacity-70 hover:!opacity-100 transition cursor-pointer"
+                          aria-label="重命名说话人"
+                          data-testid="speaker-rename-btn"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      </Tooltip>
+                    )}
                   </div>
                 )}
                 <div
@@ -339,16 +416,31 @@ export default function TranscriptStream(): JSX.Element {
                     isUserCmd
                       ? "bg-blue-600 text-white border-blue-600"
                       : isEchoReply
-                        ? "bg-violet-50 text-ink-900 border-violet-200"
+                        ? `bg-violet-50 text-ink-900 border-violet-200${
+                            s.convStatus === "pending"
+                              ? " animate-pulse"
+                              : ""
+                          }`
                         : "bg-white text-ink-800"
                   }`}
                   data-testid={
                     isConv ? `conv-bubble-${s.convKind}` : "transcript-bubble"
                   }
                 >
+                  {/* P4-fix（2026-05-28）：loading spinner 只在 Echo 回复气泡且 pending 时显示。
+                      流式 skill / artifact 阶段（2026-05-28 升级）：pending 时 text 持续
+                      被 SSE 进度事件 patch（如「准备 prompt 中…」「已收到 N 字符…」），
+                      所以 spinner 改成 text 前方的小图标位（不再 trailing"思考中…"），
+                      让用户感知"过程性内容在持续刷新"。text 为空时回退老版"思考中"提示。 */}
+                  {isEchoReply && s.convStatus === "pending" && s.text ? (
+                    <Loader2
+                      className="inline w-3 h-3 animate-spin -mt-0.5 mr-1.5 text-violet-600"
+                      aria-label="生成中"
+                    />
+                  ) : null}
                   {s.text}
-                  {s.convStatus === "pending" && (
-                    <span className="inline-flex items-center gap-1 ml-1.5 text-[11px] opacity-80">
+                  {isEchoReply && s.convStatus === "pending" && !s.text && (
+                    <span className="inline-flex items-center gap-1 text-[11px] opacity-80">
                       <Loader2 className="w-3 h-3 animate-spin" />
                       Echo 思考中…
                     </span>
