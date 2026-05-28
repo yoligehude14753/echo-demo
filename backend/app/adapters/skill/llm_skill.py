@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -40,6 +41,8 @@ from app.config import Settings
 from app.ports.llm import LLMPort
 from app.schemas.artifact import SUPPORTED_KINDS, GeneratedArtifact, normalize_kind
 from app.schemas.llm import ChatMessage
+
+logger = logging.getLogger("echodesk.skill")
 
 _CANONICAL_EXT: Final[dict[str, str]] = {
     "pptx": "pptx",
@@ -326,15 +329,47 @@ class SkillExecutor:
 
         # 高质量路径：默认 HTML 走 Kami one-pager；默认 PPT 走 ib_master JSON 渲染。
         # use_legacy_html_pptx=True 时回滚到 _generate_via_default_pipeline。
+        #
+        # 用户 2026-05-28 反馈：「生成 HTML 一直报 400」。根因：one-pager 有 7 条
+        # invariants（chars≥6000 / SVG≥3 / 必须含 #f5f4ed / 不许 rgba / 不许 emoji
+        # 等），任何一条违反 SkillError 直接 400，**没有 fallback**。M2.7 LLM 输
+        # 出常见 4000-5000 chars + 2 个 SVG → 命中率高。
+        #
+        # 修法：one-pager / ib_pptx 失败时 catch SkillError 自动降级到 legacy
+        # `_generate_via_default_pipeline`（LLM 写 raw HTML / pptxgenjs），保证
+        # 用户拿到东西。legacy 失败才真往上抛。
         if kind == "html" and not self._use_legacy_html_pptx:
-            return await self._generate_html_one_pager(
-                llm=llm,
-                brief=brief,
-                extra_instructions=extra_instructions,
-                artifact_id=artifact_id,
-                build_dir=build_dir,
-            )
+            try:
+                return await self._generate_html_one_pager(
+                    llm=llm,
+                    brief=brief,
+                    extra_instructions=extra_instructions,
+                    artifact_id=artifact_id,
+                    build_dir=build_dir,
+                )
+            except SkillError as e:
+                logger.warning(
+                    "html one-pager 失败，降级 legacy: %s (artifact_id=%s)",
+                    e,
+                    artifact_id,
+                )
+                # 复用同一 build_dir：上一轮 LLM 写的 output.html / meta.json 会被
+                # 下一轮覆盖；不另开 build_dir 避免产物 id 错位
+                art = await self._generate_via_default_pipeline(
+                    llm=llm,
+                    kind=kind,
+                    brief=brief,
+                    extra_instructions=extra_instructions,
+                    artifact_id=artifact_id,
+                    build_dir=build_dir,
+                )
+                # 标记为 fallback 产物，前端 / 日志可据此提示用户"用了降级路径"
+                art.metadata["legacy_pipeline"] = "true"
+                art.metadata["fallback_reason"] = str(e)[:200]
+                return art
         if kind == "pptx" and not self._use_legacy_html_pptx:
+            # PPT 不加 fallback：ib_deck JSON 字段校验失败常意味着 LLM 严重跑偏，
+            # legacy（让 LLM 写 pptxgenjs JS 代码）成功率也很低，不如让上层看到错误重试。
             return await self._generate_ib_pptx(
                 llm=llm,
                 brief=brief,

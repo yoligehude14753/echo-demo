@@ -32,8 +32,6 @@ import {
 } from "@/api";
 import { useStore } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
-import { useTtsPlayer } from "@/hooks/useTtsPlayer";
-
 interface PendingDoc {
   doc_id: string;
   title: string;
@@ -99,7 +97,6 @@ export default function CommandBar(): JSX.Element {
   const appendUserCommand = useStore((s) => s.appendUserCommand);
   const appendAssistantReply = useStore((s) => s.appendAssistantReply);
   const patchConversationStatus = useStore((s) => s.patchConversationStatus);
-  const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<TextAreaRef | null>(null);
 
@@ -297,9 +294,9 @@ export default function CommandBar(): JSX.Element {
             appendAssistantReply(`已生成 ${art.artifact_type}：${art.title ?? art.artifact_id}`);
           })
           .catch((e) => {
-            const msg = e instanceof Error ? e.message : String(e);
+            const raw = e instanceof Error ? e.message : String(e);
             patchConversationStatus(cmdId, "failed");
-            appendAssistantReply(`生成失败：${msg}`);
+            appendAssistantReply(`生成失败：${raw}`);
           });
         return;
       }
@@ -336,12 +333,13 @@ export default function CommandBar(): JSX.Element {
             });
             patchConversationStatus(cmdId, "done");
             appendAssistantReply(answer);
-            void tts.speak(answer);
+            // 用户 2026-05-28 反馈：自动播放且关不掉。默认不再 auto-speak，
+            // 用户想听就点 StatusBar 的 TTS 按钮，或后续在 Echo 气泡上点 🔊。
           })
           .catch((e) => {
-            const msg = e instanceof Error ? e.message : String(e);
+            const raw = e instanceof Error ? e.message : String(e);
             patchConversationStatus(cmdId, "failed");
-            appendAssistantReply(`闲聊失败：${msg}`);
+            appendAssistantReply(`闲聊失败：${raw}`);
           });
         return;
       }
@@ -398,12 +396,12 @@ export default function CommandBar(): JSX.Element {
                 score: c.score,
               }));
             appendAssistantReply(ans.answer, "rag_answer", cites);
-            void tts.speak(ans.answer);
+            // 用户 2026-05-28：默认不 auto-speak（见上文 chat 分支注释）。
           })
           .catch((e) => {
-            const msg = e instanceof Error ? e.message : String(e);
+            const raw = e instanceof Error ? e.message : String(e);
             patchConversationStatus(cmdId, "failed");
-            appendAssistantReply(`检索失败：${msg}`);
+            appendAssistantReply(`检索失败：${raw}`);
           });
         return;
       }

@@ -171,12 +171,13 @@ def test_parse_todos_skips_invalid_entries() -> None:
 
 @pytest.mark.unit
 def test_parse_todos_strips_non_at_prefix_suggested_command() -> None:
+    """suggested_command 不在 Echo 白名单 prefix → 强制降级 kind=info + 丢 prefill。"""
     todos = MeetingPipeline._parse_todos(
         [
             {
                 "text": "做 Q3 表",
                 "kind": "actionable",
-                # 不以 @ 开头 → 视为无效 prefill，丢弃 suggested_command
+                # 不以 @ 开头 → 不在白名单，整体降级 info
                 "suggested_command": "生成 PPT",
             },
             {
@@ -186,8 +187,58 @@ def test_parse_todos_strips_non_at_prefix_suggested_command() -> None:
             },
         ]
     )
+    # 用户 2026-05-28：白名单不过 → kind 降级 info，避免 UI 标"可执行"误导
+    assert todos[0].kind == "info"
     assert todos[0].suggested_command is None
+    assert todos[1].kind == "info"
     assert todos[1].suggested_command is None
+
+
+@pytest.mark.unit
+def test_parse_todos_demotes_human_only_actions_to_info() -> None:
+    """用户 2026-05-28 截图：LLM 把"查代码 / 找人 / 部署"标 actionable，
+    backend 必须强制降级 info——Echo 干不了这些事。"""
+    todos = MeetingPipeline._parse_todos(
+        [
+            {
+                "text": "查看自动测评工具代码，理解实现逻辑",
+                "kind": "actionable",
+                "suggested_command": "@查 自动测评工具代码",
+            },
+            {
+                "text": "找陈志鹏学习贺怡部署方式",
+                "kind": "actionable",
+                "suggested_command": "@chat 找陈志鹏",
+            },
+            {
+                "text": "部署 agent rena 项目",
+                "kind": "actionable",
+                "suggested_command": "@生成 PPT 部署方案",
+            },
+        ]
+    )
+    assert all(t.kind == "info" for t in todos)
+    assert all(t.suggested_command is None for t in todos)
+
+
+@pytest.mark.unit
+def test_parse_todos_accepts_all_whitelisted_prefixes() -> None:
+    """Echo 真能跑的四类前缀均应被接纳为 actionable。"""
+    todos = MeetingPipeline._parse_todos(
+        [
+            {"text": "出 Q3 PPT", "kind": "actionable", "suggested_command": "@生成 PPT Q3"},
+            {"text": "搜 Q3 数据", "kind": "actionable", "suggested_command": "@查 Q3 销售"},
+            {"text": "总结今天会议", "kind": "actionable", "suggested_command": "@总结"},
+            {"text": "随便聊聊", "kind": "actionable", "suggested_command": "@chat 你好"},
+        ]
+    )
+    assert all(t.kind == "actionable" for t in todos)
+    assert [t.suggested_command for t in todos] == [
+        "@生成 PPT Q3",
+        "@查 Q3 销售",
+        "@总结",
+        "@chat 你好",
+    ]
 
 
 @pytest.mark.unit

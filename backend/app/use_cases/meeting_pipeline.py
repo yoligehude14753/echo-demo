@@ -71,12 +71,28 @@ _MINUTES_SYS_PROMPT = """你是会议纪要助手。基于以下逐字稿生成*
 2. 决议和待办必须真实出现在原文，不要编造
 3. sections 按议题切分，每个 ≥ 2 个 bullets
 4. title 必须能让一个没参会的人一眼看懂今天讲了什么（例：「直播带货话术 + AI 编程营销讨论」），禁止用「会议纪要 / 第 N 次例会 / 未命名会议」这类无信息标题
-5. todos 抽取规则：
+5. todos 抽取规则（**严格按 Echo 实际能力分类**）：
    - 抽出所有「行动项 / 待办」，每条带：
      - text：一句话描述
      - assignee：用对话里的「说话人 N」标签或人名；找不到具体人填 null
-     - kind：含「生成 PPT / 做表 / 查资料 / 发邮件 / 计算 / 整理」等动词 → "actionable"；纯记录类（"下周再讨论"）→ "info"
-     - suggested_command：当 kind="actionable" 时给一个可直接发到指令栏的短语，必须以 @ 开头（如 "@生成 PPT 主题"、"@查 关键词"、"@生成 Word 周报"）；info 时填 null
+     - kind：**只有 Echo 自己能跑的命令**才能是 "actionable"，其余一律 "info"：
+       * actionable 限定：会上明确说了「Echo 帮我生成 X / 查 Y / 总结今天会议」这类
+         Echo 能直接执行的产物 / 检索任务
+       * info 适用：人际待办（找人 / 联系 / 沟通 / 汇报 / 打电话）、现场动作
+         （部署 / 上线 / 看代码 / 调试 / 学习 / 调研 / 了解）、决定 / 等待类
+         （审批 / 等回复 / 下周再议）—— 这些 Echo 干不了，标 info
+     - suggested_command：actionable 时给一个**Echo 真能执行**的指令，**必须**
+       以下面四个前缀之一开头：
+       * `@生成 ` + 类型 + 主题（如 "@生成 PPT Q3 销售拆解"、"@生成 Word 周报"、
+         "@生成 Excel 预算表"、"@生成 HTML 项目简报"）
+       * `@查 ` + 关键词（如 "@查 Q3 销售数据"，走 RAG 检索）
+       * `@总结` 或 `@summarize`（总结当前会议）
+       * `@chat ` + 问题（让 LLM 闲聊回答）
+       info 时填 null
+     - 反面教材（**禁止**标 actionable）：
+       * "查看 X 的代码" → info（Echo 不会浏览源码）
+       * "找张三沟通 X" → info（Echo 不会找人）
+       * "部署服务到 Y" → info（Echo 不会跑命令）
    - 没有任何待办时 todos 返回 []
 6. 只输出 JSON，不要 markdown 围栏
 """
@@ -552,16 +568,53 @@ class MeetingPipeline:
             s = s[:18]
         return s
 
-    @staticmethod
-    def _parse_todos(raw_todos: object) -> list[TodoItem]:
+    # Echo 当前真正能跑的 command 前缀白名单（与 intent_router / CommandBar 路由对齐）。
+    # 用户 2026-05-28 反馈：截图里 3 个待办都被标"可执行"，但实际是"查代码 / 找陈
+    # 志鹏 / 看 agent rena 项目"这类人际待办，Echo 根本干不了。LLM 把它们标
+    # actionable + 给了类似 "@查 自动测评工具代码" 的 suggested_command，但 RAG
+    # 检索"自动测评工具代码"也不会自动执行用户期望的"查源码"。
+    #
+    # 修法：白名单 + 文本启发式双重过滤：
+    # 1. suggested_command 必须以白名单前缀开头（已有逻辑加强）
+    # 2. todo.text 含明显的"人际待办"动词（找/约/打电话/沟通/汇报/部署/开会等）
+    #    → 强制降级 kind=info，无论 LLM 怎么标
+    _ECHO_EXECUTABLE_PREFIXES = (
+        "@生成 ",
+        "@总结",
+        "@查 ",
+        "@chat ",
+        "@summarize",
+    )
+    _HUMAN_ONLY_VERBS = (
+        # 人际沟通 / 协调
+        "找", "约", "联系", "打电话", "发消息", "微信", "邮件给",
+        "沟通", "通知", "汇报", "确认", "对齐", "讨论",
+        # 现场动作（Echo 拿不到/看不到）
+        "查看", "去看", "看下", "看一下", "查代码", "看代码",
+        "部署", "上线", "调试", "本地跑", "环境",
+        "学习", "了解", "调研", "研究",
+        # 决定 / 等待
+        "决定", "审核", "签字", "审批", "等待",
+    )
+
+    @classmethod
+    def _is_human_only_todo(cls, text: str) -> bool:
+        """text 含明显的"人际待办"动词 → Echo 无法执行，强制 info。"""
+        return any(v in text for v in cls._HUMAN_ONLY_VERBS)
+
+    @classmethod
+    def _parse_todos(cls, raw_todos: object) -> list[TodoItem]:
         """把 LLM 返回的 todos 列表标准化成 ``list[TodoItem]``。
 
-        宽容策略：
+        宽容 + 兜底策略：
         - 非 list → 返 []
         - 单条非 dict / 缺 text → skip（不抛错让整个 finalize 失败）
         - id 服务端生成 uuid（LLM 不该决定 id）
         - kind 不在 {"actionable", "info"} → 默认 "info"
-        - actionable 时 suggested_command 必须以 @ 开头，否则丢弃
+        - actionable 必须满足：
+          (a) suggested_command 以 ECHO_EXECUTABLE_PREFIXES 之一开头
+          (b) text 不含明显的人际待办动词（查代码 / 找人 / 部署等）
+          否则强制降级 kind=info、suggested_command=None
         """
         if not isinstance(raw_todos, list):
             return []
@@ -572,26 +625,39 @@ class MeetingPipeline:
             text = raw.get("text")
             if not isinstance(text, str) or not text.strip():
                 continue
+            text = text.strip()
+
             kind_raw = raw.get("kind")
             kind = kind_raw if kind_raw in ("actionable", "info") else "info"
+
             assignee = raw.get("assignee")
             if assignee is not None and not isinstance(assignee, str):
                 assignee = None
+
             suggested = raw.get("suggested_command")
-            if not (
-                kind == "actionable"
-                and isinstance(suggested, str)
-                and suggested.strip().startswith("@")
+            suggested_str = suggested.strip() if isinstance(suggested, str) else ""
+            valid_prefix = any(
+                suggested_str.startswith(p) for p in cls._ECHO_EXECUTABLE_PREFIXES
+            )
+
+            # 双重否决：白名单不过 / 人际动词命中 → 降级 info
+            if kind == "actionable" and (
+                not valid_prefix or cls._is_human_only_todo(text)
             ):
-                suggested = None
+                kind = "info"
+                suggested_str = ""
+            # info 类不允许带 suggested_command（UI 不显示"执行"按钮，prefill 也没意义）
+            if kind != "actionable":
+                suggested_str = ""
+
             out.append(
                 TodoItem(
                     id=f"t-{uuid.uuid4().hex[:12]}",
-                    text=text.strip(),
+                    text=text,
                     assignee=assignee.strip() if isinstance(assignee, str) else None,
                     kind=kind,
                     status="pending",
-                    suggested_command=suggested.strip() if suggested else None,
+                    suggested_command=suggested_str or None,
                 )
             )
         return out

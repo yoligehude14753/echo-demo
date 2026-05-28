@@ -4,6 +4,7 @@ import {
   MessageSquare,
   Mic,
   Settings,
+  Square,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -175,31 +176,53 @@ function TtsTopBarButton({
     (tts.synthHealth && !tts.synthHealth.ok
       ? `合成检查失败：${tts.synthHealth.detail ?? tts.synthHealth.state}`
       : null);
-  const tooltip = !tts.enabled
-    ? "TTS 已关"
-    : unhealthy
-      ? (healthDetail ?? "TTS 上游异常")
-      : tts.synthHealth?.ok
-        ? `TTS 正常（合成 ${tts.synthHealth.latency_ms ?? "?"}ms）`
-        : "TTS 已开：会议纪要 / 回答会语音播报";
+  // 用户 2026-05-28 反馈：「TTS 自动播放且关不掉」。问题不是 cancel 不工作
+  // （setEnabled(false) 内部就调 cancel），而是 isSpeaking 时按钮还是普通
+  // 颜色 + 文字"播放中"，用户不会想到点它能停。
+  // 修法：isSpeaking 时按钮变红 + Square 图标 + 文字"停止"，点击直接 cancel
+  // （只 stop 当前播放队列，不切 enabled——下次仍可用）。
+  const tooltip = tts.isSpeaking
+    ? "点击立即停止当前播放"
+    : !tts.enabled
+      ? "TTS 已关"
+      : unhealthy
+        ? (healthDetail ?? "TTS 上游异常")
+        : tts.synthHealth?.ok
+          ? `TTS 正常（合成 ${tts.synthHealth.latency_ms ?? "?"}ms）`
+          : "TTS 已开：点 Echo 气泡的 🔊 朗读，或点这里关闭";
   const label = tts.isSpeaking
-    ? "播放中"
+    ? "停止"
     : !tts.enabled
       ? "静音"
       : unhealthy
         ? "TTS 异常"
         : "TTS";
-  const color = !tts.enabled
-    ? "text-ink-400 hover:bg-paper-200"
-    : unhealthy
-      ? "text-amber-600 hover:bg-paper-200"
-      : "text-accent hover:bg-paper-200";
-  const Icon = !tts.enabled ? VolumeX : unhealthy ? AlertTriangle : Volume2;
+  const color = tts.isSpeaking
+    ? "text-red-600 bg-red-50 hover:bg-red-100 ring-1 ring-red-300"
+    : !tts.enabled
+      ? "text-ink-400 hover:bg-paper-200"
+      : unhealthy
+        ? "text-amber-600 hover:bg-paper-200"
+        : "text-accent hover:bg-paper-200";
+  const Icon = tts.isSpeaking
+    ? Square
+    : !tts.enabled
+      ? VolumeX
+      : unhealthy
+        ? AlertTriangle
+        : Volume2;
+  const handleClick = (): void => {
+    if (tts.isSpeaking) {
+      tts.cancel();
+    } else {
+      tts.setEnabled(!tts.enabled);
+    }
+  };
   return (
     <Tooltip title={tooltip}>
       <button
         type="button"
-        onClick={() => tts.setEnabled(!tts.enabled)}
+        onClick={handleClick}
         className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${color}`}
         data-testid="tts-toggle"
         data-tts-state={
