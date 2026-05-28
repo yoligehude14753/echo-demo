@@ -49,16 +49,33 @@ export function useMeetingHistory(): void {
     return unsub;
   }, []);
 
-  // 启动期一次性 hydrate；不重试（断网时事件流接管）
+  // 启动期 hydrate：指数退避重试，覆盖"backend 比 renderer 晚 5-10s 起来"
+  // 这一段 race —— 之前是单次失败永不重试，导致 swap app 后用户看到"历史记录
+  // 又丢了"（其实 DB 44 条都在，纯前端 listMeetings 命中 backend 启动窗口）。
+  // 退避序列 300ms / 800ms / 2s / 5s / 10s，总 ~18s 覆盖 cold start。
+  // 任一次 200 OK 立即停；alive 守护 unmount 时早退。
   useEffect(() => {
     let alive = true;
+    const delays = [0, 300, 800, 2000, 5000, 10_000];
     void (async (): Promise<void> => {
-      try {
-        const list = await listMeetings(50);
+      for (let i = 0; i < delays.length && alive; i++) {
+        if (delays[i] > 0) {
+          await new Promise<void>((res) => setTimeout(res, delays[i]));
+        }
         if (!alive) return;
-        hydrateMeetings(list);
-      } catch (e) {
-        console.warn("[meeting-history] listMeetings failed:", e);
+        try {
+          const list = await listMeetings(50);
+          if (!alive) return;
+          hydrateMeetings(list);
+          return; // 成功立即终止
+        } catch (e) {
+          if (i === delays.length - 1) {
+            console.warn(
+              "[meeting-history] listMeetings failed after retries:",
+              e,
+            );
+          }
+        }
       }
     })();
     return () => {
