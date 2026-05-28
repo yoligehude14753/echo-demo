@@ -184,6 +184,51 @@ async def test_route_no_at_returns_chat(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_route_no_at_returns_none_confidence(tmp_path: Path) -> None:
+    """P4-fix（2026-05-28）：'无 @ 前缀' 是纯规则匹配路径，没有跑分类器。
+
+    历史 bug：硬编码 confidence=1.0 → 前端显示 "置信度 100%"，给用户虚假置信感。
+    回归断言：这条路径必须返回 confidence is None，前端按 null 显示 "规则匹配"，
+    而不是把规则命中冒充成模型 100% 确信的分类结果。
+    """
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("帮我写个周报", current_meeting_id=None)
+    assert r.kind == "chat"
+    assert r.confidence is None, (
+        "无 @ 前缀 chat 路径不应硬编码 confidence=1.0；"
+        f"实际返回 {r.confidence!r}（这条路径根本没跑分类器，confidence 没语义）"
+    )
+    assert "规则" in r.rationale or "前缀" in r.rationale
+    assert llm.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_llm_classified_keeps_real_confidence(tmp_path: Path) -> None:
+    """对比：经 LLM 真分类的路径应当返回有意义的 float 置信度（不是 None）。"""
+    llm = _MockLLM(content='{"kind":"search_rag","confidence":0.78,"rationale":"想找之前的资料"}')
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@想找之前我们关于策略的讨论", current_meeting_id=None)
+    assert r.kind == "search_rag"
+    assert r.confidence is not None
+    assert 0.7 <= r.confidence <= 0.9
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_keyword_hit_keeps_real_confidence(tmp_path: Path) -> None:
+    """对比：关键字命中路径仍然返回 0.85 float 置信度。"""
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@生成 PPT 测试", current_meeting_id=None)
+    assert r.kind == "generate_pptx"
+    assert r.confidence is not None
+    assert r.confidence >= 0.8
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_route_keyword_hit_skips_llm(tmp_path: Path) -> None:
     llm = _MockLLM(content="should not be called")
     router = LLMIntentRouter(_settings(tmp_path), llm)
