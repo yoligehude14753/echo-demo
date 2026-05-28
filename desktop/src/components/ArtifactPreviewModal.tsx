@@ -8,7 +8,8 @@ import type { GeneratedArtifact } from "@/types";
 
 /**
  * 7 类产物 in-app 预览：
- *   html / pdf  → <iframe> 直读 download URL（浏览器原生支持）
+ *   html        → fetch text + sandboxed iframe srcDoc（避免 download attachment 在 iframe 空白）
+ *   pdf         → <iframe> 直读 download URL（浏览器原生支持）
  *   markdown    → fetch text + react-markdown 渲染（GFM 表格 / 代码块）
  *   txt         → fetch text + <pre> 等宽字体
  *   docx (word) → fetch ArrayBuffer + mammoth.convertToHtml → iframe srcDoc
@@ -183,11 +184,12 @@ interface PreviewBodyProps {
 function PreviewBody({ artifact, kind, downloadUrl }: PreviewBodyProps): JSX.Element {
   switch (kind) {
     case "html":
+      return <HtmlPreview downloadUrl={downloadUrl} />;
     case "pdf":
       return (
         <iframe
           src={downloadUrl}
-          title={kind === "html" ? "html preview" : "pdf preview"}
+          title="pdf preview"
           className="w-full h-[72vh] border border-paper-300 bg-white rounded-md"
           data-testid={`preview-iframe-${kind}`}
         />
@@ -256,6 +258,25 @@ function PreviewError({
 }
 
 // ---------- 各类型 renderer ----------
+
+function HtmlPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
+  const { text, loading, error } = useTextContent(downloadUrl);
+  if (loading) return <PreviewLoading />;
+  if (error) return <PreviewError message={error} downloadUrl={downloadUrl} />;
+  if (!text.trim()) {
+    return <PreviewError message="HTML 文件为空，无法预览" downloadUrl={downloadUrl} />;
+  }
+  return (
+    <iframe
+      srcDoc={text}
+      title="html preview"
+      className="w-full h-[72vh] border border-paper-300 bg-white rounded-md"
+      data-testid="preview-iframe-html"
+      sandbox="allow-scripts allow-forms allow-popups"
+      referrerPolicy="no-referrer"
+    />
+  );
+}
 
 function MarkdownPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
   const { text, loading, error } = useTextContent(downloadUrl);

@@ -134,6 +134,25 @@ test("S04b · txt artifact → <pre> 渲染原文", async ({ page }) => {
   await expect(pre).toContainText("line three");
 });
 
+test("S04c · html artifact → fetch 后写入 iframe srcdoc", async ({ page }) => {
+  const mock = await installScenarioMock(page);
+  const id = "html-fixture-001";
+  const html =
+    '<!doctype html><html><body><main data-testid="report-root"><h1>HTML 市场调研</h1><p>生态位分析</p></main></body></html>';
+  await routeDownload(page, id, html, "text/html; charset=utf-8");
+
+  await page.goto("/");
+  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+
+  await publishWithTitle(mock, "html", 1, id, "测试 HTML", "/tmp/x.html");
+  await openArtifactCard(page, id);
+
+  const frame = page.getByTestId("preview-iframe-html");
+  await expect(frame).toBeVisible({ timeout: 5_000 });
+  await expect(frame).toHaveAttribute("srcdoc", /HTML 市场调研/);
+  await expect(frame).not.toHaveAttribute("src", new RegExp(`/${id}/download`));
+});
+
 test("S04c · pdf artifact → iframe 指向 download URL", async ({ page }) => {
   const mock = await installScenarioMock(page);
   const id = "pdf-fixture-001";
