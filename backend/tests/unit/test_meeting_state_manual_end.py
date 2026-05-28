@@ -48,7 +48,13 @@ class _Diar:
     def __init__(self, ids: list[str | None]) -> None:
         self._q = list(ids)
 
-    async def identify(self, _a: bytes, *, sample_rate: int = 16_000) -> str | None:
+    async def identify(
+        self,
+        _a: bytes,
+        *,
+        sample_rate: int = 16_000,
+        meeting_id: str | None = None,
+    ) -> str | None:
         return self._q.pop(0) if self._q else None
 
     async def reset(self) -> None:

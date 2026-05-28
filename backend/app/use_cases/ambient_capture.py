@@ -59,7 +59,11 @@ class AmbientStats:
     stt_failed: int = 0  # Gate 2b: STT 发了但失败（超时/网络/5xx）
     stt_empty: int = 0  # Gate 3:  STT 返回空文本 / 所有 segs 文本为空
     hallu_dropped: int = 0  # Gate 4:  后置幻觉门丢弃（cps 过高 / 过短）
-    diarize_failed: int = 0  # side: diarizer 失败（不影响入库）
+    diarize_failed: int = 0  # side: diarizer 抛异常（不影响入库；与 returned_none 区分）
+    # side: diarizer 正常返回 None（短段没匹配 / 全静音切不出 voiced）。phase4-diar-deep
+    # 引入，区分 "diarizer 跑了但说不出是谁"（None）和 "diarizer 挂了"（failed）；
+    # 用户痛点 2026-05-28 看到 57 段 NULL，过去全归类成神秘黑盒。
+    diarize_returned_none: int = 0
     stored: int = 0  # 末态: 真正写入 ambient_segments 表
     last_chunk_at: str | None = None  # ISO timestamp 最近 chunk 进入时间
     last_stored_at: str | None = None  # ISO timestamp 最近一次成功入库时间
@@ -233,7 +237,11 @@ class AmbientCapturePipeline:
 
         # 仅在 STT 通过 + 非幻觉时才 diarize（避免 _profiles 被噪声/幻觉污染）
         if gate.pass_ and texts and not hallu_drop and self._diarizer is not None:
-            speaker_id = await self._safe_diarize(audio_bytes, sample_rate)
+            speaker_id = await self._safe_diarize(
+                audio_bytes,
+                sample_rate,
+                meeting_id=meeting_id,
+            )
 
         speaker_label: str | None = None
         if self._registry is not None and texts:
@@ -330,7 +338,13 @@ class AmbientCapturePipeline:
             logger.warning("ambient STT failed (audio saved): %s", e)
             raise _STTCallFailedError(msg) from e
 
-    async def _safe_diarize(self, audio_bytes: bytes, sample_rate: int) -> str | None:
+    async def _safe_diarize(
+        self,
+        audio_bytes: bytes,
+        sample_rate: int,
+        *,
+        meeting_id: str | None = None,
+    ) -> str | None:
         """声纹识别 ambient 入口（spk-2 改为走句级切片接口）。
 
         改前：整段 6s chunk 一次 embed → 多人混音 / 噪声主导时被判新人。
@@ -338,13 +352,24 @@ class AmbientCapturePipeline:
               "时长加权主导 speaker"（也即整 chunk 里说得最久的人）作为 chunk 的代表。
 
         若 diarizer 没实现 identify_segments（NullDiarizer 之外）则降级回老 identify。
+
+        phase4-diar-deep：透传 meeting_id 给 diarizer，让活跃说话人 list 按会议隔离。
+        meeting_id=None（ambient 主链路绝大多数情况）→ 共享 "_ambient" 池。
+        计数器区分两条 None 路径：
+        - diarize_returned_none：diarizer 正常跑了但说不出（短段无匹配 / 切不出 voiced）
+        - diarize_failed：diarizer 抛异常
         """
         if self._diarizer is None:
             return None
         try:
             if hasattr(self._diarizer, "identify_segments"):
-                segs = await self._diarizer.identify_segments(audio_bytes, sample_rate=sample_rate)
+                segs = await self._diarizer.identify_segments(
+                    audio_bytes,
+                    sample_rate=sample_rate,
+                    meeting_id=meeting_id,
+                )
                 if not segs:
+                    self._stats.diarize_returned_none += 1
                     return None
                 # 时长加权聚合：同一 sid 累加 duration，取最长
                 by_id: dict[str, int] = {}
@@ -356,6 +381,7 @@ class AmbientCapturePipeline:
                         getattr(s, "end_ms", 0) - getattr(s, "start_ms", 0)
                     )
                 if not by_id:
+                    self._stats.diarize_returned_none += 1
                     return None
                 dominant = max(by_id.items(), key=lambda kv: kv[1])
                 if len(by_id) > 1:
@@ -366,7 +392,14 @@ class AmbientCapturePipeline:
                         dominant[0],
                     )
                 return dominant[0]
-            return await self._diarizer.identify(audio_bytes, sample_rate=sample_rate)
+            sid = await self._diarizer.identify(
+                audio_bytes,
+                sample_rate=sample_rate,
+                meeting_id=meeting_id,
+            )
+            if sid is None:
+                self._stats.diarize_returned_none += 1
+            return sid
         except Exception as e:
             self._stats.diarize_failed += 1
             logger.warning("ambient diarizer failed: %s", e)

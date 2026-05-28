@@ -66,6 +66,11 @@ export interface CaptureStats {
   stt_empty: number;
   hallu_dropped: number;
   diarize_failed: number;
+  /**
+   * phase4-diar-deep：diarizer 正常跑了但说不出（短段无匹配 / 切不出 voiced）。
+   * 与 diarize_failed（diarizer 抛异常）区分，便于排查"57 段未识别"根因分布。
+   */
+  diarize_returned_none: number;
   stored: number;
   last_chunk_at: string | null;
   last_stored_at: string | null;
