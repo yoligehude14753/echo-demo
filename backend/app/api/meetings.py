@@ -2,10 +2,23 @@
 
 设计上音频上传走 multipart（会议端实时切片 30s/段），纪要落地后通过
 ``/meetings/{id}/minutes`` 拉取，前端清单式展示。
+
+P4-M_meeting_history 新增（2026-05-28）：
+- ``GET /meetings``                       前端启动期 hydrate 历史会议列表
+- ``GET /meetings/{id}/transcript``       拉指定会议的转写段（``/segments`` 别名）
+- ``GET /meetings/{id}/minutes``          反序列化 ``meetings.minutes_json``
+- ``GET /meetings/{id}/artifacts``        per-meeting 产物（当前空，留扩展点）
+
+artifacts 的产品决策（PR body 详述）：现 schema ``artifacts`` 无 meeting_id 列，
+也没有 meeting_artifacts 关联表。前端 ``store.meetings[*].artifacts`` 是基于 WS
+事件 ``artifact.ready.meeting_id`` 维护的 best-effort 视图。这个 endpoint 当前
+返回空列表，**调用约定**保留以便后续接入数据库 join；前端在 currentMeetingId
+被选中时仍以 store 内的 in-memory 列表为准。
 """
 
 from __future__ import annotations
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -24,7 +37,8 @@ from app.api.deps import (
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
-from app.schemas.meeting import MeetingMinutes, TranscriptSegment
+from app.schemas.artifact import GeneratedArtifact
+from app.schemas.meeting import MeetingMinutes, MeetingSummary, TranscriptSegment
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
 
@@ -148,6 +162,107 @@ async def manual_end_meeting(
     """用户点击状态栏：手动结束会议（含 finalize 纪要）。"""
     ended = await state.manual_end()
     return {"mode": "idle", "meeting_id": ended}
+
+
+@router.get("", response_model=list[MeetingSummary])
+async def list_meetings(
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+    limit: int = 50,
+) -> list[MeetingSummary]:
+    """会议列表（左侧面板用）。
+
+    按 started_at DESC 倒序，每条带 segments / speakers 计数 + minutes 是否就绪，
+    避免前端再发 N 次 detail 请求。
+
+    这是前端启动期 hydrate 的核心入口：早于任何 ws 事件，让用户能马上看到历史
+    会议；ws 事件随后只负责维护 in-progress 会议的实时增量。
+    """
+    rows = await repository.list_meetings(limit=limit)
+    out: list[MeetingSummary] = []
+    for r in rows:
+        n_seg = await repository.count_meeting_segments(r.id)
+        n_spk = await repository.count_meeting_speakers(r.id)
+        out.append(
+            MeetingSummary(
+                meeting_id=r.id,
+                title=r.title,
+                state=r.state,
+                started_at=r.started_at,
+                ended_at=r.ended_at,
+                finalized_at=r.finalized_at,
+                n_segments=n_seg,
+                n_speakers=n_spk,
+                has_minutes=bool(r.minutes_json),
+            )
+        )
+    return out
+
+
+@router.get("/{meeting_id}/transcript", response_model=list[TranscriptSegment])
+async def get_transcript(
+    meeting_id: str,
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+) -> list[TranscriptSegment]:
+    """单会议转写流（中间面板用）。
+
+    与 ``/segments`` 等价但语义更显式 + 直接走 repository（不依赖 pipeline 内
+    存状态，可拉历史会议）。404 当会议不存在；空列表表示没有 segment 但会议
+    本身存在（合法的"刚 start 还没说话"状态）。
+    """
+    meeting = await repository.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    return await repository.list_meeting_segments(meeting_id)
+
+
+@router.get("/{meeting_id}/minutes", response_model=MeetingMinutes)
+async def get_minutes(
+    meeting_id: str,
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+) -> MeetingMinutes:
+    """单会议纪要（右上面板用）。
+
+    从 ``meetings.minutes_json`` 反序列化；finalize 之前会议没纪要时返回 404。
+    JSON 解析失败抛 502（落库的纪要损坏属于运维问题，不应该让前端默默无展示）。
+    """
+    meeting = await repository.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    if not meeting.minutes_json:
+        raise HTTPException(status_code=404, detail="minutes not generated yet")
+    try:
+        data = json.loads(meeting.minutes_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"minutes_json corrupted: {e!s}") from e
+    # 早期落库的 minutes 可能没带 meeting_id；补上保持 schema 完整
+    data.setdefault("meeting_id", meeting_id)
+    return MeetingMinutes(**data)
+
+
+@router.get("/{meeting_id}/artifacts", response_model=list[GeneratedArtifact])
+async def get_meeting_artifacts(
+    meeting_id: str,
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+) -> list[GeneratedArtifact]:
+    """单会议产物（右下 outputs 面板用）。
+
+    **当前实现**：返回空列表。原因：
+    1. ``artifacts`` schema 没 meeting_id 列，也没有 ``meeting_artifacts`` 关
+       联表。POST /artifacts/generate 不接受 meeting_id 参数。
+    2. 前端 ``store.meetings[*].artifacts`` 是 best-effort 视图（基于 WS
+       artifact.ready.meeting_id 字段维护，会话内有效）。
+    3. 真正的"持久化 per-meeting outputs"需要在 ArtifactRequest / events /
+       schema migration 三处一起改，超出 M_meeting_history 这个 PR 的范围。
+
+    保留这个 endpoint 让前端调用约定稳定（``getMeetingArtifacts(id)`` 是 4 个
+    detail endpoint 之一）；后续 PR 接 DB join 时只换实现，前端不动。
+
+    会议不存在时仍返回 404（让前端能区分"无产物"与"无会议"）。
+    """
+    meeting = await repository.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    return []
 
 
 @router.post("/{meeting_id}/start")

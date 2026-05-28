@@ -125,7 +125,10 @@ export interface MeetingStateSnapshot {
 
 export interface IntentResult {
   kind: IntentKind;
-  confidence: number;
+  // P4-fix（2026-05-28）：confidence 现在可以是 null（纯规则匹配路径），
+  // 仅 LLM / 关键字分类器输出的真实 float 才表示有意义的概率；
+  // 前端在 confidence==null 时显示 "规则匹配" 而不是虚假的 "置信度 100%"。
+  confidence: number | null;
   params: Record<string, unknown>;
   rationale: string;
 }

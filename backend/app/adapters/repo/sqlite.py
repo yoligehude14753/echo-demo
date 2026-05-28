@@ -242,6 +242,44 @@ class SQLiteRepository(RepositoryPort):
             for r in rows
         ]
 
+    async def count_meeting_segments(self, meeting_id: str) -> int:
+        async with self._lock:
+            conn = self._require_conn()
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM meeting_segments WHERE meeting_id = ?",
+                (meeting_id,),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+        return int(row[0]) if row else 0
+
+    async def count_meeting_speakers(self, meeting_id: str) -> int:
+        """该会议出现过的不同 speaker_id 数（NULL 不计）。
+
+        优先 distinct meeting_segments.speaker_id；兼容只填 speaker_label 的旧
+        数据，再 fallback 到 distinct speaker_label。
+        """
+        async with self._lock:
+            conn = self._require_conn()
+            cur = await conn.execute(
+                "SELECT COUNT(DISTINCT speaker_id) FROM meeting_segments "
+                "WHERE meeting_id = ? AND speaker_id IS NOT NULL",
+                (meeting_id,),
+            )
+            row = await cur.fetchone()
+            n_id = int(row[0]) if row else 0
+            await cur.close()
+            if n_id > 0:
+                return n_id
+            cur = await conn.execute(
+                "SELECT COUNT(DISTINCT speaker_label) FROM meeting_segments "
+                "WHERE meeting_id = ? AND speaker_label IS NOT NULL",
+                (meeting_id,),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+        return int(row[0]) if row else 0
+
     # ── per-meeting speaker label map ───────────────────────────
     async def upsert_meeting_speaker_label(
         self,
