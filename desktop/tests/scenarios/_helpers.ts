@@ -254,4 +254,11 @@ export async function installScenarioMock(
   });
 }
 
-export { type EchoMock, publishArtifactReady, publishMeetingStarted, publishMinutesReady } from "../e2e/_mock";
+export {
+  type EchoMock,
+  publishArtifactReady,
+  publishMeetingEnded,
+  publishMeetingStarted,
+  publishMinutesFailed,
+  publishMinutesReady,
+} from "../e2e/_mock";

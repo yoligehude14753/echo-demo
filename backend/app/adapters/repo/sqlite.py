@@ -30,6 +30,7 @@ from app.ports.repository import (
     AmbientSegmentRecord,
     MeetingRecord,
     MeetingState,
+    MinutesStatus,
     RepositoryPort,
     SpeakerProfileRecord,
 )
@@ -115,6 +116,8 @@ class SQLiteRepository(RepositoryPort):
         finalized_at: datetime | None = None,
         minutes_json: str | None = None,
         raw_transcript_ref: str | None = None,
+        minutes_status: MinutesStatus | None = None,
+        minutes_error: str | None = None,
     ) -> None:
         # 用动态 SET 列表，避免空字段误改
         fields: list[str] = ["state = ?"]
@@ -134,6 +137,12 @@ class SQLiteRepository(RepositoryPort):
         if raw_transcript_ref is not None:
             fields.append("raw_transcript_ref = ?")
             values.append(raw_transcript_ref)
+        if minutes_status is not None:
+            fields.append("minutes_status = ?")
+            values.append(minutes_status)
+        if minutes_error is not None:
+            fields.append("minutes_error = ?")
+            values.append(minutes_error)
         values.append(meeting_id)
         async with self._lock:
             conn = self._require_conn()
@@ -148,7 +157,8 @@ class SQLiteRepository(RepositoryPort):
             conn = self._require_conn()
             cur = await conn.execute(
                 "SELECT id, title, state, started_at, ended_at, finalized_at, "
-                "auto_started, minutes_json, raw_transcript_ref "
+                "auto_started, minutes_json, raw_transcript_ref, "
+                "minutes_status, minutes_error "
                 "FROM meetings WHERE id = ?",
                 (meeting_id,),
             )
@@ -168,7 +178,8 @@ class SQLiteRepository(RepositoryPort):
             conn = self._require_conn()
             sql = (
                 "SELECT id, title, state, started_at, ended_at, finalized_at, "
-                "auto_started, minutes_json, raw_transcript_ref FROM meetings"
+                "auto_started, minutes_json, raw_transcript_ref, "
+                "minutes_status, minutes_error FROM meetings"
             )
             args: tuple[object, ...] = ()
             if state is not None:
@@ -449,6 +460,7 @@ class SQLiteRepository(RepositoryPort):
 
 
 def _meeting_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> MeetingRecord:
+    # 长度兼容：旧 schema 只有 9 列；新 schema 增加 minutes_status / minutes_error
     return MeetingRecord(
         id=row[0],
         title=row[1],
@@ -459,6 +471,8 @@ def _meeting_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> MeetingRecord:
         auto_started=bool(row[6]),
         minutes_json=row[7],
         raw_transcript_ref=row[8],
+        minutes_status=row[9] if len(row) > 9 else None,
+        minutes_error=row[10] if len(row) > 10 else None,
     )
 
 

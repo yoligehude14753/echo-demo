@@ -107,6 +107,19 @@ export async function finalizeMeeting(
   return asJson<MeetingMinutes>(r);
 }
 
+/**
+ * 重试生成纪要（后端 POST /meetings/{id}/finalize 是幂等的）。
+ *
+ * 用户场景：前次 finalize 失败 → 会议进入 ``minutes_status="generation_failed"``
+ * → MinutesView 给「重试」按钮 → 调本 API 重新跑 LLM，覆盖 minutes_json。
+ */
+export async function retryMinutesGeneration(
+  meetingId: string,
+  title: string,
+): Promise<MeetingMinutes> {
+  return finalizeMeeting(meetingId, title);
+}
+
 // ── 全局会议状态机（PRD：自动开/结 + 手动覆盖） ──────────────────
 
 export async function getCurrentMeeting(): Promise<MeetingStateSnapshot> {

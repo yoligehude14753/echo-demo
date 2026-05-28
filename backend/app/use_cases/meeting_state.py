@@ -35,6 +35,20 @@ MeetingMode = Literal["idle", "in_meeting"]
 StartReason = Literal["auto", "manual"]
 
 
+def _resolve_meeting_title(stored_title: str | None, meeting_id: str) -> str:
+    """给 LLM 纪要选一个合适的 title。
+
+    - 优先用 user 在 manual_start 时给的 title（已经落到 ``meetings.title``）
+    - repo 没记 → 用 ``"会议 <id>"``（比直接 ``m-xxxxxx`` 可读）
+    - 都没有 → meeting_id 兜底（不可能为空，但防御性）
+    """
+    if stored_title and stored_title.strip():
+        return stored_title.strip()
+    if meeting_id:
+        return f"会议 {meeting_id}"
+    return "未命名会议"
+
+
 @dataclass(slots=True)
 class CurrentMeeting:
     meeting_id: str
@@ -123,6 +137,44 @@ class MeetingState:
         )
         logger.info("hydrated current meeting: %s", keep.id)
 
+    async def recover_stuck_minutes(self) -> int:
+        """救活上一次 backend 进程里 finalize 失败、卡住「已结束 · 纪要空」的会议。
+
+        触发条件（任一）：
+        - ``state="ended"`` 且 ``minutes_json IS NULL``（旧版本卡住路径，无 status 字段）
+        - ``state="ended"`` 且 ``minutes_status="generation_failed"`` 且过 > 1 min 仍未被 UI 重试
+
+        操作：把 segments 重新装回 pipeline 内存，然后调一次 ``finalize_meeting``；
+        - 成功 → minutes_status="ok"，发 ``minutes.ready``
+        - 失败 → ``_mark_minutes_failed`` 已把 status 维持在 generation_failed，下次再 retry
+
+        本函数 fire-and-forget 跑（不阻塞 startup），返回尝试的会议数。
+        """
+        if self._repo is None:
+            return 0
+        meetings = await self._repo.list_meetings(state="ended", limit=20)
+        stuck = [m for m in meetings if (not m.minutes_json) and m.minutes_status != "ok"]
+        if not stuck:
+            return 0
+        logger.info("hydrate: %d stuck meeting(s) detected, retrying finalize", len(stuck))
+        for m in stuck:
+            try:
+                ok = await self._pipeline.load_meeting_for_retry(m.id)
+            except Exception as e:  # pragma: no cover - 重试前期失败
+                logger.warning("recover: load_meeting_for_retry(%s) failed: %s", m.id, e)
+                continue
+            if not ok:
+                logger.warning("recover: meeting %s has no segments to summarize; skip", m.id)
+                continue
+            title = _resolve_meeting_title(m.title, m.id)
+            try:
+                await self._pipeline.finalize_meeting(m.id, title=title)
+                logger.info("recover: meeting %s minutes regenerated successfully", m.id)
+            except Exception as e:
+                # finalize_meeting 内部已经把 minutes_status 置为 generation_failed
+                logger.warning("recover: meeting %s finalize retry failed: %s", m.id, e)
+        return len(stuck)
+
     # ── 用户手动控制 ────────────────────────────────────────────────
 
     async def manual_start(self, *, title: str | None = None) -> CurrentMeeting:
@@ -149,18 +201,29 @@ class MeetingState:
             return self._current
 
     async def manual_end(self) -> str | None:
-        """用户点击状态栏结束会议；finalize 纪要并清空状态。"""
+        """用户点击状态栏结束会议；finalize 纪要并清空状态。
+
+        关键修复（2026-05-28，echo-demo backend.log 报错根因）：
+        - 之前传 ``title=cur.meeting_id`` 看似没问题，但用户启动会议时给的 title
+          会被覆盖成 meeting_id，纪要标题就变成 "m-bdd1da4e7e21" 这种鬼东西。
+        - 改为：优先用 repo 里 ``meetings.title``（``manual_start`` 时落库），
+          回退 ``"会议 <id>"``。
+        - finalize 失败时**不再**调 ``end_meeting``（那个会用空 minutes 把 state
+          置 ended 但没有错误状态）。直接让 ``finalize_meeting`` 内部把状态置成
+          ``state=ended`` + ``minutes_status="generation_failed"``，UI 据此给「重试」入口。
+        """
         async with self._lock:
             cur = self._current
             if cur is None:
                 return None
             self._current = None
+        title = await self._resolve_title(cur.meeting_id)
         # finalize 放到 lock 外（LLM 调用耗时，避免堵 ambient 链路）
         try:
-            await self._pipeline.finalize_meeting(cur.meeting_id, title=cur.meeting_id)
+            await self._pipeline.finalize_meeting(cur.meeting_id, title=title)
         except Exception as e:
-            logger.warning("manual_end finalize failed (still ending): %s", e)
-            await self._pipeline.end_meeting(cur.meeting_id)
+            # pipeline 内部已经把 state/minutes_status 落到 ended/generation_failed
+            logger.warning("manual_end finalize failed for %s: %s", cur.meeting_id, e)
         # 让 detector 进 cooldown，避免用户结束后立刻又被自动开
         self._detector.force_end(now=datetime.now(UTC), reason="manual_end")
         await self._publish(
@@ -172,6 +235,21 @@ class MeetingState:
             },
         )
         return cur.meeting_id
+
+    async def _resolve_title(self, meeting_id: str) -> str:
+        """优先取 repo 里 user 启动时落库的 title；缺则回退 ``"会议 <id>"``。
+
+        meeting_id（``m-bdd1da4e7e21`` 之流）作为 LLM 纪要 title 用户体验极差，
+        所以只在 repo 完全查不到记录时用作最后兜底。
+        """
+        if self._repo is not None:
+            try:
+                rec = await self._repo.get_meeting(meeting_id)
+                if rec is not None and rec.title:
+                    return rec.title
+            except Exception as e:  # pragma: no cover - repo 查询异常
+                logger.warning("resolve_title: repo lookup failed for %s: %s", meeting_id, e)
+        return _resolve_meeting_title(None, meeting_id)
 
     # ── ambient 链路调用：每 chunk 喂一次 ───────────────────────────
 
@@ -236,11 +314,12 @@ class MeetingState:
             if cur is None or cur.meeting_id != meeting_id:
                 return
             self._current = None
+        title = await self._resolve_title(meeting_id)
         try:
-            await self._pipeline.finalize_meeting(meeting_id, title=meeting_id)
+            await self._pipeline.finalize_meeting(meeting_id, title=title)
         except Exception as e:
-            logger.warning("auto-end finalize failed: %s; fallback to end_meeting", e)
-            await self._pipeline.end_meeting(meeting_id)
+            # pipeline 内部已经标记 minutes_status="generation_failed"，UI 给重试入口
+            logger.warning("auto-end finalize failed for %s: %s", meeting_id, e)
         await self._publish("meeting.auto_ended", meeting_id, {"reason": reason})
         await self._publish(
             "meeting.state_changed",

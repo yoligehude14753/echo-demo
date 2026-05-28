@@ -109,16 +109,34 @@ def reset_meeting_pipeline() -> None:
 @router.get("/current")
 async def get_current_meeting(
     state: Annotated[MeetingState, Depends(get_meeting_state)],
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
 ) -> dict[str, object]:
-    """全局会议状态机当前状态：idle 或 in_meeting。"""
+    """全局会议状态机当前状态：idle 或 in_meeting。
+
+    返回中带 ``minutes_status`` 让前端 MinutesView 能区分「会议中 / 生成中 / 失败 / 已生成」。
+    in_meeting → minutes_status=null（会议没结束没纪要可言）
+    idle      → 返回最新 meeting 的 minutes_status（若用户刚结束一个会议，UI 据此决定显示什么）
+    """
     cur = state.current
-    if cur is None:
-        return {"mode": "idle", "meeting_id": None, "started_at": None, "started_by": None}
+    if cur is not None:
+        return {
+            "mode": "in_meeting",
+            "meeting_id": cur.meeting_id,
+            "started_at": cur.started_at.isoformat(),
+            "started_by": cur.started_by,
+            "minutes_status": None,
+            "minutes_error": None,
+        }
+    # idle：探一下最近一条 meeting，把它的 minutes_status 透传出来
+    latest = await repository.list_meetings(limit=1)
+    latest_rec = latest[0] if latest else None
     return {
-        "mode": "in_meeting",
-        "meeting_id": cur.meeting_id,
-        "started_at": cur.started_at.isoformat(),
-        "started_by": cur.started_by,
+        "mode": "idle",
+        "meeting_id": None,
+        "started_at": None,
+        "started_by": None,
+        "minutes_status": latest_rec.minutes_status if latest_rec else None,
+        "minutes_error": latest_rec.minutes_error if latest_rec else None,
     }
 
 
@@ -277,8 +295,30 @@ async def add_chunk(
 async def finalize(
     meeting_id: str,
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
     title: str = Form(...),
 ) -> MeetingMinutes:
+    """生成或重试生成会议纪要（幂等）。
+
+    幂等语义（2026-05-28 修）：
+    - 第一次调用：用 segments + LLM 生成 minutes，写 ``state="finalized"`` + ``minutes_status="ok"``
+    - 重试调用（前次失败 → ``state="ended"`` 且 ``minutes_status="generation_failed"``）：
+      pipeline 重新装载 repo segments 并重新跑 LLM；成功覆盖原 minutes_json，
+      失败再次写 ``generation_failed`` + 新的 ``minutes_error``。
+    - 用户视角：「重试生成纪要」按钮就是再 POST 一次 ``/meetings/{id}/finalize``。
+    """
+    # 重试场景：pipeline 内存里没有这个 meeting 的 segments（重启 / 进程切换）
+    # 显式装载一次，避免 finalize 报「no segments」。
+    if not pipeline.get_segments(meeting_id):
+        rec = await repository.get_meeting(meeting_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"meeting {meeting_id} not found")
+        loaded = await pipeline.load_meeting_for_retry(meeting_id)
+        if not loaded:
+            raise HTTPException(
+                status_code=400,
+                detail=f"meeting {meeting_id} has no segments to summarize",
+            )
     try:
         return await pipeline.finalize_meeting(meeting_id, title=title)
     except MeetingPipelineError as e:
