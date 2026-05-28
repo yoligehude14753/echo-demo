@@ -18,6 +18,10 @@ export interface EchoMockOptions {
    *  专门测引导流程的 spec 传 true 关掉这个默认行为。
    */
   keepOnboarding?: boolean;
+  /** 路径前缀列表；命中这些前缀的请求会被透传给真实 fetch，让 page.route()
+   *  在 CDP 网络层接管 mock（适用于需要更丰富 fixture 的场景，如 /healthz/full
+   *  / /admin/settings/remote）。 */
+  skipPaths?: string[];
 }
 
 export interface EchoMock {
@@ -32,6 +36,7 @@ export async function installEchoMock(
   options: EchoMockOptions = {},
 ): Promise<EchoMock> {
   const errorPaths = options.errorPaths ?? {};
+  const skipPaths = options.skipPaths ?? [];
 
   // P3.1：onboarding 默认在 e2e 跳过，避免 Modal 遮挡所有交互；
   // 想专门测引导流程的 spec 用 `disableOnboardingSkip` opt-out（注：放在 addInitScript
@@ -46,7 +51,8 @@ export async function installEchoMock(
     });
   }
 
-  await page.addInitScript((errorPaths: Record<string, number>) => {
+  await page.addInitScript(
+    ({ errorPaths, skipPaths }: { errorPaths: Record<string, number>; skipPaths: string[] }) => {
     type MockWs = {
       readyState: number;
       onopen?: (() => void) | null;
@@ -115,6 +121,12 @@ export async function installEchoMock(
       ctrl.fetchLog.push({ url, method, bodyText });
 
       const path = url.replace(/^https?:\/\/[^/]+/, "");
+      // skipPaths：让 page.route() 在 CDP 网络层接管（适合需要丰富 fixture 的 mock）
+      for (const sp of skipPaths) {
+        if (path.startsWith(sp) || path.startsWith(`/api${sp}`)) {
+          return realFetch(input, init);
+        }
+      }
       // sad path 注入：匹配 errorPaths 前缀的请求直接返错误码
       for (const prefix of Object.keys(errorPaths)) {
         if (path.startsWith(prefix) || path.startsWith(`/api${prefix}`)) {
@@ -205,7 +217,7 @@ export async function installEchoMock(
       // 其它走真实 fetch
       return realFetch(input, init);
     };
-  }, errorPaths);
+  }, { errorPaths, skipPaths });
 
   // 在 Node 上下文返回简单的 controller proxy
   const ctrl: EchoMock = {
