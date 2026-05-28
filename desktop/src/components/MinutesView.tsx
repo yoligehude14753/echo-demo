@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Empty, Tag, Tooltip, message } from "antd";
 import {
   AlertCircle,
@@ -13,6 +13,33 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { artifactDownloadUrl, getMeetingMinutes, retryMinutesGeneration } from "@/api";
+import { buildSpeakerDisplayMap } from "@/lib/speakerDisplay";
+
+// 把 LLM 返回的 assignee（"说话人 18" / "说话人18" / 已被用户改名的 "李雷"）
+// remap 成 transcript 视图里同一个 displayIdx，避免 minutes 写"说话人 21"但
+// 转写流显示"说话人 3"两边对不上。
+// 规则：能解析出 "说话人\s*\d+" 的就走 displayMap.get(rawLabel) → "说话人 N"；
+// 解析不出（用户改名 / null）原样返回。
+function remapAssignee(
+  raw: string | null | undefined,
+  displayMap: Map<string, number>,
+): string | null {
+  if (!raw) return null;
+  const m = raw.match(/^说话人\s*(\d+)$/);
+  if (!m) return raw; // 用户已改名 / 自定义
+  // displayMap 的 key 是 segments 里的 speaker_label，可能是 "说话人 18" 也可能是 "speaker_18"
+  // 优先按原字符串查；查不到再按数字部分构造的 key 试一次
+  const direct = displayMap.get(raw);
+  if (direct !== undefined) return `说话人 ${direct}`;
+  // 兜底：整个 displayMap 里有没有 label 末尾数字 = 当前数字的 key
+  const num = m[1];
+  for (const [label, idx] of displayMap.entries()) {
+    if (label.endsWith(num) || label === `说话人 ${num}` || label === `说话人${num}`) {
+      return `说话人 ${idx}`;
+    }
+  }
+  return raw; // displayMap 里没这人，原样
+}
 import { useStore } from "@/store";
 import type { TodoItem } from "@/types";
 
@@ -384,6 +411,11 @@ function MinutesBody({
   );
 }
 
+function useMeetingSpeakerMap(meetingId: string): Map<string, number> {
+  const segs = useStore((s) => s.meetings[meetingId]?.segments ?? []);
+  return useMemo(() => buildSpeakerDisplayMap(segs), [segs]);
+}
+
 /**
  * 会议待办清单。
  *
@@ -406,6 +438,7 @@ function MinutesTodoList({
   todos: TodoItem[];
 }): JSX.Element {
   const prefillCommandBar = useStore((s) => s.prefillCommandBar);
+  const speakerMap = useMeetingSpeakerMap(meetingId);
 
   if (todos.length === 0) {
     return (
@@ -428,6 +461,7 @@ function MinutesTodoList({
           <TodoRow
             key={t.id}
             todo={t}
+            displayAssignee={remapAssignee(t.assignee, speakerMap)}
             onExecute={(text) =>
               prefillCommandBar(text, {
                 meeting_id: meetingId,
@@ -443,9 +477,11 @@ function MinutesTodoList({
 
 function TodoRow({
   todo,
+  displayAssignee,
   onExecute,
 }: {
   todo: TodoItem;
+  displayAssignee: string | null;
   onExecute: (text: string) => void;
 }): JSX.Element {
   const done = todo.status === "done";
@@ -486,12 +522,12 @@ function TodoRow({
           {todo.text}
         </div>
         <div className="mt-0.5 flex items-center flex-wrap gap-1.5 text-[11px] text-ink-500">
-          {todo.assignee && (
+          {displayAssignee && (
             <Tag
               color="default"
               className="!m-0 !text-[10.5px] !leading-4 !py-0 !px-1.5"
             >
-              {todo.assignee}
+              {displayAssignee}
             </Tag>
           )}
           {todo.kind === "actionable" && !done && (
