@@ -64,8 +64,9 @@ test("S04 · @生成 HTML 命令 → 产物卡片出现", async ({ page }) => {
 
   await test.step("服务端 WS 推送 artifact.ready → 卡片出现", async () => {
     const artifactId = await publishArtifactReady(mock, "html", 1, "mock-html-scenario-001");
+    // 卡片由 data-artifact-id 锚定（title 主显示、artifact_id 仅做 tooltip / 14 字符截断后副显）
     await expect(
-      page.locator(`text=${artifactId}`).or(page.locator("text=HTML 报告")),
+      page.locator(`[data-artifact-id="${artifactId}"]`),
     ).toBeVisible({ timeout: 5_000 });
   });
 
