@@ -33,7 +33,13 @@ class FakeDiarizer:
     def __init__(self, ids: list[str | None]) -> None:
         self._q = list(ids)
 
-    async def identify(self, audio_bytes: bytes, *, sample_rate: int = 16_000) -> str | None:
+    async def identify(
+        self,
+        audio_bytes: bytes,
+        *,
+        sample_rate: int = 16_000,
+        meeting_id: str | None = None,
+    ) -> str | None:
         if not self._q:
             return None
         return self._q.pop(0)

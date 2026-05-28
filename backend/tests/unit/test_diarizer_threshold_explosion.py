@@ -67,11 +67,19 @@ def _make_drifting_embeddings(
 
 
 def _settings(threshold: float, outlier: float = 0.50) -> Settings:
+    """text-clarity 阈值对照测试：禁用 phase4-diar-deep 的活跃层 + 短段归并，
+    单独观察主阈值变化如何影响 explosion 行为。
+
+    - `diarizer_active_match_threshold=1.1`：活跃 list 匹配不可能命中 → 全走全局严判
+    - `diarizer_short_segment_continuity_ms=0`：短段归并门控关闭 → 不掩盖 explosion
+    """
     return Settings(
         diarizer_enabled=True,
         diarizer_match_threshold=threshold,
         diarizer_outlier_match_threshold=outlier,
         diarizer_min_voiced_seconds_for_new_profile=2.0,
+        diarizer_active_match_threshold=1.1,
+        diarizer_short_segment_continuity_ms=0,
     )
 
 

@@ -54,12 +54,22 @@ class _FakeDiarizer:
         self.reset_called = False
         self.identify_calls = 0
 
-    async def identify(self, audio_bytes: bytes, *, sample_rate: int = 16_000) -> str | None:
+    async def identify(
+        self,
+        audio_bytes: bytes,
+        *,
+        sample_rate: int = 16_000,
+        meeting_id: str | None = None,
+    ) -> str | None:
         self.identify_calls += 1
         return None
 
     async def identify_segments(
-        self, audio_bytes: bytes, *, sample_rate: int = 16_000
+        self,
+        audio_bytes: bytes,
+        *,
+        sample_rate: int = 16_000,
+        meeting_id: str | None = None,
     ) -> list[Any]:
         return []
 
