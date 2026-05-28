@@ -4,6 +4,7 @@ import type {
   GeneratedArtifact,
   MeetingCard,
   MeetingMinutes,
+  TodoItem,
   TranscriptSegment,
 } from "@/types";
 import type { MeetingSummary } from "@/api";
@@ -12,6 +13,25 @@ import {
   FAILED_ARTIFACT_LIMIT,
   type FailedArtifact,
 } from "@/lib/failedArtifact";
+
+/**
+ * M_minutes_refactor：MinutesView 的「执行待办」按钮通过 store.prefillCommandBar
+ * 把 todo.suggested_command 推送给 CommandBar。CommandBar 启动时注册一个
+ * handler；store 持有该 handler 引用，并暴露 prefillCommandBar(text, meta) 给
+ * 任何组件调用。
+ *
+ * 这条间接路径替代了「父组件 props 透传 ref」的方案——MinutesView 与
+ * CommandBar 在 App 树里非直接父子，走 store 单例最简单且与 sub_J 的 chat
+ * 分支彻底解耦。
+ */
+export interface CommandBarPrefillMeta {
+  meeting_id?: string;
+  todo_id?: string;
+}
+export type CommandBarPrefillHandler = (
+  text: string,
+  meta?: CommandBarPrefillMeta,
+) => void;
 
 interface Store {
   meetings: Record<string, MeetingCard>;
@@ -32,6 +52,11 @@ interface Store {
   pendingArtifactBriefs: Record<string, string>;
   connected: boolean;
   events: EchoEvent[];
+  /**
+   * M_minutes_refactor：CommandBar 在 mount 时注册一个 prefill handler；
+   * MinutesView 「执行」按钮调 prefillCommandBar(text, meta) 触发。
+   */
+  _commandBarPrefillHandler: CommandBarPrefillHandler | null;
 
   setConnected(v: boolean): void;
   selectMeeting(id: string | null): void;
@@ -51,6 +76,13 @@ interface Store {
   /** 删除单条产物（hover × 按钮）。也同步从所有 meeting 的 artifacts 中清掉，避免悬挂引用。 */
   removeArtifact(artifactId: string): void;
   dismissFailedArtifact(id: string): void;
+  /**
+   * M_minutes_refactor：CommandBar 启动时注册 prefill handler；返回的 unregister
+   * 可在 unmount 时调，避免 handler 引用陈旧实例（HMR 场景）。
+   */
+  registerCommandBarPrefill(handler: CommandBarPrefillHandler): () => void;
+  /** 把 text 推给 CommandBar 预填（meta 透传，CommandBar 据此发 artifact 时附带 meeting_id/todo_id）。 */
+  prefillCommandBar(text: string, meta?: CommandBarPrefillMeta): void;
   reset(): void;
 }
 
@@ -74,9 +106,25 @@ export const useStore = create<Store>((set, get) => ({
   pendingArtifactBriefs: {},
   connected: false,
   events: [],
+  _commandBarPrefillHandler: null,
 
   setConnected: (v) => set({ connected: v }),
   selectMeeting: (id) => set({ currentMeetingId: id }),
+
+  registerCommandBarPrefill: (handler) => {
+    set({ _commandBarPrefillHandler: handler });
+    return () => {
+      if (get()._commandBarPrefillHandler === handler) {
+        set({ _commandBarPrefillHandler: null });
+      }
+    };
+  },
+
+  prefillCommandBar: (text, meta) => {
+    const h = get()._commandBarPrefillHandler;
+    if (h) h(text, meta);
+    // 无 handler 时静默：CommandBar 还没 mount（HMR 切换瞬间），下次再点会工作
+  },
 
   reset: () =>
     set({
@@ -103,6 +151,8 @@ export const useStore = create<Store>((set, get) => ({
           ...cur,
           // 已有非空 title 优先（事件流可能比 summary 含更新值如 minutes.title）
           title: cur.title && cur.title !== cur.meeting_id ? cur.title : (sum.title ?? cur.title),
+          // M_minutes_refactor：display_title 一旦从后端拿到就持久化到 store
+          display_title: sum.display_title ?? cur.display_title ?? null,
           state: uiState,
           started_at: cur.started_at ?? sum.started_at,
           ended_at: cur.ended_at ?? sum.ended_at ?? undefined,
@@ -201,9 +251,39 @@ export const useStore = create<Store>((set, get) => ({
         get().upsertMeeting(mid, {
           minutes: m,
           title: m.title,
+          // M_minutes_refactor：LLM 生成的 title 就是 display_title，同步给左侧列表
+          display_title: m.title,
           state: "ended",
           minutes_status: "ok",
           minutes_error: null,
+        });
+        break;
+      }
+      case "meeting.todo.completed": {
+        // M_minutes_refactor：artifact 生成完毕 → 后端回写完成事件 → 把对应 todo
+        // status 置 done + artifact_id，避免必须等下次 GET /meetings/{id}/minutes
+        // 才看到 checkbox 划掉的状态。
+        if (!mid) break;
+        const p = (e.payload ?? {}) as {
+          todo_id?: string;
+          artifact_id?: string;
+          done_at?: string;
+        };
+        const cur = get().meetings[mid];
+        if (!cur?.minutes || !p.todo_id) break;
+        const todos = cur.minutes.todos ?? [];
+        const next: TodoItem[] = todos.map((t) =>
+          t.id === p.todo_id
+            ? {
+                ...t,
+                status: "done",
+                done_at: p.done_at ?? new Date().toISOString(),
+                artifact_id: p.artifact_id ?? t.artifact_id ?? null,
+              }
+            : t,
+        );
+        get().upsertMeeting(mid, {
+          minutes: { ...cur.minutes, todos: next },
         });
         break;
       }

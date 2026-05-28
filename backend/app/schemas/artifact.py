@@ -70,6 +70,11 @@ class ArtifactRequest(BaseModel):
     title: str | None = None
     context_refs: list[str] = Field(default_factory=list)  # 关联会议/RAG/Web
     quality_first: bool = True
+    # M_minutes_refactor：当指令是为了完成某条会议待办（todo），可选带这两
+    # 个字段；artifact 生成成功后会回写 meetings.minutes_json.todos[id]
+    # → status="done" + artifact_id，并发 ``meeting.todo.completed`` 事件。
+    meeting_id: str | None = None
+    todo_id: str | None = None
 
 
 class GeneratedArtifact(BaseModel):

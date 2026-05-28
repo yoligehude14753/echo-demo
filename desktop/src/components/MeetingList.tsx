@@ -90,6 +90,13 @@ export default function MeetingList(): JSX.Element {
       <div className="h-px bg-paper-300 my-1" aria-hidden="true" />
       {items.map((m) => {
         const active = currentId === m.meeting_id;
+        // M_minutes_refactor：左侧列表显示语义化标题（如「直播带货话术 + AI 编程营销
+        // 讨论」），优先级 display_title > title > meeting_id；保证旧会议、未 finalize
+        // 会议都有兜底文案。
+        const friendlyTitle =
+          (m.display_title && m.display_title.trim()) ||
+          (m.title && m.title !== m.meeting_id ? m.title : null) ||
+          m.meeting_id;
         return (
           <button
             key={m.meeting_id}
@@ -104,8 +111,12 @@ export default function MeetingList(): JSX.Element {
           >
             <div className="flex items-center gap-2">
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot[m.state]}`} />
-              <span className="text-[13px] font-medium truncate flex-1">
-                {m.title}
+              <span
+                className="text-[13px] font-medium truncate flex-1"
+                title={friendlyTitle}
+                data-testid="meeting-item-title"
+              >
+                {friendlyTitle}
               </span>
             </div>
             <div className="mt-1 text-[11px] text-ink-400 flex items-center gap-2 pl-3.5">

@@ -15,8 +15,9 @@
  *   一个紧凑的悬浮输入条；显示当前意图徽标 / 解析理由。
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Input, Tag, Tooltip, message } from "antd";
+import type { TextAreaRef } from "antd/es/input/TextArea";
 import { FileText, Loader2, Paperclip, Send, Sparkles, Upload, Wand2, X } from "lucide-react";
 
 import {
@@ -94,18 +95,26 @@ export default function CommandBar(): JSX.Element {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
+  const registerCommandBarPrefill = useStore((s) => s.registerCommandBarPrefill);
   const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<TextAreaRef | null>(null);
+
+  // M_minutes_refactor：MinutesView「执行待办」按钮通过 store.prefillCommandBar
+  // 把 suggested_command 一键填入；只 setText + focus，不自动 onSubmit 防误触。
+  useEffect(() => {
+    const unregister = registerCommandBarPrefill((nextText) => {
+      setText(nextText);
+      textareaRef.current?.focus({ cursor: "end" });
+    });
+    return unregister;
+  }, [registerCommandBarPrefill]);
+
   // P4-fix-rag-chat 智能提示节流：每条会话最多提示一次，避免每次发问都弹。
   const workspaceHintShownRef = useRef(false);
 
-  /**
-   * 当用户走 search_rag 但 RAG docs 数太少（< 3）且没配置 workspace_dirs 时，
-   * toast 提示「📂 想覆盖整个文件夹？点 设置 → 工作区目录 配置」。
-   *
-   * 节流：每个 session 最多提一次（workspaceHintShownRef）。
-   * 调 listRagDocs + workspaceStatus 并发；任一失败静默吞掉，不打扰主链路。
-   */
+  // 当用户走 search_rag 但 RAG docs 数太少（< 3）且没配置 workspace_dirs 时，
+  // toast 提示「📂 想覆盖整个文件夹？点 设置 → 工作区目录 配置」。
   const maybePromptWorkspaceConfig = useCallback(async (): Promise<void> => {
     if (workspaceHintShownRef.current) return;
     try {
@@ -465,6 +474,7 @@ export default function CommandBar(): JSX.Element {
       <div className="flex items-center gap-2">
         <Wand2 className="w-4 h-4 text-ink-500 shrink-0" />
         <Input.TextArea
+          ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onPressEnter={(e) => {

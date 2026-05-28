@@ -118,6 +118,7 @@ class SQLiteRepository(RepositoryPort):
         raw_transcript_ref: str | None = None,
         minutes_status: MinutesStatus | None = None,
         minutes_error: str | None = None,
+        display_title: str | None = None,
     ) -> None:
         # 用动态 SET 列表，避免空字段误改
         fields: list[str] = ["state = ?"]
@@ -143,6 +144,9 @@ class SQLiteRepository(RepositoryPort):
         if minutes_error is not None:
             fields.append("minutes_error = ?")
             values.append(minutes_error)
+        if display_title is not None:
+            fields.append("display_title = ?")
+            values.append(display_title)
         values.append(meeting_id)
         async with self._lock:
             conn = self._require_conn()
@@ -158,7 +162,7 @@ class SQLiteRepository(RepositoryPort):
             cur = await conn.execute(
                 "SELECT id, title, state, started_at, ended_at, finalized_at, "
                 "auto_started, minutes_json, raw_transcript_ref, "
-                "minutes_status, minutes_error "
+                "minutes_status, minutes_error, display_title "
                 "FROM meetings WHERE id = ?",
                 (meeting_id,),
             )
@@ -179,7 +183,7 @@ class SQLiteRepository(RepositoryPort):
             sql = (
                 "SELECT id, title, state, started_at, ended_at, finalized_at, "
                 "auto_started, minutes_json, raw_transcript_ref, "
-                "minutes_status, minutes_error FROM meetings"
+                "minutes_status, minutes_error, display_title FROM meetings"
             )
             args: tuple[object, ...] = ()
             if state is not None:
@@ -460,7 +464,7 @@ class SQLiteRepository(RepositoryPort):
 
 
 def _meeting_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> MeetingRecord:
-    # 长度兼容：旧 schema 只有 9 列；新 schema 增加 minutes_status / minutes_error
+    # 长度兼容：旧 schema 9 列；migration 003 → 11 列；migration 004 → 12 列
     return MeetingRecord(
         id=row[0],
         title=row[1],
@@ -473,6 +477,7 @@ def _meeting_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> MeetingRecord:
         raw_transcript_ref=row[8],
         minutes_status=row[9] if len(row) > 9 else None,
         minutes_error=row[10] if len(row) > 10 else None,
+        display_title=row[11] if len(row) > 11 else None,
     )
 
 

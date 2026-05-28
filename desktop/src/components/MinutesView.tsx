@@ -1,8 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Empty, message } from "antd";
-import { AlertCircle, ChevronDown, ChevronRight, FileText, Loader2, RefreshCw } from "lucide-react";
-import { getMeetingMinutes, retryMinutesGeneration } from "@/api";
+import { Button, Empty, Tag, Tooltip, message } from "antd";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  Download,
+  FileText,
+  Loader2,
+  Play,
+  RefreshCw,
+} from "lucide-react";
+import { artifactDownloadUrl, getMeetingMinutes, retryMinutesGeneration } from "@/api";
 import { useStore } from "@/store";
+import type { TodoItem } from "@/types";
 
 function isFinalizedLike(state: string | undefined): boolean {
   return state === "ended" || state === "finalized";
@@ -298,19 +310,37 @@ function MinutesBody({
   >["minutes"];
 }): JSX.Element {
   if (!m) return <></>;
+  // M_minutes_refactor：
+  // - 去掉「说话人列表」（用户反馈无价值），只保留标题 + 时长
+  // - action_items → todos：渲染为可勾选 TodoList，actionable 给「执行」按钮，
+  //   done 划掉 + 显示 artifact 下载链接。
+  // - 旧后端没返 todos → 兜底从 action_items 投影成 info 待办，避免行动项消失
+  const todos: TodoItem[] = m.todos?.length
+    ? m.todos
+    : (m.action_items ?? []).map((text, i) => ({
+        id: `legacy-${i}`,
+        text,
+        assignee: null,
+        kind: "info" as const,
+        status: "pending" as const,
+        done_at: null,
+        artifact_id: null,
+        suggested_command: null,
+      }));
   return (
     <div className="px-6 py-5 border-b border-paper-300 max-h-[55vh] overflow-y-auto">
       <div className="flex items-center gap-2 mb-3 text-[13px] text-ink-700 font-medium">
         <FileText className="w-3.5 h-3.5 text-ink-500" />
         <span>会议纪要</span>
       </div>
-      <h2 className="brand text-[17px] font-semibold text-ink-900 leading-snug mb-1">
+      <h2
+        className="brand text-[17px] font-semibold text-ink-900 leading-snug mb-1"
+        data-testid="minutes-title"
+      >
         {m.title}
       </h2>
       <div className="text-[11px] text-ink-400 mb-4 flex items-center gap-1.5">
         <span>时长 {Math.round(m.duration_sec)}s</span>
-        <span>·</span>
-        <span>{m.speakers.join(" / ")}</span>
       </div>
 
       <p className="text-[13.5px] text-ink-800 leading-7 mb-5">{m.summary}</p>
@@ -349,23 +379,152 @@ function MinutesBody({
         </section>
       )}
 
-      {m.action_items.length > 0 && (
-        <section>
-          <h3 className="text-[12.5px] font-semibold text-ink-900 mb-1.5">
-            行动项
-          </h3>
-          <ul className="space-y-1 text-[13px] text-ink-700">
-            {m.action_items.map((a, i) => (
-              <li
-                key={i}
-                className="flex gap-2 leading-6 pl-2 border-l-2 border-paper-300"
-              >
-                <span>{a}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <MinutesTodoList meetingId={m.meeting_id} todos={todos} />
     </div>
+  );
+}
+
+/**
+ * 会议待办清单。
+ *
+ * 状态集（19-quality-detail.mdc §状态集完整性）：
+ * - empty：todos == [] → 「本次会议无待办」
+ * - pending + actionable → ▶️ 执行 按钮（预填 suggested_command 到 CommandBar）
+ * - pending + info → 纯文字，无执行按钮
+ * - done → 文字划掉 + 🔗 已生成（→ 下载 artifact）
+ * - cancelled → 灰色 + 删除线（占位，当前后端尚不会自动置 cancelled）
+ *
+ * 注意：执行按钮把 todo 文本拼成一条带 todo_id/meeting_id 的指令塞给 CommandBar，
+ * CommandBar 发 artifact 时把这两个字段带回后端，后端生成后回写 minutes_json.todos
+ * 并发 ``meeting.todo.completed`` 事件 → store.applyEvent 把 status 置 done。
+ */
+function MinutesTodoList({
+  meetingId,
+  todos,
+}: {
+  meetingId: string;
+  todos: TodoItem[];
+}): JSX.Element {
+  const prefillCommandBar = useStore((s) => s.prefillCommandBar);
+
+  if (todos.length === 0) {
+    return (
+      <section data-testid="minutes-todos-empty">
+        <h3 className="text-[12.5px] font-semibold text-ink-900 mb-1.5">
+          待办
+        </h3>
+        <div className="text-[12px] text-ink-400 pl-2 border-l-2 border-paper-300 leading-6">
+          本次会议无待办
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section data-testid="minutes-todos">
+      <h3 className="text-[12.5px] font-semibold text-ink-900 mb-1.5">待办</h3>
+      <ul className="space-y-1">
+        {todos.map((t) => (
+          <TodoRow
+            key={t.id}
+            todo={t}
+            onExecute={(text) =>
+              prefillCommandBar(text, {
+                meeting_id: meetingId,
+                todo_id: t.id,
+              })
+            }
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function TodoRow({
+  todo,
+  onExecute,
+}: {
+  todo: TodoItem;
+  onExecute: (text: string) => void;
+}): JSX.Element {
+  const done = todo.status === "done";
+  const cancelled = todo.status === "cancelled";
+  const canExecute =
+    todo.status === "pending" &&
+    todo.kind === "actionable" &&
+    typeof todo.suggested_command === "string" &&
+    todo.suggested_command.length > 0;
+  return (
+    <li
+      data-testid="minutes-todo-row"
+      data-todo-id={todo.id}
+      data-todo-status={todo.status}
+      className={`flex items-start gap-2 px-2 py-1.5 rounded-md border border-paper-200 bg-paper-50 ${
+        done ? "opacity-70" : ""
+      }`}
+    >
+      <div className="mt-0.5 shrink-0">
+        {done ? (
+          <CheckCircle2
+            className="w-4 h-4 text-emerald-600"
+            aria-label="已完成"
+          />
+        ) : (
+          <Circle
+            className={`w-4 h-4 ${cancelled ? "text-ink-300" : "text-ink-400"}`}
+            aria-label={cancelled ? "已取消" : "待办"}
+          />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div
+          className={`text-[13px] leading-5 text-ink-800 ${
+            done || cancelled ? "line-through text-ink-500" : ""
+          }`}
+        >
+          {todo.text}
+        </div>
+        <div className="mt-0.5 flex items-center flex-wrap gap-1.5 text-[11px] text-ink-500">
+          {todo.assignee && (
+            <Tag
+              color="default"
+              className="!m-0 !text-[10.5px] !leading-4 !py-0 !px-1.5"
+            >
+              {todo.assignee}
+            </Tag>
+          )}
+          {todo.kind === "actionable" && !done && (
+            <span className="text-[10.5px] text-accent">可执行</span>
+          )}
+          {done && todo.artifact_id && (
+            <a
+              href={artifactDownloadUrl(todo.artifact_id)}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="minutes-todo-artifact-link"
+              className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-800 underline-offset-2 hover:underline"
+            >
+              <Download className="w-3 h-3" />
+              已生成 · 下载
+            </a>
+          )}
+        </div>
+      </div>
+      {canExecute && (
+        <Tooltip title={`预填到指令栏：${todo.suggested_command}`}>
+          <Button
+            type="default"
+            size="small"
+            icon={<Play className="w-3 h-3" />}
+            data-testid="minutes-todo-execute-btn"
+            onClick={() => onExecute(todo.suggested_command as string)}
+            className="!shrink-0 !text-accent"
+          >
+            执行
+          </Button>
+        </Tooltip>
+      )}
+    </li>
   );
 }

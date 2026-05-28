@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,26 +37,48 @@ from app.ports.repository import RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.events import EchoEvent
 from app.schemas.llm import ChatMessage
-from app.schemas.meeting import MeetingMinutes, MinutesSection, TranscriptSegment
+from app.schemas.meeting import MeetingMinutes, MinutesSection, TodoItem, TranscriptSegment
 
+# M_minutes_refactor（2026-05-28）：把以前只返「summary/sections/decisions/
+# action_items」的 prompt 升级为同时返「title（语义化标题，≤18 字中文）+ todos
+# （含 assignee/kind/suggested_command）」的单 JSON。
+#
+# 为什么不拆成两次 LLM 调用：finalize 链路目前一次 LLM 已经要 60-180s，再加
+# 一次延迟翻倍；让模型一次返完整 JSON 既省调用、也保证 title 与内容一致。
 _MINUTES_SYS_PROMPT = """你是会议纪要助手。基于以下逐字稿生成**结构化中文纪要**，严格输出 JSON：
 
 ```json
 {
+  "title": "≤18 字的语义化中文标题，概括本次会议主题",
   "summary": "2-3 句话核心结论",
   "sections": [
     {"heading": "议题1标题", "bullets": ["要点1", "要点2"]}
   ],
   "decisions": ["明确做出的决定"],
-  "action_items": ["谁 负责 什么 何时完成"]
+  "todos": [
+    {
+      "text": "具体待办描述（例如：生成 Q3 销售拆解 PPT）",
+      "assignee": "说话人1",
+      "kind": "actionable",
+      "suggested_command": "@生成 PPT Q3 销售拆解"
+    }
+  ]
 }
 ```
 
 要求：
 1. 不要照抄逐字稿，提炼要点
-2. 决议和行动项必须真实出现在原文，不要编造
+2. 决议和待办必须真实出现在原文，不要编造
 3. sections 按议题切分，每个 ≥ 2 个 bullets
-4. 只输出 JSON，不要 markdown 围栏
+4. title 必须能让一个没参会的人一眼看懂今天讲了什么（例：「直播带货话术 + AI 编程营销讨论」），禁止用「会议纪要 / 第 N 次例会 / 未命名会议」这类无信息标题
+5. todos 抽取规则：
+   - 抽出所有「行动项 / 待办」，每条带：
+     - text：一句话描述
+     - assignee：用对话里的「说话人 N」标签或人名；找不到具体人填 null
+     - kind：含「生成 PPT / 做表 / 查资料 / 发邮件 / 计算 / 整理」等动词 → "actionable"；纯记录类（"下周再讨论"）→ "info"
+     - suggested_command：当 kind="actionable" 时给一个可直接发到指令栏的短语，必须以 @ 开头（如 "@生成 PPT 主题"、"@查 关键词"、"@生成 Word 周报"）；info 时填 null
+   - 没有任何待办时 todos 返回 []
+6. 只输出 JSON，不要 markdown 围栏
 """
 
 
@@ -345,15 +368,32 @@ class MeetingPipeline:
             await self._mark_minutes_failed(meeting_id, str(e))
             raise
 
+        # title 解析：LLM 返的 title 优先（语义化），失败则回退用户/系统给的 title
+        # 没返或返了垃圾值（含 meeting_id / 空 / 超长）→ 回退
+        llm_title = self._extract_display_title(minutes_payload.get("title"), fallback=title)
+        todos = self._parse_todos(minutes_payload.get("todos", []))
+
+        # action_items 字段保留作向后兼容：
+        # - 新 prompt 返 todos → 把 todos.text 投影成 action_items（旧客户端仍能看到）
+        # - 旧 prompt 只返 action_items（无 todos）→ 透传 action_items，保证旧测试通过
+        legacy_action_items = minutes_payload.get("action_items", [])
+        if todos:
+            action_items_field: list[str] = [t.text for t in todos]
+        elif isinstance(legacy_action_items, list):
+            action_items_field = [str(x) for x in legacy_action_items]
+        else:
+            action_items_field = []
+
         minutes = MeetingMinutes(
             meeting_id=meeting_id,
-            title=title,
+            title=llm_title,
             duration_sec=duration_sec,
             speakers=speakers,
             summary=minutes_payload["summary"],
             sections=[MinutesSection(**s) for s in minutes_payload["sections"]],
             decisions=minutes_payload.get("decisions", []),
-            action_items=minutes_payload.get("action_items", []),
+            todos=todos,
+            action_items=action_items_field,
             created_at=datetime.now(UTC),
         )
 
@@ -363,7 +403,7 @@ class MeetingPipeline:
         # RAG 入库（纪要 summary + 逐字稿一起检索）
         try:
             rag_payload = "【纪要】\n" + minutes.summary + "\n\n【逐字稿】\n" + transcript_text
-            await self._rag.ingest_meeting(meeting_id, rag_payload, title)
+            await self._rag.ingest_meeting(meeting_id, rag_payload, llm_title)
         except Exception as e:
             # RAG 失败不视为纪要失败：纪要已生成，仅检索功能少一条。日志告警即可。
             import logging
@@ -379,7 +419,8 @@ class MeetingPipeline:
             await self._repo.update_meeting_state(
                 meeting_id,
                 state="finalized",
-                title=title,
+                title=title,  # 保留用户/系统传入的原始 title
+                display_title=llm_title,  # ← migration 004 新列：语义化标题
                 finalized_at=datetime.now(UTC),
                 minutes_json=minutes.model_dump_json(),
                 raw_transcript_ref=transcript_ref,
@@ -390,13 +431,79 @@ class MeetingPipeline:
         await self._publish("meeting.ended", meeting_id, {"duration_sec": duration_sec})
         await self._publish("minutes.ready", meeting_id, minutes.model_dump(mode="json"))
         # 主动建议前端 TTS 播一句简短的纪要 ack（前端可按 tts_enabled 决定真不真的播）
-        ack_text = f"会议{title}已结束，纪要已生成。{minutes.summary}"
+        ack_text = f"会议{llm_title}已结束，纪要已生成。{minutes.summary}"
         await self._publish(
             "tts.suggested",
             meeting_id,
             {"text": ack_text[:400], "kind": "minutes"},
         )
         return minutes
+
+    @staticmethod
+    def _extract_display_title(raw: object, *, fallback: str) -> str:
+        """从 LLM 返回的 title 字段提取干净的语义化标题。
+
+        防御场景：
+        - 返回 None / 非 str → 用 fallback
+        - 空白 / 含 meeting_id 模式（``m-` 开头 + 12 位 hex）→ 视为无效
+        - 超长 → 截到 18 字（用户需求的硬约束）
+        """
+        if not isinstance(raw, str):
+            return fallback
+        s = raw.strip()
+        if not s:
+            return fallback
+        # m-bdd1da4e7e21 / auto-... 这类前缀视为无效
+        if s.startswith(("m-", "auto-")) and len(s) <= 32:
+            return fallback
+        # 18 字硬上限（中文按字符数）
+        if len(s) > 18:
+            s = s[:18]
+        return s
+
+    @staticmethod
+    def _parse_todos(raw_todos: object) -> list[TodoItem]:
+        """把 LLM 返回的 todos 列表标准化成 ``list[TodoItem]``。
+
+        宽容策略：
+        - 非 list → 返 []
+        - 单条非 dict / 缺 text → skip（不抛错让整个 finalize 失败）
+        - id 服务端生成 uuid（LLM 不该决定 id）
+        - kind 不在 {"actionable", "info"} → 默认 "info"
+        - actionable 时 suggested_command 必须以 @ 开头，否则丢弃
+        """
+        if not isinstance(raw_todos, list):
+            return []
+        out: list[TodoItem] = []
+        for raw in raw_todos:
+            if not isinstance(raw, dict):
+                continue
+            text = raw.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            kind_raw = raw.get("kind")
+            kind = kind_raw if kind_raw in ("actionable", "info") else "info"
+            assignee = raw.get("assignee")
+            if assignee is not None and not isinstance(assignee, str):
+                assignee = None
+            suggested = raw.get("suggested_command")
+            if not (
+                kind == "actionable"
+                and isinstance(suggested, str)
+                and suggested.strip().startswith("@")
+            ):
+                suggested = None
+            out.append(
+                TodoItem(
+                    id=f"t-{uuid.uuid4().hex[:12]}",
+                    text=text.strip(),
+                    assignee=assignee.strip() if isinstance(assignee, str) else None,
+                    kind=kind,
+                    status="pending",
+                    suggested_command=suggested.strip() if suggested else None,
+                )
+            )
+        return out
 
     async def _mark_minutes_failed(self, meeting_id: str, error: str) -> None:
         """把纪要状态置为 ``generation_failed``，让 UI 给「重试」入口。
@@ -462,6 +569,8 @@ class MeetingPipeline:
         for key in ("summary", "sections"):
             if key not in data:
                 raise MeetingPipelineError(f"missing key in minutes: {key}")
+        # title / todos 是新加字段；旧 LLM 返回不带也允许（fallback 走外层），
+        # 不要在这里 raise，避免老 prompt 测试一刀切失败。
         # 防御性：sections 内必含 heading + bullets
         try:
             for sec in data["sections"]:
@@ -469,6 +578,59 @@ class MeetingPipeline:
         except (ValidationError, TypeError) as e:
             raise MeetingPipelineError(f"sections schema invalid: {e!s}") from e
         return data  # type: ignore[no-any-return]
+
+    # ── M_minutes_refactor：artifact → todo 回写 ───────────────────────
+    async def attach_artifact_to_todo(
+        self,
+        meeting_id: str,
+        todo_id: str,
+        artifact_id: str,
+    ) -> bool:
+        """把生成好的 artifact 关联到 minutes_json.todos[todo_id]。
+
+        - 找不到 meeting / minutes_json / todo_id → 返回 False（调用方决定是否日志）
+        - 找到 → 把对应 todo status 置 "done" + done_at + artifact_id，重写整段
+          minutes_json 到 repo；同时发 ``meeting.todo.completed`` 事件给前端
+        - 复用现有 minutes.failed 路径：失败只警告日志，不抛错（artifact 已生成）
+
+        rationale：todos 在 minutes_json blob 里（design choice in migration 004
+        rationale），单 todo 状态变更走整段重写——并发风险存在但 P4 demo 量级
+        够用；如果之后并发写明显，再切到独立 meeting_todos 表。
+        """
+        if self._repo is None:
+            return False
+        rec = await self._repo.get_meeting(meeting_id)
+        if rec is None or not rec.minutes_json:
+            return False
+        try:
+            data = json.loads(rec.minutes_json)
+        except json.JSONDecodeError:
+            return False
+        todos = data.get("todos")
+        if not isinstance(todos, list):
+            return False
+        hit = False
+        now_iso = datetime.now(UTC).isoformat()
+        for t in todos:
+            if isinstance(t, dict) and t.get("id") == todo_id:
+                t["status"] = "done"
+                t["done_at"] = now_iso
+                t["artifact_id"] = artifact_id
+                hit = True
+                break
+        if not hit:
+            return False
+        await self._repo.update_meeting_state(
+            meeting_id,
+            state=rec.state,
+            minutes_json=json.dumps(data, ensure_ascii=False),
+        )
+        await self._publish(
+            "meeting.todo.completed",
+            meeting_id,
+            {"todo_id": todo_id, "artifact_id": artifact_id, "done_at": now_iso},
+        )
+        return True
 
     async def _persist_transcript(
         self,
