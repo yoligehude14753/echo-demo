@@ -1,5 +1,12 @@
 import { Layout, Tooltip } from "antd";
-import { MessageSquare, Mic, Settings, Volume2, VolumeX } from "lucide-react";
+import {
+  AlertTriangle,
+  MessageSquare,
+  Mic,
+  Settings,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { useState } from "react";
 import MeetingList from "@/components/MeetingList";
 import TranscriptStream from "@/components/TranscriptStream";
@@ -53,31 +60,15 @@ export default function App(): JSX.Element {
           </Tooltip>
         </div>
         <div className="app-no-drag flex items-center gap-3 text-[11px] text-ink-500">
-          <StatusBar />
+          <StatusBar
+            ttsHealth={tts.synthHealth}
+            ttsEnabled={tts.enabled}
+            ttsLastError={tts.lastError}
+            onRefreshTtsHealth={tts.refreshHealth}
+          />
           <span className="w-px h-3 bg-paper-300" aria-hidden />
           <MeetingStatusBar />
-          <Tooltip
-            title={tts.enabled ? "TTS 已开：会议纪要/回答会语音播报" : "TTS 已关"}
-          >
-            <button
-              type="button"
-              onClick={() => tts.setEnabled(!tts.enabled)}
-              className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${
-                tts.enabled
-                  ? "text-accent hover:bg-paper-200"
-                  : "text-ink-400 hover:bg-paper-200"
-              }`}
-              data-testid="tts-toggle"
-              aria-label="TTS 开关"
-            >
-              {tts.enabled ? (
-                <Volume2 className="w-3.5 h-3.5" />
-              ) : (
-                <VolumeX className="w-3.5 h-3.5" />
-              )}
-              <span>{tts.isSpeaking ? "播放中" : tts.enabled ? "TTS" : "静音"}</span>
-            </button>
-          </Tooltip>
+          <TtsTopBarButton tts={tts} />
           <span>事件 {events.length}</span>
           <span className="flex items-center gap-1.5">
             <span
@@ -159,5 +150,73 @@ export default function App(): JSX.Element {
         </Content>
       </Layout>
     </Layout>
+  );
+}
+
+// ── 顶栏 TTS 状态按钮 ──────────────────────────────────────────────
+//
+// 旧实现只显示 enabled/disabled，绿灯=开、灰=关；用户报"TTS 完全失效"时
+// 看到的就是绿灯——欺骗。M_tts_check 改成三态：
+//   - enabled + 健康 ok            → 绿 + 「TTS」
+//   - enabled + diag 报错 / lastError → 橙 + 三角警告 + 「TTS 异常」
+//   - disabled                       → 灰 + 「静音」
+//   - 播放中                         → 蓝标 + 「播放中」
+// Tooltip / aria-label 都带上 last error / diag detail，方便排错。
+function TtsTopBarButton({
+  tts,
+}: {
+  tts: ReturnType<typeof useTtsPlayer>;
+}): JSX.Element {
+  const unhealthy =
+    tts.enabled &&
+    (tts.lastError !== null ||
+      (tts.synthHealth !== null && tts.synthHealth.ok === false));
+  const healthDetail =
+    tts.lastError ??
+    (tts.synthHealth && !tts.synthHealth.ok
+      ? `合成检查失败：${tts.synthHealth.detail ?? tts.synthHealth.state}`
+      : null);
+  const tooltip = !tts.enabled
+    ? "TTS 已关"
+    : unhealthy
+      ? (healthDetail ?? "TTS 上游异常")
+      : tts.synthHealth?.ok
+        ? `TTS 正常（合成 ${tts.synthHealth.latency_ms ?? "?"}ms）`
+        : "TTS 已开：会议纪要 / 回答会语音播报";
+  const label = tts.isSpeaking
+    ? "播放中"
+    : !tts.enabled
+      ? "静音"
+      : unhealthy
+        ? "TTS 异常"
+        : "TTS";
+  const color = !tts.enabled
+    ? "text-ink-400 hover:bg-paper-200"
+    : unhealthy
+      ? "text-amber-600 hover:bg-paper-200"
+      : "text-accent hover:bg-paper-200";
+  const Icon = !tts.enabled ? VolumeX : unhealthy ? AlertTriangle : Volume2;
+  return (
+    <Tooltip title={tooltip}>
+      <button
+        type="button"
+        onClick={() => tts.setEnabled(!tts.enabled)}
+        className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${color}`}
+        data-testid="tts-toggle"
+        data-tts-state={
+          !tts.enabled
+            ? "disabled"
+            : unhealthy
+              ? "unhealthy"
+              : tts.isSpeaking
+                ? "speaking"
+                : "ok"
+        }
+        aria-label={tooltip}
+      >
+        <Icon className="w-3.5 h-3.5" />
+        <span>{label}</span>
+      </button>
+    </Tooltip>
   );
 }

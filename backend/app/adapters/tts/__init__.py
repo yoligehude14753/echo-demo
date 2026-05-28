@@ -1,5 +1,19 @@
 """TTS adapter 集合。"""
 
-from app.adapters.tts.qwen3_tts import CosyVoiceTTS, Qwen3TTS, TTSError
+from app.adapters.tts.qwen3_tts import (
+    SILENCE_RMS_FLOOR,
+    CosyVoiceTTS,
+    Qwen3TTS,
+    SynthesisResult,
+    TTSError,
+    is_silent,
+)
 
-__all__ = ["CosyVoiceTTS", "Qwen3TTS", "TTSError"]
+__all__ = [
+    "SILENCE_RMS_FLOOR",
+    "CosyVoiceTTS",
+    "Qwen3TTS",
+    "SynthesisResult",
+    "TTSError",
+    "is_silent",
+]
