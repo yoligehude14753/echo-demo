@@ -52,15 +52,34 @@ export default function MeetingStatusBar(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
   const events = useStore((s) => s.events);
+  const upsertMeeting = useStore((s) => s.upsertMeeting);
+  const currentMeetingIdStore = useStore((s) => s.currentMeetingId);
+  const meetingsById = useStore((s) => s.meetings);
 
+  // 用户 2026-05-28：截图状态栏"待机"主面板"会议进行中"。根因：MeetingStatusBar 用
+  // 自己的 snap state（轮询 /meetings/current），MinutesView 用 store.meetings.
+  // 这两个数据源会脱节（ws 漏发 / replay buffer 不够 / EchoDesk 重启）。
+  // 修法：MeetingStatusBar 拿到 mode=idle 时，把 store 里仍标 in_meeting 的
+  // currentMeeting 强制改成 ended，让 MinutesView 至少不撒谎。
   const refresh = useCallback(async () => {
     try {
       const s = await getCurrentMeeting();
       setSnap(s);
+      // 后端 idle 但 store 仍以为在 meeting → 强制 sync
+      if (s.mode === "idle" && currentMeetingIdStore) {
+        const m = meetingsById[currentMeetingIdStore];
+        if (m && m.state === "in_meeting") {
+          upsertMeeting(currentMeetingIdStore, {
+            state: "ended",
+            ended_at: m.ended_at ?? new Date().toISOString(),
+            // 不强改 minutes_status：让真正的 minutes.ready/failed ws 事件决定
+          });
+        }
+      }
     } catch {
       // 后端不通时静默；CaptureStatus 那里已有错误提示
     }
-  }, []);
+  }, [currentMeetingIdStore, meetingsById, upsertMeeting]);
 
   useEffect(() => {
     void refresh();
@@ -102,8 +121,19 @@ export default function MeetingStatusBar(): JSX.Element {
         setSnap(s);
         message.success("已开始会议");
       } else {
+        // 记下结束前的 meeting_id；backend 改 fire-and-forget 后会立刻返回 idle
+        const endedId = snap.meeting_id;
         const s = await manualEndMeeting();
         setSnap(s);
+        // 后端 fire-and-forget 后 s.mode 已经是 idle；同步 store 让 MinutesView
+        // 立刻进入 generating 状态而不是继续"会议进行中"
+        if (endedId) {
+          upsertMeeting(endedId, {
+            state: "ended",
+            ended_at: new Date().toISOString(),
+            minutes_status: "generating",
+          });
+        }
         message.success("已结束会议，正在生成纪要…");
       }
     } catch (e) {
@@ -111,7 +141,7 @@ export default function MeetingStatusBar(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [busy, snap.mode]);
+  }, [busy, snap.mode, snap.meeting_id, upsertMeeting]);
 
   const isMeeting = snap.mode === "in_meeting";
   const isAuto = isMeeting && snap.started_by === "auto";
