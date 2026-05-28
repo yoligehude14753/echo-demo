@@ -33,4 +33,9 @@ contextBridge.exposeInMainWorld("echo", {
   // 返回 Promise<void>；失败时 reject(new Error(reason))，前端 catch 后提示用户。
   openArtifactInSystem: (filePath) =>
     ipcRenderer.invoke("echo:open-artifact-in-system", filePath),
+
+  // P4-fix-rag-chat（2026-05-28）：SettingsPanel "工作区目录" section 用。
+  // 调系统 dialog.showOpenDialog 选目录；用户取消时 resolve(null)，
+  // 选了一个目录 resolve(absolutePath)；调用失败 reject(Error)。
+  pickDirectory: (opts) => ipcRenderer.invoke("workspace:pick-directory", opts ?? {}),
 });
