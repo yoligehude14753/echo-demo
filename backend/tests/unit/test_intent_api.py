@@ -60,22 +60,23 @@ def test_intent_route_keyword_pptx(client_kw_hit: TestClient) -> None:
 
 
 @pytest.mark.unit
-def test_intent_route_no_at_returns_chat(client_kw_hit: TestClient) -> None:
+def test_intent_route_no_at_defaults_to_search_rag(client_kw_hit: TestClient) -> None:
+    """2026-05-28：不带 @ 不命中关键字 → 默认 search_rag（=问 echo）。"""
     r = client_kw_hit.post("/intent/route", json={"text": "今天天气真好"})
     assert r.status_code == 200
-    assert r.json()["kind"] == "chat"
+    assert r.json()["kind"] == "search_rag"
 
 
 @pytest.mark.unit
-def test_intent_route_llm_search_rag(client_llm_json: TestClient) -> None:
+def test_intent_route_unknown_at_defaults_to_search_rag(client_llm_json: TestClient) -> None:
+    """2026-05-28：@<未注册关键字> 也默认 search_rag，不再调 Fast LLM 误判。"""
     r = client_llm_json.post(
         "/intent/route",
-        json={"text": "@翻一下我们上周对那个方案的讨论"},  # 命中“上周”=>无关键词、走 LLM
+        json={"text": "@发 项目申报书模板到内部群"},
     )
     assert r.status_code == 200
     body = r.json()
-    # 走 LLM 返回的 JSON
-    assert body["kind"] in {"search_rag", "search_web", "chat"}
+    assert body["kind"] == "search_rag"
 
 
 @pytest.mark.unit

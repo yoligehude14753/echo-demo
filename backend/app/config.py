@@ -276,9 +276,31 @@ class Settings(BaseSettings):
 
     # ── RAG ───────────────────────────────────────────────────────
     rag_index_dir: Path = Field(default=Path("~/.echodesk/rag_index").expanduser())
-    rag_top_k: int = 5
+    # 2026-05-28: 用户原话"你的方案能覆盖的文件太少了，起码 1000 对话 + 100 文件"。
+    # 把 BM25 adapter 全局默认拉到 1000；retrieve_and_answer use case 用
+    # _DEFAULT_RAG_TOP_K=1000 也是这个数。前端如要限单次成本可显式 override。
+    rag_top_k: int = 1000
     rag_pdf_chunk_tokens: int = 600
     rag_pdf_chunk_overlap: int = 100
+
+    # ── Embedding（dense retrieval 通道；2026-05-28 spike） ─────────
+    # 见 docs/rag_embedding_spike_2026-05-28.md。主路本地 bge-m3，fallback
+    # 云雾 text-embedding-3-large。本期默认 disabled —— HybridRag 中期 4 个
+    # PR 落地后才打开（短期 BM25-only 已经够用）；提前把 settings/Port/adapter
+    # 落地是为了：
+    #   1) 不让 HybridRag PR 一次性吞掉 ~600 行新增（降低 review 风险）
+    #   2) CI/eval 脚本可独立校验 embedding 通道健康度
+    embedding_enabled: bool = False
+    embedding_main_provider: str = "bge_m3_local"  # bge_m3_local / yunwu
+    embedding_fallback_provider: str = "yunwu"
+    embedding_yunwu_model: str = "text-embedding-3-large"  # 3072d，质量高
+    embedding_bge_m3_model_id: str = "BAAI/bge-m3"
+    embedding_bge_m3_device: str = "cpu"  # mps 偶发 segfault，spike §5.3 风险 #2
+    embedding_bge_m3_cache_dir: Path | None = (
+        None  # None = sentence-transformers 默认 ~/.cache/huggingface
+    )
+    embedding_batch_size: int = 32  # spike §2.2 sweet spot
+    embedding_timeout_s: float = 60.0
 
     # ── 授权工作区（M6：用户配置可索引的目录范围） ────────────
     # 多个目录用逗号分隔，例如 ECHO_WORKSPACE_DIRS=~/Documents/work,~/Notes
@@ -315,7 +337,12 @@ class Settings(BaseSettings):
     skill_node_bin: str = "node"
     skill_executor_build_dir: Path = Field(default=Path("~/.echodesk/skill_build").expanduser())
     skill_executor_timeout_s: int = 300
-    skill_executor_max_tokens: int = 80_000
+    # HTML one-pager 实际 8-10k chars（≈ 4-5k tokens），PPT 27 字段 JSON 约 3-4k tokens。
+    # 80_000 上限会让 yunwu/MiniMax-M2.7 倾向于"使劲生成"，常拉到 5min+ 触发 wall-clock
+    # timeout（参见 ~/.echodesk/logs/runtime.log:7301 `html one-pager 失败，降级 legacy`
+    # 和 :8052 `POST /artifacts/generate 502 Bad Gateway`）。压到 12k 既够 one-pager
+    # 用、又把单次生成时长拉回 60-120s 量级。
+    skill_executor_max_tokens: int = 12_000
 
     # ── phase4-doc-skills：HTML/PPT 高质量 skill 灰度开关 ───────────
     # 默认 false：HTML 走 Kami warm-parchment one-pager；PPT 走 ib_master 14 页

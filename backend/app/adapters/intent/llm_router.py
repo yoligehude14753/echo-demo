@@ -1,18 +1,21 @@
 """LLMIntentRouter：实现 IntentRouterPort。
 
-策略：
+策略（2026-05-28 简化版）：
 1. ``@chat`` 显式逃生 → chat_no_rag（不查 RAG，纯 LLM 闲聊）
 2. 强 RAG 信号词组（"基于附件" / "产品手册里" 等）→ search_rag（confidence=0.9）
 3. 现有关键字命中（``@生成 PPT`` / ``@查...``）→ 对应意图（confidence=0.85）
-4. 问句信号（含问号 / 含"什么/介绍" 等）→ search_rag（confidence=0.7，默认走 RAG）
-5. 仅当以上全部未命中且非 ``@`` 前缀 → chat 兜底（前端会再走一层 RAG 兜底）
-6. ``@`` 前缀但关键字未命中 → 走 Fast LLM (Qwen3-1.7B) 分类
-7. LLM 解析失败 / 服务不可达 → chat 兜底
+4. 问句信号（含问号 / 含"什么/介绍" 等）→ search_rag（confidence=0.7）
+5. 其余所有输入 → **默认 search_rag（=问 echo with RAG+web）**
 
-P4-fix-rag-chat（2026-05-28）：旧策略硬把"非 @ 前缀"全归 chat，导致用户
-输入"请基于附件回答（XX.pdf）"被丢到 chat 兜底链路 → 不调 LLM 不查 RAG。
-新策略在 no-@ 路径上也跑 keyword_route()，让 RAG 强信号 / 问句先于"chat
-兜底"短路被识别。
+用户 2026-05-28 反馈：「用户输入的文本默认是 @echo 的，要带知识库 + 上下文 +
+网络」。旧设计在 5/6/7 步里调 Fast LLM 二次分类，Qwen3-1.7B 经常把
+"@发 项目申报书模板到内部群" 这类未注册关键字误判成 chat_no_rag，导致 echo
+不查 RAG 也不联网 → 回复显然没带上下文。
+
+新设计：除 keyword_route 的明确命中外一律走 RAG/web 综合通道，让
+retrieve_and_answer 自己决定查 RAG / web / both，再交主 LLM 综合回答。
+_llm_classify / _extract_from_raw 当前未被默认路径调用，保留作为 future
+扩展（如果以后要把 search_web/search_rag 进一步细分时再启用）。
 """
 
 from __future__ import annotations
@@ -28,7 +31,6 @@ from app.schemas.intent import (
     IntentKind,
     IntentResult,
     keyword_route,
-    parse_at_prefix,
 )
 from app.schemas.llm import ChatMessage
 
@@ -83,12 +85,9 @@ class LLMIntentRouter:
         current_meeting_id: str | None = None,
     ) -> IntentResult:
         stripped = text.strip()
-        at_token = parse_at_prefix(stripped)
-        has_at = at_token is not None or stripped.startswith("@")
+        # parse_at_prefix 暂不需要：默认就是问 echo（search_rag）
 
-        # P4-fix-rag-chat：所有路径先跑 keyword_route。
-        # · 强 RAG 词组 / 问句即使没有 @ 也会命中 → 不再硬归 chat
-        # · keyword_route 内部按"chat_no_rag > strong-rag > 普通 token > 问句"优先级
+        # 先跑 keyword_route：明确意图（@生成 PPT / @查 / @chat / 强 RAG 信号词等）走对应分支
         hit = keyword_route(stripped)
         if hit is not None:
             kind, conf = hit
@@ -100,20 +99,17 @@ class LLMIntentRouter:
                 rationale="关键字命中",
             )
 
-        # 非 @ 开头且关键字未命中 → chat 兜底（不调 LLM，省 60% 路由开销）
-        # 这条路径没跑分类器，confidence=None，前端按 null 改成 "规则匹配"。
-        # 注意：前端 CommandBar 的 chat 分支默认仍会走 RAG（见 CommandBar.tsx
-        # dispatch），即便这里返回 chat，用户的问题仍能用上 PDF/workspace。
-        if not has_at:
-            return IntentResult(
-                kind="chat",
-                confidence=None,
-                rationale="无 @ 前缀（规则匹配）",
-                params={"text": stripped},
-            )
-
-        # @ 前缀但关键字未命中 → 走 Fast LLM 分类 + 兜底
-        return await self._llm_classify(stripped, current_meeting_id)
+        # 用户 2026-05-28 反馈：「用户输入的文本是默认 @echo 的，要带知识库 +
+        # 上下文 + 网络」——所以未命中明确意图的所有输入（含 `@发 项目申报书...`
+        # 这类未注册关键字）都默认走 search_rag（=问 echo with RAG+web），
+        # 不再调 Fast LLM 二次分类（旧路径把 `@发 ...` 误判成 chat_no_rag，
+        # 既没用知识库也没联网，体验很差）。
+        return IntentResult(
+            kind="search_rag",
+            confidence=None,
+            rationale="默认问 echo（RAG + web + 会议上下文）",
+            params={"question": stripped},
+        )
 
     async def _llm_classify(
         self,
