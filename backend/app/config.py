@@ -287,6 +287,13 @@ class Settings(BaseSettings):
     skill_executor_timeout_s: int = 300
     skill_executor_max_tokens: int = 80_000
 
+    # ── phase4-doc-skills：HTML/PPT 高质量 skill 灰度开关 ───────────
+    # 默认 false：HTML 走 Kami warm-parchment one-pager；PPT 走 ib_master 14 页
+    # 投行风（LLM 出 27 字段 JSON → node render.mjs 渲染）。
+    # 设 true 可回滚到旧版 prompt（HTML=Tailwind dark，PPT=LLM 直写 pptxgenjs js）—
+    # 用于灰度对比 / 紧急止血。详见 `prompts.LEGACY_SKILL_PROMPTS`。
+    use_legacy_html_pptx: bool = False
+
     # ── DB ────────────────────────────────────────────────────────
     db_path: Path = Field(default=Path("~/.echodesk/echodesk.db").expanduser())
     storage_dir: Path = Field(default=Path("~/.echodesk/storage").expanduser())

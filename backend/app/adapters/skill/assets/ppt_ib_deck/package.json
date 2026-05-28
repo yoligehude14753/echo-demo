@@ -1,0 +1,17 @@
+{
+  "name": "docxtemplater_node",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "docxtemplater": "3.68",
+    "pizzip": "^3.2.0"
+  }
+}
