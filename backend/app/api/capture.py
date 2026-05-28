@@ -10,11 +10,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
+from app.adapters.llm import OpenAICompatibleLLM
 from app.adapters.rag.bm25 import BM25Rag
 from app.adapters.stt import make_stt
+from app.adapters.stt.llm_punctuator import LLMPunctuator
 from app.api.deps import (
     get_diarizer_singleton,
     get_event_bus,
+    get_llm_singleton,
     get_meeting_state,
     get_repository,
     get_speaker_registry,
@@ -42,9 +45,13 @@ def get_ambient_pipeline(
     speaker_registry: SpeakerRegistry = Depends(get_speaker_registry),
     meeting_state: MeetingState = Depends(get_meeting_state),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
+    llm: OpenAICompatibleLLM = Depends(get_llm_singleton),
 ) -> AmbientCapturePipeline:
     global _ambient  # noqa: PLW0603
     if _ambient is None:
+        # text-clarity PR：把 LLM_FAST (Qwen3-1.7B) 包成 punctuator 注入。
+        # 关闭开关只需要 AMBIENT_LLM_PUNCTUATE=false（settings）。
+        punctuator = LLMPunctuator(llm, settings) if settings.ambient_llm_punctuate else None
         _ambient = AmbientCapturePipeline(
             settings=settings,
             stt=make_stt(settings),
@@ -55,6 +62,7 @@ def get_ambient_pipeline(
             speaker_registry=speaker_registry,
             meeting_state=meeting_state,
             event_bus=event_bus,
+            punctuator=punctuator,
         )
     return _ambient
 
