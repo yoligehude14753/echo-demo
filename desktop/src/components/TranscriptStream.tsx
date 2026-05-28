@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { listRecentAmbient, type AmbientSegment } from "@/api";
-import { useStore } from "@/store";
+import { useStore, type ConversationEvent } from "@/store";
 import type { TranscriptSegment } from "@/types";
 import {
   buildSpeakerDisplayMap,
@@ -38,6 +39,31 @@ interface DisplaySegment {
   text: string;
   captured_at: string;
   speaker_label: string | null;
+  /**
+   * 用户 2026-05-28 反馈：CommandBar 输入要进转写流（右），Echo / RAG 回复
+   * 要在转写流（左）。同源合并：所有 conversation events 转成 DisplaySegment，
+   * convKind 决定渲染样式：
+   *   - user_command → 右侧 + 紫色 "我" 头像
+   *   - assistant_reply → 左侧 + Echo "E" 头像 + 高亮气泡
+   *   - rag_answer → 左侧 + Echo "E" 头像 + 引用列表
+   * undefined → STT 真实 segment（保持原路径）
+   */
+  convKind?: ConversationEvent["kind"];
+  convStatus?: ConversationEvent["status"];
+  convCitations?: ConversationEvent["citations"];
+  convId?: string;
+}
+
+function convToDisplay(ev: ConversationEvent): DisplaySegment {
+  return {
+    text: ev.text,
+    captured_at: ev.ts,
+    speaker_label: null,
+    convKind: ev.kind,
+    convStatus: ev.status,
+    convCitations: ev.citations,
+    convId: ev.id,
+  };
 }
 
 function ambientToDisplay(s: AmbientSegment): DisplaySegment {
@@ -84,14 +110,24 @@ export default function TranscriptStream(): JSX.Element {
     meeting.state === "ended" &&
     meeting.segments.length > 0;
 
+  const conversationEvents = useStore((s) => s.conversationEvents);
+
+  // 合并 STT segments + 人机对话事件，按 ts 升序排
   const segs: DisplaySegment[] = useMemo(() => {
-    if (showMeetingHistory && meeting) {
-      return meeting.segments.map((s) =>
-        meetingSegmentToDisplay(s, meeting.started_at),
-      );
-    }
-    return ambient.map(ambientToDisplay);
-  }, [showMeetingHistory, meeting, ambient]);
+    const base: DisplaySegment[] =
+      showMeetingHistory && meeting
+        ? meeting.segments.map((s) =>
+            meetingSegmentToDisplay(s, meeting.started_at),
+          )
+        : ambient.map(ambientToDisplay);
+    if (conversationEvents.length === 0) return base;
+    const convs = conversationEvents.map(convToDisplay);
+    const merged = [...base, ...convs];
+    merged.sort((a, b) =>
+      new Date(a.captured_at).getTime() - new Date(b.captured_at).getTime(),
+    );
+    return merged;
+  }, [showMeetingHistory, meeting, ambient, conversationEvents]);
 
   const speakerDisplayMap = useMemo(
     () => buildSpeakerDisplayMap(segs),
@@ -195,30 +231,54 @@ export default function TranscriptStream(): JSX.Element {
     >
       <div className="max-w-3xl mx-auto">
         {segs.map((s, idx) => {
-          const displayIdx = s.speaker_label
+          const isUserCmd = s.convKind === "user_command";
+          const isEchoReply =
+            s.convKind === "assistant_reply" || s.convKind === "rag_answer";
+          const isConv = isUserCmd || isEchoReply;
+
+          const displayIdx = !isConv && s.speaker_label
             ? (speakerDisplayMap.get(s.speaker_label) ?? 0)
             : 0;
-          const c = colorForDisplayIdx(displayIdx);
+          const c = isConv
+            // 人机对话用专属配色：用户=蓝、Echo=紫
+            ? isUserCmd
+              ? { fg: "#1d4ed8", bg: "#dbeafe", ring: "#93c5fd" }
+              : { fg: "#7c3aed", bg: "#ede9fe", ring: "#c4b5fd" }
+            : colorForDisplayIdx(displayIdx);
           const t = new Date(s.captured_at).getTime();
           const inWindow =
+            !isConv &&
             winStart !== null &&
             t >= winStart &&
             (winEnd === null || t <= winEnd);
 
-          // 当前后端没有标 self 的字段 → 全部 ambient 一律视作"他人"靠左
-          // 未来若 segment.speaker_id === 用户自己的 voiceprint，把这里改成 true
-          const isSelf = false;
+          // 用户命令 → 右侧；Echo 回复 / STT 转写 → 左侧
+          const isSelf = isUserCmd;
 
-          // 连续同说话人合并：只在第一条显示头像，气泡间距收紧
+          // 同源合并：上一条是相同 speaker / 同种 conv kind 才合并头像
           const prev = idx > 0 ? segs[idx - 1] : null;
-          const sameSpeakerAsPrev =
-            prev !== null && prev.speaker_label === s.speaker_label;
+          const sameSpeakerAsPrev = isConv
+            ? prev !== null && prev.convKind === s.convKind
+            : prev !== null &&
+              !prev.convKind &&
+              prev.speaker_label === s.speaker_label;
 
           const containerSpacing = sameSpeakerAsPrev ? "mt-1" : "mt-4";
-          const displayLabel =
-            displayIdx > 0 ? `说话人 ${displayIdx}` : "未识别";
+          const displayLabel = isUserCmd
+            ? "我"
+            : isEchoReply
+              ? "Echo"
+              : displayIdx > 0
+                ? `说话人 ${displayIdx}`
+                : "未识别";
 
-          // 头像：32px 圆形，背景柔色 + 同色边框，居中数字
+          const avatarLetter = isUserCmd
+            ? "我"
+            : isEchoReply
+              ? "E"
+              : displayIdx > 0
+                ? String(displayIdx)
+                : "?";
           const avatar = (
             <div
               className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none"
@@ -228,13 +288,17 @@ export default function TranscriptStream(): JSX.Element {
                 boxShadow: `inset 0 0 0 1px ${c.ring}`,
               }}
               title={
-                s.speaker_label
-                  ? `${displayLabel}（全局编号 ${s.speaker_label}）`
-                  : "未识别说话人"
+                isConv
+                  ? displayLabel
+                  : s.speaker_label
+                    ? `${displayLabel}（全局编号 ${s.speaker_label}）`
+                    : "未识别说话人"
               }
-              data-testid="speaker-avatar"
+              data-testid={
+                isConv ? `conv-avatar-${s.convKind}` : "speaker-avatar"
+              }
             >
-              {displayIdx > 0 ? displayIdx : "?"}
+              {avatarLetter}
             </div>
           );
           const avatarSpacer = (
@@ -267,18 +331,44 @@ export default function TranscriptStream(): JSX.Element {
                   </div>
                 )}
                 <div
-                  className={`relative text-[14px] leading-6 px-3.5 py-2 rounded-2xl shadow-sm border break-words ${
+                  className={`relative text-[14px] leading-6 px-3.5 py-2 rounded-2xl shadow-sm border break-words whitespace-pre-wrap ${
                     inWindow
                       ? "border-amber-300/70 ring-1 ring-amber-200/60"
                       : "border-paper-300"
                   } ${
-                    isSelf
-                      ? "bg-blue-500 text-white border-blue-500"
-                      : "bg-white text-ink-800"
+                    isUserCmd
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : isEchoReply
+                        ? "bg-violet-50 text-ink-900 border-violet-200"
+                        : "bg-white text-ink-800"
                   }`}
+                  data-testid={
+                    isConv ? `conv-bubble-${s.convKind}` : "transcript-bubble"
+                  }
                 >
                   {s.text}
-                  {/* hover 时显示时间（仅 HH:MM） */}
+                  {s.convStatus === "pending" && (
+                    <span className="inline-flex items-center gap-1 ml-1.5 text-[11px] opacity-80">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Echo 思考中…
+                    </span>
+                  )}
+                  {s.convKind === "rag_answer" &&
+                    s.convCitations &&
+                    s.convCitations.length > 0 && (
+                      <div className="mt-1.5 pt-1.5 border-t border-violet-200/60 text-[10.5px] text-ink-500 flex flex-wrap gap-x-2 gap-y-0.5">
+                        引用：
+                        {s.convCitations.slice(0, 5).map((cit) => (
+                          <span
+                            key={cit.chunk_id ?? cit.doc_id}
+                            className="font-mono"
+                            title={cit.chunk_id ?? cit.doc_id}
+                          >
+                            {cit.doc_id.slice(0, 24)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   <span
                     className={`absolute top-1/2 -translate-y-1/2 text-[10px] text-ink-400 font-mono opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap select-none ${
                       isSelf ? "right-full mr-2" : "left-full ml-2"

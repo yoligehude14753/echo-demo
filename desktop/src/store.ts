@@ -33,9 +33,33 @@ export type CommandBarPrefillHandler = (
   meta?: CommandBarPrefillMeta,
 ) => void;
 
+/**
+ * 人机会话流条目（CommandBar 用户输入 + Echo / RAG / chat 回复）。
+ *
+ * 用户 2026-05-28 反馈：「我输入的命令也要进转写流（右边），Echo 的回答
+ * 也要进转写流（左边），RAG 答案同理」——TranscriptStream 此前只展示
+ * STT 转写，CommandBar 提交后只 toast 一条 success，正文丢失。
+ *
+ * 设计选择：不在 backend 落库，纯前端 in-memory；进程内可见，重启清空。
+ * 后续若要持久化，挪到 sqlite 的 ambient_segments 加 `kind` 字段。
+ */
+export interface ConversationEvent {
+  id: string;
+  /** ISO 时间戳，跟 STT segments 合并排序用 */
+  ts: string;
+  kind: "user_command" | "assistant_reply" | "rag_answer";
+  text: string;
+  /** RAG 答案的引用，UI 显示 `[doc:xxx]` 形式 */
+  citations?: Array<{ doc_id: string; chunk_id?: string; score?: number }>;
+  /** 命令派发后的状态：'pending' 时 UI 显示「Echo 思考中…」spinner */
+  status?: "pending" | "done" | "failed";
+}
+
 interface Store {
   meetings: Record<string, MeetingCard>;
   currentMeetingId: string | null;
+  /** 人机会话事件流（CommandBar 输入 + LLM 回答），跟 STT segments 同源合并渲染。 */
+  conversationEvents: ConversationEvent[];
   /**
    * 标记 meeting 详情已经从后端 detail endpoint（transcript/minutes/artifacts）
    * 拉过一次。避免每次切换都重复 fetch；新事件到达时（meeting.segment 等）store
@@ -83,6 +107,20 @@ interface Store {
   registerCommandBarPrefill(handler: CommandBarPrefillHandler): () => void;
   /** 把 text 推给 CommandBar 预填（meta 透传，CommandBar 据此发 artifact 时附带 meeting_id/todo_id）。 */
   prefillCommandBar(text: string, meta?: CommandBarPrefillMeta): void;
+
+  /** CommandBar 用户提交时插入「右侧」气泡 + 返回 event id 供后续 patch（done / failed）。 */
+  appendUserCommand(text: string): string;
+  /** chat / rag 返回 LLM 回答时插入「左侧」Echo 气泡。 */
+  appendAssistantReply(
+    text: string,
+    kind?: "assistant_reply" | "rag_answer",
+    citations?: ConversationEvent["citations"],
+  ): string;
+  /** 标记某条 user_command 已完成 / 失败（仅切 status，不动 text）。 */
+  patchConversationStatus(id: string, status: "done" | "failed"): void;
+  /** 清空会话事件（顶栏「清空」按钮用，避免会议结束时残留）。 */
+  clearConversationEvents(): void;
+
   reset(): void;
 }
 
@@ -106,10 +144,48 @@ export const useStore = create<Store>((set, get) => ({
   pendingArtifactBriefs: {},
   connected: false,
   events: [],
+  conversationEvents: [],
   _commandBarPrefillHandler: null,
 
   setConnected: (v) => set({ connected: v }),
   selectMeeting: (id) => set({ currentMeetingId: id }),
+
+  appendUserCommand: (text) => {
+    const id = `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const ev: ConversationEvent = {
+      id,
+      ts: new Date().toISOString(),
+      kind: "user_command",
+      text,
+      status: "pending",
+    };
+    set((s) => ({
+      conversationEvents: [...s.conversationEvents.slice(-200), ev],
+    }));
+    return id;
+  },
+  appendAssistantReply: (text, kind = "assistant_reply", citations) => {
+    const id = `reply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const ev: ConversationEvent = {
+      id,
+      ts: new Date().toISOString(),
+      kind,
+      text,
+      citations,
+      status: "done",
+    };
+    set((s) => ({
+      conversationEvents: [...s.conversationEvents.slice(-200), ev],
+    }));
+    return id;
+  },
+  patchConversationStatus: (id, status) =>
+    set((s) => ({
+      conversationEvents: s.conversationEvents.map((e) =>
+        e.id === id ? { ...e, status } : e,
+      ),
+    })),
+  clearConversationEvents: () => set({ conversationEvents: [] }),
 
   registerCommandBarPrefill: (handler) => {
     set({ _commandBarPrefillHandler: handler });
@@ -135,6 +211,7 @@ export const useStore = create<Store>((set, get) => ({
       failedArtifacts: [],
       pendingArtifactBriefs: {},
       events: [],
+      conversationEvents: [],
     }),
 
   hydrateMeetings: (summaries) =>

@@ -96,6 +96,9 @@ export default function CommandBar(): JSX.Element {
   const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
   const registerCommandBarPrefill = useStore((s) => s.registerCommandBarPrefill);
+  const appendUserCommand = useStore((s) => s.appendUserCommand);
+  const appendAssistantReply = useStore((s) => s.appendAssistantReply);
+  const patchConversationStatus = useStore((s) => s.patchConversationStatus);
   const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<TextAreaRef | null>(null);
@@ -234,25 +237,33 @@ export default function CommandBar(): JSX.Element {
           ? `请基于附件回答（${pendingDocs.map((d) => d.filename).join("、")}）`
           : "";
     if (!value) return;
+    // 用户 2026-05-28 反馈：「我输入的命令也要进转写流（右边）」——
+    // 立刻 append 一条 user_command 事件，TranscriptStream 渲染为右侧气泡。
+    // 拿到的 cmdId 在 dispatch 结束时 patch status="done"/"failed"。
+    const cmdId = appendUserCommand(value);
     setBusy(true);
     try {
       const r = await routeIntent(value, currentMeetingId);
       setLastIntent(r);
-      await dispatch(r, value);
+      await dispatch(r, value, cmdId);
       setText("");
-      // 附件已被发出，清空 pendingDocs（后端 RAG 检索复用 doc_id）
       if (trimmed.length === 0 && pendingDocs.length > 0) {
         setPendingDocs([]);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      message.error(`发送失败：${msg}`);
+      patchConversationStatus(cmdId, "failed");
+      appendAssistantReply(`发送失败：${msg}`);
     } finally {
       setBusy(false);
     }
   }
 
-  async function dispatch(r: IntentResult, originalText: string): Promise<void> {
+  async function dispatch(
+    r: IntentResult,
+    originalText: string,
+    cmdId: string,
+  ): Promise<void> {
     switch (r.kind) {
       case "generate_html":
       case "generate_pptx":
@@ -264,12 +275,11 @@ export default function CommandBar(): JSX.Element {
         const kind = (r.params.artifact_type as string | undefined) ?? "html";
         const brief = (r.params.brief as string | undefined) ?? originalText;
         if (!brief) {
-          message.warning("brief 为空，无法生成产物");
+          patchConversationStatus(cmdId, "failed");
+          appendAssistantReply("brief 为空，无法生成产物");
           return;
         }
-        message.info(`已派发：${kindLabel[r.kind]}（后台生成中，请稍候）`);
-        // 异步触发，结果通过 WS artifact.ready event 反馈到 store
-        // 不 await，避免 busy/textarea 在 60-180s LLM 链路上一直锁住
+        appendAssistantReply(`已派发：${kindLabel[r.kind]}，后台生成中…`);
         void generateArtifact({
           artifact_type: kind as
             | "html"
@@ -283,34 +293,36 @@ export default function CommandBar(): JSX.Element {
         })
           .then((art) => {
             addArtifact(art);
-            message.success(`已生成 ${art.artifact_type}`);
+            patchConversationStatus(cmdId, "done");
+            appendAssistantReply(`已生成 ${art.artifact_type}：${art.title ?? art.artifact_id}`);
           })
           .catch((e) => {
             const msg = e instanceof Error ? e.message : String(e);
-            message.error(`生成失败：${msg}`);
+            patchConversationStatus(cmdId, "failed");
+            appendAssistantReply(`生成失败：${msg}`);
           });
         return;
       }
       case "summarize_meeting": {
         const mid = (r.params.meeting_id as string | undefined) ?? currentMeetingId;
         if (!mid) {
-          message.warning("当前没有进行中的会议");
+          patchConversationStatus(cmdId, "failed");
+          appendAssistantReply("当前没有进行中的会议");
           return;
         }
-        message.info(`正在总结会议 ${mid}…`);
+        appendAssistantReply(`正在总结会议 ${mid}…`);
         const minutes = await finalizeMeeting(mid, `会议 ${mid}`);
-        message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
+        patchConversationStatus(cmdId, "done");
+        appendAssistantReply(`会议纪要已生成，共 ${minutes.sections.length} 节`);
         return;
       }
       case "chat_no_rag": {
-        // P4-fix-rag-chat（2026-05-28）：显式 @chat → 纯 LLM 闲聊，不查 RAG。
-        // 注意：本 case 必须放在 default 之前，否则 fall-through 永远不会到。
         const question = (r.params.text as string | undefined) ?? originalText;
         if (!question) {
-          message.warning("text 为空");
+          patchConversationStatus(cmdId, "failed");
+          appendAssistantReply("text 为空");
           return;
         }
-        message.info("已派发：闲聊中（不查知识库）");
         void chatAsk(question)
           .then((answer) => {
             applyEvent({
@@ -322,12 +334,14 @@ export default function CommandBar(): JSX.Element {
                 answer,
               } as unknown as Record<string, unknown>,
             });
-            message.success("闲聊已回复");
+            patchConversationStatus(cmdId, "done");
+            appendAssistantReply(answer);
             void tts.speak(answer);
           })
           .catch((e) => {
             const msg = e instanceof Error ? e.message : String(e);
-            message.error(`闲聊失败：${msg}`);
+            patchConversationStatus(cmdId, "failed");
+            appendAssistantReply(`闲聊失败：${msg}`);
           });
         return;
       }
@@ -351,13 +365,11 @@ export default function CommandBar(): JSX.Element {
           ?? (r.params.text as string | undefined)
           ?? originalText;
         if (!question) {
-          message.warning("question 为空");
+          patchConversationStatus(cmdId, "failed");
+          appendAssistantReply("question 为空");
           return;
         }
-        message.info("已派发：检索中（后台进行中）");
-
         // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
-        // 让 RAG 覆盖整个文件夹，而不是只能用一两个手动上传的 PDF。
         // 不阻塞 ragAsk 主链路（并发触发）。
         void maybePromptWorkspaceConfig();
 
@@ -374,18 +386,24 @@ export default function CommandBar(): JSX.Element {
                 arbitration: ans.arbitration,
               } as unknown as Record<string, unknown>,
             });
-            const nCite = ans.citations?.length ?? 0;
-            message.success(
-              nCite > 0
-                ? `已回答（${nCite} 处引用）`
-                : "已回答（无引用：可能 RAG 没找到相关内容，纯 LLM 回答）",
-            );
-            // TTS 朗读 LLM 真实答案，而不是用户原文
+            patchConversationStatus(cmdId, "done");
+            // 引用映射到 ConversationEvent 的 citations 字段
+            const cites = (ans.citations ?? [])
+              .filter((c): c is typeof c & { doc_id: string } =>
+                typeof c.doc_id === "string" && c.doc_id.length > 0,
+              )
+              .map((c) => ({
+                doc_id: c.doc_id,
+                chunk_id: (c as unknown as { chunk_id?: string }).chunk_id,
+                score: c.score,
+              }));
+            appendAssistantReply(ans.answer, "rag_answer", cites);
             void tts.speak(ans.answer);
           })
           .catch((e) => {
             const msg = e instanceof Error ? e.message : String(e);
-            message.error(`检索失败：${msg}`);
+            patchConversationStatus(cmdId, "failed");
+            appendAssistantReply(`检索失败：${msg}`);
           });
         return;
       }
@@ -484,7 +502,7 @@ export default function CommandBar(): JSX.Element {
             }
           }}
           onPaste={onPaste}
-          placeholder="拖入 / 粘贴文件入库 RAG · 输入 @生成 PPT … / @查 … · Shift+Enter 换行"
+          placeholder="直接打字问 Echo 智能问答 · @生成 PPT / @查 / 拖入文件入库 RAG · Shift+Enter 换行"
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={busy}
           className="!rounded-md"
