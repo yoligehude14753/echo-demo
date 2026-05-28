@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from app.ports.llm import LLMPort
 from app.schemas.artifact import GeneratedArtifact
+from app.schemas.skill_progress import SkillProgress
 
 
 @runtime_checkable
@@ -36,3 +38,18 @@ class SkillExecutorPort(Protocol):
         brief: str,
         extra_instructions: str | None = None,
     ) -> GeneratedArtifact: ...
+
+    def generate_stream(
+        self,
+        *,
+        llm: LLMPort,
+        artifact_type: str,
+        brief: str,
+        extra_instructions: str | None = None,
+    ) -> AsyncIterator[SkillProgress]:
+        """流式版生成：yield ``SkillProgress`` 进度事件。
+
+        与 ``generate`` 等价的契约：成功路径以 ``stage="done"`` 携带 artifact 收尾；
+        失败时 yield ``stage="error"`` 并 re-raise ``SkillError`` / ``LLMError``。
+        """
+        ...

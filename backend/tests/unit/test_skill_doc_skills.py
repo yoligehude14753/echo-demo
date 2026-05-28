@@ -59,9 +59,10 @@ class FakeLLM:
             latency_ms=12.0,
         )
 
-    async def chat_stream(self, _messages: list[ChatMessage], **_: Any):  # type: ignore[no-untyped-def]
-        raise NotImplementedError
-        yield  # pragma: no cover
+    async def chat_stream(self, messages: list[ChatMessage], **_: Any):  # type: ignore[no-untyped-def]
+        # 2026-05-28: skill._call_llm 改走 chat_stream；mock 单 chunk 返回 self.content。
+        self.last_messages = list(messages)
+        yield self.content
 
 
 def _settings(tmp_path: Path, *, use_legacy_html_pptx: bool = False) -> Settings:
