@@ -222,6 +222,7 @@ export async function installEchoMock(
         const fake = {
           artifact_id: artifactId,
           artifact_type: body.artifact_type === "ppt" ? "pptx" : body.artifact_type,
+          title: `mock ${body.artifact_type} 报告`,
           file_path: "/tmp/" + artifactId + ".out",
           mime_type: "application/octet-stream",
           size_bytes: 12345,
@@ -306,6 +307,8 @@ export async function publishArtifactReady(
   artifactType: string,
   seq = 3,
   artifactId?: string,
+  title?: string,
+  filePath?: string,
 ): Promise<string> {
   const id = artifactId ?? `mock-${artifactType}-${Date.now()}`;
   await mock.publish({
@@ -315,7 +318,8 @@ export async function publishArtifactReady(
     payload: {
       artifact_id: id,
       artifact_type: artifactType,
-      file_path: `/tmp/${id}.out`,
+      title: title ?? `mock ${artifactType} 产物`,
+      file_path: filePath ?? `/tmp/${id}.out`,
       mime_type: "application/octet-stream",
       size_bytes: 12345,
       generation_latency_ms: 999,

@@ -3,50 +3,81 @@ import { Modal } from "antd";
 import {
   AlertCircle,
   Download,
+  FileCode,
   FileText,
+  FileType2,
   FileSpreadsheet,
   Globe,
   Presentation,
   RotateCcw,
+  Trash2,
   X,
 } from "lucide-react";
 import { artifactDownloadUrl } from "@/api";
 import { useStore } from "@/store";
 import type { GeneratedArtifact } from "@/types";
 import { formatRelativeTime, type FailedArtifact } from "@/lib/failedArtifact";
+import ArtifactPreviewModal from "@/components/ArtifactPreviewModal";
 
 /**
- * outputs 面板：展示历史产物列表（只读）。
+ * outputs 面板：展示历史产物列表（只读）+ 7 类 in-app 预览。
  *
- * 2026-05 修订：
- * - 重命名「产物」→「outputs」
- * - 删除右上角「生成」按钮 + 生成 Modal：产出由 @ 指令触发（CommandBar）
- * - 这里只展示历史，点击 html 可在 Modal 里预览
+ * 2026-05 修订（P4.1 M4）：
+ * - 全部 7 类（html / pptx / xlsx / word / markdown / pdf / txt）整条都可点击预览
+ *   - pptx 走 Electron shell.openPath → Keynote；其他类型在 Modal 内渲染
+ * - 顶栏新增「清空 outputs」按钮（confirm 后清空 store.artifacts；不动失败卡片）
+ * - 单条 hover 显示「×」删除按钮（不二次确认，单条删错代价低）
+ * - 标题主、artifact_id 副（title 缺失时退化为 artifact_id）
  */
 const typeIcon: Record<string, JSX.Element> = {
   word: <FileText className="w-3.5 h-3.5" />,
+  docx: <FileText className="w-3.5 h-3.5" />,
   xlsx: <FileSpreadsheet className="w-3.5 h-3.5" />,
   excel: <FileSpreadsheet className="w-3.5 h-3.5" />,
   pptx: <Presentation className="w-3.5 h-3.5" />,
   ppt: <Presentation className="w-3.5 h-3.5" />,
   html: <Globe className="w-3.5 h-3.5" />,
+  markdown: <FileCode className="w-3.5 h-3.5" />,
+  md: <FileCode className="w-3.5 h-3.5" />,
+  pdf: <FileType2 className="w-3.5 h-3.5" />,
+  txt: <FileText className="w-3.5 h-3.5" />,
+  text: <FileText className="w-3.5 h-3.5" />,
 };
 
 const typeBadge: Record<string, string> = {
   word: "bg-blue-50 text-blue-700",
+  docx: "bg-blue-50 text-blue-700",
   xlsx: "bg-emerald-50 text-emerald-700",
   excel: "bg-emerald-50 text-emerald-700",
   pptx: "bg-amber-50 text-amber-700",
   ppt: "bg-amber-50 text-amber-700",
   html: "bg-violet-50 text-violet-700",
+  markdown: "bg-sky-50 text-sky-700",
+  md: "bg-sky-50 text-sky-700",
+  pdf: "bg-rose-50 text-rose-700",
+  txt: "bg-paper-200 text-ink-700",
+  text: "bg-paper-200 text-ink-700",
 };
 
 export default function ArtifactPanel(): JSX.Element {
   const artifacts = useStore((s) => s.artifacts);
   const failedArtifacts = useStore((s) => s.failedArtifacts);
   const dismissFailedArtifact = useStore((s) => s.dismissFailedArtifact);
+  const clearArtifacts = useStore((s) => s.clearArtifacts);
+  const removeArtifact = useStore((s) => s.removeArtifact);
   const [previewArtifact, setPreviewArtifact] =
     useState<GeneratedArtifact | null>(null);
+
+  function onClearAll(): void {
+    Modal.confirm({
+      title: "清空 outputs",
+      content: `确定清空 ${artifacts.length} 条历史产物？该操作不可撤回（文件本身仍保留在磁盘）。`,
+      okText: "清空",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: () => clearArtifacts(),
+    });
+  }
 
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-paper-50">
@@ -54,10 +85,24 @@ export default function ArtifactPanel(): JSX.Element {
         <span className="text-[13px] text-ink-700 font-medium lowercase tracking-wider">
           outputs
         </span>
-        <span className="text-[11px] text-ink-400">
-          {failedArtifacts.length > 0
-            ? `${artifacts.length} · ${failedArtifacts.length} 失败`
-            : artifacts.length}
+        <span className="flex items-center gap-2">
+          <span className="text-[11px] text-ink-400">
+            {failedArtifacts.length > 0
+              ? `${artifacts.length} · ${failedArtifacts.length} 失败`
+              : artifacts.length}
+          </span>
+          {artifacts.length > 0 && (
+            <button
+              type="button"
+              data-testid="clear-artifacts-btn"
+              aria-label="清空 outputs"
+              onClick={onClearAll}
+              className="p-1 rounded text-ink-400 hover:text-err hover:bg-paper-150 transition-colors"
+              title="清空 outputs"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
         </span>
       </div>
 
@@ -77,68 +122,87 @@ export default function ArtifactPanel(): JSX.Element {
             </div>
           </div>
         )}
-        {artifacts.map((a) => (
-          <div
-            key={a.artifact_id}
-            className="group px-3 py-2.5 rounded-lg hover:bg-paper-150 cursor-pointer transition-colors"
-            onClick={() =>
-              a.artifact_type === "html" ? setPreviewArtifact(a) : undefined
-            }
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-2 text-[13px] text-ink-800 font-medium truncate">
-                <span
-                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                    typeBadge[a.artifact_type] ?? "bg-paper-200 text-ink-700"
-                  }`}
-                >
-                  {typeIcon[a.artifact_type] ?? null}
-                  <span className="uppercase">{a.artifact_type}</span>
+        {artifacts.map((a) => {
+          const displayName = a.title || a.artifact_id;
+          const shortId = a.artifact_id.slice(0, 14);
+          return (
+            <div
+              key={a.artifact_id}
+              data-testid="artifact-card"
+              data-artifact-id={a.artifact_id}
+              className="group px-3 py-2.5 rounded-lg hover:bg-paper-150 cursor-pointer transition-colors"
+              onClick={() => setPreviewArtifact(a)}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2 min-w-0 flex-1">
+                  <span
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
+                      typeBadge[a.artifact_type] ?? "bg-paper-200 text-ink-700"
+                    }`}
+                  >
+                    {typeIcon[a.artifact_type] ?? null}
+                    <span className="uppercase">{a.artifact_type}</span>
+                  </span>
+                  <span className="flex flex-col min-w-0">
+                    <span
+                      className="text-[13px] text-ink-800 font-medium truncate"
+                      title={a.artifact_id}
+                      data-testid="artifact-title"
+                    >
+                      {displayName}
+                    </span>
+                    {a.title && (
+                      <span
+                        className="font-mono text-[10px] text-ink-400 truncate"
+                        title={a.artifact_id}
+                      >
+                        {shortId}
+                      </span>
+                    )}
+                  </span>
                 </span>
-                <span className="font-mono text-[12px] text-ink-600 truncate">
-                  {a.artifact_id}
+                <span className="flex items-center gap-1 shrink-0">
+                  <a
+                    href={artifactDownloadUrl(a.artifact_id)}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="下载产物"
+                    onClick={(e) => e.stopPropagation()}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-paper-200"
+                  >
+                    <Download className="w-3.5 h-3.5 text-ink-500 hover:text-accent" />
+                  </a>
+                  <button
+                    type="button"
+                    data-testid="remove-artifact-btn"
+                    aria-label="删除该产物"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeArtifact(a.artifact_id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-ink-400 hover:text-err hover:bg-paper-200"
+                    title="从列表移除（不删磁盘文件）"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 </span>
-              </span>
-              <a
-                href={artifactDownloadUrl(a.artifact_id)}
-                target="_blank"
-                rel="noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <Download className="w-4 h-4 text-ink-500 hover:text-accent" />
-              </a>
+              </div>
+              <div className="text-[11px] text-ink-400 mt-1 flex items-center gap-2 pl-1">
+                <span>{(a.size_bytes / 1024).toFixed(1)} KB</span>
+                <span>·</span>
+                <span>{(a.generation_latency_ms / 1000).toFixed(1)}s</span>
+                <span>·</span>
+                <span className="font-mono text-[10px]">{a.model}</span>
+              </div>
             </div>
-            <div className="text-[11px] text-ink-400 mt-1 flex items-center gap-2 pl-1">
-              <span>{(a.size_bytes / 1024).toFixed(1)} KB</span>
-              <span>·</span>
-              <span>{(a.generation_latency_ms / 1000).toFixed(1)}s</span>
-              <span>·</span>
-              <span className="font-mono text-[10px]">{a.model}</span>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      <Modal
-        open={!!previewArtifact}
-        onCancel={() => setPreviewArtifact(null)}
-        footer={null}
-        width="86%"
-        title={
-          <span className="font-mono text-[12px] text-ink-700">
-            {previewArtifact?.artifact_id}
-          </span>
-        }
-      >
-        {previewArtifact && (
-          <iframe
-            src={artifactDownloadUrl(previewArtifact.artifact_id)}
-            title="preview"
-            className="w-full h-[72vh] border border-paper-300 bg-white rounded-md"
-          />
-        )}
-      </Modal>
+      <ArtifactPreviewModal
+        artifact={previewArtifact}
+        onClose={() => setPreviewArtifact(null)}
+      />
     </div>
   );
 }

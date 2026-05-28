@@ -79,10 +79,9 @@ export default function TranscriptStream(): JSX.Element {
     }
   }, [events]);
 
-  // segs 从空 → 非空时重新绑监听（首次出现 scroller 需要 attach onScroll）。
-  // 之前直接写 `[segs.length === 0]` 表达式触发 react-hooks/exhaustive-deps 警告
-  // （PR #51 引入），改用 useMemo 抽出来让静态检查能通过。
-  const hasNoSegs = useMemo(() => segs.length === 0, [segs.length]);
+  // 提取布尔到变量：eslint react-hooks/exhaustive-deps 不支持复合表达式作为 dep
+  // （pre-existing warning，已在 PR #51 修；PR #53 conflict resolution 保留简洁写法）
+  const hasNoSegments = segs.length === 0;
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
@@ -92,7 +91,7 @@ export default function TranscriptStream(): JSX.Element {
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [hasNoSegs]);
+  }, [hasNoSegments]);
 
   useEffect(() => {
     if (!stickyToBottomRef.current) return;

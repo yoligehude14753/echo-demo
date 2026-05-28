@@ -4,6 +4,7 @@
 > **当前版本**：v0.2.0（详见 [`CHANGELOG.md`](CHANGELOG.md)）
 > **快速安装**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
+> **远程后端 stable HTTPS endpoint（Phase 4 · 不依赖 Tailscale）**：见 [`docs/REMOTE_API.md`](docs/REMOTE_API.md)
 
 ## 状态摘要 (2026-05-28)
 

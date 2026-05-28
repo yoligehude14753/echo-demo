@@ -26,4 +26,11 @@ contextBridge.exposeInMainWorld("echo", {
   getMicStatus: () => ipcRenderer.invoke("mic:status"),
   requestMic: () => ipcRenderer.invoke("mic:request"),
   openMicSystemPrefs: () => ipcRenderer.invoke("mic:open-system-prefs"),
+
+  // P4.1 M4 产物预览：把 backend 落盘的绝对路径交给系统默认应用打开。
+  // 主要用途：pptx 浏览器无法原生渲染，调 macOS Keynote / Office；
+  //          docx / xlsx 用户也可以选择在系统应用打开做二次编辑。
+  // 返回 Promise<void>；失败时 reject(new Error(reason))，前端 catch 后提示用户。
+  openArtifactInSystem: (filePath) =>
+    ipcRenderer.invoke("echo:open-artifact-in-system", filePath),
 });

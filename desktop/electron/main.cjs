@@ -530,6 +530,26 @@ ipcMain.handle("mic:request", async () => {
   }
 });
 
+// P4.1 M4：把 backend 落盘的产物文件交给系统默认应用打开（如 .pptx 走 Keynote）。
+// Electron 与 backend 跑在同一台 mac，artifact.file_path 是绝对路径，可直接传给 shell.openPath。
+// 安全：只接受字符串绝对路径；不在主进程做任何 file system 修改，仅委派给 OS。
+// 失败：shell.openPath 把错误字符串作为 resolve 值返回（非 reject），所以这里手动 throw 让 renderer catch。
+ipcMain.handle("echo:open-artifact-in-system", async (_event, filePath) => {
+  if (typeof filePath !== "string" || !filePath.trim()) {
+    throw new Error("filePath required");
+  }
+  try {
+    const err = await shell.openPath(filePath);
+    if (err) {
+      // err 不为空字符串 = 系统层失败（文件不存在 / 没有匹配 app / 权限不足）
+      throw new Error(err);
+    }
+  } catch (e) {
+    log(`[artifact] openPath failed (${filePath}): ${e?.message ?? e}`);
+    throw e instanceof Error ? e : new Error(String(e));
+  }
+});
+
 ipcMain.handle("mic:open-system-prefs", async () => {
   if (process.platform !== "darwin") {
     return { ok: false, reason: "non-darwin" };
