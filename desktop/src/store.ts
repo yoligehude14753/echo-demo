@@ -31,6 +31,14 @@ interface Store {
   applyEvent(e: EchoEvent): void;
   upsertMeeting(id: string, patch: Partial<MeetingCard>): void;
   addArtifact(a: GeneratedArtifact): void;
+  /**
+   * 清空全局 outputs 列表（顶栏「清空」按钮）。
+   * 不清 failedArtifacts —— 它们有独立 dismiss，避免一键覆盖失败上下文。
+   * 也不清 meetings[*].artifacts —— 那是会议详情视图的快照，独立维护。
+   */
+  clearArtifacts(): void;
+  /** 删除单条产物（hover × 按钮）。也同步从所有 meeting 的 artifacts 中清掉，避免悬挂引用。 */
+  removeArtifact(artifactId: string): void;
   dismissFailedArtifact(id: string): void;
   reset(): void;
 }
@@ -83,6 +91,23 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       const dedup = s.artifacts.filter((x) => x.artifact_id !== a.artifact_id);
       return { artifacts: [a, ...dedup].slice(0, 50) };
+    }),
+
+  clearArtifacts: () => set({ artifacts: [] }),
+
+  removeArtifact: (artifactId) =>
+    set((s) => {
+      const nextMeetings: Record<string, MeetingCard> = {};
+      for (const [id, m] of Object.entries(s.meetings)) {
+        nextMeetings[id] = {
+          ...m,
+          artifacts: m.artifacts.filter((x) => x.artifact_id !== artifactId),
+        };
+      }
+      return {
+        artifacts: s.artifacts.filter((x) => x.artifact_id !== artifactId),
+        meetings: nextMeetings,
+      };
     }),
 
   applyEvent: (e) => {
