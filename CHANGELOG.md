@@ -10,12 +10,44 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ## [Unreleased]
 
+### 新增（P4.1 M4 · 产物预览）
+
+- **7 类产物 in-app 预览**
+  点击 ArtifactPanel 任一卡片直接在应用内 Modal 预览，不必再下载：
+  - `html` / `pdf` → `<iframe>`（浏览器原生 PDF viewer）
+  - `markdown` → `react-markdown` + `remark-gfm`（GFM 表格 / 代码块）
+  - `txt` → `<pre>` 等宽字体
+  - `word` / `docx` → `mammoth` 解析 → 隔离 `<iframe srcDoc>` 渲染（CSS 不污染主应用）
+  - `xlsx` → SheetJS 解析 + sheet tab 切换（动态 import，避免拖累主 bundle）
+  - `pptx` → 浏览器无法原生渲染，调 Electron `shell.openPath` 用 macOS Keynote 打开
+- **ArtifactPanel 顶栏「清空 outputs」按钮**
+  历史卡片堆积时一键清空（保留失败卡片 + 文件本身仍在磁盘）；走 `Modal.confirm`
+  二次确认避免误清。
+- **单条 hover「×」删除按钮**
+  跟 `Download` 按钮一样仅在 hover 时显示；删错代价低（仅从面板移除引用，
+  不删磁盘文件）所以不二次确认。
+- **列表展示 title 主、artifact_id 副**
+  M3 引入的 `title` 字段（如 `FY26 Outlook 摘要`）作为卡片主标题；UUID 退化为
+  14 字符截断的 mono 副文本 + tooltip 含完整 ID。Title 缺失时退回完整 UUID。
+
+### 修复
+
+- 旧 `artifact-generate` e2e / `s04_meeting_and_artifact` 适配新 ArtifactPanel：
+  artifact_id 不再完整渲染在卡片上，测试用 `data-artifact-id` selector 锚定。
+- `TranscriptStream` 顺手清理一条 pre-existing eslint warning（复合表达式 dep
+  提取为变量，行为等价）。
+
+### 配置变更
+
+- Electron preload 新增 `window.echo.openArtifactInSystem(filePath)` IPC bridge；
+  主进程暴露 `echo:open-artifact-in-system` 调 `shell.openPath`，仅用于产物预览。
+
 ### 计划中
 
 - P3.6 应用图标 + dmg 背景刷一刷
 - P3.7 自动更新检查（仅检查 latest release，不自动下载）
-- P4.1 keychain 集成（API key 不再以明文落 user.json）
-- P4.2 macOS Universal Binary（arm64 + x64 合并）
+- P4.2 keychain 集成（API key 不再以明文落 user.json）
+- P4.3 macOS Universal Binary（arm64 + x64 合并）
 
 ---
 

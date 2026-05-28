@@ -58,8 +58,9 @@ test("@生成 命令触发产物生成流程，卡片出现", async ({ page }) =
   //    再补一发 ws artifact.ready 模拟服务端推送（双保险，匹配真实链路）
   const artifactId = await publishArtifactReady(mock, "html", 1, "mock-html-e2e-001");
 
-  // 5. ArtifactPanel 应该能看到这个 artifact（id 或 type label 之一即可）
+  // 5. ArtifactPanel 应该能看到这个 artifact（M4 改版后 title 主显示，artifact_id 截断；
+  //    用 data-artifact-id 直接锚定卡片即可）
   await expect(
-    page.locator(`text=${artifactId}`).or(page.locator("text=HTML 报告")),
+    page.locator(`[data-artifact-id="${artifactId}"]`),
   ).toBeVisible({ timeout: 5_000 });
 });

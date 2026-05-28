@@ -25,6 +25,9 @@ interface ElectronEchoBridge {
   getMicStatus?: () => Promise<ElectronMicStatus>;
   requestMic?: () => Promise<boolean>;
   openMicSystemPrefs?: () => Promise<{ ok: boolean; reason?: string }>;
+  // Phase 4 M4 产物预览：用系统默认 App 打开 backend 落盘的绝对路径（pptx → Keynote）。
+  // 失败时 reject(new Error(reason))；浏览器/纯 dev 模式下 undefined。
+  openArtifactInSystem?: (filePath: string) => Promise<void>;
 }
 
 declare global {

@@ -79,6 +79,9 @@ export default function TranscriptStream(): JSX.Element {
     }
   }, [events]);
 
+  // 提取布尔到变量：eslint react-hooks/exhaustive-deps 不支持复合表达式作为 dep
+  // （pre-existing warning，借 M4 lint 门顺手清掉；行为完全等价）
+  const hasNoSegments = segs.length === 0;
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
@@ -88,7 +91,7 @@ export default function TranscriptStream(): JSX.Element {
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [segs.length === 0]);
+  }, [hasNoSegments]);
 
   useEffect(() => {
     if (!stickyToBottomRef.current) return;
