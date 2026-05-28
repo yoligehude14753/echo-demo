@@ -48,7 +48,7 @@ _DIAG_CACHE_TTL_S = 30.0
 _DIAG_PROBE_TEXT = "测试一下"
 _diag_lock = asyncio.Lock()
 # 类型放到下面定义，这里用 Any 占位避免 forward-ref 与 UP037 的死循环。
-_diag_cache: tuple[float, Any] | None = None
+_diag_cache: tuple[float, DiagResult] | None = None
 
 
 def get_tts_singleton(
