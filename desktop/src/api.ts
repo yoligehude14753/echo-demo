@@ -462,7 +462,48 @@ export async function workspaceClear(): Promise<{ n_removed: number }> {
 // ── TTS ─────────────────────────────────────────────────────
 
 /**
+ * 后端 /tts/speak 失败时抛出的结构化错误。
+ *
+ * 与裸 Error 的区别：携带 backend 文本（如 ``tts_silent_output:..``），
+ * 让上层（useTtsPlayer / message.error）能给用户一句话人话。
+ */
+export class TtsSpeakError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public detail: string,
+  ) {
+    super(message);
+    this.name = "TtsSpeakError";
+  }
+}
+
+function summarizeTtsDetail(status: number, raw: string): string {
+  // 后端返回 FastAPI HTTPException → ``{"detail": "tts_silent_output: ..."}``
+  // 但其它非 HTTPException 路径可能是裸字符串；两种都要兼容。
+  let detail = raw;
+  try {
+    const obj = JSON.parse(raw) as { detail?: unknown };
+    if (typeof obj.detail === "string") detail = obj.detail;
+  } catch {
+    /* not json */
+  }
+  if (detail.startsWith("tts_silent_output")) {
+    return "TTS 上游返回静音（可能 qwen3-tts 冷启动），请稍后重试";
+  }
+  if (detail.startsWith("tts_upstream_error")) {
+    return `TTS 上游异常：${detail.replace("tts_upstream_error:", "").trim()}`;
+  }
+  if (status === 503) return "TTS 已在设置中关闭";
+  if (status === 400) return "TTS 文本为空";
+  return `TTS 失败：${detail || `HTTP ${status}`}`;
+}
+
+/**
  * 拉取 PCM bytes（16kHz 16-bit mono）。前端用 AudioContext 解码播放。
+ *
+ * 失败时抛 ``TtsSpeakError``（含人类可读 message）；调用方应 message.error
+ * 给用户而不是 console.warn 后吞掉。
  */
 export async function ttsSpeak(
   text: string,
@@ -475,10 +516,34 @@ export async function ttsSpeak(
     body: JSON.stringify({ text, voice }),
   });
   if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`tts ${r.status}: ${t}`);
+    const raw = await r.text();
+    throw new TtsSpeakError(summarizeTtsDetail(r.status, raw), r.status, raw);
   }
   return await r.arrayBuffer();
+}
+
+/**
+ * TTS 子系统真实健康（与单纯 TCP probe 区分）：跑一次合成回环判断。
+ * 与 backend /tts/diag 一一对应。
+ */
+export interface TtsDiagResult {
+  ok: boolean;
+  state: "ok" | "disabled" | "upstream_error" | "silent_output" | "empty";
+  detail: string | null;
+  latency_ms: number | null;
+  pcm_bytes: number | null;
+  rms: number | null;
+  peak: number | null;
+  voice: string | null;
+  base_url: string | null;
+  checked_at: number;
+}
+
+export async function ttsDiag(opts: { fresh?: boolean } = {}): Promise<TtsDiagResult> {
+  const path = opts.fresh ? "/tts/diag?fresh=true" : "/tts/diag";
+  const u = await apiUrl(path);
+  const r = await fetch(u, { method: "GET" });
+  return asJson<TtsDiagResult>(r);
 }
 
 export async function listSpeakers(): Promise<

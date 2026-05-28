@@ -12,7 +12,8 @@
 
 import { Tooltip, Popover, Button } from "antd";
 import { RefreshCw, Mic, Server, Cloud, Cpu } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import type { TtsDiagResult } from "@/api";
 import {
   useBackendHealth,
   type BackendHealth,
@@ -21,6 +22,17 @@ import {
   type SupervisorStatus,
   type MicPermission,
 } from "@/hooks/useBackendHealth";
+
+export interface StatusBarProps {
+  /** TTS 合成回环最新结果（来自 /tts/diag）。null = 尚未拉到 */
+  ttsHealth?: TtsDiagResult | null;
+  /** 用户 TTS 开关：关闭时 pill 强制显示灰色 disabled，不再读 diag */
+  ttsEnabled?: boolean;
+  /** 最近一次 /tts/speak 失败的人话；非 null → pill 强制变橙 */
+  ttsLastError?: string | null;
+  /** Popover 里"重试"按钮回调（强刷 /tts/diag）。 */
+  onRefreshTtsHealth?: () => Promise<void> | void;
+}
 
 type Level = "ok" | "warn" | "fail" | "unknown";
 
@@ -72,6 +84,34 @@ function levelFromProbes(probes: ProbeResultDTO[]): Level {
   if (failCount === 0 && okCount === probes.length) return "ok";
   if (failCount === probes.length) return "fail";
   return "warn";
+}
+
+// 多个 level 合并取最差（unknown < ok 仅在两者都不为 fail/warn 时退到 unknown）。
+// 用于 heyi pill 同时反映 TCP probe 与 /tts/diag 合成回环两条线索。
+const LEVEL_ORDER: Record<Level, number> = { ok: 0, warn: 1, fail: 2, unknown: 3 };
+function mergeLevels(a: Level, b: Level): Level {
+  // fail 永远胜出（有任何明确失败 → 整体 fail）；其次 warn；ok 与 unknown 取 ok。
+  if (a === "fail" || b === "fail") return "fail";
+  if (a === "warn" || b === "warn") return "warn";
+  if (a === "ok" || b === "ok") return "ok";
+  return LEVEL_ORDER[a] <= LEVEL_ORDER[b] ? a : b;
+}
+
+// TTS 子系统等级：综合 enabled / lastError / synthHealth.state。
+// 哲学（M_tts_check）：TCP 通了 ≠ 合成成功；这里说的 ok 是真合成 ok。
+function levelFromTtsHealth(
+  enabled: boolean | undefined,
+  health: TtsDiagResult | null | undefined,
+  lastError: string | null | undefined,
+): Level {
+  if (enabled === false) return "unknown";
+  if (lastError) return "fail";
+  if (!health) return "unknown";
+  if (health.state === "disabled") return "unknown";
+  if (health.state === "ok") return "ok";
+  // upstream_error / silent_output / empty 都是用户应该知道的"虽然 TCP 通了
+  // 但实际合成不出有效音频"。
+  return "fail";
 }
 
 function levelFromYunwu(p: ProbeResultDTO | undefined): Level {
@@ -130,12 +170,8 @@ function fmtLatency(p?: ProbeResultDTO): string {
   return `${p.latency_ms}ms`;
 }
 
-function fmtCheckedAgo(p?: ProbeResultDTO): string {
-  if (!p || !p.checked_at) return "—";
-  const sec = Math.max(0, Math.floor(Date.now() / 1000 - p.checked_at));
-  if (sec < 60) return `${sec}s 前`;
-  return `${Math.floor(sec / 60)} 分钟前`;
-}
+// fmtCheckedAgo 之前用在 HeyiPopover 末行；M_tts_check 把 footer 改成静态
+// "TCP 探针 30s · 合成回环 30s"，不再展示动态时差，故此函数移除。
 
 function ProbeRow({
   name,
@@ -247,24 +283,95 @@ function BackendPopover({
 
 function HeyiPopover({
   remote,
+  ttsHealth,
+  ttsEnabled,
+  ttsLastError,
+  onRefreshTtsHealth,
 }: {
   remote: HealthzFull["remote"] | undefined;
+  ttsHealth: TtsDiagResult | null | undefined;
+  ttsEnabled: boolean | undefined;
+  ttsLastError: string | null | undefined;
+  onRefreshTtsHealth: (() => Promise<void> | void) | undefined;
 }): JSX.Element {
   const stt = remote?.heyi_stt_firered;
   const tts = remote?.heyi_tts_qwen3;
   const fastLlm = remote?.heyi_llm_fast;
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    if (!onRefreshTtsHealth) return;
+    setRefreshing(true);
+    try {
+      await onRefreshTtsHealth();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // 真实合成状态：以 ttsHealth 为准，TCP probe 仅当作辅助信息。
+  const synthState = ttsHealth?.state;
+  const synthOk = ttsHealth?.ok === true;
+  const synthText =
+    ttsEnabled === false
+      ? "已在设置中关闭"
+      : ttsLastError
+        ? `失败 · ${ttsLastError}`
+        : !ttsHealth
+          ? "—"
+          : synthOk
+            ? `ok · 合成 ${ttsHealth.latency_ms ?? "?"}ms · rms=${ttsHealth.rms ?? "?"}`
+            : `${synthState} · ${ttsHealth.detail ?? "—"}`;
+  const synthColor =
+    ttsEnabled === false
+      ? "text-ink-500"
+      : ttsLastError || (ttsHealth && !synthOk)
+        ? "text-err"
+        : synthOk
+          ? "text-accent"
+          : "text-ink-500";
+
   return (
-    <div className="min-w-[260px] text-[12px] py-1">
+    <div className="min-w-[300px] max-w-[420px] text-[12px] py-1">
       <div className="font-semibold mb-1.5 flex items-center gap-1.5">
         <Cpu className="w-3.5 h-3.5" />
         heyi-bj 远端服务
       </div>
       <ProbeRow name="STT FireRed :8090" probe={stt} />
-      <ProbeRow name="TTS Qwen3 :8094" probe={tts} />
-      <ProbeRow name="Fast LLM :7860" probe={fastLlm} />
-      <div className="text-ink-400 text-[10px] mt-2">
-        探针 30s 一轮 · 最近 {fmtCheckedAgo(stt)}
+      <ProbeRow name="TTS Qwen3 :8094 (TCP)" probe={tts} />
+      <div className="flex items-start justify-between text-[11px] mt-0.5">
+        <span className="text-ink-700 shrink-0 mr-2">TTS 合成回环</span>
+        <span
+          className={`${synthColor} text-right break-words`}
+          data-testid="tts-synth-status"
+          data-tts-state={synthState ?? (ttsEnabled === false ? "disabled" : "unknown")}
+        >
+          {synthText}
+        </span>
       </div>
+      <ProbeRow name="Fast LLM :7860" probe={fastLlm} />
+      <div className="flex items-center justify-between mt-2">
+        <span className="text-ink-400 text-[10px]">
+          TCP 探针 30s · 合成回环 30s
+        </span>
+        {onRefreshTtsHealth && (
+          <Button
+            size="small"
+            type="text"
+            icon={<RefreshCw className={`w-3 h-3 ${refreshing ? "animate-spin" : ""}`} />}
+            className="!text-[10px] !h-6"
+            onClick={() => void refresh()}
+            data-testid="tts-synth-refresh"
+            disabled={refreshing}
+          >
+            重测合成
+          </Button>
+        )}
+      </div>
+      {ttsLastError && (
+        <div className="text-err text-[10px] mt-1.5 break-words">
+          ⚠ 最近一次 /tts/speak：{ttsLastError}
+        </div>
+      )}
     </div>
   );
 }
@@ -351,15 +458,26 @@ function MicPopover({ perm }: { perm: MicPermission }): JSX.Element {
 
 // ===== 顶层组件 =====
 
-export default function StatusBar(): JSX.Element {
+export default function StatusBar({
+  ttsHealth,
+  ttsEnabled,
+  ttsLastError,
+  onRefreshTtsHealth,
+}: StatusBarProps = {}): JSX.Element {
   const health = useBackendHealth();
   const { supervisor, healthz, healthzOk, mic } = health;
 
   const backendLevel = levelFromSupervisor(supervisor, healthzOk);
+  // heyi pill 级别：取「TCP 各探针」与「TTS 合成回环」二者的最差。
+  // 这样即便 STT/Fast LLM TCP 都通了，只要 /tts/diag 报 silent_output，
+  // pill 也会立刻变红/橙——消除"绿灯但用户没声音"的欺骗。
+  const ttsHealthLevel = levelFromTtsHealth(ttsEnabled, ttsHealth, ttsLastError);
   const heyiLevel = useMemo(() => {
-    if (!healthz?.remote) return "unknown" as Level;
-    return levelFromProbes(HEYI_PROBES.map((k) => healthz.remote[k]).filter(Boolean));
-  }, [healthz?.remote]);
+    const tcpLevel = healthz?.remote
+      ? levelFromProbes(HEYI_PROBES.map((k) => healthz.remote[k]).filter(Boolean))
+      : ("unknown" as Level);
+    return mergeLevels(tcpLevel, ttsHealthLevel);
+  }, [healthz?.remote, ttsHealthLevel]);
   const yunwuLevel = levelFromYunwu(healthz?.remote?.yunwu_llm_main);
   const micLevel = levelFromMic(mic);
 
@@ -388,7 +506,15 @@ export default function StatusBar(): JSX.Element {
         label="heyi-bj"
         level={heyiLevel}
         icon={<Cpu className="w-3 h-3" />}
-        popover={<HeyiPopover remote={healthz?.remote} />}
+        popover={
+          <HeyiPopover
+            remote={healthz?.remote}
+            ttsHealth={ttsHealth}
+            ttsEnabled={ttsEnabled}
+            ttsLastError={ttsLastError}
+            onRefreshTtsHealth={onRefreshTtsHealth}
+          />
+        }
         testId="pill-heyi"
       />
       <Pill
