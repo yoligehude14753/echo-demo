@@ -164,6 +164,27 @@ export async function installEchoMock(
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      // M_diag_brake：useEchoCapture 5s 轮询 /capture/stats，未 mock 时 fall
+      // through 到 realFetch → vite proxy 报错 + DoorBreakdown 永远 "加载中"。
+      // 默认返回 0 计数；spec 如需特定分布可用 page.route 覆盖。
+      if (path === "/capture/stats" || path === "/api/capture/stats") {
+        return new Response(
+          JSON.stringify({
+            chunks_total: 0,
+            gated_rms: 0,
+            gated_low_speech: 0,
+            stt_circuit_open: 0,
+            stt_failed: 0,
+            stt_empty: 0,
+            hallu_dropped: 0,
+            diarize_failed: 0,
+            stored: 0,
+            last_chunk_at: null,
+            last_stored_at: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       // workspace / rag/docs 默认返空（WorkspaceBar 30s 轮询调用）
       if (path.startsWith("/workspace/status") || path.startsWith("/api/workspace/status")) {
         return new Response(
