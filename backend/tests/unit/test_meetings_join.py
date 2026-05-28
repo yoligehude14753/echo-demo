@@ -1,0 +1,343 @@
+"""Phase 4 M_meeting_history：会议历史 4 个 GET endpoint 的 DB join 单测。
+
+关注点：
+- 一个 meeting_id 能从 SQLite 查出 transcript / minutes / artifacts 三件套
+- 列表 endpoint 的计数（n_segments / n_speakers / has_minutes）口径正确
+- 404 边界：会议不存在 / 还未生成纪要
+
+不重测 pipeline 本身（test_meeting_pipeline_repo.py 已覆盖）；这里只校 HTTP
+层 + repo join 是否一致。
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+from app.adapters.repo.sqlite import SQLiteRepository
+from app.api.deps import (
+    aclose_repository,
+    get_repository,
+    reset_deps_for_test,
+)
+from app.api.meetings import reset_meeting_pipeline
+from app.config import Settings, get_settings
+from app.main import create_app
+from app.ports.repository import RepositoryPort
+from app.schemas.meeting import TranscriptSegment
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+async def repo(tmp_path: Path) -> SQLiteRepository:
+    """每个测试一份干净 sqlite。"""
+    r = SQLiteRepository(tmp_path / "echo.db")
+    await r.init()
+    try:
+        yield r
+    finally:
+        await r.aclose()
+
+
+@pytest.fixture
+def client(tmp_path: Path, repo: SQLiteRepository) -> TestClient:
+    """注入 repo 单例 + 关掉 lifespan 副作用。
+
+    create_app 的 lifespan 默认会跑 prober / workspace scan，这些在单测里都不
+    需要；TestClient 只在用 with-block 时才触发 lifespan，我们直接 TestClient(app)
+    所以路径上不会跑那些后台 task。但要小心 dependency_overrides 必须先注册。
+    """
+    reset_deps_for_test()
+    reset_meeting_pipeline()
+    app = create_app()
+    settings = Settings(storage_dir=tmp_path / "storage")
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_repository] = lambda: repo
+    return TestClient(app)
+
+
+async def _seed_meeting(
+    repo: RepositoryPort,
+    meeting_id: str,
+    *,
+    title: str,
+    started_at: datetime,
+    segments: list[TranscriptSegment],
+    minutes_payload: dict[str, object] | None = None,
+    ended_at: datetime | None = None,
+) -> None:
+    """直接落 DB（绕开 pipeline / LLM），单独验 endpoint 行为。"""
+    await repo.create_meeting(meeting_id, started_at=started_at, title=title)
+    captured = started_at
+    for seg in segments:
+        await repo.append_meeting_segment(meeting_id, seg, captured_at=captured)
+    if minutes_payload is not None:
+        await repo.update_meeting_state(
+            meeting_id,
+            state="finalized",
+            ended_at=ended_at or started_at + timedelta(minutes=10),
+            finalized_at=ended_at or started_at + timedelta(minutes=10),
+            minutes_json=json.dumps(minutes_payload, ensure_ascii=False),
+        )
+    elif ended_at is not None:
+        await repo.update_meeting_state(meeting_id, state="ended", ended_at=ended_at)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_list_meetings_aggregates_counts(client: TestClient, repo: SQLiteRepository) -> None:
+    """两个 meeting：A 有 3 段 + 2 说话人 + 已 finalize；B 仅 1 段 + 进行中。"""
+    t0 = datetime(2026, 5, 28, 9, 0, tzinfo=UTC)
+    await _seed_meeting(
+        repo,
+        "mtg-A",
+        title="Q3 复盘",
+        started_at=t0,
+        segments=[
+            TranscriptSegment(
+                text="开场", start_ms=0, end_ms=500, speaker_id="spk_A", speaker_label="说话人1"
+            ),
+            TranscriptSegment(
+                text="数据", start_ms=600, end_ms=1100, speaker_id="spk_B", speaker_label="说话人2"
+            ),
+            TranscriptSegment(
+                text="收尾",
+                start_ms=1200,
+                end_ms=1800,
+                speaker_id="spk_A",
+                speaker_label="说话人1",
+            ),
+        ],
+        minutes_payload={
+            "meeting_id": "mtg-A",
+            "title": "Q3 复盘",
+            "duration_sec": 120,
+            "speakers": ["说话人1", "说话人2"],
+            "summary": "Q3 销售达成 95%",
+            "sections": [{"heading": "亮点", "bullets": ["新签 3 单", "客单价 +12%"]}],
+            "decisions": ["Q4 重点扩张"],
+            "action_items": ["李明 周五前出方案"],
+            "created_at": "2026-05-28T09:10:00+00:00",
+        },
+    )
+    await _seed_meeting(
+        repo,
+        "mtg-B",
+        title="临时同步",
+        started_at=t0 + timedelta(hours=1),
+        segments=[
+            TranscriptSegment(
+                text="先聊一下", start_ms=0, end_ms=900, speaker_id="spk_A", speaker_label="说话人1"
+            ),
+        ],
+    )
+
+    r = client.get("/meetings")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+    by_id = {m["meeting_id"]: m for m in data}
+
+    a = by_id["mtg-A"]
+    assert a["title"] == "Q3 复盘"
+    assert a["state"] == "finalized"
+    assert a["n_segments"] == 3
+    assert a["n_speakers"] == 2
+    assert a["has_minutes"] is True
+    assert a["finalized_at"] is not None
+
+    b = by_id["mtg-B"]
+    assert b["state"] == "in_meeting"
+    assert b["n_segments"] == 1
+    assert b["n_speakers"] == 1
+    assert b["has_minutes"] is False
+
+    # 排序：started_at DESC，所以 mtg-B 在前
+    assert data[0]["meeting_id"] == "mtg-B"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_transcript_returns_segments(client: TestClient, repo: SQLiteRepository) -> None:
+    t0 = datetime(2026, 5, 28, 9, 0, tzinfo=UTC)
+    await _seed_meeting(
+        repo,
+        "mtg-1",
+        title="t1",
+        started_at=t0,
+        segments=[
+            TranscriptSegment(
+                text="一段", start_ms=0, end_ms=500, speaker_id="spk_A", speaker_label="说话人1"
+            ),
+            TranscriptSegment(
+                text="两段",
+                start_ms=600,
+                end_ms=1200,
+                speaker_id="spk_B",
+                speaker_label="说话人2",
+            ),
+        ],
+    )
+    r = client.get("/meetings/mtg-1/transcript")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body) == 2
+    assert body[0]["text"] == "一段"
+    assert body[0]["speaker_label"] == "说话人1"
+    assert body[1]["text"] == "两段"
+
+
+@pytest.mark.unit
+def test_get_transcript_404_on_missing(client: TestClient) -> None:
+    r = client.get("/meetings/no-such-id/transcript")
+    assert r.status_code == 404
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_minutes_roundtrips_json(client: TestClient, repo: SQLiteRepository) -> None:
+    t0 = datetime(2026, 5, 28, 9, 0, tzinfo=UTC)
+    payload = {
+        "meeting_id": "mtg-min",
+        "title": "落库纪要",
+        "duration_sec": 600,
+        "speakers": ["说话人1"],
+        "summary": "短总结",
+        "sections": [{"heading": "议题", "bullets": ["要点"]}],
+        "decisions": [],
+        "action_items": [],
+        "created_at": "2026-05-28T09:30:00+00:00",
+    }
+    await _seed_meeting(
+        repo,
+        "mtg-min",
+        title="落库纪要",
+        started_at=t0,
+        segments=[
+            TranscriptSegment(text="x", start_ms=0, end_ms=500, speaker_id="spk_A"),
+        ],
+        minutes_payload=payload,
+    )
+    r = client.get("/meetings/mtg-min/minutes")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["title"] == "落库纪要"
+    assert data["summary"] == "短总结"
+    assert data["sections"][0]["heading"] == "议题"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_minutes_404_when_not_finalized(
+    client: TestClient, repo: SQLiteRepository
+) -> None:
+    t0 = datetime(2026, 5, 28, 9, 0, tzinfo=UTC)
+    await _seed_meeting(
+        repo,
+        "mtg-no-minutes",
+        title="进行中",
+        started_at=t0,
+        segments=[TranscriptSegment(text="x", start_ms=0, end_ms=500)],
+    )
+    r = client.get("/meetings/mtg-no-minutes/minutes")
+    assert r.status_code == 404
+
+
+@pytest.mark.unit
+def test_get_minutes_404_on_missing_meeting(client: TestClient) -> None:
+    r = client.get("/meetings/no-such-id/minutes")
+    assert r.status_code == 404
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_artifacts_returns_empty_list(client: TestClient, repo: SQLiteRepository) -> None:
+    """当前 schema 没有 meeting<->artifact 关联，endpoint 始终返回空。
+
+    PR body 详细解释了这个产品/工程权衡。本 case 锁住"endpoint 不抛错且返回
+    list[]"的契约——前端 getMeetingArtifacts 实现依赖这一点。
+    """
+    t0 = datetime(2026, 5, 28, 9, 0, tzinfo=UTC)
+    await _seed_meeting(
+        repo,
+        "mtg-art",
+        title="t",
+        started_at=t0,
+        segments=[TranscriptSegment(text="x", start_ms=0, end_ms=500)],
+    )
+    r = client.get("/meetings/mtg-art/artifacts")
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+
+
+@pytest.mark.unit
+def test_get_artifacts_404_on_missing(client: TestClient) -> None:
+    r = client.get("/meetings/no-such-id/artifacts")
+    assert r.status_code == 404
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_join_consistency_across_endpoints(
+    client: TestClient, repo: SQLiteRepository
+) -> None:
+    """同一个 meeting_id 通过三个 endpoint 拿到的元信息应一致。
+
+    业务目标：用户在前端选中 meeting A → 中右面板显示的转写段数 == list 上
+    显示的 n_segments；显示的纪要 title == list.title。这是"数据库关联好"
+    用户期望的最低保证。
+    """
+    t0 = datetime(2026, 5, 28, 9, 0, tzinfo=UTC)
+    payload = {
+        "meeting_id": "mtg-join",
+        "title": "联调测试",
+        "duration_sec": 90,
+        "speakers": ["说话人1", "说话人2"],
+        "summary": "x",
+        "sections": [],
+        "decisions": [],
+        "action_items": [],
+        "created_at": "2026-05-28T09:30:00+00:00",
+    }
+    segs = [
+        TranscriptSegment(
+            text=f"段{i}",
+            start_ms=i * 500,
+            end_ms=i * 500 + 400,
+            speaker_label=f"说话人{(i % 2) + 1}",
+        )
+        for i in range(5)
+    ]
+    await _seed_meeting(
+        repo,
+        "mtg-join",
+        title="联调测试",
+        started_at=t0,
+        segments=segs,
+        minutes_payload=payload,
+    )
+
+    list_r = client.get("/meetings")
+    assert list_r.status_code == 200
+    [item] = [m for m in list_r.json() if m["meeting_id"] == "mtg-join"]
+
+    transcript_r = client.get("/meetings/mtg-join/transcript")
+    minutes_r = client.get("/meetings/mtg-join/minutes")
+
+    assert transcript_r.status_code == 200
+    assert minutes_r.status_code == 200
+    assert len(transcript_r.json()) == item["n_segments"] == 5
+    assert minutes_r.json()["title"] == item["title"] == "联调测试"
+    assert item["n_speakers"] == 2
+    assert item["has_minutes"] is True
+
+
+@pytest.mark.asyncio
+async def teardown_test_deps() -> None:
+    """避免单例残留污染相邻 test。"""
+    reset_deps_for_test()
+    reset_meeting_pipeline()
+    await aclose_repository()

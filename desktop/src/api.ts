@@ -100,6 +100,64 @@ export async function manualEndMeeting(): Promise<MeetingStateSnapshot> {
   return asJson<MeetingStateSnapshot>(r);
 }
 
+// ── 会议历史（M_meeting_history）─────────────────────────────
+//
+// 这 4 个 export 是"读 only"，专门给左侧会议列表 + 切换中右面板用的。
+// 不替换 startMeeting / endMeeting / uploadCaptureChunk 等 mutating endpoint。
+// 后端见 backend/app/api/meetings.py 的 GET /meetings、/{id}/transcript、
+// /{id}/minutes、/{id}/artifacts 四个 endpoint。
+
+export interface MeetingSummary {
+  meeting_id: string;
+  title: string | null;
+  state: "in_meeting" | "ended" | "finalized";
+  started_at: string;
+  ended_at: string | null;
+  finalized_at: string | null;
+  n_segments: number;
+  n_speakers: number;
+  has_minutes: boolean;
+}
+
+export async function listMeetings(limit = 50): Promise<MeetingSummary[]> {
+  const u = await apiUrl(`/meetings?limit=${limit}`);
+  const r = await fetch(u);
+  return asJson<MeetingSummary[]>(r);
+}
+
+export async function getMeetingTranscript(
+  meetingId: string,
+): Promise<TranscriptSegment[]> {
+  const u = await apiUrl(
+    `/meetings/${encodeURIComponent(meetingId)}/transcript`,
+  );
+  const r = await fetch(u);
+  return asJson<TranscriptSegment[]>(r);
+}
+
+/** 拿不到（404 / 未生成）时返回 null，调用方据此显示"暂无纪要"。 */
+export async function getMeetingMinutes(
+  meetingId: string,
+): Promise<MeetingMinutes | null> {
+  const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/minutes`);
+  const r = await fetch(u);
+  if (r.status === 404) return null;
+  return asJson<MeetingMinutes>(r);
+}
+
+export async function getMeetingArtifacts(
+  meetingId: string,
+): Promise<GeneratedArtifact[]> {
+  const u = await apiUrl(
+    `/meetings/${encodeURIComponent(meetingId)}/artifacts`,
+  );
+  const r = await fetch(u);
+  // 当前后端实现总是返回空数组（详见 meetings.py 注释）；调用约定保留以便
+  // 后续接入 DB join 时只换实现，前端不动。会议不存在仍返回 404。
+  if (r.status === 404) return [];
+  return asJson<GeneratedArtifact[]>(r);
+}
+
 // ── 待机时持续显示 ambient 转写片段 ──────────────────────────
 
 export interface AmbientSegment {

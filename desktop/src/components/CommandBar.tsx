@@ -17,7 +17,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { Input, Tag, Tooltip, message } from "antd";
-import { FileText, Loader2, Paperclip, Sparkles, Upload, Wand2, X } from "lucide-react";
+import { FileText, Loader2, Paperclip, Send, Sparkles, Upload, Wand2, X } from "lucide-react";
 
 import {
   finalizeMeeting,
@@ -167,8 +167,27 @@ export default function CommandBar(): JSX.Element {
     setPendingDocs((prev) => prev.filter((d) => d.doc_id !== docId));
   }, []);
 
+  // P4-fix（2026-05-28）：附件已附 + 文本空 时按 Enter / 点 Send，
+  // 历史上 onSubmit 静默 return，导致用户报"对话无法发送"。
+  // 修复：附件存在时用默认 brief "请总结附件内容" 发送（让 dispatch 能跑下去），
+  // 真正空（无文本无附件）才忽略；上传中仍然阻塞防 RAG 半成品。
+  function canSubmit(): boolean {
+    if (busy) return false;
+    if (uploading > 0) return false;
+    if (text.trim().length > 0) return true;
+    if (pendingDocs.length > 0) return true;
+    return false;
+  }
+
   async function onSubmit(): Promise<void> {
-    const value = text.trim();
+    if (busy || uploading > 0) return;
+    const trimmed = text.trim();
+    const value =
+      trimmed.length > 0
+        ? trimmed
+        : pendingDocs.length > 0
+          ? `请基于附件回答（${pendingDocs.map((d) => d.filename).join("、")}）`
+          : "";
     if (!value) return;
     setBusy(true);
     try {
@@ -176,9 +195,13 @@ export default function CommandBar(): JSX.Element {
       setLastIntent(r);
       await dispatch(r, value);
       setText("");
+      // 附件已被发出，清空 pendingDocs（后端 RAG 检索复用 doc_id）
+      if (trimmed.length === 0 && pendingDocs.length > 0) {
+        setPendingDocs([]);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      message.error(`意图路由失败：${msg}`);
+      message.error(`发送失败：${msg}`);
     } finally {
       setBusy(false);
     }
@@ -293,14 +316,26 @@ export default function CommandBar(): JSX.Element {
       )}
 
       {lastIntent && (
-        <div className="flex items-center gap-2 mb-1.5 text-[11px] text-ink-500">
+        <div
+          className="flex items-center gap-2 mb-1.5 text-[11px] text-ink-500"
+          data-testid="intent-status"
+        >
           <Sparkles className="w-3 h-3" />
           <span>意图：</span>
           <Tag color={kindColor[lastIntent.kind]} className="!m-0">
             {kindLabel[lastIntent.kind]}
           </Tag>
           <span>·</span>
-          <span>置信度 {(lastIntent.confidence * 100).toFixed(0)}%</span>
+          {typeof lastIntent.confidence === "number" ? (
+            // P4-fix（2026-05-28）：只在分类器真的产生了置信度时显示百分比；
+            // 纯规则匹配路径（无 @ 前缀）返回 null，改显 "规则匹配"，
+            // 避免把虚假的 "100%" 当成模型决策。
+            <span data-testid="intent-confidence">
+              置信度 {(lastIntent.confidence * 100).toFixed(0)}%
+            </span>
+          ) : (
+            <span data-testid="intent-rule-matched">规则匹配</span>
+          )}
           {lastIntent.rationale && (
             <Tooltip title={lastIntent.rationale}>
               <span className="truncate max-w-[280px]">
@@ -385,7 +420,32 @@ export default function CommandBar(): JSX.Element {
             }
           }}
         />
-        {busy && <Loader2 className="w-4 h-4 text-ink-400 animate-spin" />}
+        {/* P4-fix：显式 Send 按钮替代"只能按 Enter"的隐性 affordance；
+            附件附了但文本空也允许点击（避免之前的 silent return）。 */}
+        <Tooltip
+          title={
+            uploading > 0
+              ? "入库中，请等待文件完成"
+              : !canSubmit()
+                ? "请输入文本或粘贴/拖入文件"
+                : "发送（Enter）"
+          }
+        >
+          <button
+            type="button"
+            onClick={() => void onSubmit()}
+            className="shrink-0 p-1.5 rounded hover:bg-paper-200 text-accent disabled:opacity-40 disabled:text-ink-400 disabled:hover:bg-transparent"
+            disabled={!canSubmit()}
+            data-testid="command-send-btn"
+            aria-label="发送"
+          >
+            {busy ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
+          </button>
+        </Tooltip>
       </div>
     </div>
   );
