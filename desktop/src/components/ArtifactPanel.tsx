@@ -60,18 +60,31 @@ const typeBadge: Record<string, string> = {
 };
 
 export default function ArtifactPanel(): JSX.Element {
-  const artifacts = useStore((s) => s.artifacts);
+  const globalArtifacts = useStore((s) => s.artifacts);
   const failedArtifacts = useStore((s) => s.failedArtifacts);
   const dismissFailedArtifact = useStore((s) => s.dismissFailedArtifact);
   const clearArtifacts = useStore((s) => s.clearArtifacts);
   const removeArtifact = useStore((s) => s.removeArtifact);
+  const currentMeetingId = useStore((s) => s.currentMeetingId);
+  const meeting = useStore((s) =>
+    currentMeetingId ? s.meetings[currentMeetingId] : undefined,
+  );
   const [previewArtifact, setPreviewArtifact] =
     useState<GeneratedArtifact | null>(null);
+
+  // 选中具体会议 → 仅展示该会议的产物（meeting.artifacts 由 ws 事件维护，
+  // 详见 store.ts 的 artifact.ready handler）。"待机时段"（currentMeetingId
+  // === null）走全局视图，与历史一致。
+  const scopedToMeeting = currentMeetingId !== null && meeting !== undefined;
+  const artifacts = scopedToMeeting ? meeting.artifacts : globalArtifacts;
+  // 失败卡片仍走全局：它们只活在当前会话，没有 per-meeting 归属
+  const showFailed = !scopedToMeeting;
+  const visibleFailed = showFailed ? failedArtifacts : [];
 
   function onClearAll(): void {
     Modal.confirm({
       title: "清空 outputs",
-      content: `确定清空 ${artifacts.length} 条历史产物？该操作不可撤回（文件本身仍保留在磁盘）。`,
+      content: `确定清空 ${globalArtifacts.length} 条历史产物？该操作不可撤回（文件本身仍保留在磁盘）。`,
       okText: "清空",
       okType: "danger",
       cancelText: "取消",
@@ -83,15 +96,15 @@ export default function ArtifactPanel(): JSX.Element {
     <div className="flex-1 min-h-0 flex flex-col bg-paper-50">
       <div className="flex items-center justify-between px-6 h-11 border-b border-paper-300 shrink-0">
         <span className="text-[13px] text-ink-700 font-medium lowercase tracking-wider">
-          outputs
+          {scopedToMeeting ? "本会议产物" : "outputs"}
         </span>
         <span className="flex items-center gap-2">
           <span className="text-[11px] text-ink-400">
-            {failedArtifacts.length > 0
-              ? `${artifacts.length} · ${failedArtifacts.length} 失败`
+            {visibleFailed.length > 0
+              ? `${artifacts.length} · ${visibleFailed.length} 失败`
               : artifacts.length}
           </span>
-          {artifacts.length > 0 && (
+          {!scopedToMeeting && globalArtifacts.length > 0 && (
             <button
               type="button"
               data-testid="clear-artifacts-btn"
@@ -106,19 +119,25 @@ export default function ArtifactPanel(): JSX.Element {
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
-        {failedArtifacts.map((f) => (
+      <div
+        className="flex-1 overflow-y-auto px-3 py-2 space-y-1"
+        data-testid="artifact-list"
+        data-scope={scopedToMeeting ? "meeting" : "global"}
+      >
+        {visibleFailed.map((f) => (
           <FailedArtifactCard
             key={f.id}
             failed={f}
             onDismiss={() => dismissFailedArtifact(f.id)}
           />
         ))}
-        {artifacts.length === 0 && failedArtifacts.length === 0 && (
+        {artifacts.length === 0 && visibleFailed.length === 0 && (
           <div className="px-3 py-8 text-center text-ink-400 text-[11px] space-y-1">
-            <div>暂无产物</div>
+            <div>{scopedToMeeting ? "该会议暂无产物" : "暂无产物"}</div>
             <div className="text-ink-300">
-              在输入框输入 @生成 PPT / @报告 / @Excel … 触发
+              {scopedToMeeting
+                ? "切到「待机时段」查看全部历史产物"
+                : "在输入框输入 @生成 PPT / @报告 / @Excel … 触发"}
             </div>
           </div>
         )}

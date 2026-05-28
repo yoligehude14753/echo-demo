@@ -6,6 +6,7 @@ import type {
   MeetingMinutes,
   TranscriptSegment,
 } from "@/types";
+import type { MeetingSummary } from "@/api";
 import {
   buildFailedArtifact,
   FAILED_ARTIFACT_LIMIT,
@@ -15,6 +16,12 @@ import {
 interface Store {
   meetings: Record<string, MeetingCard>;
   currentMeetingId: string | null;
+  /**
+   * 标记 meeting 详情已经从后端 detail endpoint（transcript/minutes/artifacts）
+   * 拉过一次。避免每次切换都重复 fetch；新事件到达时（meeting.segment 等）store
+   * 自然会通过 applyEvent 增量更新，无需重置该 flag。
+   */
+  meetingDetailLoaded: Record<string, boolean>;
   artifacts: GeneratedArtifact[];
   failedArtifacts: FailedArtifact[];
   /**
@@ -30,6 +37,10 @@ interface Store {
   selectMeeting(id: string | null): void;
   applyEvent(e: EchoEvent): void;
   upsertMeeting(id: string, patch: Partial<MeetingCard>): void;
+  /** 用 GET /meetings 返回的列表把 store.meetings 与每条 summary 合并（保留事件已注入的 segments/minutes/artifacts）。 */
+  hydrateMeetings(summaries: MeetingSummary[]): void;
+  /** 标记某 meeting detail 已加载完毕，避免重复 fetch。 */
+  markMeetingDetailLoaded(id: string): void;
   addArtifact(a: GeneratedArtifact): void;
   /**
    * 清空全局 outputs 列表（顶栏「清空」按钮）。
@@ -57,6 +68,7 @@ function emptyMeeting(id: string, title?: string): MeetingCard {
 export const useStore = create<Store>((set, get) => ({
   meetings: {},
   currentMeetingId: null,
+  meetingDetailLoaded: {},
   artifacts: [],
   failedArtifacts: [],
   pendingArtifactBriefs: {},
@@ -70,11 +82,39 @@ export const useStore = create<Store>((set, get) => ({
     set({
       meetings: {},
       currentMeetingId: null,
+      meetingDetailLoaded: {},
       artifacts: [],
       failedArtifacts: [],
       pendingArtifactBriefs: {},
       events: [],
     }),
+
+  hydrateMeetings: (summaries) =>
+    set((s) => {
+      const next: Record<string, MeetingCard> = { ...s.meetings };
+      for (const sum of summaries) {
+        const cur = next[sum.meeting_id] ?? emptyMeeting(sum.meeting_id);
+        // backend 状态三态 → 前端两态：finalized 视为 ended，保持已有 UI 颜色
+        const uiState =
+          sum.state === "in_meeting"
+            ? "in_meeting"
+            : "ended";
+        next[sum.meeting_id] = {
+          ...cur,
+          // 已有非空 title 优先（事件流可能比 summary 含更新值如 minutes.title）
+          title: cur.title && cur.title !== cur.meeting_id ? cur.title : (sum.title ?? cur.title),
+          state: uiState,
+          started_at: cur.started_at ?? sum.started_at,
+          ended_at: cur.ended_at ?? sum.ended_at ?? undefined,
+        };
+      }
+      return { meetings: next };
+    }),
+
+  markMeetingDetailLoaded: (id) =>
+    set((s) => ({
+      meetingDetailLoaded: { ...s.meetingDetailLoaded, [id]: true },
+    })),
 
   dismissFailedArtifact: (id) =>
     set((s) => ({

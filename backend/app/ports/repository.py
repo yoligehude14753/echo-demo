@@ -114,6 +114,10 @@ class RepositoryPort(Protocol):
         meeting_id: str,
     ) -> list[TranscriptSegment]: ...
 
+    async def count_meeting_segments(self, meeting_id: str) -> int: ...
+
+    async def count_meeting_speakers(self, meeting_id: str) -> int: ...
+
     # ── Per-meeting speaker label map（与 meeting 内 _speaker_labels 镜像）─
     async def upsert_meeting_speaker_label(
         self,
