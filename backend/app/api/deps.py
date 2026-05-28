@@ -120,6 +120,7 @@ def get_meeting_state(
             repository=repository,
             event_bus=event_bus,
             max_meeting_duration_s=settings.automeet_max_meeting_duration_s,
+            backfill_window_s=settings.automeet_backfill_window_s,
         )
     return _meeting_state_singleton
 

@@ -22,7 +22,7 @@ import json
 import time
 import uuid
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -182,16 +182,28 @@ class MeetingPipeline:
         *,
         title: str | None = None,
         auto_started: bool = False,
+        started_at: datetime | None = None,
     ) -> None:
-        """启动 / 续接一个会议；如果 repo 里已存在 in_meeting 行则保留旧 started_at。"""
+        """启动 / 续接一个会议；如果 repo 里已存在 in_meeting 行则保留旧 started_at。
+
+        ``started_at``：当 detector 自动触发时，传入"回溯起点"（now - backfill_window_s）。
+        - 内存里 `_started_at[meeting_id]` 用这个值，让 backfill 进来的 ambient 偏移正确
+        - `_wall_clock_start` 配套回拨，让 detector 触发后 N 秒到达的 chunk 的 offset_ms
+          = (该 chunk wall-time - started_at) 而不是 0
+        - 没传 → fallback now（手动开会、测试用例都走这条）
+        """
         now = datetime.now(UTC)
+        effective_start = started_at if started_at is not None else now
         async with self._lock:
             self._segments.setdefault(meeting_id, [])
             self._speaker_labels.setdefault(meeting_id, {})
-            self._started_at.setdefault(meeting_id, now)
-            self._wall_clock_start.setdefault(meeting_id, time.monotonic())
+            self._started_at.setdefault(meeting_id, effective_start)
+            # monotonic 回拨：把"虚拟开始时刻"摆在 (now - elapsed) 处，新 chunk 的 offset 才正确
+            elapsed_since_start = (now - effective_start).total_seconds()
+            self._wall_clock_start.setdefault(
+                meeting_id, time.monotonic() - elapsed_since_start
+            )
             self._finalized.discard(meeting_id)
-        # 注意：不再 reset diarizer，避免清掉 ambient 链路累积的 speaker registry
         if self._repo is not None:
             await self._repo.create_meeting(
                 meeting_id,
@@ -204,6 +216,85 @@ class MeetingPipeline:
             meeting_id,
             {"auto_started": auto_started, "title": title},
         )
+
+    async def backfill_from_ambient(
+        self,
+        meeting_id: str,
+        *,
+        since: datetime,
+        until: datetime | None = None,
+        limit: int = 200,
+    ) -> int:
+        """把 ambient_segments 在 [since, until or now] 区间内的条目复制成 meeting_segments。
+
+        用于「自动识别会议开始」时的回溯倒灌：
+        detector 累计 6s+ 语音才能触发 auto_start，触发瞬间真实会议已经进行了 6-90s；
+        这段时间 ambient_capture 已经把 chunk 写入 ambient_segments，但因为还没
+        active meeting，没有触发 meeting_pipeline.ingest_from_stt → meeting_segments
+        里看不到开头的对话。本方法在 _apply_auto_start 内调一次，把这段断层补上。
+
+        - 不发 meeting.segment WS 事件：UI 会通过 GET /meetings/{id} 拉详情时一并捞到，
+          避免把 ambient 已经在 UI 显示过的同样文本再 push 一遍触发重复气泡。
+        - 不重复 diarize / STT：直接复用 ambient 已经跑过的 speaker_id / speaker_label。
+        - 不依赖现存 wall_clock_start：start_ms 用 (captured_at - started_at) 计算。
+
+        参数：
+        - since / until：UTC 时区的 datetime 窗口（含端点）
+        - limit：单次 backfill 最多取多少条（默认 200，按 90s 窗口 ~30 chunks 足够）
+
+        返回：实际写入 meeting_segments 的条数。
+        """
+        if self._repo is None:
+            return 0
+        if meeting_id in self._finalized:
+            return 0
+        cutoff_until = until if until is not None else datetime.now(UTC)
+        ambient_rows = await self._repo.list_ambient_segments(
+            since=since, until=cutoff_until, limit=limit
+        )
+        if not ambient_rows:
+            return 0
+        # list_ambient_segments 返回 DESC（最近的在前），backfill 需要按时间正序排
+        ambient_rows = sorted(ambient_rows, key=lambda r: r.captured_at)
+
+        started_at = self._started_at.get(meeting_id, since)
+        base_ms = int(started_at.timestamp() * 1000)
+        existing_keys: set[tuple[int, str]] = set()
+        async with self._lock:
+            for existing in self._segments[meeting_id]:
+                existing_keys.add((existing.start_ms, existing.text.strip()))
+
+        out: list[TranscriptSegment] = []
+        async with self._lock:
+            for row in ambient_rows:
+                if not row.text or not row.text.strip():
+                    continue
+                cap_ms = int(row.captured_at.timestamp() * 1000)
+                offset_ms = max(0, cap_ms - base_ms)
+                dur_ms = row.duration_ms if row.duration_ms > 0 else 1000
+                # 去重：同 start_ms + 同 text 视作已在 _segments（避免与 ingest_from_stt 重复插）
+                key = (offset_ms, row.text.strip())
+                if key in existing_keys:
+                    continue
+                existing_keys.add(key)
+                seg = TranscriptSegment(
+                    text=row.text,
+                    start_ms=offset_ms,
+                    end_ms=offset_ms + dur_ms,
+                    speaker_id=row.speaker_id,
+                    speaker_label=row.speaker_label,
+                )
+                self._segments[meeting_id].append(seg)
+                out.append(seg)
+            # 保证内存里 segments 按时间升序（add_audio_chunk 后续会继续 append 更晚的 chunk）
+            self._segments[meeting_id].sort(key=lambda s: s.start_ms)
+
+        for seg in out:
+            captured_at = started_at + timedelta(milliseconds=seg.start_ms)
+            await self._repo.append_meeting_segment(
+                meeting_id, seg, captured_at=captured_at
+            )
+        return len(out)
 
     async def end_meeting(self, meeting_id: str) -> None:
         """结束会议叠加层（不生成纪要）；ambient 主链路不受影响。"""

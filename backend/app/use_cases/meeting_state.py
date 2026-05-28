@@ -20,7 +20,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from app.ports.event_bus import EventBusPort
@@ -65,12 +65,16 @@ class MeetingState:
         repository: RepositoryPort | None = None,
         event_bus: EventBusPort | None = None,
         max_meeting_duration_s: float = 1800.0,
+        backfill_window_s: float = 90.0,
     ) -> None:
         self._pipeline = pipeline
         self._detector = detector
         self._repo = repository
         self._event_bus = event_bus
         self._max_meeting_duration_s = max_meeting_duration_s
+        # 用户 2026-05-28 反馈：「自动识别会议开始要往前覆盖前面的连续对话」。
+        # detector 触发时刻晚于真实会议开始 6-30s，本字段控制回溯窗口大小。
+        self._backfill_window_s = backfill_window_s
         self._current: CurrentMeeting | None = None
         self._lock = asyncio.Lock()
 
@@ -286,18 +290,49 @@ class MeetingState:
         return self._current.meeting_id if self._current else None
 
     async def _apply_auto_start(self, meeting_id: str, *, reason: str) -> None:
+        now = datetime.now(UTC)
+        # 用户 2026-05-28 反馈：「自动识别会议开始要往前覆盖前面的连续对话」。
+        # detector 累计 6s+ 语音才触发，触发时点已经晚于真实开会 6-30s，
+        # 这段时间的 ambient_segments 没有进 meeting，UI 看不到开头。
+        # 修复策略："宁可覆盖大不要覆盖小" → 把过去 backfill_window_s 内
+        # 的 ambient 整段倒灌进 meeting（去重交给 pipeline.backfill_from_ambient）。
+        backfill_since = now - timedelta(seconds=self._backfill_window_s)
         async with self._lock:
             if self._current is not None:
-                # 已有会议（多半是 manual 进来后 detector 才触发的）→ 忽略 detector start
                 logger.debug("auto-start ignored (already in meeting): %s", reason)
                 return
             self._current = CurrentMeeting(
                 meeting_id=meeting_id,
-                started_at=datetime.now(UTC),
+                started_at=backfill_since,
                 started_by="auto",
             )
-        await self._pipeline.start_meeting(meeting_id, auto_started=True)
-        await self._publish("meeting.auto_detected", meeting_id, {"reason": reason})
+        await self._pipeline.start_meeting(
+            meeting_id, auto_started=True, started_at=backfill_since
+        )
+        backfilled = 0
+        try:
+            backfilled = await self._pipeline.backfill_from_ambient(
+                meeting_id, since=backfill_since, until=now
+            )
+        except Exception as e:
+            # backfill 是兜底加分项，失败不影响主流程 / 会议正常进行
+            logger.warning("auto-start backfill failed for %s: %s", meeting_id, e)
+        logger.info(
+            "auto-start backfill: meeting=%s window_s=%.0f segments=%d reason=%s",
+            meeting_id,
+            self._backfill_window_s,
+            backfilled,
+            reason,
+        )
+        await self._publish(
+            "meeting.auto_detected",
+            meeting_id,
+            {
+                "reason": reason,
+                "backfilled_segments": backfilled,
+                "backfill_window_s": self._backfill_window_s,
+            },
+        )
         await self._publish(
             "meeting.state_changed",
             meeting_id,

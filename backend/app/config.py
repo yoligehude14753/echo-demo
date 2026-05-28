@@ -256,6 +256,12 @@ class Settings(BaseSettings):
     # 防止持续环境音 / 单人独白让会议永不结束（2026-05 「会议中 9h+」bug 的结构性修复）。
     # hydrate 也会用这个值清理跨重启遗留的过期 auto-meeting。
     automeet_max_meeting_duration_s: float = 1800.0
+    # 检测到 auto-start 时回溯多久的 ambient 倒灌进 meeting_segments：
+    # detector 需要 ≥6s 累计语音 + 30s 滑窗才触发，触发时刻已经晚于真实
+    # 会议开始 6-30s（甚至更多，若开头说话间断）。用户 2026-05-28 反馈：
+    # 「自动识别到会议开始就得往前覆盖前面的连续对话，宁可覆盖大不要覆盖小」。
+    # 默认 90s：把检测延迟 + 开头几句铺垫一并卷进 meeting_segments。
+    automeet_backfill_window_s: float = 90.0
 
     # ── RAG ───────────────────────────────────────────────────────
     rag_index_dir: Path = Field(default=Path("~/.echodesk/rag_index").expanduser())
