@@ -380,16 +380,16 @@ async def test_backfill_from_ambient_offset_math(tmp_path: Path) -> None:
                 ),
             ]
 
-        async def create_meeting(self, meeting_id: str, *, started_at, title=None, auto_started=False) -> None:  # noqa: ARG002, ANN001
+        async def create_meeting(self, meeting_id: str, *, started_at, title=None, auto_started=False) -> None:
             self.created.append((meeting_id, title, auto_started))
 
         async def list_ambient_segments(
-            self, *, since=None, until=None, limit: int = 100  # noqa: ARG002, ANN001
+            self, *, since=None, until=None, limit: int = 100
         ):
             # 模拟 DESC 排序（仿真 sqlite 实现）
             return list(reversed(self.ambient_rows))
 
-        async def append_meeting_segment(self, meeting_id: str, seg, *, captured_at) -> None:  # noqa: ARG002, ANN001
+        async def append_meeting_segment(self, meeting_id: str, seg, *, captured_at) -> None:
             self.appended.append((meeting_id, seg.start_ms, seg.text))
 
     fake_repo = _FakeRepo()
