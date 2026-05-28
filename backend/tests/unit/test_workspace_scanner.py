@@ -151,7 +151,12 @@ async def test_scan_respects_max_file_size(tmp_path: Path) -> None:
 
     rag, scanner = _make(tmp_path, [ws], workspace_max_file_mb=0.1)  # 100 KB 上限
     r = await scanner.scan()
-    assert r.n_total == 1  # 只有 small 通过
+    # P11 修复（2026-05-28）：oversized 文件计入 n_total + n_failed + errors，
+    # 不再静默 continue。让 UI 能看到「big.txt 超限被跳过」而不是误以为目录只有 1 个文件。
+    assert r.n_total == 2  # small 通过 + big 超限都算扫到
+    assert r.n_added == 1
+    assert r.n_failed == 1
+    assert any("oversized" in e and "big.txt" in e for e in r.errors), r.errors
     docs = await rag.list_docs()
     assert len(docs) == 1
 

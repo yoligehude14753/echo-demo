@@ -272,7 +272,10 @@ class Settings(BaseSettings):
     # ── 授权工作区（M6：用户配置可索引的目录范围） ────────────
     # 多个目录用逗号分隔，例如 ECHO_WORKSPACE_DIRS=~/Documents/work,~/Notes
     workspace_dirs: str = ""
-    workspace_max_file_mb: float = 20.0
+    # 用户 2026-05-28 实测：heyibalabala 文件夹 8 PDF 中 2 个 > 20MB 被静默跳过。
+    # 大型行业报告 / 案例集 PDF 常 30-80MB，20MB cap 现实里过紧。提到 100MB
+    # 兼顾常见知识库文件。超过 100MB 的极端文件仍跳过（防 markitdown OOM）。
+    workspace_max_file_mb: float = 100.0
     workspace_scan_on_startup: bool = True
     workspace_state_file: Path = Field(
         default=Path("~/.echodesk/workspace_state.json").expanduser()
