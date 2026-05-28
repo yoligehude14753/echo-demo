@@ -113,6 +113,17 @@ class AudioCapture {
     this.emitChunk(pcm16ToWav(pcm, CAPTURE_SAMPLE_RATE));
   }
 
+  /**
+   * Test seam：让 E2E 跳过 ~6s 真实音频积累，直接合成一次 chunk emit。
+   * Headless Chromium 拿不到真实麦克风、AudioContext 也不跑，无法验证
+   * Phase 4「采集 vs 入库」两个计数器；E2E 通过 `window.__echoAudioCapture`
+   * 调用本方法触发 ChunkRouter。production 永不调用。
+   */
+  __emitChunkForTest(blob?: Blob): void {
+    const payload = blob ?? new Blob([new Uint8Array(44)], { type: "audio/wav" });
+    this.emitChunk(payload);
+  }
+
   private async boot(): Promise<void> {
     if (!this.running) return;
     this.setState("initializing");
@@ -157,3 +168,11 @@ class AudioCapture {
 
 /** 全局单例：CaptureSession 在 runtime 层唯一实例 */
 export const audioCapture = new AudioCapture();
+
+// 仅 dev/test 暴露给 window；production build (import.meta.env.DEV=false) 不挂。
+// 见 src/vite-env.d.ts —— /// <reference types="vite/client" /> 让 import.meta.env 通过类型校验。
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (
+    window as Window & { __echoAudioCapture?: AudioCapture }
+  ).__echoAudioCapture = audioCapture;
+}

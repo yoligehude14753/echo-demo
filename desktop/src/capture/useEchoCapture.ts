@@ -18,6 +18,7 @@ export function useEchoCapture(): CaptureStatus {
   const [captureState, setCaptureState] = useState<CaptureState>("initializing");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [ambientChunks, setAmbientChunks] = useState(0);
+  const [ambientStored, setAmbientStored] = useState(0);
   const [meetingChunks, setMeetingChunks] = useState(0);
 
   useEffect(() => {
@@ -33,6 +34,7 @@ export function useEchoCapture(): CaptureStatus {
 
     const offRouter = attachCaptureChunkRouter({
       onChunkPosted: () => setAmbientChunks((n) => n + 1),
+      onAmbientUploaded: () => setAmbientStored((n) => n + 1),
       onMeetingUploaded: () => setMeetingChunks((n) => n + 1),
       onConnectionLost: (e) => {
         const msg = e instanceof Error ? e.message : String(e);
@@ -70,6 +72,7 @@ export function useEchoCapture(): CaptureStatus {
   return {
     state: captureState,
     ambientChunks,
+    ambientStored,
     meetingChunks,
     meetingOverlayId,
     errorMessage,

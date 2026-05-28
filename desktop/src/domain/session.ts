@@ -24,8 +24,16 @@ export type MeetingState = "idle" | "in_meeting" | "ended";
 
 export interface CaptureStatus {
   state: CaptureState;
-  /** ambient 主链路已上传 chunk 数 */
+  /**
+   * 已上传的 chunk 数（含被 VAD/底噪/STT 空文本过滤掉的、未入库的）。
+   * 等于"麦克风产生 + 后端 POST /capture/chunk 200"次数。
+   */
   ambientChunks: number;
+  /**
+   * 真正写入 ambient_segments 表的有效转写段数。
+   * 等于 chunk 响应里 `ambient_stored=true` 的次数；通常远小于 ambientChunks。
+   */
+  ambientStored: number;
   /** meeting 叠加层已上传 chunk 数（仅 in_meeting） */
   meetingChunks: number;
   /** 若 meeting 叠加层激活，指向 meeting_id */
