@@ -43,6 +43,9 @@ const kindLabel: Record<IntentKind, string> = {
   generate_pptx: "生成 PPT",
   generate_xlsx: "生成 Excel",
   generate_word: "生成 Word",
+  generate_markdown: "生成 Markdown",
+  generate_pdf: "生成 PDF",
+  generate_txt: "生成 TXT",
   summarize_meeting: "总结会议",
   chat: "对话",
 };
@@ -54,6 +57,9 @@ const kindColor: Record<IntentKind, string> = {
   generate_pptx: "gold",
   generate_xlsx: "green",
   generate_word: "cyan",
+  generate_markdown: "geekblue",
+  generate_pdf: "red",
+  generate_txt: "default",
   summarize_meeting: "geekblue",
   chat: "default",
 };
@@ -183,7 +189,10 @@ export default function CommandBar(): JSX.Element {
       case "generate_html":
       case "generate_pptx":
       case "generate_xlsx":
-      case "generate_word": {
+      case "generate_word":
+      case "generate_markdown":
+      case "generate_pdf":
+      case "generate_txt": {
         const kind = (r.params.artifact_type as string | undefined) ?? "html";
         const brief = (r.params.brief as string | undefined) ?? originalText;
         if (!brief) {
@@ -194,7 +203,14 @@ export default function CommandBar(): JSX.Element {
         // 异步触发，结果通过 WS artifact.ready event 反馈到 store
         // 不 await，避免 busy/textarea 在 60-180s LLM 链路上一直锁住
         void generateArtifact({
-          artifact_type: kind as "html" | "pptx" | "xlsx" | "word",
+          artifact_type: kind as
+            | "html"
+            | "pptx"
+            | "xlsx"
+            | "word"
+            | "markdown"
+            | "pdf"
+            | "txt",
           brief,
         })
           .then((art) => {

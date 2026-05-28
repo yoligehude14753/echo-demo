@@ -44,6 +44,7 @@ duckduckgo-search==6.2.13
 python-docx==1.1.2
 openpyxl==3.1.5
 jinja2==3.1.4             # HTML 模板
+fpdf2==2.8.7              # PDF 生成（P4-M3，纯 Python 无原生依赖；中文需 Noto Sans SC TTF）
 
 # ── 观测 / 日志 ─────────────────────────────────────────────
 structlog==24.4.0

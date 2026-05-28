@@ -54,4 +54,5 @@ markers = [
     "e2e: 端到端，含真实音频/PDF/产物",
     "arch: 架构 Fitness Function",
     "slow: > 30s，CI 默认跳过",
+    "requires_font: 需要 NotoSansSC TTF（仓库内 backend/app/adapters/skill/fonts/）",
 ]

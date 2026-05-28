@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,10 +53,15 @@ async def exec_python_to_artifact(
     *,
     expected_ext: str,
     timeout_s: float = 120.0,
+    env: Mapping[str, str] | None = None,
 ) -> ExecResult:
     """把 LLM 生成的 Python 写到 build_dir/script.py，运行后期望输出 build_dir/output.{ext}。
 
-    自动把代码内 `doc.save('xxx')` / `wb.save('xxx')` 改写为绝对路径，避免 cwd 变化导致找不到文件。
+    自动把代码内 `doc.save('xxx')` / `wb.save('xxx')` / `pdf.output('xxx')`
+    改写为绝对路径，避免 cwd 变化导致找不到文件。
+
+    ``env`` 可选，传入额外的子进程环境变量（如 PDF 字体路径）；在父进程 env
+    基础上合并，不替换。
     """
     ok, reason = _is_safe_python(code)
     if not ok:
@@ -63,15 +70,19 @@ async def exec_python_to_artifact(
     await asyncio.to_thread(build_dir.mkdir, parents=True, exist_ok=True)
     output_path = build_dir / f"output.{expected_ext}"
 
-    # 重写 save() 路径为绝对路径
+    # 重写 save()/output() 路径为绝对路径
     code_norm = re.sub(
-        r"(doc|wb|workbook|pres)\.save\(\s*['\"][^'\"]+['\"]\s*\)",
-        f"\\1.save(r'{output_path.resolve()}')",
+        r"(doc|wb|workbook|pres|pdf)\.(save|output)\(\s*['\"][^'\"]+['\"]\s*\)",
+        f"\\1.\\2(r'{output_path.resolve()}')",
         code,
     )
 
     script_path = build_dir / "script.py"
     await asyncio.to_thread(script_path.write_text, code_norm, encoding="utf-8")
+
+    subproc_env: dict[str, str] | None = None
+    if env:
+        subproc_env = {**os.environ, **dict(env)}
 
     t0 = time.monotonic()
 
@@ -83,6 +94,7 @@ async def exec_python_to_artifact(
             text=True,
             timeout=timeout_s,
             check=False,
+            env=subproc_env,
         )
         return proc.returncode, proc.stderr
 
@@ -103,14 +115,33 @@ async def exec_python_to_artifact(
     return ExecResult(False, None, f"rc={rc} stderr={stderr[:600]}", elapsed)
 
 
-async def exec_html_to_file(code: str, build_dir: Path) -> ExecResult:
-    """HTML 直接写文件 + 基本健康检查。"""
+async def exec_text_to_file(text: str, build_dir: Path, ext: str) -> ExecResult:
+    """LLM 直出文本（html / markdown / txt）直接落盘 + 基本健康检查。
+
+    - html: 必须含 `<html` 或 `<!DOCTYPE`；长度 ≥ 1500 字符
+    - markdown / txt: 不允许是「围栏包裹整篇」的 LLM 输出（已在上游剥掉），且
+      长度阈值放宽到 ≥ 300 字符（中文段落即可达到）
+    """
     await asyncio.to_thread(build_dir.mkdir, parents=True, exist_ok=True)
-    output_path = build_dir / "output.html"
-    s = code.strip()
-    if "<html" not in s.lower()[:500] and not s.lower().startswith("<!doctype"):
-        return ExecResult(False, None, "no <!DOCTYPE> / <html> in head", 0.0)
-    if len(s) < 1500:
-        return ExecResult(False, None, f"too short ({len(s)} chars)", 0.0)
+    output_path = build_dir / f"output.{ext}"
+    s = text.strip()
+
+    if ext == "html":
+        head = s.lower()[:500]
+        if "<html" not in head and not head.startswith("<!doctype"):
+            return ExecResult(False, None, "no <!DOCTYPE> / <html> in head", 0.0)
+        if len(s) < 1500:
+            return ExecResult(False, None, f"too short ({len(s)} chars)", 0.0)
+    elif ext in {"md", "markdown", "txt", "text"}:
+        if len(s) < 300:
+            return ExecResult(False, None, f"too short ({len(s)} chars)", 0.0)
+    else:  # pragma: no cover - 入口处已校验
+        return ExecResult(False, None, f"unsupported text ext: {ext}", 0.0)
+
     await asyncio.to_thread(output_path.write_text, s, encoding="utf-8")
     return ExecResult(True, output_path, "", 0.0)
+
+
+async def exec_html_to_file(code: str, build_dir: Path) -> ExecResult:
+    """HTML 直接写文件 + 基本健康检查（保留兼容 alias，新调用方应用 exec_text_to_file）。"""
+    return await exec_text_to_file(code, build_dir, "html")

@@ -118,7 +118,20 @@ export async function listRecentAmbient(
   return asJson<AmbientSegment[]>(r);
 }
 
-export type ArtifactKind = "word" | "xlsx" | "excel" | "pptx" | "ppt" | "html";
+export type ArtifactKind =
+  | "word"
+  | "docx"
+  | "xlsx"
+  | "excel"
+  | "pptx"
+  | "ppt"
+  | "html"
+  | "markdown"
+  | "md"
+  | "mdown"
+  | "pdf"
+  | "txt"
+  | "text";
 
 export async function generateArtifact(req: {
   artifact_type: ArtifactKind;
