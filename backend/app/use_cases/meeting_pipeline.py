@@ -216,9 +216,7 @@ class MeetingPipeline:
             self._started_at.setdefault(meeting_id, effective_start)
             # monotonic 回拨：把"虚拟开始时刻"摆在 (now - elapsed) 处，新 chunk 的 offset 才正确
             elapsed_since_start = (now - effective_start).total_seconds()
-            self._wall_clock_start.setdefault(
-                meeting_id, time.monotonic() - elapsed_since_start
-            )
+            self._wall_clock_start.setdefault(meeting_id, time.monotonic() - elapsed_since_start)
             self._finalized.discard(meeting_id)
         if self._repo is not None:
             await self._repo.create_meeting(
@@ -307,9 +305,7 @@ class MeetingPipeline:
 
         for seg in out:
             captured_at = started_at + timedelta(milliseconds=seg.start_ms)
-            await self._repo.append_meeting_segment(
-                meeting_id, seg, captured_at=captured_at
-            )
+            await self._repo.append_meeting_segment(meeting_id, seg, captured_at=captured_at)
         return len(out)
 
     async def end_meeting(self, meeting_id: str) -> None:
@@ -587,14 +583,41 @@ class MeetingPipeline:
     )
     _HUMAN_ONLY_VERBS = (
         # 人际沟通 / 协调
-        "找", "约", "联系", "打电话", "发消息", "微信", "邮件给",
-        "沟通", "通知", "汇报", "确认", "对齐", "讨论",
+        "找",
+        "约",
+        "联系",
+        "打电话",
+        "发消息",
+        "微信",
+        "邮件给",
+        "沟通",
+        "通知",
+        "汇报",
+        "确认",
+        "对齐",
+        "讨论",
         # 现场动作（Echo 拿不到/看不到）
-        "查看", "去看", "看下", "看一下", "查代码", "看代码",
-        "部署", "上线", "调试", "本地跑", "环境",
-        "学习", "了解", "调研", "研究",
+        "查看",
+        "去看",
+        "看下",
+        "看一下",
+        "查代码",
+        "看代码",
+        "部署",
+        "上线",
+        "调试",
+        "本地跑",
+        "环境",
+        "学习",
+        "了解",
+        "调研",
+        "研究",
         # 决定 / 等待
-        "决定", "审核", "签字", "审批", "等待",
+        "决定",
+        "审核",
+        "签字",
+        "审批",
+        "等待",
     )
 
     @classmethod
@@ -636,14 +659,10 @@ class MeetingPipeline:
 
             suggested = raw.get("suggested_command")
             suggested_str = suggested.strip() if isinstance(suggested, str) else ""
-            valid_prefix = any(
-                suggested_str.startswith(p) for p in cls._ECHO_EXECUTABLE_PREFIXES
-            )
+            valid_prefix = any(suggested_str.startswith(p) for p in cls._ECHO_EXECUTABLE_PREFIXES)
 
             # 双重否决：白名单不过 / 人际动词命中 → 降级 info
-            if kind == "actionable" and (
-                not valid_prefix or cls._is_human_only_todo(text)
-            ):
+            if kind == "actionable" and (not valid_prefix or cls._is_human_only_todo(text)):
                 kind = "info"
                 suggested_str = ""
             # info 类不允许带 suggested_command（UI 不显示"执行"按钮，prefill 也没意义）

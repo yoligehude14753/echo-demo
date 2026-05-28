@@ -295,9 +295,7 @@ async def test_backfill_from_ambient_imports_pre_start_segments(tmp_path: Path) 
         auto_started=True,
         started_at=backfill_since,
     )
-    n = await pipe.backfill_from_ambient(
-        "m-bf", since=backfill_since, until=detect_at
-    )
+    n = await pipe.backfill_from_ambient("m-bf", since=backfill_since, until=detect_at)
     assert n == 3
 
     segs = pipe.get_segments("m-bf")
@@ -306,9 +304,7 @@ async def test_backfill_from_ambient_imports_pre_start_segments(tmp_path: Path) 
     assert [s.speaker_id for s in segs] == ["spk-A", "spk-A", "spk-B"]
 
     # 同一窗口再调一次：去重，不重复入
-    n2 = await pipe.backfill_from_ambient(
-        "m-bf", since=backfill_since, until=detect_at
-    )
+    n2 = await pipe.backfill_from_ambient("m-bf", since=backfill_since, until=detect_at)
     assert n2 == 0
     assert len(pipe.get_segments("m-bf")) == 3
 
@@ -380,12 +376,12 @@ async def test_backfill_from_ambient_offset_math(tmp_path: Path) -> None:
                 ),
             ]
 
-        async def create_meeting(self, meeting_id: str, *, started_at, title=None, auto_started=False) -> None:
+        async def create_meeting(
+            self, meeting_id: str, *, started_at, title=None, auto_started=False
+        ) -> None:
             self.created.append((meeting_id, title, auto_started))
 
-        async def list_ambient_segments(
-            self, *, since=None, until=None, limit: int = 100
-        ):
+        async def list_ambient_segments(self, *, since=None, until=None, limit: int = 100):
             # 模拟 DESC 排序（仿真 sqlite 实现）
             return list(reversed(self.ambient_rows))
 
@@ -407,9 +403,7 @@ async def test_backfill_from_ambient_offset_math(tmp_path: Path) -> None:
         auto_started=True,
         started_at=backfill_since,
     )
-    n = await pipe.backfill_from_ambient(
-        "m-bf", since=backfill_since, until=detect_at
-    )
+    n = await pipe.backfill_from_ambient("m-bf", since=backfill_since, until=detect_at)
     assert n == 3, f"expected 3 (skip whitespace-only row), got {n}"
 
     segs = pipe.get_segments("m-bf")
@@ -417,9 +411,7 @@ async def test_backfill_from_ambient_offset_math(tmp_path: Path) -> None:
     assert [s.start_ms for s in segs] == [0, 20_000, 45_000]
     assert [s.speaker_id for s in segs] == ["spk-A", "spk-A", "spk-B"]
 
-    n2 = await pipe.backfill_from_ambient(
-        "m-bf", since=backfill_since, until=detect_at
-    )
+    n2 = await pipe.backfill_from_ambient("m-bf", since=backfill_since, until=detect_at)
     assert n2 == 0
     assert len(pipe.get_segments("m-bf")) == 3
     # repo 也只追加 3 次（去重生效）

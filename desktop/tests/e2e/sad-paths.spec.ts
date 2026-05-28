@@ -14,8 +14,9 @@ import { installEchoMock } from "./_mock";
 
 const COMMAND_BAR_TA = "[data-testid='command-textarea']";
 
-test("LLM 生成失败 → 错误 toast + textarea 不被锁死", async ({ page }) => {
-  // intent route 走 page.route（默认 mock 没拦它，走 realFetch 会失败）
+test("LLM 生成失败 → 转写流错误气泡 + textarea 不被锁死", async ({ page }) => {
+  // phase4-ui（2026-05-28）：CommandBar 反馈从 Ant Design toast 改成转写流气泡
+  // appendAssistantReply -> ConversationEvent -> TranscriptStream 渲染 conv-bubble-*。
   await page.route("**/intent/route", (route) =>
     route.fulfill({
       status: 200,
@@ -29,7 +30,6 @@ test("LLM 生成失败 → 错误 toast + textarea 不被锁死", async ({ page 
     }),
   );
 
-  // /artifacts/generate 注入 500
   await installEchoMock(page, {
     errorPaths: { "/artifacts/generate": 500 },
   });
@@ -40,20 +40,22 @@ test("LLM 生成失败 → 错误 toast + textarea 不被锁死", async ({ page 
   await ta.fill("@生成 HTML 测试 sad path");
   await ta.press("Enter");
 
-  // 期望：error toast 显示生成失败
+  // 期望：转写流出现一条 Echo 气泡（assistant_reply），text 含「生成失败」
   await expect(
-    page.locator(".ant-message-error").filter({ hasText: /生成失败/ }),
+    page
+      .locator("[data-testid='conv-bubble-assistant_reply']")
+      .filter({ hasText: /生成失败/ }),
   ).toBeVisible({ timeout: 10_000 });
 
-  // 期望：textarea 不被永久 disabled（fire-and-forget 模式应立即释放）
+  // 期望：textarea 不被永久 disabled（fire-and-forget）
   await expect(ta).not.toBeDisabled({ timeout: 5_000 });
 
-  // 期望：再次输入仍可工作（清空 + 重新输入）
+  // 期望：再次输入仍可工作
   await ta.fill("继续输入测试");
   await expect(ta).toHaveValue("继续输入测试");
 });
 
-test("RAG 检索失败 → 错误 toast 不崩页", async ({ page }) => {
+test("RAG 检索失败 → 转写流错误气泡 不崩页", async ({ page }) => {
   await page.route("**/intent/route", (route) =>
     route.fulfill({
       status: 200,
@@ -77,7 +79,9 @@ test("RAG 检索失败 → 错误 toast 不崩页", async ({ page }) => {
   await ta.press("Enter");
 
   await expect(
-    page.locator(".ant-message-error").filter({ hasText: /检索失败/ }),
+    page
+      .locator("[data-testid='conv-bubble-assistant_reply']")
+      .filter({ hasText: /检索失败/ }),
   ).toBeVisible({ timeout: 10_000 });
 
   // UI 仍能交互（顶部 brand 仍可见，textarea 仍可用）

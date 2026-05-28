@@ -326,3 +326,60 @@ async def test_default_settings_have_phase4_diar_deep_values() -> None:
     assert s.diarizer_active_window_s == 60.0
     assert s.diarizer_active_match_threshold == 0.35
     assert s.diarizer_short_segment_continuity_ms == 1500
+    # 用户 2026-05-28 ambient 编号爆炸修复：cap 默认 6
+    assert s.diarizer_ambient_max_speakers == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ambient_max_speakers_cap_forces_reuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    """用户 2026-05-28：ambient 长时间运行编号爆到 11/19（实际 3 人）。
+
+    cap=3 时，前 3 段都互相正交（cos≈0）→ 各注册新人，每次都注入 active list。
+    第 4 段又一组新正交向量进来：
+    - 阶段 1 active 匹配（阈值 0.35）：active 里 3 人 cos 都 < 0.35，全 miss
+    - 阶段 2 global _profiles 匹配（阈值 0.55）：同上 miss
+    - 阶段 3 voiced_active_s ≥ min_for_new=0.5 本来要 _counter+=1 注册 speaker_4
+    - 用户修法：ambient cap 命中 → 强制复用 best_sim 最高的现有 ID（即使 sim 低）
+    断言：30 段不同正交向量，unique 数 ≤ cap=3，_counter 也卡在 3。
+    """
+    cap = 3
+    d = ECAPADiarizer(
+        _settings(
+            diarizer_min_voiced_seconds_for_new_profile=0.5,
+            diarizer_ambient_max_speakers=cap,
+            # 把活跃窗拉长到 1h，避免测试里被时间窗清理掉
+            diarizer_active_window_s=3600.0,
+        )
+    )
+
+    rng = np.random.default_rng(seed=7)
+    dim = 64
+    feed: list[np.ndarray] = []
+    for _ in range(30):
+        v = rng.normal(size=dim).astype(np.float32)
+        v /= float(np.linalg.norm(v))
+        feed.append(v)
+
+    async def _fake_embed(_b: bytes, _sr: int) -> object:
+        return feed.pop(0)
+
+    now = datetime(2026, 1, 1, 10, 0, 0, tzinfo=UTC)
+    seg_buf = _sine_pcm(2_500)
+    sids: list[str | None] = []
+    with patch.object(d, "_embed", side_effect=_fake_embed):
+        for _ in range(30):
+            sid = await d._identify_one(
+                seg_buf,
+                16_000,
+                dur_sec=2.5,
+                voiced_active_s=2.5,
+                context_id="_ambient",
+                now=now,
+            )
+            sids.append(sid)
+
+    assigned = {s for s in sids if s is not None}
+    assert len(assigned) <= cap, f"ambient cap broken: {len(assigned)} > {cap}, got {assigned}"
+    # _counter 不再无限累积（前 cap 段分配 speaker_1..speaker_3 之后不再 +1）
+    assert d._counter == cap, f"counter ran past cap: {d._counter} != {cap}"

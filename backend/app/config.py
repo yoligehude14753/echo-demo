@@ -217,6 +217,13 @@ class Settings(BaseSettings):
     # - 1500ms 跟 spk-6 的 diarizer_min_voiced_seconds_for_new_profile=2.0 协同：
     #   < 2.0 active_s 不允许注册新人，但 < 1.5s 干脆别 embed 直接归并。
     diarizer_short_segment_continuity_ms: int = 1500
+    # 用户 2026-05-28 截图反馈：ambient 模式下长时间运行 → 屏幕显示"说话人 11/19"
+    # 但实际只有 3 个人。根因：ambient 进程内 _counter 无上限，每次匹配失败就 +1。
+    # 修法：ambient context 内 active speakers 数到达此 cap 后，新声音强制 reuse
+    # active list 里 best_sim 最高的现有 ID，绝不分配 speaker_N+1。
+    # - meeting context 不受此 cap 约束（meeting 内人数明确，cap 反而把不同人挤一起）
+    # - 6 来源：典型小会 3-4 人 + 2 路 buffer 给 ECAPA 误判；用户可调
+    diarizer_ambient_max_speakers: int = 6
 
     # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
     # 对齐基线：echo `backend/app/pipeline.py:570-577`（生产值 600 / 400 / 0.05 / 12）。

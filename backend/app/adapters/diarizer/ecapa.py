@@ -393,6 +393,29 @@ class ECAPADiarizer:
             )
             return None
 
+        # 用户 2026-05-28：ambient 长时间运行编号爆炸（11/19 个 ID 实际 3 人）。
+        # ambient context 已达 max_speakers cap → 不再分配新 ID，强制复用 active
+        # list 里 best_sim 最高的（如果没有 active 走 best_match；都没有再放行新建）。
+        if context_id == _AMBIENT_CONTEXT:
+            ambient_cap = getattr(self._settings, "diarizer_ambient_max_speakers", 0)
+            if ambient_cap > 0 and len(ctx.active) >= ambient_cap:
+                # 优先选 active list 内最像的；退而求其次选 global _profiles 最像的
+                reuse_id = active_id if active_id is not None else best_id
+                if reuse_id is not None:
+                    new_centroid = self._ema_update(reuse_id, vec)
+                    self._touch_active(ctx, reuse_id, new_centroid, now)
+                    ctx.last_speaker = reuse_id
+                    await self._persist(reuse_id, new_centroid)
+                    logger.info(
+                        "ecapa ambient cap hit (%d ≥ %d), reuse %s (active_sim=%.3f, best_sim=%.3f)",
+                        len(ctx.active),
+                        ambient_cap,
+                        reuse_id,
+                        active_sim if active_id else 0.0,
+                        best_sim if best_id else 0.0,
+                    )
+                    return reuse_id
+
         # 注册新人：写 _profiles + 注入活跃 list
         self._counter += 1
         new_id = f"speaker_{self._counter}"

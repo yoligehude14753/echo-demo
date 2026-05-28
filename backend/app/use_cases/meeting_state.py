@@ -306,9 +306,7 @@ class MeetingState:
                 started_at=backfill_since,
                 started_by="auto",
             )
-        await self._pipeline.start_meeting(
-            meeting_id, auto_started=True, started_at=backfill_since
-        )
+        await self._pipeline.start_meeting(meeting_id, auto_started=True, started_at=backfill_since)
         backfilled = 0
         try:
             backfilled = await self._pipeline.backfill_from_ambient(
