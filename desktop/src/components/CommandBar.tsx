@@ -15,8 +15,9 @@
  *   一个紧凑的悬浮输入条；显示当前意图徽标 / 解析理由。
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Input, Tag, Tooltip, message } from "antd";
+import type { TextAreaRef } from "antd/es/input/TextArea";
 import { FileText, Loader2, Paperclip, Send, Sparkles, Upload, Wand2, X } from "lucide-react";
 
 import {
@@ -89,8 +90,31 @@ export default function CommandBar(): JSX.Element {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
+  const registerCommandBarPrefill = useStore((s) => s.registerCommandBarPrefill);
   const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<TextAreaRef | null>(null);
+
+  /**
+   * M_minutes_refactor：MinutesView 的「执行待办」按钮通过 store.prefillCommandBar
+   * 把 suggested_command 文本一键填入这里。
+   *
+   * 为不影响 sub_J 正在动的 chat 分支 / 智能提示，这里**只做最小动作**：
+   * 1) 替换 textarea 内容（setText）
+   * 2) focus textarea + 把光标推到末尾，方便用户继续追加 / 直接回车
+   * 3) **不**自动 onSubmit，避免误触误发；用户看到预填后自己按 Enter
+   *
+   * NOTE：dispatch / handleSend 那一坨完全没动，sub_J 安全。
+   */
+  useEffect(() => {
+    const unregister = registerCommandBarPrefill((nextText) => {
+      setText(nextText);
+      const ref = textareaRef.current;
+      // antd TextAreaRef.focus({ cursor: 'end' }) 会把光标推到末尾
+      ref?.focus({ cursor: "end" });
+    });
+    return unregister;
+  }, [registerCommandBarPrefill]);
 
   const handleFiles = useCallback(async (files: FileList | File[]): Promise<void> => {
     const arr = Array.from(files);
@@ -379,6 +403,7 @@ export default function CommandBar(): JSX.Element {
       <div className="flex items-center gap-2">
         <Wand2 className="w-4 h-4 text-ink-500 shrink-0" />
         <Input.TextArea
+          ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onPressEnter={(e) => {

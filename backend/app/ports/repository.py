@@ -41,6 +41,9 @@ class MeetingRecord(BaseModel):
     raw_transcript_ref: str | None = None
     minutes_status: MinutesStatus | None = None
     minutes_error: str | None = None
+    # M_minutes_refactor (migration 004)：LLM finalize 时生成的语义化标题
+    # （≤ 18 字，中文），独立列方便 GET /meetings 不解析 minutes_json blob。
+    display_title: str | None = None
 
 
 class AmbientSegmentRecord(BaseModel):
@@ -100,6 +103,7 @@ class RepositoryPort(Protocol):
         raw_transcript_ref: str | None = None,
         minutes_status: MinutesStatus | None = None,
         minutes_error: str | None = None,
+        display_title: str | None = None,
     ) -> None: ...
 
     async def get_meeting(self, meeting_id: str) -> MeetingRecord | None: ...

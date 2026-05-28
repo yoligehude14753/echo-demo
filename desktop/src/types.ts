@@ -5,6 +5,7 @@ export type BusinessEventType =
   | "meeting.state_changed"
   | "meeting.segment"
   | "meeting.ended"
+  | "meeting.todo.completed"
   | "minutes.ready"
   | "minutes.failed"
   | "artifact.generating"
@@ -52,14 +53,33 @@ export interface MinutesSection {
   bullets: string[];
 }
 
+// M_minutes_refactor：会议待办（替代以前的 action_items 纯字符串列表）
+export type TodoKind = "actionable" | "info";
+export type TodoStatus = "pending" | "done" | "cancelled";
+
+export interface TodoItem {
+  id: string;
+  text: string;
+  assignee?: string | null;
+  kind: TodoKind;
+  status: TodoStatus;
+  done_at?: string | null;
+  artifact_id?: string | null;
+  suggested_command?: string | null;
+}
+
 export interface MeetingMinutes {
   meeting_id: string;
-  title: string;
+  title: string; // ← 现在是 LLM 生成的语义化标题（≤18 字）
   duration_sec: number;
+  // 兼容字段：后端仍会返；前端 MinutesBody 不再渲染
   speakers: string[];
   summary: string;
   sections: MinutesSection[];
   decisions: string[];
+  // ── M_minutes_refactor：UI 优先渲染 todos ────────────────────
+  todos: TodoItem[];
+  /** @deprecated 改用 todos；旧后端返回时仍透传，UI 不再展示 */
   action_items: string[];
   raw_transcript_ref?: string | null;
   created_at: string;
@@ -140,6 +160,9 @@ export type { MeetingState };
 export interface MeetingCard {
   meeting_id: string;
   title: string;
+  /** M_minutes_refactor：LLM 生成的语义化标题（finalize 之后才有）。
+   *  左侧列表显示顺序：display_title > title > meeting_id。 */
+  display_title?: string | null;
   state: MeetingState;
   segments: TranscriptSegment[];
   speakers: Set<string>;

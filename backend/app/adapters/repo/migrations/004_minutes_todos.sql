@@ -1,0 +1,15 @@
+-- 004_minutes_todos.sql
+-- M_minutes_refactor：把会议纪要从「meeting_id + 说话人列表」改为「语义化标题 +
+-- TodoList」需要在 meetings 表上加一列 display_title。
+--
+-- 设计取舍：
+--   - todos 本身仍然进 minutes_json（不另开表）：避免 schema 漂移、保持
+--     finalize 的「单 row 原子写」语义；todos 的 status/done_at/artifact_id
+--     回写通过整段 minutes_json 重写（artifacts.generate 路径），代价可接受。
+--   - display_title 必须是独立列：左侧会议列表（GET /meetings）频繁读这一列，
+--     不希望每次都解析 minutes_json blob；同时 meeting_id 作 PK 不变，
+--     兼容性最好。
+--
+-- 历史数据：所有现存 meeting 的 display_title 都补 NULL，前端按
+-- ``display_title || title || meeting_id`` 顺序退化展示，保持兼容。
+ALTER TABLE meetings ADD COLUMN display_title TEXT;

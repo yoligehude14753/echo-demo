@@ -10,6 +10,7 @@ GET  /artifacts/{id}/download — 下载产物文件，filename 形如
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from app.ports.skill import SkillExecutorPort
 from app.schemas.artifact import ArtifactRequest, GeneratedArtifact
 from app.schemas.events import EchoEvent
 from app.use_cases.generate_artifact import generate_artifact
+
+_log = logging.getLogger("echodesk.artifacts")
 
 router = APIRouter(tags=["artifacts"])
 
@@ -53,12 +56,19 @@ async def generate(
     runner: SkillExecutorPort = Depends(get_skill),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
 ) -> GeneratedArtifact:
-    """生成产物。artifact_type 走 ArtifactKind 枚举校验（含 ppt/pptx/word/xlsx/excel/html 别名）。"""
+    """生成产物。artifact_type 走 ArtifactKind 枚举校验（含 ppt/pptx/word/xlsx/excel/html 别名）。
+
+    M_minutes_refactor：可选携带 ``meeting_id`` + ``todo_id``：
+    - 生成成功后回写 ``meetings.minutes_json.todos[todo_id].status="done"``
+      + ``artifact_id``，并发 ``meeting.todo.completed`` 事件给前端
+    - 任何一边为空则跳过回写（普通产物生成路径不受影响）
+    """
     if not body.brief.strip():
         raise HTTPException(status_code=400, detail="brief empty")
     await event_bus.publish(
         EchoEvent(
             type="artifact.generating",
+            meeting_id=body.meeting_id,
             payload={"artifact_type": body.artifact_type, "brief": body.brief[:200]},
         )
     )
@@ -74,6 +84,7 @@ async def generate(
         await event_bus.publish(
             EchoEvent(
                 type="artifact.failed",
+                meeting_id=body.meeting_id,
                 payload={"artifact_type": body.artifact_type, "error": str(e)[:300]},
             )
         )
@@ -85,6 +96,7 @@ async def generate(
         await event_bus.publish(
             EchoEvent(
                 type="artifact.failed",
+                meeting_id=body.meeting_id,
                 payload={
                     "artifact_type": body.artifact_type,
                     "error": f"远程 LLM 不可达：{str(e)[:200]}",
@@ -93,10 +105,65 @@ async def generate(
             )
         )
         raise HTTPException(status_code=502, detail=str(e)) from e
+    # M_minutes_refactor：todo 回写（artifact 已经生成，回写失败只警告日志，
+    # 不影响 artifact.ready 事件正常发出，否则用户看不到产物已生成）
+    if body.meeting_id and body.todo_id:
+        await _attach_artifact_to_todo_safe(
+            meeting_id=body.meeting_id,
+            todo_id=body.todo_id,
+            artifact_id=artifact.artifact_id,
+        )
+    payload = artifact.model_dump(mode="json")
+    if body.meeting_id:
+        payload["meeting_id"] = body.meeting_id
+    if body.todo_id:
+        payload["todo_id"] = body.todo_id
     await event_bus.publish(
-        EchoEvent(type="artifact.ready", payload=artifact.model_dump(mode="json"))
+        EchoEvent(
+            type="artifact.ready",
+            meeting_id=body.meeting_id,
+            payload=payload,
+        )
     )
     return artifact
+
+
+async def _attach_artifact_to_todo_safe(*, meeting_id: str, todo_id: str, artifact_id: str) -> None:
+    """从 meetings.py 拿 pipeline 单例并尝试回写 todo；任何异常只警告日志。
+
+    use_cases / api 层间用 lazy import 避免循环引用（meetings.py 也 import 这里的
+    schemas / 反向风险）。回写失败不抛错——artifact 自身已经成功生成，前端能
+    在 ArtifactPanel 看到下载链接；只是 todo checkbox 不会自动划掉。
+    """
+    try:
+        from app.api.meetings import _pipeline
+
+        if _pipeline is None:
+            _log.warning(
+                "todo writeback skipped: meeting pipeline singleton not initialized "
+                "(meeting_id=%s todo_id=%s artifact_id=%s)",
+                meeting_id,
+                todo_id,
+                artifact_id,
+            )
+            return
+        ok = await _pipeline.attach_artifact_to_todo(meeting_id, todo_id, artifact_id)
+        if not ok:
+            _log.warning(
+                "todo writeback miss: meeting_id=%s todo_id=%s artifact_id=%s "
+                "(meeting / minutes_json / todo not found)",
+                meeting_id,
+                todo_id,
+                artifact_id,
+            )
+    except Exception as e:  # pragma: no cover - 防御性，不影响主路径
+        _log.warning(
+            "todo writeback failed: meeting_id=%s todo_id=%s artifact_id=%s err=%s",
+            meeting_id,
+            todo_id,
+            artifact_id,
+            e,
+        )
 
 
 # 跨平台不允许的文件名字符 + 控制字符

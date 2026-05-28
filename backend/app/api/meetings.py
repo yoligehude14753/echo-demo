@@ -186,6 +186,7 @@ async def list_meetings(
             MeetingSummary(
                 meeting_id=r.id,
                 title=r.title,
+                display_title=r.display_title,  # M_minutes_refactor：语义化标题
                 state=r.state,
                 started_at=r.started_at,
                 ended_at=r.ended_at,

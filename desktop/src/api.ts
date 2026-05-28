@@ -160,6 +160,10 @@ export async function manualEndMeeting(): Promise<MeetingStateSnapshot> {
 export interface MeetingSummary {
   meeting_id: string;
   title: string | null;
+  /** M_minutes_refactor：LLM finalize 时生成的语义化标题（替代左侧列表里
+   *  显示的 meeting_id）；未生成时为 null。前端按
+   *  ``display_title || title || meeting_id`` 顺序兜底展示。 */
+  display_title: string | null;
   state: "in_meeting" | "ended" | "finalized";
   started_at: string;
   ended_at: string | null;
@@ -245,6 +249,10 @@ export async function generateArtifact(req: {
   artifact_type: ArtifactKind;
   brief: string;
   extra_instructions?: string;
+  /** M_minutes_refactor：当指令来自会议待办「执行」按钮时一并传，后端
+   *  生成成功后会回写 ``meetings.minutes_json.todos[id].status=done``。 */
+  meeting_id?: string;
+  todo_id?: string;
 }): Promise<GeneratedArtifact> {
   const u = await apiUrl("/artifacts/generate");
   const r = await fetch(u, {
