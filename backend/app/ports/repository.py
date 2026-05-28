@@ -63,6 +63,10 @@ class SpeakerProfileRecord(BaseModel):
 
     speaker_id: str
     label: str | None = None
+    # 用户 2026-05-28：True 表示 label 是用户手动通过 POST /speakers/{id}/rename
+    # 设置的（跨进程加载）；False 是自动分配的「说话人 N」（仅当前进程使用，
+    # 启动 hydrate 时跳过避免编号被旧数据撑爆）。migration 005 引入。
+    label_user_set: bool = False
     n_samples: int = 0
     first_seen_at: datetime
     last_seen_at: datetime
@@ -175,6 +179,7 @@ class RepositoryPort(Protocol):
         *,
         captured_at: datetime,
         label: str | None = None,
+        label_user_set: bool | None = None,
         embedding_blob: bytes | None = None,
     ) -> None: ...
 

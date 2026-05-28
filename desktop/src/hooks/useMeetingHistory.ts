@@ -11,7 +11,7 @@
  *    store.meetings[id]。已有事件流注入的 segments / minutes 不会被覆盖（用
  *    "数量更多者胜出"作为同步策略）。
  *
- * 3. **特殊 id 不 fetch**：currentMeetingId === null（虚拟"待机时段"）跳过
+ * 3. **特殊 id 不 fetch**：currentMeetingId === null（虚拟"伴随时段"）跳过
  *    detail fetch；该状态下 TranscriptStream 显示 ambient feed，MinutesView /
  *    ArtifactPanel 显示空态。
  *

@@ -176,45 +176,37 @@ def test_supported_intents_complete() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_route_no_at_returns_chat(tmp_path: Path) -> None:
-    llm = _MockLLM(content="should not be called")
-    router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("帮我写个周报", current_meeting_id=None)
-    assert r.kind == "chat"
-    assert llm.calls == []  # 完全跳过 LLM
+async def test_route_no_at_defaults_to_search_rag(tmp_path: Path) -> None:
+    """2026-05-28：'帮我写个周报' 没命中产物/总结意图 → 默认问 echo（search_rag）。
 
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_route_no_at_returns_none_confidence(tmp_path: Path) -> None:
-    """P4-fix（2026-05-28）：'无 @ 前缀' 是纯规则匹配路径，没有跑分类器。
-
-    历史 bug：硬编码 confidence=1.0 → 前端显示 "置信度 100%"，给用户虚假置信感。
-    回归断言：这条路径必须返回 confidence is None，前端按 null 显示 "规则匹配"，
-    而不是把规则命中冒充成模型 100% 确信的分类结果。
+    用户期望：所有未明确说"@生成 PPT/@chat"的输入都走 RAG+web，让 echo 用知识库
+    + 网络回答。旧行为返回 chat 兜底没接知识库 → 用户反馈"echo 没带上下文"。
     """
     llm = _MockLLM(content="should not be called")
     router = LLMIntentRouter(_settings(tmp_path), llm)
     r = await router.route("帮我写个周报", current_meeting_id=None)
-    assert r.kind == "chat"
-    assert r.confidence is None, (
-        "无 @ 前缀 chat 路径不应硬编码 confidence=1.0；"
-        f"实际返回 {r.confidence!r}（这条路径根本没跑分类器，confidence 没语义）"
-    )
-    assert "规则" in r.rationale or "前缀" in r.rationale
-    assert llm.calls == []
+    assert r.kind == "search_rag"
+    assert llm.calls == []  # 不再调 Fast LLM 二次分类
+    assert r.confidence is None  # 默认路径不产生分类置信度
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_route_llm_classified_keeps_real_confidence(tmp_path: Path) -> None:
-    """对比：经 LLM 真分类的路径应当返回有意义的 float 置信度（不是 None）。"""
-    llm = _MockLLM(content='{"kind":"search_rag","confidence":0.78,"rationale":"想找之前的资料"}')
+async def test_route_unknown_at_prefix_defaults_to_search_rag(tmp_path: Path) -> None:
+    """2026-05-28 痛点截图复现：'@发 项目申报书模板到内部群' 必须默认走 search_rag。
+
+    旧逻辑：keyword_route miss → _llm_classify → Fast LLM(Qwen3-1.7B) 把它误判
+    成 chat_no_rag（"用户显式声明只闲聊不用知识库" 置信度 95%）→ Echo 不查
+    RAG/网络/上下文 → 回复"您好！您的需求不太明确"。
+
+    新逻辑：未命中明确关键字 → 一律 search_rag，让 retrieve_and_answer 接管。
+    """
+    llm = _MockLLM(content="should not be called")
     router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("@想找之前我们关于策略的讨论", current_meeting_id=None)
+    r = await router.route("@发 项目申报书模板到内部群", current_meeting_id="m1")
     assert r.kind == "search_rag"
-    assert r.confidence is not None
-    assert 0.7 <= r.confidence <= 0.9
+    assert llm.calls == [], "默认路径不应调用 Fast LLM 二次分类"
+    assert r.params.get("question")
 
 
 @pytest.mark.unit
@@ -275,46 +267,30 @@ async def test_route_txt_params(tmp_path: Path) -> None:
     assert r.params.get("artifact_type") == "txt"
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_route_llm_json_ok(tmp_path: Path) -> None:
-    # 用一个关键字命中不到的 @ 短句
-    llm = _MockLLM(content='{"kind":"search_rag","confidence":0.78,"rationale":"想找之前的资料"}')
-    router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("@想找之前我们关于策略的讨论", current_meeting_id="m9")
-    assert r.kind == "search_rag"
-    assert 0.7 <= r.confidence <= 0.9
-    assert r.params.get("question")
+# 2026-05-28：默认路径不再调 Fast LLM 二次分类，原来的 LLM JSON 解析 /
+# 非 JSON fallback / LLM 失败兜底 测试合并为下面这一条覆盖新行为。
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_route_llm_jsonp_with_fence(tmp_path: Path) -> None:
-    llm = _MockLLM(content='```json\n{"kind":"chat","confidence":0.55,"rationale":"闲聊"}\n```')
+async def test_route_unknown_input_never_calls_llm(tmp_path: Path) -> None:
+    """所有未命中 keyword_route 的输入（带 @ / 不带 @ / LLM 失败）都默认 search_rag。
+
+    不调用任何 LLM，避免 Fast LLM 误判和额外延迟。
+    """
+    llm = _MockLLM(raise_exc=TimeoutError("LLM 不应被调用"))
     router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("@顺便聊两句", current_meeting_id=None)
-    assert r.kind == "chat"
 
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_route_llm_non_json_extract(tmp_path: Path) -> None:
-    # LLM 输出非 JSON 但含有合法 kind 关键字
-    llm = _MockLLM(content="kind: search_web ，因为是最新消息")
-    router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("@请把这个查清楚以后告诉我", current_meeting_id=None)
-    assert r.kind == "search_web"
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_route_llm_failure_falls_back_to_chat(tmp_path: Path) -> None:
-    llm = _MockLLM(raise_exc=TimeoutError("net down"))
-    router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("@语义不明的句子触发 LLM 兜底", current_meeting_id=None)
-    assert r.kind == "chat"
-    assert r.confidence is not None
-    assert r.confidence <= 0.5
+    # 这几个 case 都不能命中 keyword_route（无 RAG 强信号、无关键字、无问句词）
+    for text in (
+        "@发 项目申报书模板到内部群",  # 痛点截图原案例：@发 未注册关键字
+        "@顺便聊两句",
+        "@语义不明的句子",
+        "帮我做一个东西",
+    ):
+        r = await router.route(text, current_meeting_id=None)
+        assert r.kind == "search_rag", f"{text!r} 应默认 search_rag，实际 {r.kind!r}"
+        assert llm.calls == [], f"{text!r} 路由不应调 LLM，实际调了 {len(llm.calls)} 次"
 
 
 # ── P4-fix-rag-chat（2026-05-28）：RAG 强信号 + 问句默认 RAG + chat_no_rag escape
@@ -365,28 +341,16 @@ async def test_route_question_word_intro_defaults_to_rag(tmp_path: Path) -> None
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_route_greeting_remains_chat(tmp_path: Path) -> None:
-    """'你好' 这种纯寒暄不含问句词 / RAG 信号 → 仍然走 chat（无 @ 前缀路径）。"""
-    llm = _MockLLM(content="should not be called")
-    router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("你好", current_meeting_id=None)
-    assert r.kind == "chat"
-    assert r.confidence is None  # 规则匹配路径
-    assert llm.calls == []
+async def test_route_greeting_defaults_to_search_rag(tmp_path: Path) -> None:
+    """2026-05-28：「你好」也默认问 echo（RAG 检索不到东西时 LLM 仍能寒暄）。
 
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_route_time_query_remains_chat(tmp_path: Path) -> None:
-    """'现在几点' 没有问号 / 介绍词 / RAG 信号 → chat（避免误归 RAG）。
-
-    注：实际场景下用户问"现在几点"通常想要联网，但当前 keyword_route 没有
-    "几点"映射，保留旧行为（chat）以免误归 search_rag 浪费 RAG 检索。
+    旧行为：纯寒暄归 chat 兜底。新行为：用户要纯闲聊请显式 `@chat 你好`，
+    否则 echo 默认带知识库回答（即使空命中也无伤大雅）。
     """
     llm = _MockLLM(content="should not be called")
     router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("现在几点", current_meeting_id=None)
-    assert r.kind == "chat"
+    r = await router.route("你好", current_meeting_id=None)
+    assert r.kind == "search_rag"
     assert llm.calls == []
 
 

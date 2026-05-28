@@ -405,12 +405,45 @@ function spawnBackendAndWatch() {
   backendProc.on("error", (err) => {
     log(`[backend] spawn error: ${err.message}`);
   });
-  backendProc.stdout?.on("data", (b) =>
-    process.stdout.write(`[backend] ${b.toString()}`),
+  // 持久化 backend stdout / stderr 到 ~/.echodesk/logs/runtime.log（最大 8MB 滚动）。
+  // 用户 2026-05-28 反馈"生成 HTML 报 400 看不到根因"——Electron 转发到
+  // process.stdout 但 macOS 上没人看，diag 时拿不到任何后端日志。
+  // 现在写到文件，下次同样的 bug 直接 `tail -200 ~/.echodesk/logs/runtime.log` 就能定位。
+  const runtimeLogPath = path.join(
+    os.homedir(),
+    ".echodesk",
+    "logs",
+    "runtime.log",
   );
-  backendProc.stderr?.on("data", (b) =>
-    process.stderr.write(`[backend] ${b.toString()}`),
-  );
+  try {
+    fs.mkdirSync(path.dirname(runtimeLogPath), { recursive: true });
+    // 启动时若已 >8MB，简单 truncate（避免无限增长）
+    try {
+      const st = fs.statSync(runtimeLogPath);
+      if (st.size > 8 * 1024 * 1024) fs.truncateSync(runtimeLogPath, 0);
+    } catch {
+      /* 不存在 → 接下来 appendFile 自动创建 */
+    }
+  } catch (e) {
+    log(`[backend] runtime log dir prepare failed: ${e.message}`);
+  }
+  const writeRuntime = (chunk) => {
+    try {
+      fs.appendFile(runtimeLogPath, chunk, () => undefined);
+    } catch {
+      /* 写 log 失败时不能影响主链路 */
+    }
+  };
+  backendProc.stdout?.on("data", (b) => {
+    const s = b.toString();
+    process.stdout.write(`[backend] ${s}`);
+    writeRuntime(s);
+  });
+  backendProc.stderr?.on("data", (b) => {
+    const s = b.toString();
+    process.stderr.write(`[backend] ${s}`);
+    writeRuntime(s);
+  });
   backendProc.on("exit", (code, signal) => {
     const wasOurs = backendProc !== null; // killBackendProc 会先置 null
     log(`[backend] child exited code=${code} signal=${signal} ours=${wasOurs}`);

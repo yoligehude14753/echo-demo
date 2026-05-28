@@ -78,7 +78,9 @@ class BM25Rag:
             return
         from rank_bm25 import BM25Okapi
 
-        self._bm25 = BM25Okapi(self._tokens)
+        # D.3 (rag_redesign_2026-05-28): b=0.5 (默认 0.75) 削弱 length normalization 的过激，
+        # 让 ambient 短段的 "length bonus" 砍半；与 D.4 的 doc-level 多样性 cap 协同。
+        self._bm25 = BM25Okapi(self._tokens, b=0.5)
 
     def _persist_doc(self, doc_id: str, doc_title: str, chunks: list[RagChunk]) -> None:
         payload = {

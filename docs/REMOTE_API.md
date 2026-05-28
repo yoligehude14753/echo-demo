@@ -220,17 +220,14 @@ ExecStart=/usr/local/bin/cloudflared tunnel --config /home/ai/.cloudflared/confi
 | 项 | 状态 | 备注 |
 |---|---|---|
 | TLS | Cloudflare 自动 LetsEncrypt | 用户侧 HTTPS，cloudflared → 本地服务是 HTTP（noTLSVerify=true）|
-| 鉴权 | **无** | 4 个 endpoint 当前对全公网开放，任何人知道域名即可调用 |
+| 鉴权（老 3 个域名 stt/llm-fast/tts） | **optional**：带正确 Bearer 校验，不带也放过（向后兼容 echo-demo）| 2026-05-28 加了 `heyi-gateway` nginx，详见 §8 |
+| 鉴权（新 2 个域名 llm/tts2） | **strict Bearer**：必须带 `Authorization: Bearer <token>` | 2026-05-28 新增，详见 §8 |
 | 速率限制 | Cloudflare 默认 + cloudflared `keepAliveConnections=10` | 单 IP / 单分钟级 |
-| 日志 | cloudflared 写 `/home/ai/cloudflared.log` | 包含访问路径，但没记 body |
+| 日志 | cloudflared 写 `/home/ai/cloudflared.log` + `docker logs heyi-gateway` | 后者包含 nginx access log |
 
-**风险**：3 个 GPU 服务（FireRedASR2 / sglang / Qwen3-TTS）**现在是裸跑、无 token**，公网可调用 = GPU 算力可被白嫖。
+**残留风险**：老 3 个域名（stt/llm-fast/tts）当前是 _optional auth_——不带 token 也通，目的是不破坏 echo-demo 现网调用。**这是过渡态**，目标终态是切到 strict Bearer（见 §8 路线图）。
 
-**Mitigation（建议下个 PR 加）**：
-- 在 `originRequest` 加 `httpHostHeader` + 在各 GPU 服务前加一个 sidecar nginx 校验 `X-Echo-Token`
-- 或者用 Cloudflare Access (free tier) 加 Google OAuth 限制 google identity
-
-当前接受这个风险因为：(a) 域名没公开，(b) 用户单人使用，(c) 流量 < 100 req/day，Cloudflare 全局 free tier 没问题。
+**当前可接受**因为：(a) 域名没公开，(b) 用户单人使用，(c) 流量 < 100 req/day，Cloudflare 全局 free tier 没问题。
 
 ## 7. 验证
 
@@ -248,3 +245,124 @@ tts.yoliyoli.uk/           http=404 (root 无路由)  ✅ Qwen3-TTS
 > - 从 heyi-bj 自己 curl（如上）
 > - 从手机 4G/5G 网络（脱离 Tailscale）
 > - 临时关 Tailscale magic DNS：`sudo tailscale set --accept-dns=false` （测完记得恢复）
+
+---
+
+## 8. 公网 Auth 网关（2026-05-28 新增）
+
+> **What**：在 cloudflared 与本地服务之间插入一个 nginx 容器 `heyi-gateway`（监听 `127.0.0.1:8081`），按 `Host` 头分流到各 GPU 服务并校验 `Authorization: Bearer <token>`。
+>
+> **Why**：原 4 个公网 endpoint 是裸跑无 auth（见 §6 历史版本），任何知道域名的人都可白嫖 GPU；同时新增 `llm.yoliyoli.uk` 暴露 Qwen3-32B-AWQ + `tts2.yoliyoli.uk` 暴露 CosyVoice2，对公网开放就必须有 auth。
+
+### 8.1 当前公网域名一览（2026-05-28）
+
+| 域名 | 后端 | 模型 | Auth 模式 | OpenAI 兼容 |
+|---|---|---|---|---|
+| `stt.yoliyoli.uk` | `:8090` firered | FireRedASR2-AED | optional Bearer | `/v1/audio/transcriptions` |
+| `llm-fast.yoliyoli.uk` | `:7860` sglang | Qwen3-1.7B | optional Bearer | `/v1/{models,chat/completions,completions}` |
+| `tts.yoliyoli.uk` | `:8094` fasterqwen3-tts | Qwen3-TTS (CustomVoice) | optional Bearer | `/v1/audio/speech` + `/v1/voices` |
+| **`llm.yoliyoli.uk`** _(新)_ | `:7862` sglang | **Qwen3-32B-AWQ** | **strict Bearer** | `/v1/{models,chat/completions,completions}` |
+| **`tts2.yoliyoli.uk`** _(新)_ | `:8092` cosyvoice2 | **CosyVoice2** | **strict Bearer** | `/v1/audio/speech` |
+
+> "optional Bearer" = 不带 token 放过；带 token 必须正确（否则 401）。"strict Bearer" = 必须带正确 token。
+
+### 8.2 Token 获取
+
+```bash
+cat ~/.echodesk/heyi_gateway.token   # 已在 Mac 本机生成（chmod 600）
+```
+
+> Token 来源：`heyi:openssl rand -hex 32`，固定形态 64 字符 hex 字符串。**轮转**时改 nginx.conf 的 map 值 + 同步更新 `~/.echodesk/heyi_gateway.token` 即可。
+
+### 8.3 客户端调用示例（OpenAI Python SDK）
+
+```python
+from openai import OpenAI
+from pathlib import Path
+
+TOKEN = Path("~/.echodesk/heyi_gateway.token").expanduser().read_text().strip()
+
+# Qwen3-32B-AWQ
+client = OpenAI(base_url="https://llm.yoliyoli.uk/v1", api_key=TOKEN)
+print(client.chat.completions.create(
+    model="Qwen3-32B-AWQ",
+    messages=[{"role": "user", "content": "hi"}],
+    max_tokens=64,
+).choices[0].message.content)
+
+# Qwen3-1.7B fast（老域名也支持带 token）
+fast = OpenAI(base_url="https://llm-fast.yoliyoli.uk/v1", api_key=TOKEN)
+```
+
+### 8.4 curl 验证（从 Mac，避开 Tailscale magic DNS 拦截）
+
+```bash
+TOKEN=$(cat ~/.echodesk/heyi_gateway.token)
+
+# 1. 新增 32B（strict auth）
+curl -H "Authorization: Bearer $TOKEN" https://llm.yoliyoli.uk/v1/models
+curl -H "Authorization: Bearer $TOKEN" -X POST https://llm.yoliyoli.uk/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen3-32B-AWQ","messages":[{"role":"user","content":"用一句话自我介绍"}],"max_tokens":80}'
+
+# 2. 老域名（optional auth，带不带 token 都通）
+curl https://llm-fast.yoliyoli.uk/v1/models
+curl -H "Authorization: Bearer $TOKEN" https://llm-fast.yoliyoli.uk/v1/models   # 等价
+
+# 3. 错误 token 应该被拒
+curl -H "Authorization: Bearer wrong" https://llm-fast.yoliyoli.uk/v1/models    # → 401
+
+# 4. 新 CosyVoice2
+curl -H "Authorization: Bearer $TOKEN" -X POST https://tts2.yoliyoli.uk/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"cosyvoice2","input":"你好","voice":"default"}' --output /tmp/cosy.wav
+```
+
+> Tailscale magic DNS 会把 `*.yoliyoli.uk` 劫持到 `198.18.0.X`（4via6）导致 SSL connect 失败。临时绕过：`sudo tailscale set --accept-dns=false`（测完记得恢复）。
+
+### 8.5 heyi-bj 端实施记录
+
+```bash
+# 1. nginx auth 网关（heyi-gateway 容器）
+ssh heyi 'docker ps --filter name=heyi-gateway --format "{{.Names}}\t{{.Status}}"'
+# 配置：/home/ai/heyi-gateway/nginx.conf（host network，监听 127.0.0.1:8081）
+# 启动：docker run -d --name heyi-gateway --network host --restart always \
+#         -v /home/ai/heyi-gateway/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine
+
+# 2. cloudflared config 路由更新（旧 4 条 + 新 2 条 → 全部指向 :8081 网关）
+ssh heyi 'cat ~/.cloudflared/config.yml'
+# 备份：/home/ai/.cloudflared/config.yml.bak-1779931059  /home/ai/.cloudflared/config.yml.bak-<ts>
+
+# 3. cloudflared 进程：systemd --user 守护（PID 由 PPID 2386 = systemd --user 拉起）
+ssh heyi 'ps aux | grep cloudflared | grep -v grep'
+```
+
+cloudflared **保留旧 `echo.yoliyoli.uk → :8765` 不动**（echo backend 直通，无 auth；与本项目无关，按原状）。其余 5 个全部指向 `localhost:8081`（nginx gateway）。
+
+### 8.6 已知 TODO（ambiguity 兜底）
+
+| # | 项 | 当前状态 | 卡在哪 | 用户需做 |
+|---|---|---|---|---|
+| 1 | **DNS for `llm.yoliyoli.uk` / `tts2.yoliyoli.uk`** | nginx + cloudflared ingress 已就绪，DNS 未解析 | heyi 上无 `cert.pem`，`cloudflared tunnel route dns` 跑不了 | 在 Cloudflare Dashboard `yoliyoli.uk` 区里手工加两条 CNAME（见下） |
+| 2 | **老 3 域名升级为 strict Bearer** | 仍是 optional auth（兼容期）| 切之前要先确保所有客户端都带 token | echo-demo 一侧加 `Authorization` header 注入后再切 |
+| 3 | **cloudflared 切 systemd 守护 named tunnel** | 当前 user-systemd 已守护 | 跑得起来，但 unit 文件还没归档到仓库 | （已在原 §5 TODO，本次不动） |
+
+**DNS 配置**（用户在 Cloudflare Dashboard 加一次性）：
+
+```
+llm.yoliyoli.uk    CNAME  bfd33448-3605-47c5-813d-70924ae5cd09.cfargotunnel.com   (proxied)
+tts2.yoliyoli.uk   CNAME  bfd33448-3605-47c5-813d-70924ae5cd09.cfargotunnel.com   (proxied)
+```
+
+加完 DNS 后立即可用（cloudflared ingress 已经准备好了）。
+
+### 8.7 回滚预案
+
+如果 nginx 网关挂了/认证逻辑出错导致 echo-demo 链路异常：
+
+```bash
+# 立即恢复直通（绕过 nginx，直接 cloudflared → 后端）
+ssh heyi 'cp ~/.cloudflared/config.yml.bak-1779931059 ~/.cloudflared/config.yml \
+  && pkill -HUP cloudflared'   # systemd --user 自动拉起新进程
+# 副作用：丢失 32B + CosyVoice2 域名，4 个老域名回到无 auth 裸跑
+```

@@ -7,7 +7,8 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_repository, get_speaker_registry
+from app.api.deps import get_diarizer_singleton, get_repository, get_speaker_registry
+from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort, SpeakerProfileRecord
 from app.use_cases.speaker_registry import SpeakerRegistry
 
@@ -50,8 +51,17 @@ async def rename_speaker(
     body: Annotated[SpeakerRenameRequest, Body(...)],
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     registry: Annotated[SpeakerRegistry, Depends(get_speaker_registry)],
+    diarizer: Annotated[DiarizerPort, Depends(get_diarizer_singleton)],
 ) -> SpeakerInfo:
+    """改 speaker 名 + 把当前声纹写盘，让下次进程启动 hydrate 时能匹配回原 ID。
+
+    用户 2026-05-28 期望：改过名的人下次同样声纹再说话要自动改过来。所以
+    rename 时同时调 ``diarizer.persist_profile_for_user_label`` 把 embedding
+    落 repo（ECAPA 默认 persist=False 不写盘，但 user-labeled speaker 例外）。
+    """
     await registry.rename(speaker_id, body.label)
+    if hasattr(diarizer, "persist_profile_for_user_label"):
+        await diarizer.persist_profile_for_user_label(speaker_id)
     row = await repository.get_speaker(speaker_id)
     if row is None:
         # 改名后理应存在；防御性 fallback

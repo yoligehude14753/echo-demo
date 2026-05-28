@@ -93,21 +93,33 @@ class WorkspaceScanner:
     def list_authorized_dirs(self) -> list[Path]:
         return [d for d in self._settings.workspace_dirs_list if d.exists() and d.is_dir()]
 
-    def _iter_files(self) -> list[Path]:
-        out: list[Path] = []
+    def _iter_files(self) -> tuple[list[Path], list[tuple[Path, int]]]:
+        """扫描可索引文件 + 超过大小限制的文件（用于上报 failed）。
+
+        P11 修复（2026-05-28）：以前超大文件 `continue` 静默跳过 →
+        n_total/n_failed 都不算它们，用户看到 `added=2 failed=0` 但实际
+        8 个文件只有 2 个真入库。改成返回 oversized 列表，scan() 把它们
+        计入 n_failed + errors 让 UI 能看见原因。
+        """
+        ok: list[Path] = []
+        oversized: list[tuple[Path, int]] = []
         for root in self.list_authorized_dirs():
             for p in root.rglob("*"):
                 if not p.is_file():
                     continue
                 if p.suffix.lower() not in SUPPORTED_EXTS:
                     continue
-                # 排除点开头的隐藏目录/系统文件（.git, .DS_Store, .venv 等）
                 if any(part.startswith(".") for part in p.relative_to(root).parts):
                     continue
-                if p.stat().st_size > self._max_bytes:
+                try:
+                    size = p.stat().st_size
+                except OSError:
                     continue
-                out.append(p.resolve())
-        return out
+                if size > self._max_bytes:
+                    oversized.append((p.resolve(), size))
+                    continue
+                ok.append(p.resolve())
+        return ok, oversized
 
     async def scan(self) -> WorkspaceScanResult:
         """全量扫描 + 增量同步。返回统计。"""
@@ -118,9 +130,21 @@ class WorkspaceScanner:
         t0 = time.monotonic()
         result = WorkspaceScanResult()
         state = self._load_state()
-        current_files = self._iter_files()
+        current_files, oversized = self._iter_files()
         current_paths = {str(p) for p in current_files}
-        result.n_total = len(current_files)
+        # n_total 包含 oversized（让用户能看到"扫了 8 个但有 2 个超限"，
+        # 而不是误以为目录只有 6 个候选文件）。
+        result.n_total = len(current_files) + len(oversized)
+
+        # 0. 超大文件：不 ingest 但要报告 failed，附原因 + 大小，让用户知道
+        # 可以调 workspace_max_file_mb 或分割文件。这是 P11 静默漏文件 bug 的核心修复点。
+        max_mb = self._settings.workspace_max_file_mb
+        for p, size in oversized:
+            size_mb = round(size / 1024 / 1024, 1)
+            msg = f"oversized {p.name}: {size_mb} MB > {max_mb} MB cap"
+            result.errors.append(msg)
+            result.n_failed += 1
+            log.warning("workspace skip oversized: %s (%.1f MB > %.0f MB)", p, size_mb, max_mb)
 
         # 1. 移除已消失的文件
         gone = [k for k in state if k not in current_paths]

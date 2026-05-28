@@ -2,7 +2,7 @@
  * 场景 7（P4 M_meeting_history）：左侧会议列表点击切换 → 中右面板联动
  *
  * 覆盖功能：
- *  - 启动期 GET /meetings hydrate：左侧渲染 2 条历史会议（A、B）+ 1 条"待机时段"虚拟项
+ *  - 启动期 GET /meetings hydrate：左侧渲染 2 条历史会议（A、B）+ 1 条"伴随时段"虚拟项
  *  - 点击 meeting A → currentMeetingId 切到 A → 中间转写流显示 A 的段、右上纪要显示 A 标题、右下显示 A 的产物
  *  - 点击 meeting B → 三处面板都切到 B，没有 stale UI 残留
  *  - 点击 meeting A 后再点 meeting B（"返回时点已选中再切"场景）
@@ -184,7 +184,7 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     });
   });
 
-  // 5. /capture/recent —— 待机时段视图用，给个空数组让 TranscriptStream 走"等待环境音"
+  // 5. /capture/recent —— 伴随时段视图用，给个空数组让 TranscriptStream 走"等待环境音"
   await page.route(/\/(api\/)?capture\/recent/, async (route) => {
     await route.fulfill({
       status: 200,
@@ -201,10 +201,10 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     ],
   });
 
-  await test.step("打开主界面，等连接 OK + 列表渲染 3 项（待机时段 + A + B）", async () => {
+  await test.step("打开主界面，等连接 OK + 列表渲染 3 项（伴随时段 + A + B）", async () => {
     await page.goto("/");
     await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
-    // 待机时段始终在
+    // 伴随时段始终在
     await expect(page.getByTestId("meeting-item-ambient")).toBeVisible();
     // 两条历史会议（按 started_at DESC，B 在前）
     await expect(page.getByTestId("meeting-item")).toHaveCount(2, { timeout: 5_000 });
@@ -306,7 +306,7 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     await expect(page.getByText("B-第一段：版本对齐")).toHaveCount(0);
   });
 
-  await test.step("点击「待机时段」→ 转写流切回 ambient + 纪要/产物清空", async () => {
+  await test.step("点击「伴随时段」→ 转写流切回 ambient + 纪要/产物清空", async () => {
     await page.getByTestId("meeting-item-ambient").click();
     // ambient lane（capture/recent 返回 []）→ 显示"等待环境音转写…"占位
     await expect(page.getByText("等待环境音转写…")).toBeVisible();

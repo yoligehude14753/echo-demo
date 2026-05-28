@@ -5,7 +5,7 @@
  * 验收点：
  *  - idle：「待机」文案；按钮样式不带 rose / amber 色
  *  - in_meeting + started_by=manual：「会议中」+ mm:ss 计时（含 ":" 字符）
- *  - in_meeting + started_by=auto：「持续监听」+ Mic 图标，不显示计时（不含 ":"）
+ *  - in_meeting + started_by=auto：「持续陪伴」+ Mic 图标，不显示计时（不含 ":"）
  *    — 这是核心回归点：旧 UI 会显示「会议中 562:53」给用户假象
  */
 import { test, expect } from "@playwright/test";
@@ -67,10 +67,10 @@ test("MeetingStatusBar · manual 显示「会议中 mm:ss」(含计时 ':')", as
   const text = (await bar.textContent()) ?? "";
   expect(text).toContain(":");
   // 不应误显示 auto 文案
-  expect(text).not.toContain("持续监听");
+  expect(text).not.toContain("持续陪伴");
 });
 
-test("MeetingStatusBar · auto 显示「持续监听」(不含计时 ':')", async ({ page }) => {
+test("MeetingStatusBar · auto 显示「持续陪伴」(不含计时 ':')", async ({ page }) => {
   // 模拟 auto-meeting 已开始 6 小时（旧 UI 会显 360:00 这种假象）
   const startedAt = new Date(Date.now() - 6 * 3600_000).toISOString();
   await mockCurrentMeeting(page, {
@@ -84,7 +84,7 @@ test("MeetingStatusBar · auto 显示「持续监听」(不含计时 ':')", asyn
 
   const bar = page.getByTestId("meeting-status-bar");
   await expect(bar).toBeVisible({ timeout: 5_000 });
-  await expect(bar).toContainText("持续监听");
+  await expect(bar).toContainText("持续陪伴");
 
   // 核心回归断言：auto 状态下顶栏不显示 mm:ss 计时（不含 ":"）
   const text = (await bar.textContent()) ?? "";

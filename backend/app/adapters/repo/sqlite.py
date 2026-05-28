@@ -400,6 +400,7 @@ class SQLiteRepository(RepositoryPort):
         *,
         captured_at: datetime,
         label: str | None = None,
+        label_user_set: bool | None = None,
         embedding_blob: bytes | None = None,
     ) -> None:
         async with self._lock:
@@ -413,11 +414,12 @@ class SQLiteRepository(RepositoryPort):
             if row is None:
                 await conn.execute(
                     "INSERT INTO speakers "
-                    "(speaker_id, label, n_samples, first_seen_at, last_seen_at, embedding_blob) "
-                    "VALUES (?, ?, 1, ?, ?, ?)",
+                    "(speaker_id, label, label_user_set, n_samples, first_seen_at, last_seen_at, embedding_blob) "
+                    "VALUES (?, ?, ?, 1, ?, ?, ?)",
                     (
                         speaker_id,
                         label,
+                        1 if label_user_set else 0,
                         _to_iso(captured_at),
                         _to_iso(captured_at),
                         embedding_blob,
@@ -429,6 +431,9 @@ class SQLiteRepository(RepositoryPort):
                 if label is not None:
                     sets.append("label = ?")
                     vals.append(label)
+                if label_user_set is not None:
+                    sets.append("label_user_set = ?")
+                    vals.append(1 if label_user_set else 0)
                 if embedding_blob is not None:
                     sets.append("embedding_blob = ?")
                     vals.append(embedding_blob)
@@ -443,7 +448,8 @@ class SQLiteRepository(RepositoryPort):
         async with self._lock:
             conn = self._require_conn()
             cur = await conn.execute(
-                "SELECT speaker_id, label, n_samples, first_seen_at, last_seen_at, embedding_blob "
+                "SELECT speaker_id, label, label_user_set, n_samples, "
+                "first_seen_at, last_seen_at, embedding_blob "
                 "FROM speakers WHERE speaker_id = ?",
                 (speaker_id,),
             )
@@ -455,7 +461,8 @@ class SQLiteRepository(RepositoryPort):
         async with self._lock:
             conn = self._require_conn()
             cur = await conn.execute(
-                "SELECT speaker_id, label, n_samples, first_seen_at, last_seen_at, embedding_blob "
+                "SELECT speaker_id, label, label_user_set, n_samples, "
+                "first_seen_at, last_seen_at, embedding_blob "
                 "FROM speakers ORDER BY last_seen_at DESC"
             )
             rows = await cur.fetchall()
@@ -482,13 +489,16 @@ def _meeting_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> MeetingRecord:
 
 
 def _speaker_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> SpeakerProfileRecord:
+    # 列序：speaker_id, label, label_user_set, n_samples, first_seen_at,
+    #       last_seen_at, embedding_blob（与 SELECT 语句一致；migration 005）
     return SpeakerProfileRecord(
         speaker_id=row[0],
         label=row[1],
-        n_samples=row[2],
-        first_seen_at=_from_iso(row[3]) or datetime.fromtimestamp(0),
-        last_seen_at=_from_iso(row[4]) or datetime.fromtimestamp(0),
-        embedding_blob=row[5],
+        label_user_set=bool(row[2]),
+        n_samples=row[3],
+        first_seen_at=_from_iso(row[4]) or datetime.fromtimestamp(0),
+        last_seen_at=_from_iso(row[5]) or datetime.fromtimestamp(0),
+        embedding_blob=row[6],
     )
 
 

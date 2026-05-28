@@ -20,7 +20,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from app.ports.event_bus import EventBusPort
@@ -65,14 +65,21 @@ class MeetingState:
         repository: RepositoryPort | None = None,
         event_bus: EventBusPort | None = None,
         max_meeting_duration_s: float = 1800.0,
+        backfill_window_s: float = 90.0,
     ) -> None:
         self._pipeline = pipeline
         self._detector = detector
         self._repo = repository
         self._event_bus = event_bus
         self._max_meeting_duration_s = max_meeting_duration_s
+        # 用户 2026-05-28 反馈：「自动识别会议开始要往前覆盖前面的连续对话」。
+        # detector 触发时刻晚于真实会议开始 6-30s，本字段控制回溯窗口大小。
+        self._backfill_window_s = backfill_window_s
         self._current: CurrentMeeting | None = None
         self._lock = asyncio.Lock()
+        # 用户 2026-05-28：manual_end 改 fire-and-forget 后用强引用挂住后台 finalize
+        # 任务，防止 GC 把它干掉（asyncio.create_task 只持弱引用）
+        self._bg_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def current(self) -> CurrentMeeting | None:
@@ -201,40 +208,64 @@ class MeetingState:
             return self._current
 
     async def manual_end(self) -> str | None:
-        """用户点击状态栏结束会议；finalize 纪要并清空状态。
+        """用户点击状态栏结束会议；立刻返回 idle，纪要后台生成。
 
-        关键修复（2026-05-28，echo-demo backend.log 报错根因）：
-        - 之前传 ``title=cur.meeting_id`` 看似没问题，但用户启动会议时给的 title
-          会被覆盖成 meeting_id，纪要标题就变成 "m-bdd1da4e7e21" 这种鬼东西。
-        - 改为：优先用 repo 里 ``meetings.title``（``manual_start`` 时落库），
-          回退 ``"会议 <id>"``。
-        - finalize 失败时**不再**调 ``end_meeting``（那个会用空 minutes 把 state
-          置 ended 但没有错误状态）。直接让 ``finalize_meeting`` 内部把状态置成
-          ``state=ended`` + ``minutes_status="generation_failed"``，UI 据此给「重试」入口。
+        用户 2026-05-28 反馈："会议中按钮总是点不好，响应也有问题"。
+        根因：原实现 await ``finalize_meeting`` ≈ LLM 同步等 120s 才返回，HTTP
+        请求被卡住 → 前端按钮 ``disabled={busy}`` 锁 120s → 用户感觉"点不动"。
+
+        新流程：
+        1. 持锁清空 ``_current``（防止 ambient 链路把后续 chunk 算进已结束会议）
+        2. 立刻发 ``meeting.state_changed`` 让前端切回 idle / 按钮立刻可用
+        3. ``finalize_meeting`` 扔到 background task 跑，结束后通过 ws 推送
+           ``minutes.ready`` / ``minutes.failed``，UI 自然更新
+
+        finalize 异常：pipeline 内部已经把 ``state=ended + minutes_status=
+        generation_failed`` 写进 repo，且发 ``minutes.failed``，UI 给重试入口。
         """
         async with self._lock:
             cur = self._current
             if cur is None:
                 return None
             self._current = None
-        title = await self._resolve_title(cur.meeting_id)
-        # finalize 放到 lock 外（LLM 调用耗时，避免堵 ambient 链路）
-        try:
-            await self._pipeline.finalize_meeting(cur.meeting_id, title=title)
-        except Exception as e:
-            # pipeline 内部已经把 state/minutes_status 落到 ended/generation_failed
-            logger.warning("manual_end finalize failed for %s: %s", cur.meeting_id, e)
+
+        meeting_id = cur.meeting_id
+        title = await self._resolve_title(meeting_id)
         # 让 detector 进 cooldown，避免用户结束后立刻又被自动开
         self._detector.force_end(now=datetime.now(UTC), reason="manual_end")
+        # 先告诉前端 idle，按钮立刻可用；纪要后台跑
         await self._publish(
             "meeting.state_changed",
-            cur.meeting_id,
+            meeting_id,
             {
                 "mode": "idle",
                 "ended_by": "manual",
+                "minutes_status": "generating",
             },
         )
-        return cur.meeting_id
+
+        async def _bg_finalize() -> None:
+            try:
+                await self._pipeline.finalize_meeting(meeting_id, title=title)
+            except Exception as e:
+                # pipeline 内部已经把 state/minutes_status 落到 ended/generation_failed
+                logger.warning("manual_end finalize failed for %s: %s", meeting_id, e)
+
+        # 不 await：让 HTTP 立刻返回。任务持有强引用避免被 GC。
+        task = asyncio.create_task(_bg_finalize())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return meeting_id
+
+    async def await_pending_finalizations(self) -> None:
+        """测试 / 优雅关停用：等所有 background finalize 跑完。
+
+        生产路径不应该 await 这个；它只是让 unit test 能验证 fire-and-forget
+        分支真把 ``finalize_meeting`` 调到了。
+        """
+        if not self._bg_tasks:
+            return
+        await asyncio.gather(*list(self._bg_tasks), return_exceptions=True)
 
     async def _resolve_title(self, meeting_id: str) -> str:
         """优先取 repo 里 user 启动时落库的 title；缺则回退 ``"会议 <id>"``。
@@ -286,18 +317,47 @@ class MeetingState:
         return self._current.meeting_id if self._current else None
 
     async def _apply_auto_start(self, meeting_id: str, *, reason: str) -> None:
+        now = datetime.now(UTC)
+        # 用户 2026-05-28 反馈：「自动识别会议开始要往前覆盖前面的连续对话」。
+        # detector 累计 6s+ 语音才触发，触发时点已经晚于真实开会 6-30s，
+        # 这段时间的 ambient_segments 没有进 meeting，UI 看不到开头。
+        # 修复策略："宁可覆盖大不要覆盖小" → 把过去 backfill_window_s 内
+        # 的 ambient 整段倒灌进 meeting（去重交给 pipeline.backfill_from_ambient）。
+        backfill_since = now - timedelta(seconds=self._backfill_window_s)
         async with self._lock:
             if self._current is not None:
-                # 已有会议（多半是 manual 进来后 detector 才触发的）→ 忽略 detector start
                 logger.debug("auto-start ignored (already in meeting): %s", reason)
                 return
             self._current = CurrentMeeting(
                 meeting_id=meeting_id,
-                started_at=datetime.now(UTC),
+                started_at=backfill_since,
                 started_by="auto",
             )
-        await self._pipeline.start_meeting(meeting_id, auto_started=True)
-        await self._publish("meeting.auto_detected", meeting_id, {"reason": reason})
+        await self._pipeline.start_meeting(meeting_id, auto_started=True, started_at=backfill_since)
+        backfilled = 0
+        try:
+            backfilled = await self._pipeline.backfill_from_ambient(
+                meeting_id, since=backfill_since, until=now
+            )
+        except Exception as e:
+            # backfill 是兜底加分项，失败不影响主流程 / 会议正常进行
+            logger.warning("auto-start backfill failed for %s: %s", meeting_id, e)
+        logger.info(
+            "auto-start backfill: meeting=%s window_s=%.0f segments=%d reason=%s",
+            meeting_id,
+            self._backfill_window_s,
+            backfilled,
+            reason,
+        )
+        await self._publish(
+            "meeting.auto_detected",
+            meeting_id,
+            {
+                "reason": reason,
+                "backfilled_segments": backfilled,
+                "backfill_window_s": self._backfill_window_s,
+            },
+        )
         await self._publish(
             "meeting.state_changed",
             meeting_id,
@@ -309,17 +369,13 @@ class MeetingState:
         )
 
     async def _apply_auto_end(self, meeting_id: str, *, reason: str) -> None:
+        """auto-end 同 manual_end：finalize 改后台跑，不堵 detector 主循环。"""
         async with self._lock:
             cur = self._current
             if cur is None or cur.meeting_id != meeting_id:
                 return
             self._current = None
         title = await self._resolve_title(meeting_id)
-        try:
-            await self._pipeline.finalize_meeting(meeting_id, title=title)
-        except Exception as e:
-            # pipeline 内部已经标记 minutes_status="generation_failed"，UI 给重试入口
-            logger.warning("auto-end finalize failed for %s: %s", meeting_id, e)
         await self._publish("meeting.auto_ended", meeting_id, {"reason": reason})
         await self._publish(
             "meeting.state_changed",
@@ -328,8 +384,19 @@ class MeetingState:
                 "mode": "idle",
                 "ended_by": "auto",
                 "reason": reason,
+                "minutes_status": "generating",
             },
         )
+
+        async def _bg_finalize() -> None:
+            try:
+                await self._pipeline.finalize_meeting(meeting_id, title=title)
+            except Exception as e:
+                logger.warning("auto-end finalize failed for %s: %s", meeting_id, e)
+
+        task = asyncio.create_task(_bg_finalize())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     async def _publish(self, event_type: str, meeting_id: str, payload: dict[str, object]) -> None:
         if self._event_bus is None:

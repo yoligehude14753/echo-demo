@@ -42,6 +42,14 @@ def _settings(tmp_path: Path) -> Settings:
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_skill_html_real_yunwu(tmp_path: Path) -> None:
+    """phase4-doc-skills 默认走 Kami warm-parchment one-pager 而不再依赖 Tailwind CDN。
+
+    断言对齐 ``llm_skill._generate_html_one_pager`` 的 invariants：
+    chars ≥ 6000、≥ 3 inline SVG、含 warm-parchment 主色 ``#f5f4ed`` /
+    ``#faf9f5``。brief 也不再强求 Tailwind（旧 brief 让模型在中性 prompt
+    上歪到 dark theme 反而违反 invariants → 整测试 fail，参见
+    runtime.log:7301 `html one-pager 失败，降级 legacy`）。
+    """
     s = _settings(tmp_path)
     llm = OpenAICompatibleLLM(s)
     skill = SkillExecutor(s)
@@ -50,15 +58,17 @@ async def test_skill_html_real_yunwu(tmp_path: Path) -> None:
         artifact_type="html",
         brief=(
             "生成一份单文件 HTML 简报：英伟达 2020-2025 年营收快照（用占位真实数字），"
-            "暗色主题 + Tailwind CDN + 至少一个 inline SVG 柱状图。无需联网。"
+            "至少一个 inline SVG 柱状图。无需联网。"
         ),
     )
     assert art.artifact_type == "html"
     assert art.file_path.endswith(".html")
-    assert art.size_bytes > 1500
+    assert art.size_bytes > 6000  # one-pager invariants: ≥6000 chars
     html = Path(art.file_path).read_text(encoding="utf-8")
     assert "<!DOCTYPE" in html.upper() or "<html" in html.lower()
-    assert "tailwind" in html.lower()
+    # one-pager invariants：≥3 inline SVG + Kami warm-parchment 主色
+    assert html.lower().count("<svg") >= 3
+    assert "#f5f4ed" in html.lower() or "#faf9f5" in html.lower()
     await llm.aclose()
 
 

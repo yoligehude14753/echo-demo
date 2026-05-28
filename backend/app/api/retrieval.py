@@ -25,7 +25,7 @@ from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
 from app.ports.rag import RagPort
 from app.ports.web_search import WebSearchPort
-from app.use_cases.retrieve_and_answer import retrieve_and_answer
+from app.use_cases.retrieve_and_answer import _DEFAULT_RAG_TOP_K, retrieve_and_answer
 
 router = APIRouter(tags=["rag"])
 
@@ -57,8 +57,15 @@ def reset_singletons() -> None:
 
 class AskRequest(BaseModel):
     question: str
-    rag_top_k: int = 5
+    # 默认 None → use case 用 ``_DEFAULT_RAG_TOP_K=1000`` 大粗召回 + ``_PROMPT_RENDER_TOP_N=80``
+    # 渲染。前端如要限制单次成本可显式传，但默认值绝不再写 5（用户 2026-05-28 反馈
+    # "你的方案能覆盖的文件太少了"，新规格不能被 API 默认值悄悄覆盖）。
+    rag_top_k: int | None = None
     web_top_n: int = 5
+    # 用户 2026-05-28：用户输入默认 = 问 echo，要带上下文（当前会议/最近 ambient）。
+    # 前端把最近的转录拼成可读字符串塞进来，retrieve_and_answer 会把它作为
+    # 额外证据块附加到 prompt，让 Echo 答题时能感知到"我们刚才在聊什么"。
+    inline_context: str | None = None
 
 
 @router.post("/rag/ingest")
@@ -160,8 +167,9 @@ async def rag_ask(
         rag=rag,
         web=web,
         question=body.question,
-        rag_top_k=body.rag_top_k,
+        rag_top_k=body.rag_top_k if body.rag_top_k is not None else _DEFAULT_RAG_TOP_K,
         web_top_n=body.web_top_n,
+        inline_context=body.inline_context,
     )
     retrieval_meta = json.dumps(
         {

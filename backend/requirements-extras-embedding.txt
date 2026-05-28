@@ -1,0 +1,19 @@
+# Dense embedding 通道可选依赖（2026-05-28 spike 落地）
+#
+# 默认 requirements.txt 不含这些重包：torch + transformers + tokenizers 总
+# 大小约 1.5 GB，平时纯 BM25 链路用不到。需要本地 bge-m3 主路时，单独装：
+#
+#   pip install -r backend/requirements-extras-embedding.txt
+#
+# 未装情况下：`BgeM3LocalEmbedding` import 即抛 ImportError，
+# `adapters/embedding/__init__.py` 捕获后将其设为 None，
+# `EmbeddingRouter` 自动只走 fallback (`YunwuOpenAIEmbedding`)。
+
+# sentence-transformers 自动拉 torch/transformers/tokenizers
+sentence-transformers>=3.0,<4.0
+
+# ANN 索引：bge-m3 dense 通道用 hnswlib（pure-C wheel，Apple Silicon 友好）
+hnswlib>=0.8,<1.0
+
+# bge-m3 三向量（dense + sparse + ColBERT）原生支持；HybridRag 中期 PR 启用
+FlagEmbedding>=1.3,<2.0

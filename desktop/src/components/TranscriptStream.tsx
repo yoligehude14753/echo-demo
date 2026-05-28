@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listRecentAmbient, type AmbientSegment } from "@/api";
-import { useStore } from "@/store";
+import { Loader2, Pencil } from "lucide-react";
+import { Tooltip, message } from "antd";
+import { listRecentAmbient, renameSpeaker, type AmbientSegment } from "@/api";
+import { useStore, type ConversationEvent } from "@/store";
 import type { TranscriptSegment } from "@/types";
 import {
   buildSpeakerDisplayMap,
@@ -18,7 +20,7 @@ function fmtClockShort(iso: string): string {
  * 转写流主面板（v2 气泡布局，参考 Marvis 简化）。
  *
  * 数据源切换（P4 M_meeting_history，2026-05-28）：
- * - currentMeetingId === null（"待机时段"）→ 显示全局 ambient feed（3s 轮询）
+ * - currentMeetingId === null（"伴随时段"）→ 显示全局 ambient feed（3s 轮询）
  * - currentMeetingId 已选 + 会议 ended/finalized → 显示 meeting.segments（DB 历史）
  * - currentMeetingId 已选 + 会议 in_meeting → 显示 ambient + 时间窗高亮（兼容当前
  *   ambient pipeline：会议中 chunk 既写 ambient_segments 也走 meeting overlay；
@@ -38,6 +40,34 @@ interface DisplaySegment {
   text: string;
   captured_at: string;
   speaker_label: string | null;
+  // 用户 2026-05-28：speaker_id 沿着 STT → ambient/meeting → display 一路带下来
+  // 让 speaker_tag 点击改名时知道改的是哪个全局 ID（rename API 需要）。
+  speaker_id?: string | null;
+  /**
+   * 用户 2026-05-28 反馈：CommandBar 输入要进转写流（右），Echo / RAG 回复
+   * 要在转写流（左）。同源合并：所有 conversation events 转成 DisplaySegment，
+   * convKind 决定渲染样式：
+   *   - user_command → 右侧 + 紫色 "用户" 头像（2026-05-28：原来叫"我"，改"用户"）
+   *   - assistant_reply → 左侧 + Echo "E" 头像 + 高亮气泡
+   *   - rag_answer → 左侧 + Echo "E" 头像 + 引用列表
+   * undefined → STT 真实 segment（保持原路径）
+   */
+  convKind?: ConversationEvent["kind"];
+  convStatus?: ConversationEvent["status"];
+  convCitations?: ConversationEvent["citations"];
+  convId?: string;
+}
+
+function convToDisplay(ev: ConversationEvent): DisplaySegment {
+  return {
+    text: ev.text,
+    captured_at: ev.ts,
+    speaker_label: null,
+    convKind: ev.kind,
+    convStatus: ev.status,
+    convCitations: ev.citations,
+    convId: ev.id,
+  };
 }
 
 function ambientToDisplay(s: AmbientSegment): DisplaySegment {
@@ -45,6 +75,7 @@ function ambientToDisplay(s: AmbientSegment): DisplaySegment {
     text: s.text,
     captured_at: s.captured_at,
     speaker_label: s.speaker_label,
+    speaker_id: s.speaker_id,
   };
 }
 
@@ -63,6 +94,7 @@ function meetingSegmentToDisplay(
     text: s.text,
     captured_at: captured,
     speaker_label: s.speaker_label ?? null,
+    speaker_id: s.speaker_id ?? null,
   };
 }
 
@@ -76,6 +108,14 @@ export default function TranscriptStream(): JSX.Element {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickyToBottomRef = useRef(true);
 
+  // 用户 2026-05-28：所有 speaker label 可改名。
+  // 本地 overrides 优先：刚改完不等 ws 事件就能显示新名字；同时立刻 POST /speakers/{id}/rename
+  // 持久化到 repo（label_user_set=1），下次同声纹再来或重启后能识别。
+  // key = speaker_id（全局唯一），value = 用户起的名字
+  const [speakerOverrides, setSpeakerOverrides] = useState<
+    Record<string, string>
+  >({});
+
   // 是否走"会议历史"分支：会议已选 + 已结束（ended/finalized 等）+ 有 segments
   // 进行中会议仍走 ambient 分支保持实时性（ambient 是 chunk 写入的最近 100 条）
   const showMeetingHistory =
@@ -84,14 +124,24 @@ export default function TranscriptStream(): JSX.Element {
     meeting.state === "ended" &&
     meeting.segments.length > 0;
 
+  const conversationEvents = useStore((s) => s.conversationEvents);
+
+  // 合并 STT segments + 人机对话事件，按 ts 升序排
   const segs: DisplaySegment[] = useMemo(() => {
-    if (showMeetingHistory && meeting) {
-      return meeting.segments.map((s) =>
-        meetingSegmentToDisplay(s, meeting.started_at),
-      );
-    }
-    return ambient.map(ambientToDisplay);
-  }, [showMeetingHistory, meeting, ambient]);
+    const base: DisplaySegment[] =
+      showMeetingHistory && meeting
+        ? meeting.segments.map((s) =>
+            meetingSegmentToDisplay(s, meeting.started_at),
+          )
+        : ambient.map(ambientToDisplay);
+    if (conversationEvents.length === 0) return base;
+    const convs = conversationEvents.map(convToDisplay);
+    const merged = [...base, ...convs];
+    merged.sort((a, b) =>
+      new Date(a.captured_at).getTime() - new Date(b.captured_at).getTime(),
+    );
+    return merged;
+  }, [showMeetingHistory, meeting, ambient, conversationEvents]);
 
   const speakerDisplayMap = useMemo(
     () => buildSpeakerDisplayMap(segs),
@@ -186,13 +236,6 @@ export default function TranscriptStream(): JSX.Element {
     );
   }
 
-  const headerLine = showMeetingHistory
-    ? `历史会议 · ${meeting?.title || currentMeetingId} · ${segs.length} 段`
-    : `ambient 持续转写 · ${segs.length} 条 · 每 3s 刷新`;
-  const headerDot = showMeetingHistory
-    ? "bg-ink-400"
-    : "bg-emerald-500 animate-pulse";
-
   return (
     <div
       ref={scrollerRef}
@@ -201,40 +244,67 @@ export default function TranscriptStream(): JSX.Element {
       data-mode={showMeetingHistory ? "meeting-history" : "ambient"}
     >
       <div className="max-w-3xl mx-auto">
-        <div className="text-[11px] text-ink-400 mb-3 px-1 flex items-center gap-2 sticky top-0 bg-paper-50/90 backdrop-blur-sm py-1 z-10">
-          <span className={`w-1.5 h-1.5 rounded-full ${headerDot}`} />
-          <span>{headerLine}</span>
-          {!showMeetingHistory && meeting && (
-            <span className="ml-auto text-[10px] text-ink-500">
-              高亮：{meeting.title || currentMeetingId} 时间窗
-            </span>
-          )}
-        </div>
         {segs.map((s, idx) => {
-          const displayIdx = s.speaker_label
+          const isUserCmd = s.convKind === "user_command";
+          const isEchoReply =
+            s.convKind === "assistant_reply" || s.convKind === "rag_answer";
+          const isConv = isUserCmd || isEchoReply;
+
+          const displayIdx = !isConv && s.speaker_label
             ? (speakerDisplayMap.get(s.speaker_label) ?? 0)
             : 0;
-          const c = colorForDisplayIdx(displayIdx);
+          const c = isConv
+            // 人机对话用专属配色：用户=蓝、Echo=紫
+            ? isUserCmd
+              ? { fg: "#1d4ed8", bg: "#dbeafe", ring: "#93c5fd" }
+              : { fg: "#7c3aed", bg: "#ede9fe", ring: "#c4b5fd" }
+            : colorForDisplayIdx(displayIdx);
           const t = new Date(s.captured_at).getTime();
           const inWindow =
+            !isConv &&
             winStart !== null &&
             t >= winStart &&
             (winEnd === null || t <= winEnd);
 
-          // 当前后端没有标 self 的字段 → 全部 ambient 一律视作"他人"靠左
-          // 未来若 segment.speaker_id === 用户自己的 voiceprint，把这里改成 true
-          const isSelf = false;
+          // 用户命令 → 右侧；Echo 回复 / STT 转写 → 左侧
+          const isSelf = isUserCmd;
 
-          // 连续同说话人合并：只在第一条显示头像，气泡间距收紧
+          // 同源合并：上一条是相同 speaker / 同种 conv kind 才合并头像
           const prev = idx > 0 ? segs[idx - 1] : null;
-          const sameSpeakerAsPrev =
-            prev !== null && prev.speaker_label === s.speaker_label;
+          const sameSpeakerAsPrev = isConv
+            ? prev !== null && prev.convKind === s.convKind
+            : prev !== null &&
+              !prev.convKind &&
+              prev.speaker_label === s.speaker_label;
 
           const containerSpacing = sameSpeakerAsPrev ? "mt-1" : "mt-4";
-          const displayLabel =
-            displayIdx > 0 ? `说话人 ${displayIdx}` : "未识别";
 
-          // 头像：32px 圆形，背景柔色 + 同色边框，居中数字
+          // 用户起的名字（本地 override 或来自 backend label）优先于「说话人 N」
+          // 即使没有 speaker_id（旧 ambient 记录）也按 speaker_label 兜底匹配
+          const sttUserName =
+            (s.speaker_id && speakerOverrides[s.speaker_id]) || null;
+
+          const displayLabel = isUserCmd
+            // 用户 2026-05-28："我" → "用户"，"用户"语义更对称
+            ? "用户"
+            : isEchoReply
+              ? "Echo"
+              : sttUserName
+                ? sttUserName
+                : displayIdx > 0
+                  ? `说话人 ${displayIdx}`
+                  : "未识别";
+
+          const avatarLetter = isUserCmd
+            // 用户头像同样 "我" → "用"
+            ? "用"
+            : isEchoReply
+              ? "E"
+              : sttUserName
+                ? sttUserName.slice(0, 1)
+                : displayIdx > 0
+                  ? String(displayIdx)
+                  : "?";
           const avatar = (
             <div
               className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none"
@@ -244,18 +314,54 @@ export default function TranscriptStream(): JSX.Element {
                 boxShadow: `inset 0 0 0 1px ${c.ring}`,
               }}
               title={
-                s.speaker_label
-                  ? `${displayLabel}（全局编号 ${s.speaker_label}）`
-                  : "未识别说话人"
+                isConv
+                  ? displayLabel
+                  : s.speaker_label
+                    ? `${displayLabel}（全局编号 ${s.speaker_label}）`
+                    : "未识别说话人"
               }
-              data-testid="speaker-avatar"
+              data-testid={
+                isConv ? `conv-avatar-${s.convKind}` : "speaker-avatar"
+              }
             >
-              {displayIdx > 0 ? displayIdx : "?"}
+              {avatarLetter}
             </div>
           );
           const avatarSpacer = (
             <div className="shrink-0 w-8 h-8" aria-hidden="true" />
           );
+
+          // STT 说话人可改名（user_command / echo_reply 不需改）
+          const canRename = !isConv && Boolean(s.speaker_id);
+          const handleRenameClick = (): void => {
+            if (!s.speaker_id) return;
+            const next = window.prompt(
+              `给 ${displayLabel} 起个名字（如：陈志鹏）：`,
+              sttUserName ?? "",
+            );
+            if (next === null) return;
+            const trimmed = next.trim();
+            if (!trimmed) return;
+            // 本地 override 立刻生效，避免等 ws
+            setSpeakerOverrides((prev) => ({
+              ...prev,
+              [s.speaker_id as string]: trimmed,
+            }));
+            void renameSpeaker(s.speaker_id, trimmed)
+              .then(() => {
+                message.success(`已重命名为「${trimmed}」`);
+              })
+              .catch((e: unknown) => {
+                const msg = e instanceof Error ? e.message : String(e);
+                message.error(`改名失败：${msg}`);
+                // 回滚 override
+                setSpeakerOverrides((prev) => {
+                  const rest = { ...prev };
+                  delete rest[s.speaker_id as string];
+                  return rest;
+                });
+              });
+          };
 
           return (
             <div
@@ -273,28 +379,88 @@ export default function TranscriptStream(): JSX.Element {
               >
                 {!sameSpeakerAsPrev && (
                   <div
-                    className={`text-[11px] mb-0.5 px-1 ${
-                      isSelf ? "text-right" : "text-left"
+                    className={`text-[11px] mb-0.5 px-1 inline-flex items-center gap-1 ${
+                      isSelf ? "text-right justify-end" : "text-left"
                     }`}
                     style={{ color: c.fg }}
                     data-testid="speaker-tag"
                   >
-                    {displayLabel}
+                    <span>{displayLabel}</span>
+                    {canRename && (
+                      <Tooltip
+                        title={
+                          sttUserName
+                            ? "改名（声纹将永久关联此名字）"
+                            : "起个名字（声纹将永久关联此名字）"
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={handleRenameClick}
+                          className="opacity-0 group-hover:opacity-70 hover:!opacity-100 transition cursor-pointer"
+                          aria-label="重命名说话人"
+                          data-testid="speaker-rename-btn"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      </Tooltip>
+                    )}
                   </div>
                 )}
                 <div
-                  className={`relative text-[14px] leading-6 px-3.5 py-2 rounded-2xl shadow-sm border break-words ${
+                  className={`relative text-[14px] leading-6 px-3.5 py-2 rounded-2xl shadow-sm border break-words whitespace-pre-wrap ${
                     inWindow
                       ? "border-amber-300/70 ring-1 ring-amber-200/60"
                       : "border-paper-300"
                   } ${
-                    isSelf
-                      ? "bg-blue-500 text-white border-blue-500"
-                      : "bg-white text-ink-800"
+                    isUserCmd
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : isEchoReply
+                        ? `bg-violet-50 text-ink-900 border-violet-200${
+                            s.convStatus === "pending"
+                              ? " animate-pulse"
+                              : ""
+                          }`
+                        : "bg-white text-ink-800"
                   }`}
+                  data-testid={
+                    isConv ? `conv-bubble-${s.convKind}` : "transcript-bubble"
+                  }
                 >
+                  {/* P4-fix（2026-05-28）：loading spinner 只在 Echo 回复气泡且 pending 时显示。
+                      流式 skill / artifact 阶段（2026-05-28 升级）：pending 时 text 持续
+                      被 SSE 进度事件 patch（如「准备 prompt 中…」「已收到 N 字符…」），
+                      所以 spinner 改成 text 前方的小图标位（不再 trailing"思考中…"），
+                      让用户感知"过程性内容在持续刷新"。text 为空时回退老版"思考中"提示。 */}
+                  {isEchoReply && s.convStatus === "pending" && s.text ? (
+                    <Loader2
+                      className="inline w-3 h-3 animate-spin -mt-0.5 mr-1.5 text-violet-600"
+                      aria-label="生成中"
+                    />
+                  ) : null}
                   {s.text}
-                  {/* hover 时显示时间（仅 HH:MM） */}
+                  {isEchoReply && s.convStatus === "pending" && !s.text && (
+                    <span className="inline-flex items-center gap-1 text-[11px] opacity-80">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Echo 思考中…
+                    </span>
+                  )}
+                  {s.convKind === "rag_answer" &&
+                    s.convCitations &&
+                    s.convCitations.length > 0 && (
+                      <div className="mt-1.5 pt-1.5 border-t border-violet-200/60 text-[10.5px] text-ink-500 flex flex-wrap gap-x-2 gap-y-0.5">
+                        引用：
+                        {s.convCitations.slice(0, 5).map((cit) => (
+                          <span
+                            key={cit.chunk_id ?? cit.doc_id}
+                            className="font-mono"
+                            title={cit.chunk_id ?? cit.doc_id}
+                          >
+                            {cit.doc_id.slice(0, 24)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   <span
                     className={`absolute top-1/2 -translate-y-1/2 text-[10px] text-ink-400 font-mono opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap select-none ${
                       isSelf ? "right-full mr-2" : "left-full ml-2"

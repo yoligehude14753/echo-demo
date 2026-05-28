@@ -217,6 +217,13 @@ class Settings(BaseSettings):
     # - 1500ms 跟 spk-6 的 diarizer_min_voiced_seconds_for_new_profile=2.0 协同：
     #   < 2.0 active_s 不允许注册新人，但 < 1.5s 干脆别 embed 直接归并。
     diarizer_short_segment_continuity_ms: int = 1500
+    # 用户 2026-05-28 截图反馈：ambient 模式下长时间运行 → 屏幕显示"说话人 11/19"
+    # 但实际只有 3 个人。根因：ambient 进程内 _counter 无上限，每次匹配失败就 +1。
+    # 修法：ambient context 内 active speakers 数到达此 cap 后，新声音强制 reuse
+    # active list 里 best_sim 最高的现有 ID，绝不分配 speaker_N+1。
+    # - meeting context 不受此 cap 约束（meeting 内人数明确，cap 反而把不同人挤一起）
+    # - 6 来源：典型小会 3-4 人 + 2 路 buffer 给 ECAPA 误判；用户可调
+    diarizer_ambient_max_speakers: int = 6
 
     # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
     # 对齐基线：echo `backend/app/pipeline.py:570-577`（生产值 600 / 400 / 0.05 / 12）。
@@ -249,24 +256,59 @@ class Settings(BaseSettings):
     automeet_min_distinct_speakers: int = 2
     automeet_min_active_seconds: float = 6.0
     # 静默 X 秒 → 自动 end（含 finalize 纪要）
-    automeet_silence_timeout_s: float = 30.0
+    # 用户 2026-05-28 反馈："会议结束同理，宁可覆盖更大的范围"。end 端的 grace
+    # 实际由 silence_timeout 提供：detector 判定 end 时点 = 真实结束 + 此值，
+    # 期间若有零星 chunk 仍走 ambient → meeting overlay。30s 偏紧（思考停顿
+    # 经常 20-25s），调到 45s 给 trailing tail 更多空间。
+    automeet_silence_timeout_s: float = 45.0
     # 自动结束后多久内不再触发新会议（防抖）
     automeet_cooldown_s: float = 60.0
     # 单个 auto-meeting 的硬上限（兜底）：超过 X 秒一律 force-end，
     # 防止持续环境音 / 单人独白让会议永不结束（2026-05 「会议中 9h+」bug 的结构性修复）。
     # hydrate 也会用这个值清理跨重启遗留的过期 auto-meeting。
     automeet_max_meeting_duration_s: float = 1800.0
+    # 检测到 auto-start 时回溯多久的 ambient 倒灌进 meeting_segments：
+    # detector 需要 ≥6s 累计语音 + 30s 滑窗才触发，触发时刻已经晚于真实
+    # 会议开始 6-30s（甚至更多，若开头说话间断）。用户 2026-05-28 反馈：
+    # 「自动识别到会议开始就得往前覆盖前面的连续对话，宁可覆盖大不要覆盖小」。
+    # 默认 90s：把检测延迟 + 开头几句铺垫一并卷进 meeting_segments。
+    automeet_backfill_window_s: float = 90.0
 
     # ── RAG ───────────────────────────────────────────────────────
     rag_index_dir: Path = Field(default=Path("~/.echodesk/rag_index").expanduser())
-    rag_top_k: int = 5
+    # 2026-05-28: 用户原话"你的方案能覆盖的文件太少了，起码 1000 对话 + 100 文件"。
+    # 把 BM25 adapter 全局默认拉到 1000；retrieve_and_answer use case 用
+    # _DEFAULT_RAG_TOP_K=1000 也是这个数。前端如要限单次成本可显式 override。
+    rag_top_k: int = 1000
     rag_pdf_chunk_tokens: int = 600
     rag_pdf_chunk_overlap: int = 100
+
+    # ── Embedding（dense retrieval 通道；2026-05-28 spike） ─────────
+    # 见 docs/rag_embedding_spike_2026-05-28.md。主路本地 bge-m3，fallback
+    # 云雾 text-embedding-3-large。本期默认 disabled —— HybridRag 中期 4 个
+    # PR 落地后才打开（短期 BM25-only 已经够用）；提前把 settings/Port/adapter
+    # 落地是为了：
+    #   1) 不让 HybridRag PR 一次性吞掉 ~600 行新增（降低 review 风险）
+    #   2) CI/eval 脚本可独立校验 embedding 通道健康度
+    embedding_enabled: bool = False
+    embedding_main_provider: str = "bge_m3_local"  # bge_m3_local / yunwu
+    embedding_fallback_provider: str = "yunwu"
+    embedding_yunwu_model: str = "text-embedding-3-large"  # 3072d，质量高
+    embedding_bge_m3_model_id: str = "BAAI/bge-m3"
+    embedding_bge_m3_device: str = "cpu"  # mps 偶发 segfault，spike §5.3 风险 #2
+    embedding_bge_m3_cache_dir: Path | None = (
+        None  # None = sentence-transformers 默认 ~/.cache/huggingface
+    )
+    embedding_batch_size: int = 32  # spike §2.2 sweet spot
+    embedding_timeout_s: float = 60.0
 
     # ── 授权工作区（M6：用户配置可索引的目录范围） ────────────
     # 多个目录用逗号分隔，例如 ECHO_WORKSPACE_DIRS=~/Documents/work,~/Notes
     workspace_dirs: str = ""
-    workspace_max_file_mb: float = 20.0
+    # 用户 2026-05-28 实测：heyibalabala 文件夹 8 PDF 中 2 个 > 20MB 被静默跳过。
+    # 大型行业报告 / 案例集 PDF 常 30-80MB，20MB cap 现实里过紧。提到 100MB
+    # 兼顾常见知识库文件。超过 100MB 的极端文件仍跳过（防 markitdown OOM）。
+    workspace_max_file_mb: float = 100.0
     workspace_scan_on_startup: bool = True
     workspace_state_file: Path = Field(
         default=Path("~/.echodesk/workspace_state.json").expanduser()
@@ -295,7 +337,12 @@ class Settings(BaseSettings):
     skill_node_bin: str = "node"
     skill_executor_build_dir: Path = Field(default=Path("~/.echodesk/skill_build").expanduser())
     skill_executor_timeout_s: int = 300
-    skill_executor_max_tokens: int = 80_000
+    # HTML one-pager 实际 8-10k chars（≈ 4-5k tokens），PPT 27 字段 JSON 约 3-4k tokens。
+    # 80_000 上限会让 yunwu/MiniMax-M2.7 倾向于"使劲生成"，常拉到 5min+ 触发 wall-clock
+    # timeout（参见 ~/.echodesk/logs/runtime.log:7301 `html one-pager 失败，降级 legacy`
+    # 和 :8052 `POST /artifacts/generate 502 Bad Gateway`）。压到 12k 既够 one-pager
+    # 用、又把单次生成时长拉回 60-120s 量级。
+    skill_executor_max_tokens: int = 12_000
 
     # ── phase4-doc-skills：HTML/PPT 高质量 skill 灰度开关 ───────────
     # 默认 false：HTML 走 Kami warm-parchment one-pager；PPT 走 ib_master 14 页

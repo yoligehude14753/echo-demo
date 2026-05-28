@@ -59,9 +59,10 @@ class FakeLLM:
             latency_ms=12.0,
         )
 
-    async def chat_stream(self, _messages: list[ChatMessage], **_: Any):  # type: ignore[no-untyped-def]
-        raise NotImplementedError
-        yield  # pragma: no cover
+    async def chat_stream(self, messages: list[ChatMessage], **_: Any):  # type: ignore[no-untyped-def]
+        # 2026-05-28: skill._call_llm 改走 chat_stream；mock 单 chunk 返回 self.content。
+        self.last_messages = list(messages)
+        yield self.content
 
 
 def _settings(tmp_path: Path, *, use_legacy_html_pptx: bool = False) -> Settings:
@@ -210,27 +211,47 @@ async def test_html_one_pager_strips_prose_around_doctype(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_html_one_pager_rgba_invariant_raises(tmp_path: Path) -> None:
+async def test_html_one_pager_rgba_invariant_falls_back_to_legacy(tmp_path: Path) -> None:
+    """用户 2026-05-28：one-pager invariant 违反不再 400，自动降级 legacy 拿产物。
+
+    rgba 违反 → SkillError → catch → ``_generate_via_default_pipeline`` → 用同一
+    LLM 输出走 legacy 路径写盘，返回带 ``legacy_pipeline=true`` 的 artifact。
+    """
     skill = SkillExecutor(_settings(tmp_path))
     bad_html = _make_valid_kami_html().replace(
         "background:#f5f4ed", "background:rgba(245,244,237,1)"
     )
     llm = FakeLLM(bad_html)
-    with pytest.raises(SkillError, match="invariant"):
-        await skill.generate(llm=llm, artifact_type="html", brief="x")
+    art = await skill.generate(llm=llm, artifact_type="html", brief="x")
+    assert art.artifact_type == "html"
+    assert art.metadata.get("legacy_pipeline") == "true"
+    saved = Path(art.file_path).read_text(encoding="utf-8")
+    # legacy pipeline 不做 invariant 校验，保留原始（含 rgba）HTML
+    assert "rgba(245,244,237,1)" in saved
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_html_one_pager_katakana_raises(tmp_path: Path) -> None:
-    """日文片假名嵌在 <body> 内部（不是 </html> 后面）才会被 invariants 检测到——
-    `_extract_html_document` 会先收敛到 <!doctype...</html> 范围。
-    """
+async def test_html_one_pager_katakana_falls_back_to_legacy(tmp_path: Path) -> None:
+    """日文片假名同样降级 legacy 而不是 400。"""
     skill = SkillExecutor(_settings(tmp_path))
     bad_html = _make_valid_kami_html().replace("</body>", "<p>ワークロード</p></body>")
     llm = FakeLLM(bad_html)
-    with pytest.raises(SkillError, match="invariant"):
-        await skill.generate(llm=llm, artifact_type="html", brief="x")
+    art = await skill.generate(llm=llm, artifact_type="html", brief="x")
+    assert art.artifact_type == "html"
+    assert art.metadata.get("legacy_pipeline") == "true"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_html_one_pager_invariants_unit_function() -> None:
+    """``_check_html_one_pager_invariants`` 仍然作为独立函数报违规，
+    供 legacy fallback 之外的诊断 / 测试使用。"""
+    rgba_html = _make_valid_kami_html().replace(
+        "background:#f5f4ed", "background:rgba(245,244,237,1)"
+    )
+    violations = _check_html_one_pager_invariants(rgba_html)
+    assert any("rgba" in v for v in violations)
 
 
 @pytest.mark.asyncio

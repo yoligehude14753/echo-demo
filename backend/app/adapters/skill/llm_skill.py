@@ -18,17 +18,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
+import logging
 import re
 import shutil
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Final
 
+from app.adapters.llm.openai_compatible import LLMError
 from app.adapters.skill.node_executor import exec_node_to_artifact
 from app.adapters.skill.prompts import get_skill_prompt
 from app.adapters.skill.python_executor import (
@@ -40,6 +43,9 @@ from app.config import Settings
 from app.ports.llm import LLMPort
 from app.schemas.artifact import SUPPORTED_KINDS, GeneratedArtifact, normalize_kind
 from app.schemas.llm import ChatMessage
+from app.schemas.skill_progress import SkillProgress
+
+logger = logging.getLogger("echodesk.skill")
 
 _CANONICAL_EXT: Final[dict[str, str]] = {
     "pptx": "pptx",
@@ -50,6 +56,18 @@ _CANONICAL_EXT: Final[dict[str, str]] = {
     "pdf": "pdf",
     "txt": "txt",
 }
+
+# skill LLM 流式生成：连续 ``_STREAM_IDLE_TIMEOUT_S`` 秒没新 token 才判定为 stall。
+# 不设 wall-clock 总时长——HTML one-pager / xlsx 长输出经常 8-15min，只要 LLM
+# 还在吐 token 就一直接（用户原话 "只怕效率没打满，质量没打满"）。
+_STREAM_IDLE_TIMEOUT_S: Final[float] = 90.0
+# 建 SSE 连接的最长等待。给 1800s 是因为云雾偶发"连接建好但前 5min 没首 token"
+# 的状况；首 token 到达后 idle window 接管,与此值无关。
+_STREAM_CONNECT_TIMEOUT_S: Final[float] = 1800.0
+# 每累积 N chars yield 一次 ``llm_chunk`` SkillProgress 事件。
+# 太小（每个 token 一推）→ 前端 patchAssistantReply 太密导致 React 重渲染卡；
+# 太大（>1k）→ 用户感知不到进度。200 chars ≈ 80-120 汉字，对应每 1-3s 一推。
+_LLM_CHUNK_FLUSH_CHARS: Final[int] = 200
 
 # 项目内置的中文字体（PDF 生成依赖）：backend/app/adapters/skill/fonts/...
 _PDF_FONT_PATH: Final[Path] = Path(__file__).resolve().parent / "fonts" / "NotoSansSC-Regular.ttf"
@@ -275,15 +293,6 @@ def _parse_ib_deck_json(raw: str) -> dict[str, str]:
     raise SkillError(f"无法解析 ib_pptx JSON: {last_err}")
 
 
-@dataclass
-class _LLMOutput:
-    """LLM 一次 chat 调用的可观察结果（用于产物 metadata + 日志）。"""
-
-    content: str  # 已剥围栏的输出
-    model: str
-    latency_ms: float
-
-
 class SkillExecutor:
     """实现 ports.skill.SkillExecutorPort（7 产物生成 + 别名归一）。
 
@@ -312,6 +321,55 @@ class SkillExecutor:
         brief: str,
         extra_instructions: str | None = None,
     ) -> GeneratedArtifact:
+        """非流式入口（向后兼容）：消费 ``generate_stream`` 拿到 ``done`` 事件返回 artifact。
+
+        异常路径：``generate_stream`` 内部捕获 ``SkillError`` / ``LLMError`` 后会
+        yield 一条 ``stage="error"`` 进度事件再 re-raise，原始异常类型透传上来，
+        让 ``api/artifacts.py`` 仍能按 ``SkillError`` (400) / ``LLMError`` (502)
+        分流。
+        """
+        final: GeneratedArtifact | None = None
+        async for ev in self.generate_stream(
+            llm=llm,
+            artifact_type=artifact_type,
+            brief=brief,
+            extra_instructions=extra_instructions,
+        ):
+            if ev.stage == "done" and ev.artifact is not None:
+                final = ev.artifact
+        if final is None:
+            raise SkillError("generate_stream 完成但未产出 artifact（缺少 done 事件）")
+        return final
+
+    async def generate_stream(
+        self,
+        *,
+        llm: LLMPort,
+        artifact_type: str,
+        brief: str,
+        extra_instructions: str | None = None,
+    ) -> AsyncIterator[SkillProgress]:
+        """流式入口：yield 一系列 ``SkillProgress`` 事件，让前端能看到过程性内容。
+
+        阶段序列（happy path，HTML one-pager 为例）：
+
+        - ``prompt_build`` → 进入路由 / 准备 system prompt
+        - ``llm_stream_start`` → 即将调 LLM
+        - ``llm_chunk`` × N → LLM 每累积 200 chars 推一次（前端取尾部展示）
+        - ``llm_stream_done`` → LLM 全文已收到（``text`` 含完整内容）
+        - ``invariants_check`` → 校验 HTML / JSON
+        - ``executor_run`` → 调 node / python / 直接落盘
+        - ``saved`` → 产物已落盘
+        - ``done`` → 携带 ``GeneratedArtifact``
+
+        异常路径（``SkillError`` / ``LLMError``）：catch → yield ``stage="error"``
+        → re-raise（保留原始异常类型供上层 API 分流）。
+
+        Fallback：HTML one-pager 路径 ``SkillError`` 时（如 invariants 违反）自动
+        降级 legacy ``_generate_via_default_pipeline_stream``；fallback 事件流
+        与正常 happy path 同型，只是 ``done.artifact.metadata`` 会多
+        ``legacy_pipeline="true"`` + ``fallback_reason=...``。
+        """
         if artifact_type.lower().strip() not in SUPPORTED_KINDS:
             raise SkillError(
                 f"unsupported artifact_type: {artifact_type} (supported: {sorted(SUPPORTED_KINDS)})"
@@ -324,40 +382,77 @@ class SkillExecutor:
         build_dir = self._build_root / artifact_id
         build_dir.mkdir(parents=True, exist_ok=True)
 
-        # 高质量路径：默认 HTML 走 Kami one-pager；默认 PPT 走 ib_master JSON 渲染。
-        # use_legacy_html_pptx=True 时回滚到 _generate_via_default_pipeline。
-        if kind == "html" and not self._use_legacy_html_pptx:
-            return await self._generate_html_one_pager(
-                llm=llm,
-                brief=brief,
-                extra_instructions=extra_instructions,
-                artifact_id=artifact_id,
-                build_dir=build_dir,
-            )
-        if kind == "pptx" and not self._use_legacy_html_pptx:
-            return await self._generate_ib_pptx(
-                llm=llm,
-                brief=brief,
-                extra_instructions=extra_instructions,
-                artifact_id=artifact_id,
-                build_dir=build_dir,
-            )
-
-        return await self._generate_via_default_pipeline(
-            llm=llm,
-            kind=kind,
-            brief=brief,
-            extra_instructions=extra_instructions,
-            artifact_id=artifact_id,
-            build_dir=build_dir,
+        yield SkillProgress(
+            stage="prompt_build",
+            msg=f"准备 {kind} prompt 中…",
         )
+
+        try:
+            if kind == "html" and not self._use_legacy_html_pptx:
+                try:
+                    async for ev in self._generate_html_one_pager_stream(
+                        llm=llm,
+                        brief=brief,
+                        extra_instructions=extra_instructions,
+                        artifact_id=artifact_id,
+                        build_dir=build_dir,
+                    ):
+                        yield ev
+                    return
+                except SkillError as e:
+                    # 高质量 HTML invariants 违反 / 抽取失败 → 降级 legacy。
+                    # LLMError 不在此处 catch（LLM 不可达时 legacy 也会失败,直接外抛）。
+                    logger.warning(
+                        "html one-pager 失败，降级 legacy: %s (artifact_id=%s)",
+                        e,
+                        artifact_id,
+                    )
+                    yield SkillProgress(
+                        stage="prompt_build",
+                        msg=f"高质量 HTML 失败({e})，降级 legacy 流水线…",
+                    )
+                    async for ev in self._generate_via_default_pipeline_stream(
+                        llm=llm,
+                        kind=kind,
+                        brief=brief,
+                        extra_instructions=extra_instructions,
+                        artifact_id=artifact_id,
+                        build_dir=build_dir,
+                        legacy_fallback_reason=str(e),
+                    ):
+                        yield ev
+                    return
+            if kind == "pptx" and not self._use_legacy_html_pptx:
+                # PPT 不加 fallback：ib_deck JSON 字段校验失败常意味着 LLM 严重跑偏。
+                async for ev in self._generate_ib_pptx_stream(
+                    llm=llm,
+                    brief=brief,
+                    extra_instructions=extra_instructions,
+                    artifact_id=artifact_id,
+                    build_dir=build_dir,
+                ):
+                    yield ev
+                return
+
+            async for ev in self._generate_via_default_pipeline_stream(
+                llm=llm,
+                kind=kind,
+                brief=brief,
+                extra_instructions=extra_instructions,
+                artifact_id=artifact_id,
+                build_dir=build_dir,
+            ):
+                yield ev
+        except (SkillError, LLMError) as e:
+            yield SkillProgress(stage="error", error=str(e))
+            raise
 
     # ─────────────────────────────────────────────────────────────────────
     # 默认 / legacy 流水线：LLM → 剥围栏 → exec_for_kind → 产物
     # 用于 word / xlsx / markdown / txt / pdf；也作为 HTML/PPT 的 legacy 回滚。
     # ─────────────────────────────────────────────────────────────────────
 
-    async def _generate_via_default_pipeline(
+    async def _generate_via_default_pipeline_stream(
         self,
         *,
         llm: LLMPort,
@@ -366,12 +461,35 @@ class SkillExecutor:
         extra_instructions: str | None,
         artifact_id: str,
         build_dir: Path,
-    ) -> GeneratedArtifact:
-        sys_prompt = get_skill_prompt(kind, legacy=self._use_legacy_html_pptx)
-        llm_out = await self._call_llm(llm, sys_prompt, brief, extra_instructions)
-        code = _strip_code_fence(llm_out.content, text_mode=kind in _TEXT_KINDS)
+        legacy_fallback_reason: str | None = None,
+    ) -> AsyncIterator[SkillProgress]:
+        """Stream 版默认流水线。yield ``llm_stream_*`` + ``executor_run`` + ``saved`` + ``done``。
 
+        ``legacy_fallback_reason`` 非空时表示这是 HTML one-pager 失败后的降级路径，
+        会在 metadata 写 ``legacy_pipeline="true"`` + ``fallback_reason``。
+        """
+        sys_prompt = get_skill_prompt(kind, legacy=self._use_legacy_html_pptx)
+        yield SkillProgress(
+            stage="llm_stream_start",
+            msg=f"调用 {self._settings.llm_main_model}（{kind} 默认流水线）…",
+        )
+
+        llm_content = ""
+        llm_latency_ms = 0.0
+        async for ev in self._call_llm_stream(llm, sys_prompt, brief, extra_instructions):
+            yield ev
+            if ev.stage == "llm_stream_done":
+                llm_content = ev.text or ""
+                llm_latency_ms = ev.latency_ms or 0.0
+
+        code = _strip_code_fence(llm_content, text_mode=kind in _TEXT_KINDS)
         ext = _CANONICAL_EXT[kind]
+
+        yield SkillProgress(
+            stage="executor_run",
+            tool=_executor_tool_for_kind(kind),
+            msg=f"执行 {kind} 生成器（{_executor_tool_for_kind(kind)}）…",
+        )
         result = await self._exec_for_kind(kind, code, build_dir, ext)
         if not result.success or result.output_path is None:
             raise SkillError(f"skill {kind} execution failed: {result.stderr[:400]}")
@@ -380,11 +498,14 @@ class SkillExecutor:
         title = _make_title(brief)
         metadata: dict[str, str] = {
             "kind": kind,
-            "model": llm_out.model,
+            "model": self._settings.llm_main_model,
             "exec_elapsed_s": f"{result.elapsed_s:.2f}",
             "code_size": str(len(code)),
         }
-        if self._use_legacy_html_pptx and kind in {"html", "pptx"}:
+        if legacy_fallback_reason is not None:
+            metadata["legacy_pipeline"] = "true"
+            metadata["fallback_reason"] = legacy_fallback_reason[:200]
+        elif self._use_legacy_html_pptx and kind in {"html", "pptx"}:
             metadata["legacy_pipeline"] = "true"
 
         bag = code.lower()
@@ -410,23 +531,25 @@ class SkillExecutor:
 
         self._write_meta(build_dir, title=title, kind=kind, ext=ext)
 
-        return GeneratedArtifact(
+        artifact = GeneratedArtifact(
             artifact_id=artifact_id,
             artifact_type=kind,
             title=title,
             file_path=str(output_path),
             mime_type=_mime_for(ext),
             size_bytes=output_path.stat().st_size,
-            generation_latency_ms=llm_out.latency_ms + result.elapsed_s * 1000.0,
-            model=llm_out.model,
+            generation_latency_ms=llm_latency_ms + result.elapsed_s * 1000.0,
+            model=self._settings.llm_main_model,
             metadata=metadata,
         )
+        yield SkillProgress(stage="saved", msg=f"产物 {artifact_id} 已保存")
+        yield SkillProgress(stage="done", artifact=artifact)
 
     # ─────────────────────────────────────────────────────────────────────
     # phase4-doc-skills：HTML one-pager（Kami warm-parchment）
     # ─────────────────────────────────────────────────────────────────────
 
-    async def _generate_html_one_pager(
+    async def _generate_html_one_pager_stream(
         self,
         *,
         llm: LLMPort,
@@ -434,31 +557,50 @@ class SkillExecutor:
         extra_instructions: str | None,
         artifact_id: str,
         build_dir: Path,
-    ) -> GeneratedArtifact:
-        """LLM 直出 Kami warm-parchment 整篇 HTML，10 invariants 校验后落盘。
+    ) -> AsyncIterator[SkillProgress]:
+        """Stream 版 Kami one-pager 生成。yield ``llm_stream_*`` + ``invariants_check``
+        + ``executor_run`` + ``saved`` + ``done``。
 
         失败路径：
         - 含日文片假名 → ``SkillError("LLM 输出含日文片假名")``
-        - invariants 不满足（rgba / emoji / 没 #f5f4ed / SVG < 3 等）→ ``SkillError("invariant 违反: ...")``
+        - invariants 不满足（rgba / emoji / 没 #f5f4ed / SVG < 3 等）→ ``SkillError(...)``
 
-        失败信号交由上层（API / Workspace use_case）决定是重试还是降级回 legacy。
+        SkillError 由上层 ``generate_stream`` 捕获后走 legacy fallback。
         """
         sys_prompt = get_skill_prompt("html", legacy=False)
-        llm_out = await self._call_llm(llm, sys_prompt, brief, extra_instructions)
-        html = _strip_code_fence(llm_out.content, text_mode=True)
+        yield SkillProgress(
+            stage="llm_stream_start",
+            msg=f"调用 {self._settings.llm_main_model}（Kami one-pager）…",
+        )
+
+        llm_content = ""
+        llm_latency_ms = 0.0
+        async for ev in self._call_llm_stream(llm, sys_prompt, brief, extra_instructions):
+            yield ev
+            if ev.stage == "llm_stream_done":
+                llm_content = ev.text or ""
+                llm_latency_ms = ev.latency_ms or 0.0
+
+        yield SkillProgress(stage="invariants_check", msg="校验 HTML 10 invariants 中…")
+        html = _strip_code_fence(llm_content, text_mode=True)
         html = _extract_html_document(html)
 
         violations = _check_html_one_pager_invariants(html)
         if violations:
             raise SkillError(f"HTML one-pager invariant 违反: {'; '.join(violations[:3])}")
 
+        yield SkillProgress(
+            stage="executor_run",
+            tool="exec_text_to_file",
+            msg="写入 HTML 文件…",
+        )
         output_path = build_dir / "output.html"
         output_path.write_text(html, encoding="utf-8")
 
         title = _make_title(brief)
         metadata: dict[str, str] = {
             "kind": "html",
-            "model": llm_out.model,
+            "model": self._settings.llm_main_model,
             "exec_elapsed_s": "0.00",
             "code_size": str(len(html)),
             "skill_variant": "kami_one_pager",
@@ -468,23 +610,25 @@ class SkillExecutor:
         }
         self._write_meta(build_dir, title=title, kind="html", ext="html")
 
-        return GeneratedArtifact(
+        artifact = GeneratedArtifact(
             artifact_id=artifact_id,
             artifact_type="html",
             title=title,
             file_path=str(output_path),
             mime_type=_mime_for("html"),
             size_bytes=output_path.stat().st_size,
-            generation_latency_ms=llm_out.latency_ms,
-            model=llm_out.model,
+            generation_latency_ms=llm_latency_ms,
+            model=self._settings.llm_main_model,
             metadata=metadata,
         )
+        yield SkillProgress(stage="saved", msg=f"产物 {artifact_id} 已保存")
+        yield SkillProgress(stage="done", artifact=artifact)
 
     # ─────────────────────────────────────────────────────────────────────
     # phase4-doc-skills：14 页投行风 PPT（ib_master + docxtemplater）
     # ─────────────────────────────────────────────────────────────────────
 
-    async def _generate_ib_pptx(
+    async def _generate_ib_pptx_stream(
         self,
         *,
         llm: LLMPort,
@@ -492,15 +636,9 @@ class SkillExecutor:
         extra_instructions: str | None,
         artifact_id: str,
         build_dir: Path,
-    ) -> GeneratedArtifact:
-        """LLM 出 27 字段 JSON → ``node render.mjs ib_master.pptx data.json output.pptx``。
-
-        步骤：
-        1. 调 LLM 取 JSON 文本（system prompt = PPT_IB_DECK_SYSTEM）
-        2. 预检日文片假名（M2.7 偶发，必须拒绝；INTEGRATE_PROMPT 6.6）
-        3. 提取 + 解析 JSON，校验 27 个字段全部为非空 string
-        4. 写 data.json 到 build_dir，串行调 node render.mjs（不并发，避免 npm 锁）
-        5. 验证产物存在且 > 8KB，返回 GeneratedArtifact
+    ) -> AsyncIterator[SkillProgress]:
+        """Stream 版 14 页 ib_pptx 生成。yield ``llm_stream_*`` + ``invariants_check``
+        + ``executor_run`` (node render.mjs) + ``saved`` + ``done``。
         """
         if not _PPT_IB_MASTER.exists() or not _PPT_IB_RENDER_MJS.exists():
             raise SkillError(
@@ -510,9 +648,23 @@ class SkillExecutor:
             )
 
         sys_prompt = get_skill_prompt("pptx", legacy=False)
-        llm_out = await self._call_llm(llm, sys_prompt, brief, extra_instructions)
-        raw = llm_out.content
+        yield SkillProgress(
+            stage="llm_stream_start",
+            msg=f"调用 {self._settings.llm_main_model}（ib_pptx 27 字段 JSON）…",
+        )
 
+        raw = ""
+        llm_latency_ms = 0.0
+        async for ev in self._call_llm_stream(llm, sys_prompt, brief, extra_instructions):
+            yield ev
+            if ev.stage == "llm_stream_done":
+                raw = ev.text or ""
+                llm_latency_ms = ev.latency_ms or 0.0
+
+        yield SkillProgress(
+            stage="invariants_check",
+            msg="校验 27 字段 JSON / 片假名 / 字段完整性…",
+        )
         if _KATAKANA_RE.search(raw):
             raise SkillError(
                 "LLM 输出含日文片假名（M2.7 偶发），拒绝渲染；建议重试 "
@@ -530,6 +682,11 @@ class SkillExecutor:
             encoding="utf-8",
         )
 
+        yield SkillProgress(
+            stage="executor_run",
+            tool="node_render_mjs",
+            msg="渲染 14 页投行风 PPT（node render.mjs ib_master.pptx）…",
+        )
         output_path = build_dir / "output.pptx"
         render_result = await self._run_ib_render(
             data_path=data_path,
@@ -542,7 +699,7 @@ class SkillExecutor:
         title = _make_title(brief)
         metadata: dict[str, str] = {
             "kind": "pptx",
-            "model": llm_out.model,
+            "model": self._settings.llm_main_model,
             "exec_elapsed_s": f"{render_result.elapsed_s:.2f}",
             "skill_variant": "ib_deck_v3",
             "field_count": str(len(_PPT_IB_DECK_FIELDS)),
@@ -551,17 +708,19 @@ class SkillExecutor:
         }
         self._write_meta(build_dir, title=title, kind="pptx", ext="pptx")
 
-        return GeneratedArtifact(
+        artifact = GeneratedArtifact(
             artifact_id=artifact_id,
             artifact_type="pptx",
             title=title,
             file_path=str(output_path),
             mime_type=_mime_for("pptx"),
             size_bytes=output_path.stat().st_size,
-            generation_latency_ms=llm_out.latency_ms + render_result.elapsed_s * 1000.0,
-            model=llm_out.model,
+            generation_latency_ms=llm_latency_ms + render_result.elapsed_s * 1000.0,
+            model=self._settings.llm_main_model,
             metadata=metadata,
         )
+        yield SkillProgress(stage="saved", msg=f"产物 {artifact_id} 已保存")
+        yield SkillProgress(stage="done", artifact=artifact)
 
     async def _run_ib_render(
         self,
@@ -648,29 +807,93 @@ class SkillExecutor:
             elapsed_s=elapsed,
         )
 
-    async def _call_llm(
+    async def _call_llm_stream(
         self,
         llm: LLMPort,
         sys_prompt: str,
         brief: str,
         extra_instructions: str | None,
-    ) -> _LLMOutput:
+    ) -> AsyncIterator[SkillProgress]:
+        """流式调 LLM 并按 ~200 chars 节流推进度事件。
+
+        - 保留 ``_STREAM_IDLE_TIMEOUT_S`` 空闲检测（连续 90s 没新 chunk 才判 stall）
+        - 每累积 ``_LLM_CHUNK_FLUSH_CHARS`` 字符 yield 一次 ``stage="llm_chunk"``，
+          ``text`` 是「目前累积的全部内容」（前端只取尾部展示，避免拼接错位）
+        - 末尾 yield ``stage="llm_stream_done"``：``text`` 完整内容、``total_chars``、
+          ``latency_ms``。调用方据 done 事件取最终 content 进入后续阶段。
+
+        失败：``TimeoutError`` 转换为 ``LLMError``，由上层 ``generate_stream`` catch
+        → yield error → re-raise（保留 LLMError 类型给 api/artifacts.py 分流到 502）。
+
+        ── 为什么用流式 ─────────────────────────────────────────────────
+        skill 让 LLM 一次性产出 HTML one-pager（6000+ 字符 + 3 SVG）或
+        PPT 27 字段 JSON，yunwu/MiniMax-M2.7 上偶发 4-5 分钟才出完。
+        非流式 ``llm.chat(timeout_s=300)`` 把整个请求包在一个 wait_for
+        里 → 上游慢吐 token 也会被一刀切，前端拿到 ``timeout after 300s``。
+
+        改成 ``chat_stream`` + idle-timeout：只要 ``_STREAM_IDLE_TIMEOUT_S``
+        秒内还有新 chunk 进来就一直等，整体 wall-clock 上限 = ``_timeout_s``。
+        """
         user_msg = brief
         if extra_instructions:
             user_msg += "\n\n额外指令：\n" + extra_instructions
+        messages = [
+            ChatMessage(role="system", content=sys_prompt),
+            ChatMessage(role="user", content=user_msg),
+        ]
         t_start = time.monotonic()
-        resp = await llm.chat(
-            [
-                ChatMessage(role="system", content=sys_prompt),
-                ChatMessage(role="user", content=user_msg),
-            ],
+        chunks: list[str] = []
+        last_flush_total = 0
+        # chat_stream 内部仅用 timeout_s 限制 *建立 SSE 连接* 的最长等待；连接建好后
+        # 每个 chunk 由我们这里的 idle window 把守。给 chat_stream 一个**远大于
+        # ``self._timeout_s``** 的 connect timeout，避免长输出在快收完时被一刀切。
+        agen = llm.chat_stream(
+            messages,
             max_tokens=self._max_tokens,
             temperature=0.4,
-            timeout_s=self._timeout_s,
+            timeout_s=_STREAM_CONNECT_TIMEOUT_S,
         )
-        return _LLMOutput(
-            content=resp.content,
-            model=resp.model,
+        # ── 为什么没有 wall-clock 兜底 ────────────────────────────────────
+        # E2E 实测（2026-05-28 17:58）：MiniMax-M2.7 输出 ~25k chars 的 HTML
+        # one-pager 单次 wall-clock 已逼近 300s。HTML invariants 要求 ≥6000
+        # chars + ≥3 SVG，xlsx Python 代码块也常超 15k chars。用户原话：
+        # "只怕效率没打满，质量没打满"——意思是只要 LLM 还在吐 token 就让它
+        # 吐完，不要为了"看起来不卡"提前砍掉。idle window 已经足够区分
+        # "LLM 还在生成" vs "上游真挂了/被防火墙阻断"。
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(agen.__anext__(), timeout=_STREAM_IDLE_TIMEOUT_S)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as e:
+                    elapsed = time.monotonic() - t_start
+                    raise LLMError(
+                        f"{self._settings.llm_main_model} skill stream idle timeout"
+                        f" after {_STREAM_IDLE_TIMEOUT_S:.0f}s without new tokens"
+                        f" (received {sum(len(c) for c in chunks)} chars in"
+                        f" {elapsed:.0f}s before stall)"
+                    ) from e
+                chunks.append(chunk)
+                total = sum(len(c) for c in chunks)
+                if total - last_flush_total >= _LLM_CHUNK_FLUSH_CHARS:
+                    acc = "".join(chunks)
+                    yield SkillProgress(
+                        stage="llm_chunk",
+                        text=acc,
+                        total_chars=len(acc),
+                    )
+                    last_flush_total = total
+        finally:
+            close = getattr(agen, "aclose", None)
+            if close is not None:
+                with contextlib.suppress(Exception):
+                    await close()
+        content = "".join(chunks)
+        yield SkillProgress(
+            stage="llm_stream_done",
+            text=content,
+            total_chars=len(content),
             latency_ms=(time.monotonic() - t_start) * 1000.0,
         )
 
@@ -720,6 +943,20 @@ class SkillExecutor:
             (build_dir / "meta.json").write_text(
                 json.dumps(meta, ensure_ascii=False), encoding="utf-8"
             )
+
+
+def _executor_tool_for_kind(kind: str) -> str:
+    """返回 default pipeline 对应的执行器名（用于 ``SkillProgress.tool`` 字段）。
+
+    保持与 ``SkillExecutor._exec_for_kind`` 的路由一致：html/markdown/txt 走
+    ``exec_text_to_file``，pptx 走 ``exec_node_to_artifact``，其它走
+    ``exec_python_to_artifact``。
+    """
+    if kind in {"html", "markdown", "txt"}:
+        return "exec_text_to_file"
+    if kind == "pptx":
+        return "exec_node_to_artifact"
+    return "exec_python_to_artifact"
 
 
 def _mime_for(ext: str) -> str:
