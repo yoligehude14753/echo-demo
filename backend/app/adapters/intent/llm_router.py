@@ -72,7 +72,13 @@ class LLMIntentRouter:
         # 非 @ 开头直接走 chat（不调 LLM）
         at_token = parse_at_prefix(stripped)
         if at_token is None and not stripped.startswith("@"):
-            return IntentResult(kind="chat", confidence=1.0, rationale="无 @ 前缀")
+            # 这条是纯规则匹配路径，没有跑分类器；返回 confidence=None
+            # 让前端不渲染虚假的 "置信度 100%"（前端按 null 改成 "规则匹配"）。
+            return IntentResult(
+                kind="chat",
+                confidence=None,
+                rationale="无 @ 前缀（规则匹配）",
+            )
 
         # 关键字快速路由
         hit = keyword_route(stripped)
