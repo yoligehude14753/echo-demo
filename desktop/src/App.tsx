@@ -13,7 +13,6 @@ import TranscriptStream from "@/components/TranscriptStream";
 import ArtifactPanel from "@/components/ArtifactPanel";
 import MinutesView from "@/components/MinutesView";
 import CommandBar from "@/components/CommandBar";
-import CaptureStatus from "@/components/CaptureStatus";
 import MeetingStatusBar from "@/components/MeetingStatusBar";
 import WorkspaceBar from "@/components/WorkspaceBar";
 import StatusBar from "@/components/StatusBar";
@@ -32,7 +31,8 @@ const { Header, Sider, Content } = Layout;
 export default function App(): JSX.Element {
   useEchoWS();
   useMeetingHistory();
-  const captureStatus = useEchoCapture();
+  // 副作用保留：STT 熔断订阅 + /capture/stats 轮询；不再渲染 CaptureStatus chip。
+  useEchoCapture();
   const tts = useTtsPlayer();
   const connected = useStore((s) => s.connected);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
@@ -133,9 +133,6 @@ export default function App(): JSX.Element {
                   {currentMeetingId}
                 </span>
               )}
-              <div className="ml-auto">
-                <CaptureStatus status={captureStatus} />
-              </div>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
               <TranscriptStream />

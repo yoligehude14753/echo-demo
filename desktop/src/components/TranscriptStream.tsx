@@ -186,13 +186,6 @@ export default function TranscriptStream(): JSX.Element {
     );
   }
 
-  const headerLine = showMeetingHistory
-    ? `历史会议 · ${meeting?.title || currentMeetingId} · ${segs.length} 段`
-    : `ambient 持续转写 · ${segs.length} 条 · 每 3s 刷新`;
-  const headerDot = showMeetingHistory
-    ? "bg-ink-400"
-    : "bg-emerald-500 animate-pulse";
-
   return (
     <div
       ref={scrollerRef}
@@ -201,15 +194,6 @@ export default function TranscriptStream(): JSX.Element {
       data-mode={showMeetingHistory ? "meeting-history" : "ambient"}
     >
       <div className="max-w-3xl mx-auto">
-        <div className="text-[11px] text-ink-400 mb-3 px-1 flex items-center gap-2 sticky top-0 bg-paper-50/90 backdrop-blur-sm py-1 z-10">
-          <span className={`w-1.5 h-1.5 rounded-full ${headerDot}`} />
-          <span>{headerLine}</span>
-          {!showMeetingHistory && meeting && (
-            <span className="ml-auto text-[10px] text-ink-500">
-              高亮：{meeting.title || currentMeetingId} 时间窗
-            </span>
-          )}
-        </div>
         {segs.map((s, idx) => {
           const displayIdx = s.speaker_label
             ? (speakerDisplayMap.get(s.speaker_label) ?? 0)
