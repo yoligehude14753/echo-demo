@@ -1,5 +1,12 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
-const { app, BrowserWindow, shell, ipcMain, systemPreferences } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  dialog,
+  shell,
+  ipcMain,
+  systemPreferences,
+} = require("electron");
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
 const http = require("node:http");
@@ -546,6 +553,30 @@ ipcMain.handle("echo:open-artifact-in-system", async (_event, filePath) => {
     }
   } catch (e) {
     log(`[artifact] openPath failed (${filePath}): ${e?.message ?? e}`);
+    throw e instanceof Error ? e : new Error(String(e));
+  }
+});
+
+// P4-fix-rag-chat（2026-05-28）：让 SettingsPanel"工作区目录"section 能用系统
+// dialog 选目录，再 POST /workspace/add-dir 持久化 + 触发 scan。
+//
+// 安全：dialog 由 electron 主进程出，用户必须看到/点确认；返回 null 时表示
+// 用户取消，不写任何配置。失败 reject 让 renderer message.error。
+ipcMain.handle("workspace:pick-directory", async (_event, opts = {}) => {
+  const win = BrowserWindow.getFocusedWindow();
+  const defaultPath = typeof opts.defaultPath === "string" ? opts.defaultPath : os.homedir();
+  try {
+    const r = await dialog.showOpenDialog(win || undefined, {
+      title: "选择工作区目录（EchoDesk 会扫描索引整个文件夹）",
+      properties: ["openDirectory", "createDirectory"],
+      defaultPath,
+      message: "支持的文件：PDF / Word / Excel / PPT / Markdown / TXT / HTML / CSV 等",
+      buttonLabel: "选中此目录",
+    });
+    if (r.canceled || r.filePaths.length === 0) return null;
+    return r.filePaths[0];
+  } catch (e) {
+    log(`[workspace] pick-directory failed: ${e?.message ?? e}`);
     throw e instanceof Error ? e : new Error(String(e));
   }
 });

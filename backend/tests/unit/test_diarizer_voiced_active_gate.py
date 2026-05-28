@@ -32,9 +32,16 @@ def _silence_pcm(duration_ms: int) -> bytes:
 
 
 def _enabled(**kwargs) -> Settings:
+    """spk-3 短段门控测试：禁用 phase4-diar-deep 的短段归并 + 活跃层，
+    单独观察 voiced_active_s + outlier_threshold 组合的行为。
+    """
     base = {
         "diarizer_enabled": True,
         "diarizer_match_threshold": 0.65,
+        # 关闭 phase4-diar-deep 短段归并（让 < 1500ms 段继续走 outlier 路径）
+        "diarizer_short_segment_continuity_ms": 0,
+        # 关闭活跃层（让所有匹配都走全局严判）
+        "diarizer_active_match_threshold": 1.1,
     }
     base.update(kwargs)
     return Settings(**base)

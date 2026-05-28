@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # ── LLM 快速通道（Qwen3-1.7B on heyi-bj） ────────────────────
     llm_fast_provider: str = "heyi-local"
     llm_fast_model: str = "Qwen3-1.7B"
-    llm_fast_base_url: str = "http://100.87.251.9:7860/v1"
+    llm_fast_base_url: str = "https://llm-fast.yoliyoli.uk/v1"
     llm_local_api_key: str = "EMPTY"
     llm_fast_max_tokens: int = 512
 
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     # 选项老让人误判"换 backend 能修 X"）。详见 docs/ARCH-AUDIT.md §2。
     # 保留 stt_backend 字段供未来扩展（如本地化离线 STT）。
     stt_backend: str = "firered"
-    stt_firered_url: str = "http://100.87.251.9:8090"
+    stt_firered_url: str = "https://stt.yoliyoli.uk"
     stt_language: str = "zh"
     stt_llm_correct: bool = False
 
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     )
     # 兼容旧 env：TTS_COSYVOICE_URL / TTS_COSYVOICE_VOICE 仍能正确加载
     tts_qwen3_url: str = Field(
-        default="http://100.87.251.9:8094",
+        default="https://tts.yoliyoli.uk",
         validation_alias=AliasChoices(
             "tts_qwen3_url",
             "TTS_QWEN3_URL",
@@ -174,6 +174,39 @@ class Settings(BaseSettings):
     # 语义（短段更易回退到已知人，少新增碎片化 ID）；丢段会让 ambient text
     # 没 speaker_label，体验比"算作新人"更友好。
     diarizer_outlier_match_threshold: float = 0.50
+
+    # ── phase4-diar-deep：跨 chunk 活跃说话人 + 短段归并 ──────────
+    # 用户痛点（2026-05-28）：实际 3 个人说话，最近 2h `ambient_segments` 表里
+    # 出现 40+ unique speaker_id + 57 段 NULL（数据：2026-05-28 03:28 sqlite
+    # 查询）。sub_F 把 threshold 从 0.70 降到 0.55 没解决——根因不是阈值松紧，
+    # 是匹配空间被历史 stale centroid 污染：`_profiles` 通过 hydrate 把所有曾
+    # 注册过的 speaker_N 全部载入（哪怕是上次 explosion 的产物），新 embed 在
+    # 几十个 centroid 里挑 best，真实噪音让同一人跟自己 centroid 的 cos 落入
+    # 0.40-0.55 区间，而某个无关 stale centroid 恰好 0.50-0.65 → 错认 / 新建。
+    #
+    # 修法：每个 context（meeting_id 或 "_ambient"）维护「活跃说话人 list」+
+    # 时间窗口（默认 60s）。新段先在窗口内的活跃说话人里用宽松阈值（0.35）
+    # 找最近匹配 → 命中 / 复用 ID + EMA 更新；没命中再走全局 _profiles（保留
+    # 0.55 阈值不放宽，跨会话仍稳健）；仍没命中 + voiced active 够长才注册新人。
+    # 等同于"实时聚类"：人在说话的那一阵子，他自己的 centroid 持续被刷新，
+    # 后续段在 active list 里就是绝对的"最像自己"。
+    #
+    # 历史 stale centroid 仍在 _profiles 不被删，但**不参与活跃匹配**（除非
+    # 全局阶段命中，那就是用户真的回来说话了，应该复用历史 ID）。
+    diarizer_active_window_s: float = 60.0
+    # 活跃 list 内的匹配阈值（比 global 松，因为 active centroid 是"刚刚说过话
+    # 的人"，几乎只可能是同一人在抖动；0.35 ≈ ECAPA 上不同人 cos 大概率 < 0.2
+    # 的安全分隔点）。
+    diarizer_active_match_threshold: float = 0.35
+    # voiced 段短于此值（且 context 有 last_speaker）→ 不调 ECAPA，直接归到
+    # 上一 speaker。规避「短噪声段独立 embed → 不像任何人 → 新建」路径。
+    # 1500ms 选择理由：
+    # - audio_gate.split_into_voiced_segments 默认 min_segment_ms=800 已经把
+    #   < 800ms 的段在 VAD 阶段就过滤掉，**所以阈值必须 > 800 才有效**；
+    # - ECAPA `_MIN_BYTES_FOR_EMBED = 32_000`（1s），800-1000ms 段以前直接返 None；
+    # - 1500ms 跟 spk-6 的 diarizer_min_voiced_seconds_for_new_profile=2.0 协同：
+    #   < 2.0 active_s 不允许注册新人，但 < 1.5s 干脆别 embed 直接归并。
+    diarizer_short_segment_continuity_ms: int = 1500
 
     # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
     # 对齐基线：echo `backend/app/pipeline.py:570-577`（生产值 600 / 400 / 0.05 / 12）。

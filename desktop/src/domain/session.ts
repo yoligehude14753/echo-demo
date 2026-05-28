@@ -63,6 +63,8 @@ export interface CaptureStatsSnapshot {
   stt_empty: number;
   hallu_dropped: number;
   diarize_failed: number;
+  /** phase4-diar-deep：diarizer 正常跑但说不出（None）；与 failed 区分用于根因分布。 */
+  diarize_returned_none: number;
   stored: number;
   last_chunk_at: string | null;
   last_stored_at: string | null;

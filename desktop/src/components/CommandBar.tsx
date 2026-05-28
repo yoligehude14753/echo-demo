@@ -21,11 +21,14 @@ import type { TextAreaRef } from "antd/es/input/TextArea";
 import { FileText, Loader2, Paperclip, Send, Sparkles, Upload, Wand2, X } from "lucide-react";
 
 import {
+  chatAsk,
   finalizeMeeting,
   generateArtifact,
   ingestFile,
+  listRagDocs,
   ragAsk,
   routeIntent,
+  workspaceStatus,
 } from "@/api";
 import { useStore } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
@@ -39,7 +42,7 @@ interface PendingDoc {
 
 const kindLabel: Record<IntentKind, string> = {
   search_web: "联网搜索",
-  search_rag: "回忆历史",
+  search_rag: "查知识库",
   generate_html: "生成 HTML",
   generate_pptx: "生成 PPT",
   generate_xlsx: "生成 Excel",
@@ -48,6 +51,7 @@ const kindLabel: Record<IntentKind, string> = {
   generate_pdf: "生成 PDF",
   generate_txt: "生成 TXT",
   summarize_meeting: "总结会议",
+  chat_no_rag: "纯闲聊",
   chat: "对话",
 };
 
@@ -62,6 +66,7 @@ const kindColor: Record<IntentKind, string> = {
   generate_pdf: "red",
   generate_txt: "default",
   summarize_meeting: "geekblue",
+  chat_no_rag: "default",
   chat: "default",
 };
 
@@ -95,26 +100,42 @@ export default function CommandBar(): JSX.Element {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<TextAreaRef | null>(null);
 
-  /**
-   * M_minutes_refactor：MinutesView 的「执行待办」按钮通过 store.prefillCommandBar
-   * 把 suggested_command 文本一键填入这里。
-   *
-   * 为不影响 sub_J 正在动的 chat 分支 / 智能提示，这里**只做最小动作**：
-   * 1) 替换 textarea 内容（setText）
-   * 2) focus textarea + 把光标推到末尾，方便用户继续追加 / 直接回车
-   * 3) **不**自动 onSubmit，避免误触误发；用户看到预填后自己按 Enter
-   *
-   * NOTE：dispatch / handleSend 那一坨完全没动，sub_J 安全。
-   */
+  // M_minutes_refactor：MinutesView「执行待办」按钮通过 store.prefillCommandBar
+  // 把 suggested_command 一键填入；只 setText + focus，不自动 onSubmit 防误触。
   useEffect(() => {
     const unregister = registerCommandBarPrefill((nextText) => {
       setText(nextText);
-      const ref = textareaRef.current;
-      // antd TextAreaRef.focus({ cursor: 'end' }) 会把光标推到末尾
-      ref?.focus({ cursor: "end" });
+      textareaRef.current?.focus({ cursor: "end" });
     });
     return unregister;
   }, [registerCommandBarPrefill]);
+
+  // P4-fix-rag-chat 智能提示节流：每条会话最多提示一次，避免每次发问都弹。
+  const workspaceHintShownRef = useRef(false);
+
+  // 当用户走 search_rag 但 RAG docs 数太少（< 3）且没配置 workspace_dirs 时，
+  // toast 提示「📂 想覆盖整个文件夹？点 设置 → 工作区目录 配置」。
+  const maybePromptWorkspaceConfig = useCallback(async (): Promise<void> => {
+    if (workspaceHintShownRef.current) return;
+    try {
+      const [docs, ws] = await Promise.all([
+        listRagDocs(),
+        workspaceStatus(),
+      ]);
+      const nDocs = docs.total ?? 0;
+      const nConfigured = ws.configured_dirs?.length ?? 0;
+      if (nDocs < 3 && nConfigured === 0) {
+        workspaceHintShownRef.current = true;
+        message.info({
+          content:
+            "📂 想覆盖整个文件夹？点 设置（齿轮） → 工作区目录，加一个 ~/Documents 之类的目录，RAG 会自动扫描索引",
+          duration: 8,
+        });
+      }
+    } catch {
+      /* 静默：智能提示不应阻塞用户主问答 */
+    }
+  }, []);
 
   const handleFiles = useCallback(async (files: FileList | File[]): Promise<void> => {
     const arr = Array.from(files);
@@ -281,15 +302,65 @@ export default function CommandBar(): JSX.Element {
         message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
         return;
       }
+      case "chat_no_rag": {
+        // P4-fix-rag-chat（2026-05-28）：显式 @chat → 纯 LLM 闲聊，不查 RAG。
+        // 注意：本 case 必须放在 default 之前，否则 fall-through 永远不会到。
+        const question = (r.params.text as string | undefined) ?? originalText;
+        if (!question) {
+          message.warning("text 为空");
+          return;
+        }
+        message.info("已派发：闲聊中（不查知识库）");
+        void chatAsk(question)
+          .then((answer) => {
+            applyEvent({
+              type: "chat.done",
+              seq: 0,
+              ts: new Date().toISOString(),
+              payload: {
+                question,
+                answer,
+              } as unknown as Record<string, unknown>,
+            });
+            message.success("闲聊已回复");
+            void tts.speak(answer);
+          })
+          .catch((e) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            message.error(`闲聊失败：${msg}`);
+          });
+        return;
+      }
       case "search_web":
-      case "search_rag": {
-        const question = (r.params.question as string | undefined) ?? originalText;
+      case "search_rag":
+      case "chat":
+      default: {
+        // P4-fix-rag-chat（2026-05-28）：chat 分支默认也走 RAG。
+        //
+        // 用户痛点截图：上传 PDF 后输入"请基于附件回答（XX.pdf）"被分到 chat
+        // → 旧代码只 toast 用户原文 + TTS 复述 → LLM 完全没调用、PDF 没用上。
+        //
+        // 新策略：chat / search_rag / search_web 都走 ragAsk（POST /rag/ask）。
+        // backend retrieve_and_answer 会自己分类 rag / web / either，所有已索引
+        // 的 docs（含 ambient + 上传 PDF + workspace 扫描结果）自动作为 context；
+        // LLM 真的基于 PDF 答题 + TTS 朗读 LLM 输出（不是用户原文）。
+        //
+        // 显式 escape：r.kind="chat_no_rag"（@chat 前缀触发，见上面 case）→
+        // 走 /chat 端点纯 LLM 闲聊，不查 RAG，避免"我就想说个'你好'还要 RAG"的浪费。
+        const question = (r.params.question as string | undefined)
+          ?? (r.params.text as string | undefined)
+          ?? originalText;
         if (!question) {
           message.warning("question 为空");
           return;
         }
         message.info("已派发：检索中（后台进行中）");
-        // 同样异步触发
+
+        // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
+        // 让 RAG 覆盖整个文件夹，而不是只能用一两个手动上传的 PDF。
+        // 不阻塞 ragAsk 主链路（并发触发）。
+        void maybePromptWorkspaceConfig();
+
         void ragAsk(question)
           .then((ans) => {
             applyEvent({
@@ -303,7 +374,13 @@ export default function CommandBar(): JSX.Element {
                 arbitration: ans.arbitration,
               } as unknown as Record<string, unknown>,
             });
-            message.success("已返回检索结果（见事件流）");
+            const nCite = ans.citations?.length ?? 0;
+            message.success(
+              nCite > 0
+                ? `已回答（${nCite} 处引用）`
+                : "已回答（无引用：可能 RAG 没找到相关内容，纯 LLM 回答）",
+            );
+            // TTS 朗读 LLM 真实答案，而不是用户原文
             void tts.speak(ans.answer);
           })
           .catch((e) => {
@@ -311,12 +388,6 @@ export default function CommandBar(): JSX.Element {
             message.error(`检索失败：${msg}`);
           });
         return;
-      }
-      case "chat":
-      default: {
-        const reply = (r.params.text as string | undefined) ?? originalText;
-        message.info(`chat 兜底：${reply}`);
-        void tts.speak(reply);
       }
     }
   }

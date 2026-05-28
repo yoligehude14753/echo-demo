@@ -178,6 +178,7 @@ export async function installEchoMock(
             stt_empty: 0,
             hallu_dropped: 0,
             diarize_failed: 0,
+            diarize_returned_none: 0,
             stored: 0,
             last_chunk_at: null,
             last_stored_at: null,
