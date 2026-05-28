@@ -83,12 +83,16 @@ class FakeMeeting:
 
 
 def _settings(tmp_path: Path) -> Settings:
+    # phase4-speaker-reset：本文件覆盖 ambient → SpeakerRegistry → speakers 表的
+    # legacy 持久化路径，显式 diarizer_persist_speakers=True 保留 repo 写入。
+    # per-meeting 路径覆盖在 test_speaker_per_meeting_counter.py。
     return Settings(
         storage_dir=tmp_path / "storage",
         rag_index_dir=tmp_path / "rag",
         ambient_rms_gate=0,
         ambient_min_speech_frame_ratio=0.0,
         ambient_min_stt_chars=0,
+        diarizer_persist_speakers=True,
     )
 
 
@@ -98,10 +102,11 @@ async def test_ambient_chunk_records_speaker(tmp_path: Path) -> None:
     repo = SQLiteRepository(tmp_path / "echo.db")
     await repo.init()
     try:
-        registry = SpeakerRegistry(repo)
+        settings = _settings(tmp_path)
+        registry = SpeakerRegistry(repo, settings=settings)
         rag = FakeRag()
         pipeline = AmbientCapturePipeline(
-            settings=_settings(tmp_path),
+            settings=settings,
             stt=FakeSTT([[TranscriptSegment(text="hello", start_ms=0, end_ms=500)]]),
             rag=rag,  # type: ignore[arg-type]
             meeting=FakeMeeting(),  # type: ignore[arg-type]
@@ -140,9 +145,10 @@ async def test_multiple_chunks_same_speaker_increments(tmp_path: Path) -> None:
     repo = SQLiteRepository(tmp_path / "echo.db")
     await repo.init()
     try:
-        registry = SpeakerRegistry(repo)
+        settings = _settings(tmp_path)
+        registry = SpeakerRegistry(repo, settings=settings)
         pipeline = AmbientCapturePipeline(
-            settings=_settings(tmp_path),
+            settings=settings,
             stt=FakeSTT(
                 [
                     [TranscriptSegment(text="hi", start_ms=0, end_ms=500)],
@@ -223,7 +229,7 @@ async def test_diarizer_failure_does_not_block_ambient(tmp_path: Path) -> None:
             meeting=FakeMeeting(),  # type: ignore[arg-type]
             repository=repo,
             diarizer=BrokenDiarizer(),  # type: ignore[arg-type]
-            speaker_registry=SpeakerRegistry(repo),
+            speaker_registry=SpeakerRegistry(repo, settings=_settings(tmp_path)),
         )
         result = await pipeline.ingest_chunk(b"\x00" * 32_000)
         assert result.ambient_stored is True

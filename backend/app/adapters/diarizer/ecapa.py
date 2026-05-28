@@ -150,10 +150,12 @@ class ECAPADiarizer:
         """启动时从 repo 把所有已知 centroid 读回 `_profiles`，恢复 `_counter`。
 
         - 没接 repo → 标记 hydrated=True，直接返回
+        - settings.diarizer_persist_speakers=False（默认，phase4-speaker-reset PR）
+          → 跳过 hydrate；进程内 _profiles 从 0 开始，重启即清空（embedding 仅内存）
         - embedding_blob 为空的旧记录 → 跳过（保留 label，等下次说话时重新注册）
         - _counter 从所有 `speaker_N` 形态的 ID 提取，取 max(N)
         """
-        if self._repo is None:
+        if self._repo is None or not self._settings.diarizer_persist_speakers:
             self._hydrated = True
             return
         try:
@@ -299,7 +301,10 @@ class ECAPADiarizer:
         return new
 
     async def _persist(self, sid: str, vec: Any) -> None:
-        if self._repo is None:
+        # phase4-speaker-reset：persist=False（默认）时不写 speakers 表（embedding 仅内存）。
+        # _profiles 仍在内存里维护，所以 active list / 全局 _profiles 匹配照常工作；
+        # 进程重启即清空，对齐"不跨会议长期记忆声纹"。
+        if self._repo is None or not self._settings.diarizer_persist_speakers:
             return
         try:
             await self._repo.upsert_speaker(

@@ -163,7 +163,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
     repo = get_repository(settings)
     await repo.init()
     try:
-        registry = get_speaker_registry(repo)
+        registry = get_speaker_registry(settings, repo)
         await registry.hydrate()
         n_speakers = len(registry.known_speaker_ids())
         if n_speakers:

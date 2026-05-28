@@ -141,6 +141,16 @@ class Settings(BaseSettings):
     # ── Speaker Diarization ──────────────────────────────────────
     diarizer_enabled: bool = True
     diarizer_backend: str = "ecapa"
+    # 说话人声纹是否跨会议持久化（用户 2026-05-28 决策：关）。
+    # 关闭含义：每个 meeting 维持独立的 speaker counter（从 1 开始），
+    # diarizer 不 hydrate 老 speakers 表 / 不 insert 新行。embedding 内存里
+    # 用，进程重启就没了。详见 docs/ARCH-AUDIT.md §4 root #11。
+    # 用户痛点（截图复现，2026-05-28）：UI 显示「说话人 18 / 19 / 20 / 21」，
+    # 编号已经累加到 20+。SpeakerRegistry 走全局 counter（N = repo.speakers
+    # 总数 + 1）→ 一开会就接老编号，不是新会议从 1 开始。
+    # 复活老行为：env DIARIZER_PERSIST_SPEAKERS=true 即走 legacy 路径
+    # （registry hydrate 全局 + repo 持久化、ECAPA hydrate centroid）。
+    diarizer_persist_speakers: bool = False
     # ── threshold 演进史 ──────────────────────────────────────────
     # 0.65 (init) → 0.70 (spk-1 抄 echo prod) → 0.55 (text-clarity PR, 本次)
     #

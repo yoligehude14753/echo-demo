@@ -68,12 +68,17 @@ def get_diarizer_singleton(
 
 
 def get_speaker_registry(
+    settings: Settings = Depends(get_settings),
     repository: RepositoryPort = Depends(get_repository),
 ) -> SpeakerRegistry:
-    """跨进程持久化的全局说话人编号 + 用户改名 cache。"""
+    """说话人编号 + 用户改名 cache。
+
+    phase4-speaker-reset：注入 settings 让 registry 按 ``diarizer_persist_speakers``
+    切换 per-meeting / legacy 路径。默认 False → per-meeting 从 1 开始。
+    """
     global _speaker_registry_singleton  # noqa: PLW0603
     if _speaker_registry_singleton is None:
-        _speaker_registry_singleton = SpeakerRegistry(repository)
+        _speaker_registry_singleton = SpeakerRegistry(repository, settings=settings)
     return _speaker_registry_singleton
 
 

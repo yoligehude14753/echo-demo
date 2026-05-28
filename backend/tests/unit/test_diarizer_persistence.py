@@ -62,7 +62,14 @@ class FakeRepo:
 
 
 def _settings() -> Settings:
-    return Settings(diarizer_enabled=True, diarizer_match_threshold=0.65)
+    # phase4-speaker-reset：本文件覆盖 ECAPA centroid 跨进程持久化（hydrate +
+    # _persist），属于 legacy 路径 → 显式 diarizer_persist_speakers=True。
+    # 默认 False 时 hydrate / _persist 都是 no-op，相关 assert 必然失败。
+    return Settings(
+        diarizer_enabled=True,
+        diarizer_match_threshold=0.65,
+        diarizer_persist_speakers=True,
+    )
 
 
 @pytest.mark.asyncio
