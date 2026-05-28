@@ -249,7 +249,11 @@ class Settings(BaseSettings):
     automeet_min_distinct_speakers: int = 2
     automeet_min_active_seconds: float = 6.0
     # 静默 X 秒 → 自动 end（含 finalize 纪要）
-    automeet_silence_timeout_s: float = 30.0
+    # 用户 2026-05-28 反馈："会议结束同理，宁可覆盖更大的范围"。end 端的 grace
+    # 实际由 silence_timeout 提供：detector 判定 end 时点 = 真实结束 + 此值，
+    # 期间若有零星 chunk 仍走 ambient → meeting overlay。30s 偏紧（思考停顿
+    # 经常 20-25s），调到 45s 给 trailing tail 更多空间。
+    automeet_silence_timeout_s: float = 45.0
     # 自动结束后多久内不再触发新会议（防抖）
     automeet_cooldown_s: float = 60.0
     # 单个 auto-meeting 的硬上限（兜底）：超过 X 秒一律 force-end，
