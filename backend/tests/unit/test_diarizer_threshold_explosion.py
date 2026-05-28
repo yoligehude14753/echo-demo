@@ -166,11 +166,23 @@ async def test_genuinely_distinct_speakers_still_separate_under_new_threshold() 
     assert len(set(sids)) == 2, f"expected 2 distinct speakers, got {set(sids)}"
 
 
-@pytest.mark.asyncio
 @pytest.mark.unit
-async def test_default_settings_uses_loosened_threshold() -> None:
-    """锁死 settings default：保护 0.55 不被无意改回。"""
-    s = Settings()
+def test_default_settings_uses_loosened_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """锁死 settings default：保护 0.55 不被无意改回。
+
+    本测试**只验证 code 里的 default**，不被外部 .env 影响。pydantic-settings 默认
+    会读 `_PROJECT_ROOT/.env`（config.py 写死的路径），开发机 / CI runner 都会带
+    `DIARIZER_MATCH_THRESHOLD=0.65` 这类覆盖。用 `_env_file=None` 显式禁用
+    env 文件 + 清相关 env var 保证测试 hermetic。
+    """
+    for key in (
+        "DIARIZER_MATCH_THRESHOLD",
+        "DIARIZER_OUTLIER_MATCH_THRESHOLD",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.diarizer_match_threshold == 0.55, (
         "default threshold should be 0.55 after text-clarity PR; see config.py threshold 演进史"
     )
