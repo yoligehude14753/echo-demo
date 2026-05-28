@@ -1,18 +1,19 @@
-"""Skill 执行器单测：mock LLM，验证 4 种产物的代码路径。"""
+"""Skill 执行器单测：mock LLM，验证 7 种产物的代码路径。"""
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 from app.adapters.skill import SkillError, SkillExecutor
-from app.adapters.skill.llm_skill import _strip_code_fence
+from app.adapters.skill.llm_skill import _make_title, _strip_code_fence
 from app.adapters.skill.node_executor import _is_safe_node
 from app.adapters.skill.python_executor import _is_safe_python
 from app.config import Settings
-from app.schemas.artifact import SUPPORTED_KINDS, normalize_kind
+from app.schemas.artifact import SUPPORTED_KINDS, GeneratedArtifact, normalize_kind
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
 
 
@@ -104,8 +105,10 @@ def test_is_safe_python_accepts_docx() -> None:
 async def test_unsupported_artifact_type_raises(tmp_path: Path) -> None:
     skill = SkillExecutor(_settings(tmp_path))
     llm = FakeLLM("...")
+    # 7 类产物 (html/pptx/word/xlsx/markdown/pdf/txt) + 别名都已支持；
+    # 这里用一个明确不在 SUPPORTED_KINDS 的值（如 csv）
     with pytest.raises(SkillError, match="unsupported"):
-        await skill.generate(llm=llm, artifact_type="pdf", brief="x")
+        await skill.generate(llm=llm, artifact_type="csv", brief="x")
 
 
 @pytest.mark.asyncio
@@ -208,7 +211,23 @@ async def test_python_with_forbidden_import_raises(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_supported_kinds_covers_all_aliases() -> None:
-    assert {"ppt", "pptx", "word", "xlsx", "excel", "html"} == SUPPORTED_KINDS
+    # 13 个别名 -> 7 个 canonical kinds
+    expected = {
+        "ppt",
+        "pptx",
+        "word",
+        "docx",
+        "xlsx",
+        "excel",
+        "html",
+        "markdown",
+        "md",
+        "mdown",
+        "pdf",
+        "txt",
+        "text",
+    }
+    assert expected == SUPPORTED_KINDS
 
 
 @pytest.mark.unit
@@ -218,13 +237,69 @@ def test_normalize_kind_pptx_alias() -> None:
     assert normalize_kind("excel") == "xlsx"
     assert normalize_kind("xlsx") == "xlsx"
     assert normalize_kind("word") == "word"
+    assert normalize_kind("docx") == "word"
     assert normalize_kind("html") == "html"
 
 
 @pytest.mark.unit
+def test_normalize_kind_markdown_pdf_txt_aliases() -> None:
+    """P4-M3：新增 markdown/pdf/txt 别名归一化。"""
+    assert normalize_kind("markdown") == "markdown"
+    assert normalize_kind("md") == "markdown"
+    assert normalize_kind("MD") == "markdown"
+    assert normalize_kind("mdown") == "markdown"
+    assert normalize_kind("pdf") == "pdf"
+    assert normalize_kind("PDF") == "pdf"
+    assert normalize_kind("txt") == "txt"
+    assert normalize_kind("text") == "txt"
+    assert normalize_kind("TEXT") == "txt"
+
+
+@pytest.mark.unit
 def test_normalize_kind_invalid_returns_empty() -> None:
-    assert normalize_kind("pdf") == ""
+    # P4-M3 之前 "pdf" 是 invalid；现在 invalid 走 csv / rtf 等
+    assert normalize_kind("csv") == ""
+    assert normalize_kind("rtf") == ""
     assert normalize_kind("") == ""
+
+
+@pytest.mark.unit
+def test_make_title_short() -> None:
+    assert _make_title("生成英伟达 2025 Q3 财报分析") == "生成英伟达 2025 Q3 财报分析"
+
+
+@pytest.mark.unit
+def test_make_title_long_truncates_with_ellipsis() -> None:
+    brief = "英伟达 2025 财年第三季度业绩超预期" * 5
+    title = _make_title(brief, max_len=40)
+    assert len(title) <= 41  # 40 chars + 1 ellipsis
+    assert title.endswith("…")
+
+
+@pytest.mark.unit
+def test_make_title_collapses_whitespace() -> None:
+    assert _make_title("  生成  \n\t  HTML   报告  ") == "生成 HTML 报告"
+
+
+@pytest.mark.unit
+def test_make_title_empty() -> None:
+    assert _make_title("") == ""
+    assert _make_title("   \n\t  ") == ""
+
+
+@pytest.mark.unit
+def test_generated_artifact_title_default_empty() -> None:
+    """旧 fixture 不传 title 时默认为空字符串，避免破坏下游测试。"""
+    a = GeneratedArtifact(
+        artifact_id="x",
+        artifact_type="html",
+        file_path="/tmp/x.html",
+        mime_type="text/html",
+        size_bytes=100,
+        generation_latency_ms=1.0,
+        model="m",
+    )
+    assert a.title == ""
 
 
 @pytest.mark.unit
@@ -323,3 +398,244 @@ async def test_pptx_generation_executes_pptxgenjs(tmp_path: Path) -> None:
     assert art.file_path.endswith(".pptx")
     assert Path(art.file_path).stat().st_size > 8_000
     assert int(art.metadata.get("slide_count_hint", "0")) >= 3
+
+
+# ── P4-M3 新增：markdown / txt / pdf 三种产物 + title + meta.json ──────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_markdown_generation_minimal(tmp_path: Path) -> None:
+    """LLM 直出 GFM markdown → 落盘 .md，验证 prompt 与 metadata。"""
+    skill = SkillExecutor(_settings(tmp_path))
+    md = (
+        "# 英伟达 2025 Q3 分析\n\n"
+        "## 执行摘要\n\n"
+        "英伟达数据中心业务持续强势，毛利率维持高位。\n\n"
+        "## 财务摘要\n\n"
+        "| 指标 | Q2 | Q3 |\n"
+        "| --- | --- | --- |\n"
+        "| 营收 | 30B | 35B |\n"
+        "| 毛利率 | 74% | 75% |\n\n"
+        "## 风险\n\n"
+        "- 客户集中度高\n- 供应链限制\n\n"
+        "## 结论\n\n"
+        "估值仍有空间。来源：英伟达 10-Q。\n" + "正文：" + "字" * 400
+    )
+    llm = FakeLLM(md)
+    art = await skill.generate(llm=llm, artifact_type="markdown", brief="英伟达 2025 Q3 分析报告")
+    assert art.artifact_type == "markdown"
+    assert art.file_path.endswith(".md")
+    assert Path(art.file_path).exists()
+    assert Path(art.file_path).read_text(encoding="utf-8").startswith("#")
+    assert int(art.metadata["heading_count"]) >= 3
+    assert int(art.metadata["table_count"]) >= 1
+    # title 来自 brief 前 40 字
+    assert art.title.startswith("英伟达 2025 Q3")
+    # prompt 是 markdown
+    assert llm.last_messages is not None
+    assert "Markdown" in llm.last_messages[0].content
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_markdown_alias_md_routes_same(tmp_path: Path) -> None:
+    """artifact_type='md' 应归一为 markdown。"""
+    skill = SkillExecutor(_settings(tmp_path))
+    md = "# T\n\n## A\n\n## B\n\n" + "正文段落。" * 100
+    llm = FakeLLM(md)
+    art = await skill.generate(llm=llm, artifact_type="md", brief="t")
+    assert art.artifact_type == "markdown"
+    assert art.file_path.endswith(".md")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_markdown_strip_outer_fence(tmp_path: Path) -> None:
+    """LLM 把整篇 markdown 包在 ```markdown 围栏里时，应自动剥掉。"""
+    skill = SkillExecutor(_settings(tmp_path))
+    inner = "# Title\n\n## Sec\n\n" + "正文。" * 200
+    md = "```markdown\n" + inner + "\n```"
+    llm = FakeLLM(md)
+    art = await skill.generate(llm=llm, artifact_type="markdown", brief="测试剥围栏")
+    saved = Path(art.file_path).read_text(encoding="utf-8")
+    assert saved.startswith("# Title")
+    assert "```" not in saved
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_txt_generation_minimal(tmp_path: Path) -> None:
+    """LLM 直出纯文本 → 落盘 .txt。"""
+    skill = SkillExecutor(_settings(tmp_path))
+    body = (
+        "EchoDesk 每日待办 - 2026-05-28\n\n"
+        "MORNING\n"
+        "  - 跑 P4-M3 测试\n"
+        "  - 同步 PR 进度\n\n"
+        "AFTERNOON\n"
+        "  - 整理英伟达分析草稿\n" + "  - 备注：上下文 ≥ 600 字符以通过健康检查；" * 20
+    )
+    llm = FakeLLM(body)
+    art = await skill.generate(llm=llm, artifact_type="txt", brief="今天待办")
+    assert art.artifact_type == "txt"
+    assert art.file_path.endswith(".txt")
+    saved = Path(art.file_path).read_text(encoding="utf-8")
+    assert "EchoDesk" in saved
+    assert int(art.metadata["line_count"]) >= 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_txt_too_short_raises(tmp_path: Path) -> None:
+    skill = SkillExecutor(_settings(tmp_path))
+    llm = FakeLLM("太短")
+    with pytest.raises(SkillError, match="too short"):
+        await skill.generate(llm=llm, artifact_type="txt", brief="x")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_pdf_generation_minimal_ascii(tmp_path: Path) -> None:
+    """PDF stub：用 fpdf2 内置 helvetica 不依赖中文字体，验证执行链路。
+
+    不调 add_font，因为 CI 没字体；中文渲染由 test_pdf_generation_with_noto_font
+    单独 @pytest.mark.requires_font 跳过 CI 没字体的情况。
+    """
+    pytest.importorskip("fpdf")
+    skill = SkillExecutor(_settings(tmp_path))
+    code = (
+        "from fpdf import FPDF\n"
+        "pdf = FPDF()\n"
+        "pdf.add_page()\n"
+        "pdf.set_font('helvetica', '', 12)\n"
+        "pdf.cell(40, 10, 'Hello echo-demo')\n"
+        "pdf.add_page()\n"
+        "pdf.set_font('helvetica', '', 14)\n"
+        "pdf.cell(40, 10, 'Page 2')\n"
+        "pdf.output('output.pdf')\n"
+    )
+    llm = FakeLLM(code)
+    art = await skill.generate(llm=llm, artifact_type="pdf", brief="生成最小 PDF")
+    assert art.artifact_type == "pdf"
+    assert art.file_path.endswith(".pdf")
+    out = Path(art.file_path)
+    assert out.exists()
+    assert out.stat().st_size > 500
+    # 文件头是 PDF 魔数
+    assert out.read_bytes()[:4] == b"%PDF"
+    # metadata
+    assert int(art.metadata["pages_hint"]) >= 2
+    # ECHODESK_PDF_FONT_PATH 应被注入子进程（哪怕代码没用）
+    # ↑ 此处通过路由能跑成功间接确认；显式覆盖见
+    #   test_pdf_executor_injects_font_env_var
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_pdf_executor_injects_font_env_var(tmp_path: Path) -> None:
+    """PDF kind 走 exec_python_to_artifact 时，env 必须含 ECHODESK_PDF_FONT_PATH。"""
+    pytest.importorskip("fpdf")
+    skill = SkillExecutor(_settings(tmp_path))
+    # 让 LLM 输出读取 env 变量并断言非空的代码 —— 跑成功证明环境变量被传进来了
+    code = (
+        "import os\n"
+        "path = os.environ['ECHODESK_PDF_FONT_PATH']\n"
+        "assert path and os.path.exists(path), f'font path missing: {path!r}'\n"
+        "from fpdf import FPDF\n"
+        "pdf = FPDF()\n"
+        "pdf.add_page()\n"
+        "pdf.set_font('helvetica', '', 12)\n"
+        "pdf.cell(40, 10, 'env-injected')\n"
+        "pdf.output('output.pdf')\n"
+    )
+    llm = FakeLLM(code)
+    art = await skill.generate(llm=llm, artifact_type="pdf", brief="env injection 验证")
+    assert Path(art.file_path).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.requires_font
+async def test_pdf_generation_with_noto_font(tmp_path: Path) -> None:
+    """中文 PDF：use add_font('noto', '', $ECHODESK_PDF_FONT_PATH) 渲染中文。
+
+    需要 repo 内置 NotoSansSC-Regular.ttf；CI 没字体时通过
+    ``@pytest.mark.requires_font`` 跳过（见 conftest）。
+    """
+    pytest.importorskip("fpdf")
+    font_path = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "adapters"
+        / "skill"
+        / "fonts"
+        / "NotoSansSC-Regular.ttf"
+    )
+    if not font_path.exists():
+        pytest.skip("NotoSansSC-Regular.ttf 未下载（开发环境 / CI）")
+    skill = SkillExecutor(_settings(tmp_path))
+    code = (
+        "import os\n"
+        "from fpdf import FPDF\n"
+        "pdf = FPDF()\n"
+        "pdf.add_page()\n"
+        "pdf.add_font('noto', '', os.environ['ECHODESK_PDF_FONT_PATH'])\n"
+        "pdf.set_font('noto', '', 14)\n"
+        "pdf.cell(0, 10, '中文 PDF 验证：你好，世界！')\n"
+        "pdf.output('output.pdf')\n"
+    )
+    llm = FakeLLM(code)
+    art = await skill.generate(llm=llm, artifact_type="pdf", brief="中文 PDF")
+    out = Path(art.file_path)
+    assert out.exists()
+    assert out.read_bytes()[:4] == b"%PDF"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_artifact_meta_json_written(tmp_path: Path) -> None:
+    """generate 完成后 build_dir/meta.json 必须含 title / artifact_type / ext。"""
+    skill = SkillExecutor(_settings(tmp_path))
+    md = "# T\n\n## S\n\n" + "正文段。" * 150
+    llm = FakeLLM(md)
+    art = await skill.generate(
+        llm=llm, artifact_type="markdown", brief="英伟达 2025 财年第三季度业绩点评"
+    )
+    build_dir = Path(art.file_path).parent
+    meta_path = build_dir / "meta.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["title"].startswith("英伟达 2025 财年")
+    assert meta["artifact_type"] == "markdown"
+    assert meta["ext"] == "md"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_html_meta_json_written(tmp_path: Path) -> None:
+    """HTML 走的是 exec_text_to_file 同款路径，也要写 meta.json。"""
+    skill = SkillExecutor(_settings(tmp_path))
+    html = (
+        "<!DOCTYPE html><html><head><script src='https://cdn.tailwindcss.com'></script>"
+        "</head><body>" + "<p>正文段</p>" * 200 + "</body></html>"
+    )
+    llm = FakeLLM(html)
+    art = await skill.generate(llm=llm, artifact_type="html", brief="生成 demo HTML 周报")
+    meta_path = Path(art.file_path).parent / "meta.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["artifact_type"] == "html"
+    assert meta["ext"] == "html"
+    assert "demo HTML" in meta["title"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_generated_artifact_has_non_empty_title(tmp_path: Path) -> None:
+    """SkillExecutor 必须为每个产物填非空 title。"""
+    skill = SkillExecutor(_settings(tmp_path))
+    md = "# T\n\n## S\n\n" + "段。" * 150
+    llm = FakeLLM(md)
+    art = await skill.generate(llm=llm, artifact_type="markdown", brief="第一季度财报点评草稿")
+    assert art.title == "第一季度财报点评草稿"

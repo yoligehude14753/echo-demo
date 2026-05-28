@@ -1,11 +1,16 @@
 """HTTP API: 产物生成 / 下载。
 
-POST /artifacts/generate — body { artifact_type: 'word'|'xlsx'|'pptx'|'html', brief: str }
-GET  /artifacts/{id}/download — 下载产物文件
+POST /artifacts/generate — body { artifact_type, brief, extra_instructions? }
+  artifact_type ∈ word | docx | xlsx | excel | pptx | ppt | html
+                  | markdown | md | mdown | pdf | txt | text （详见 schemas.artifact）
+GET  /artifacts/{id}/download — 下载产物文件，filename 形如
+  <safe_title>_<artifact_id>.<ext>（来自 build_dir/meta.json）。
 """
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -94,6 +99,26 @@ async def generate(
     return artifact
 
 
+# 跨平台不允许的文件名字符 + 控制字符
+_UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+# 文件名总长度上限（含扩展名）；macOS HFS+ 是 255 字节，留余量给 _<id>.<ext>
+_MAX_FILENAME_LEN = 120
+# meta.json 缺失或 title 被全部清掉时的兜底
+_FALLBACK_TITLE = "untitled"
+
+
+def _safe_title(raw: str) -> str:
+    """将任意 title 字符串归一为可作为文件名片段的安全形式。"""
+    s = _UNSAFE_FILENAME_CHARS.sub(" ", raw).strip()
+    s = re.sub(r"\s+", " ", s)
+    s = s.strip(" .")  # 去首尾空格/句点（Windows 上以 . 结尾会被 strip）
+    if not s:
+        return _FALLBACK_TITLE
+    if len(s) > _MAX_FILENAME_LEN:
+        s = s[:_MAX_FILENAME_LEN].rstrip(" .…") or _FALLBACK_TITLE
+    return s
+
+
 @router.get("/artifacts/{artifact_id}/download")
 async def download(
     artifact_id: str,
@@ -106,4 +131,18 @@ async def download(
     if not candidates:
         raise HTTPException(status_code=404, detail="output file missing")
     f = candidates[0]
-    return FileResponse(f, filename=f.name)
+
+    # 读 meta.json 拼友好文件名；缺失/坏掉 → 回退到 output.<ext>
+    meta_path = build_dir / "meta.json"
+    download_name = f.name
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            raw_title = str(meta.get("title", "") or "")
+            ext = str(meta.get("ext", "") or f.suffix.lstrip("."))
+            safe = _safe_title(raw_title)
+            download_name = f"{safe}_{artifact_id}.{ext}" if ext else f"{safe}_{artifact_id}"
+        except (OSError, json.JSONDecodeError, ValueError):
+            download_name = f.name
+
+    return FileResponse(f, filename=download_name)

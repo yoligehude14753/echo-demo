@@ -113,13 +113,63 @@ def test_keyword_route_misses() -> None:
     assert keyword_route("帮我把这件事记下来") is None
 
 
+# ── P4-M3：markdown / pdf / txt 三种新 intent 别名 ────────────────────────
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_markdown() -> None:
+    hit = keyword_route("@生成 Markdown 笔记")
+    assert hit is not None
+    assert hit[0] == "generate_markdown"
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_markdown_via_biji_alias() -> None:
+    """中文别名 '笔记' 命中 markdown。"""
+    hit = keyword_route("@笔记 今天会议要点")
+    assert hit is not None
+    assert hit[0] == "generate_markdown"
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_pdf() -> None:
+    hit = keyword_route("@生成 PDF 月报")
+    assert hit is not None
+    assert hit[0] == "generate_pdf"
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_pdf_lower_case() -> None:
+    hit = keyword_route("@pdf 简历模板")
+    assert hit is not None
+    assert hit[0] == "generate_pdf"
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_txt() -> None:
+    hit = keyword_route("@生成 TXT 列表")
+    assert hit is not None
+    assert hit[0] == "generate_txt"
+
+
+@pytest.mark.unit
+def test_keyword_route_hits_txt_via_plaintext_alias() -> None:
+    """中文别名 '纯文本' 命中 txt。"""
+    hit = keyword_route("@纯文本 待办清单")
+    assert hit is not None
+    assert hit[0] == "generate_txt"
+
+
 @pytest.mark.unit
 def test_supported_intents_complete() -> None:
-    # 8 类（2026-05 起：删除 start_meeting/end_meeting，会议由状态机控制）
-    assert len(SUPPORTED_INTENTS) == 8
+    # 11 类（P4-M3 起：新增 generate_markdown / generate_pdf / generate_txt）
+    assert len(SUPPORTED_INTENTS) == 11
     assert "start_meeting" not in SUPPORTED_INTENTS
     assert "end_meeting" not in SUPPORTED_INTENTS
     assert "summarize_meeting" in SUPPORTED_INTENTS
+    assert "generate_markdown" in SUPPORTED_INTENTS
+    assert "generate_pdf" in SUPPORTED_INTENTS
+    assert "generate_txt" in SUPPORTED_INTENTS
 
 
 @pytest.mark.unit
@@ -142,6 +192,40 @@ async def test_route_keyword_hit_skips_llm(tmp_path: Path) -> None:
     assert llm.calls == []
     assert r.params.get("artifact_type") == "pptx"
     assert "英伟达" in str(r.params.get("brief", ""))
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_pdf_params(tmp_path: Path) -> None:
+    """@生成 PDF 月报 → kind=generate_pdf, artifact_type='pdf'."""
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@生成 PDF 5 月营收月报", current_meeting_id=None)
+    assert r.kind == "generate_pdf"
+    assert r.params.get("artifact_type") == "pdf"
+    assert "营收" in str(r.params.get("brief", ""))
+    assert llm.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_markdown_params(tmp_path: Path) -> None:
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@笔记 今天的会议要点", current_meeting_id=None)
+    assert r.kind == "generate_markdown"
+    assert r.params.get("artifact_type") == "markdown"
+    assert "会议要点" in str(r.params.get("brief", ""))
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_txt_params(tmp_path: Path) -> None:
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@生成 TXT 项目说明草稿", current_meeting_id=None)
+    assert r.kind == "generate_txt"
+    assert r.params.get("artifact_type") == "txt"
 
 
 @pytest.mark.unit

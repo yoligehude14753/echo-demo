@@ -64,9 +64,19 @@ export interface MeetingMinutes {
   created_at: string;
 }
 
+export type ArtifactType =
+  | "html"
+  | "pptx"
+  | "xlsx"
+  | "word"
+  | "markdown"
+  | "pdf"
+  | "txt";
+
 export interface GeneratedArtifact {
   artifact_id: string;
-  artifact_type: string;
+  artifact_type: ArtifactType | string;
+  title: string;
   file_path: string;
   mime_type: string;
   size_bytes: number;
@@ -82,6 +92,9 @@ export type IntentKind =
   | "generate_pptx"
   | "generate_xlsx"
   | "generate_word"
+  | "generate_markdown"
+  | "generate_pdf"
+  | "generate_txt"
   | "summarize_meeting"
   | "chat";
 
