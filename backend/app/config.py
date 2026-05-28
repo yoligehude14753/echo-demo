@@ -183,6 +183,10 @@ class Settings(BaseSettings):
     automeet_silence_timeout_s: float = 30.0
     # 自动结束后多久内不再触发新会议（防抖）
     automeet_cooldown_s: float = 60.0
+    # 单个 auto-meeting 的硬上限（兜底）：超过 X 秒一律 force-end，
+    # 防止持续环境音 / 单人独白让会议永不结束（2026-05 「会议中 9h+」bug 的结构性修复）。
+    # hydrate 也会用这个值清理跨重启遗留的过期 auto-meeting。
+    automeet_max_meeting_duration_s: float = 1800.0
 
     # ── RAG ───────────────────────────────────────────────────────
     rag_index_dir: Path = Field(default=Path("~/.echodesk/rag_index").expanduser())
