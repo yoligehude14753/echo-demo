@@ -133,10 +133,11 @@ test("采集计数器与入库计数器分别走（mock /capture/chunk 交替返
   expect(captured).toBeGreaterThanOrEqual(3);
   expect(stored).toBeGreaterThanOrEqual(1);
 
-  // Tooltip 解释文案：hover 后能看到差距大的原因
+  // Popover 解释文案：hover 后能看到 7 道门分布（M_diag_brake PR #53 把
+  // Tooltip 升级为 Popover，加入诊断面板；原 VAD 文案现在变成 7 道门表）
   await cap.hover();
   await expect(
-    page.locator(".ant-tooltip-inner").filter({ hasText: /VAD/ }),
+    page.locator(".ant-popover-inner").filter({ hasText: /7 道门/ }),
   ).toBeVisible({ timeout: 5_000 });
 });
 
