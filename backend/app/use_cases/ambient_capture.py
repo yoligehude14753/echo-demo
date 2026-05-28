@@ -243,9 +243,27 @@ class AmbientCapturePipeline:
                 meeting_id=meeting_id,
             )
 
+        # phase4-speaker-reset：把 meeting context 传给 registry，让 per-meeting
+        # counter 工作。优先级：
+        #   1. caller 显式 meeting_id（manual meeting 走这条）
+        #   2. meeting_state.current.meeting_id（已在进行中的 auto/manual meeting）
+        #   3. None → registry 内部走 ``__ambient__`` sentinel
+        # 注：observe_chunk 还没跑（在下面）；本 chunk 触发的新 auto-meeting 在本
+        # 行无法预知 → 只能落入 ``__ambient__`` 池。下一 chunk 起 state.current 就
+        # 不为 None，会正确路由到新 meeting 的 counter。
+        ctx_meeting_id: str | None = meeting_id
+        if ctx_meeting_id is None and self._state is not None:
+            current = self._state.current
+            if current is not None:
+                ctx_meeting_id = current.meeting_id
+
         speaker_label: str | None = None
         if self._registry is not None and texts:
-            speaker_label = await self._registry.label_for(speaker_id, captured_at=captured_dt)
+            speaker_label = await self._registry.label_for(
+                speaker_id,
+                captured_at=captured_dt,
+                meeting_id=ctx_meeting_id,
+            )
 
         if texts:
             ambient_text = " ".join(texts)
