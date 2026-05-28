@@ -74,7 +74,12 @@ INTENT_TO_ARTIFACT_TYPE: dict[IntentKind, str] = {
 
 class IntentResult(BaseModel):
     kind: IntentKind
-    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+    # P4-fix（2026-05-28）：confidence 现在是 Optional。
+    # 历史上 "无 @ 前缀 → chat" 路径硬编码返回 confidence=1.0，给用户
+    # 一个 "置信度 100%" 的虚假百分比——但这条路径根本没跑分类器，
+    # 数字没有实质语义。改为 None 表示"该路径不产生置信度"，前端按 null 处理。
+    # 真正经过关键字/LLM 分类的路径仍返回有意义的 float（0.0~1.0）。
+    confidence: float | None = Field(ge=0.0, le=1.0, default=None)
     params: dict[str, Any] = Field(default_factory=dict)
     rationale: str = ""
 
