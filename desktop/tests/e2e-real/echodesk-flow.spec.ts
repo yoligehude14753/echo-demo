@@ -3,7 +3,7 @@
  *
  * 不调慢路径 LLM；专注 PR-8 ~ PR-11 引入的 UI/交互修订是否真的生效：
  *  1. 启动后页面渲染 + WS 连接
- *  2. CaptureStatus 文案符合新设计（无 @开始会议、有"已转"或"静音/底噪"）
+ *  2. CaptureStatus 文案符合新设计（无 @开始会议、有"采集 X · 入库 Y"或"静音/底噪"）
  *  3. MeetingStatusBar 全局会议状态机：点击切换 idle ↔ in_meeting
  *  4. 左侧会议列表跟随状态变化
  *  5. TranscriptStream 待机时显示 ambient 持续转写流（不是空白）
@@ -40,7 +40,7 @@ test.describe("EchoDesk 核心流程", () => {
     // 关键：不能再出现 @开始会议 字样
     await expect(cap).not.toContainText("@开始会议");
     await expect(cap).not.toContainText("叠加转写");
-    // 新文案：持续采集 + 已转 / 静音底噪 之一
+    // 新文案：持续采集 · 采集 X · 入库 Y · 静音/底噪自动过滤
     await expect(cap).toContainText(/持续采集|初始化麦克风|麦克风不可用/);
   });
 
