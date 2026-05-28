@@ -147,15 +147,19 @@ class ECAPADiarizer:
         self._contexts: dict[str, _ContextState] = {}
 
     async def hydrate(self) -> None:
-        """启动时从 repo 把所有已知 centroid 读回 `_profiles`，恢复 `_counter`。
+        """启动时从 repo 读已知 centroid 进 ``_profiles``。
 
-        - 没接 repo → 标记 hydrated=True，直接返回
-        - settings.diarizer_persist_speakers=False（默认，phase4-speaker-reset PR）
-          → 跳过 hydrate；进程内 _profiles 从 0 开始，重启即清空（embedding 仅内存）
-        - embedding_blob 为空的旧记录 → 跳过（保留 label，等下次说话时重新注册）
-        - _counter 从所有 `speaker_N` 形态的 ID 提取，取 max(N)
+        用户 2026-05-28 期望：用户改过名的 speaker 跨重启可被识别。
+        新策略：
+        - persist=True：legacy 全量加载（保留旧行为）
+        - persist=False（默认）：**只**加载 label 非空的 speaker（用户改过名的）。
+          没改过名的 speaker_N 不加载，保证 ambient/per-meeting 编号每进程从 1 起
+          不爆炸；老熟人重启后第一次说话能匹配回原 ID + 显示用户起的名字。
+        - embedding_blob 为空的行跳过（只有 label 没声纹，匹配不上没法用）
+        - ``_counter`` 从所有 ``speaker_N`` 形态 ID 取 max(N)，避免新分配的
+          ``speaker_N`` 与历史 ID 冲突
         """
-        if self._repo is None or not self._settings.diarizer_persist_speakers:
+        if self._repo is None:
             self._hydrated = True
             return
         try:
@@ -167,12 +171,17 @@ class ECAPADiarizer:
 
         loaded = 0
         max_n = 0
+        persist_all = bool(self._settings.diarizer_persist_speakers)
         async with self._lock:
             for r in rows:
                 m = _SPEAKER_ID_RE.match(r.speaker_id)
                 if m:
                     n = int(m.group(1))
                     max_n = max(max_n, n)
+                # persist=False 时只加载 user 改过名的 speaker（"老熟人识别"）
+                # migration 005 引入 label_user_set 区分自动分配 vs 用户手动改名
+                if not persist_all and not r.label_user_set:
+                    continue
                 if r.embedding_blob:
                     try:
                         vec = _blob_to_vec(r.embedding_blob)
@@ -183,7 +192,12 @@ class ECAPADiarizer:
                         logger.warning("ecapa hydrate decode failed for %s: %s", r.speaker_id, e)
             self._counter = max_n
             self._hydrated = True
-        logger.info("ecapa hydrated: %d profiles loaded, counter=%d", loaded, self._counter)
+        logger.info(
+            "ecapa hydrated: %d profiles loaded (persist_all=%s), counter=%d",
+            loaded,
+            persist_all,
+            self._counter,
+        )
 
     async def _ensure_encoder(self) -> None:
         if not self._enabled:
@@ -314,6 +328,32 @@ class ECAPADiarizer:
             )
         except Exception as e:  # pragma: no cover
             logger.warning("ecapa persist %s failed: %s", sid, e)
+
+    async def persist_profile_for_user_label(self, speaker_id: str) -> bool:
+        """用户给某 speaker_id 改名后，把当前 centroid 强制落 repo。
+
+        用户 2026-05-28：「下次有相同的声纹要改过来」要求 embedding 跨重启可
+        match。普通路径 ``_persist`` 在 persist=False 时不写 repo（避免污染
+        per-meeting 干净编号），但 user 改过名的人是例外：他们的声纹必须落盘，
+        hydrate 时才能加载回来识别。
+
+        返回是否真写了（无 repo / 无 profile → False）。
+        """
+        if self._repo is None:
+            return False
+        vec = self._profiles.get(speaker_id)
+        if vec is None:
+            return False
+        try:
+            await self._repo.upsert_speaker(
+                speaker_id,
+                captured_at=datetime.now(UTC),
+                embedding_blob=_vec_to_blob(vec),
+            )
+            return True
+        except Exception as e:  # pragma: no cover
+            logger.warning("ecapa persist_profile_for_user_label %s failed: %s", speaker_id, e)
+            return False
 
     async def _identify_one(
         self,

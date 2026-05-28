@@ -187,7 +187,7 @@ async def test_legacy_path_when_persist_true(tmp_path: Path) -> None:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rename_propagates_across_meetings_in_per_meeting_mode() -> None:
-    """persist=False：rename 把 speaker_id 在所有出现过的 meeting 里改名（不写 repo）。"""
+    """persist=False：rename 把 speaker_id 在所有出现过的 meeting 里改名。"""
     reg = SpeakerRegistry(None, settings=_new_settings())
     now = datetime.now(UTC)
 
@@ -204,3 +204,74 @@ async def test_rename_propagates_across_meetings_in_per_meeting_mode() -> None:
     assert (await reg.label_for("spk_A", captured_at=now, meeting_id="m-2")) == "Alice"
     # spk_B 在 m-1 仍是 "说话人2"，没被牵连
     assert (await reg.label_for("spk_B", captured_at=now, meeting_id="m-1")) == "说话人2"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_user_rename_persists_across_process_restart(tmp_path: Path) -> None:
+    """用户 2026-05-28 核心需求：用户改过的名 跨进程重启自动应用。
+
+    进程 1：spk_A 自动 "说话人1" → 用户改 "陈志鹏" → 写 repo + label_user_set=1
+    进程 2：新 SpeakerRegistry hydrate → spk_A 一来就拿 "陈志鹏"，
+            不再分配 "说话人 N"。
+    """
+    db = tmp_path / "echo.db"
+
+    # ── 进程 1：改名并持久化 ──
+    repo1 = SQLiteRepository(db)
+    await repo1.init()
+    try:
+        reg1 = SpeakerRegistry(repo1, settings=_new_settings())
+        await reg1.hydrate()
+        now = datetime.now(UTC)
+        assert (await reg1.label_for("spk_A", captured_at=now, meeting_id="m-1")) == "说话人1"
+        await reg1.rename("spk_A", "陈志鹏")
+        # 立刻命中：同进程下次 label_for 已经是用户名字
+        assert (await reg1.label_for("spk_A", captured_at=now, meeting_id="m-2")) == "陈志鹏"
+        # repo 里 label_user_set=1
+        row = await repo1.get_speaker("spk_A")
+        assert row is not None
+        assert row.label == "陈志鹏"
+        assert row.label_user_set is True
+    finally:
+        await repo1.aclose()
+
+    # ── 进程 2：模拟重启，应该 hydrate 拿到用户起的名字 ──
+    repo2 = SQLiteRepository(db)
+    await repo2.init()
+    try:
+        reg2 = SpeakerRegistry(repo2, settings=_new_settings())
+        await reg2.hydrate()
+        now = datetime.now(UTC)
+        # 一上来就是用户名字，绕过"说话人 N"分配
+        first = await reg2.label_for("spk_A", captured_at=now, meeting_id="m-fresh")
+        assert first == "陈志鹏", f"重启后应直接用 user label，实际：{first!r}"
+        # 没改过名的新人仍从 "说话人1" 开始（编号不被持久化数据撑爆）
+        second = await reg2.label_for("spk_new", captured_at=now, meeting_id="m-fresh")
+        assert second == "说话人1", f"未改名 speaker 应从 1 起，实际：{second!r}"
+    finally:
+        await repo2.aclose()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_user_rename_changes_label_again(tmp_path: Path) -> None:
+    """用户改了自己的名称（二次改名）也要应用过来。"""
+    repo = SQLiteRepository(tmp_path / "echo.db")
+    await repo.init()
+    try:
+        reg = SpeakerRegistry(repo, settings=_new_settings())
+        await reg.hydrate()
+        now = datetime.now(UTC)
+        await reg.label_for("spk_A", captured_at=now, meeting_id="m-1")
+        await reg.rename("spk_A", "陈志鹏")
+        # 同一 voice 二次改名
+        await reg.rename("spk_A", "陈总")
+        assert (await reg.label_for("spk_A", captured_at=now, meeting_id="m-1")) == "陈总"
+        # repo 里 label 也已更新
+        row = await repo.get_speaker("spk_A")
+        assert row is not None
+        assert row.label == "陈总"
+        assert row.label_user_set is True
+    finally:
+        await repo.aclose()
