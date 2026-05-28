@@ -1,10 +1,14 @@
-"""Ambient 主链路 API：POST /capture/chunk。
+"""Ambient 主链路 API：POST /capture/chunk + GET /capture/stats。
 
 每个 chunk 必走 ambient（落盘 + STT + RAG）；可选 meeting_id 激活 meeting 叠加层。
+
+M_diag_brake 新增：GET /capture/stats 返回进程级 7 道门处理结果计数，
+供前端 CaptureStatus Popover 实时展示根因分布。
 """
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -80,6 +84,18 @@ async def capture_chunk(
         sample_rate=sample_rate,
         meeting_id=mid or None,
     )
+
+
+@router.get("/stats")
+async def get_capture_stats(
+    pipeline: Annotated[AmbientCapturePipeline, Depends(get_ambient_pipeline)],
+) -> dict[str, object]:
+    """ambient pipeline 7 道门处理结果分布（进程级 in-memory，重启清零）。
+
+    供前端 CaptureStatus Popover 显示「哪道门把声音吃了」根因分布。
+    所有计数器都是单调递增 int；客户端可定时轮询取差分得到瞬时速率。
+    """
+    return asdict(pipeline.get_stats())
 
 
 @router.get("/recent")
