@@ -162,14 +162,16 @@ def test_keyword_route_hits_txt_via_plaintext_alias() -> None:
 
 @pytest.mark.unit
 def test_supported_intents_complete() -> None:
-    # 11 类（P4-M3 起：新增 generate_markdown / generate_pdf / generate_txt）
-    assert len(SUPPORTED_INTENTS) == 11
+    # 12 类（P4-fix-rag-chat 起：新增 chat_no_rag 显式逃生路径）
+    assert len(SUPPORTED_INTENTS) == 12
     assert "start_meeting" not in SUPPORTED_INTENTS
     assert "end_meeting" not in SUPPORTED_INTENTS
     assert "summarize_meeting" in SUPPORTED_INTENTS
     assert "generate_markdown" in SUPPORTED_INTENTS
     assert "generate_pdf" in SUPPORTED_INTENTS
     assert "generate_txt" in SUPPORTED_INTENTS
+    assert "chat_no_rag" in SUPPORTED_INTENTS
+    assert "chat" in SUPPORTED_INTENTS
 
 
 @pytest.mark.unit
@@ -311,4 +313,117 @@ async def test_route_llm_failure_falls_back_to_chat(tmp_path: Path) -> None:
     router = LLMIntentRouter(_settings(tmp_path), llm)
     r = await router.route("@语义不明的句子触发 LLM 兜底", current_meeting_id=None)
     assert r.kind == "chat"
+    assert r.confidence is not None
     assert r.confidence <= 0.5
+
+
+# ── P4-fix-rag-chat（2026-05-28）：RAG 强信号 + 问句默认 RAG + chat_no_rag escape
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_strong_rag_phrase_overrides_no_at_chat(tmp_path: Path) -> None:
+    """痛点截图复现：'请基于附件回答（XX.pdf）' 必须归 search_rag 而非 chat。
+
+    旧逻辑：非 @ 前缀 → 硬归 chat → CommandBar 走兜底 toast → LLM 完全未调。
+    新逻辑：keyword_route 在 no-@ 路径也跑，'基于附件' 命中强 RAG 信号 → search_rag。
+    """
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route(
+        "请基于附件回答（褐蚁AI工作站产品手册_260416.pdf）",
+        current_meeting_id=None,
+    )
+    assert r.kind == "search_rag"
+    assert r.confidence is not None
+    assert r.confidence >= 0.85
+    assert llm.calls == []
+    assert r.params.get("question")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_question_mark_defaults_to_rag(tmp_path: Path) -> None:
+    """'褐蚁的功能有哪些？' 没有 @ 前缀但是问句 → 默认走 RAG。"""
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("褐蚁的功能有哪些？", current_meeting_id=None)
+    assert r.kind == "search_rag"
+    assert llm.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_question_word_intro_defaults_to_rag(tmp_path: Path) -> None:
+    """'给我介绍下这个产品' 含"介绍" → 默认走 RAG。"""
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("给我介绍下这个产品", current_meeting_id=None)
+    assert r.kind == "search_rag"
+    assert llm.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_greeting_remains_chat(tmp_path: Path) -> None:
+    """'你好' 这种纯寒暄不含问句词 / RAG 信号 → 仍然走 chat（无 @ 前缀路径）。"""
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("你好", current_meeting_id=None)
+    assert r.kind == "chat"
+    assert r.confidence is None  # 规则匹配路径
+    assert llm.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_time_query_remains_chat(tmp_path: Path) -> None:
+    """'现在几点' 没有问号 / 介绍词 / RAG 信号 → chat（避免误归 RAG）。
+
+    注：实际场景下用户问"现在几点"通常想要联网，但当前 keyword_route 没有
+    "几点"映射，保留旧行为（chat）以免误归 search_rag 浪费 RAG 检索。
+    """
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("现在几点", current_meeting_id=None)
+    assert r.kind == "chat"
+    assert llm.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_chat_no_rag_explicit_escape(tmp_path: Path) -> None:
+    """'@chat 你好' 显式声明纯闲聊 → chat_no_rag，跳过 RAG 检索。"""
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@chat 你好", current_meeting_id=None)
+    assert r.kind == "chat_no_rag"
+    assert r.confidence is not None
+    assert r.confidence >= 0.9
+    assert r.params.get("text") == "你好"
+    assert llm.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_chat_no_rag_escapes_even_with_question_mark(tmp_path: Path) -> None:
+    """'@chat 现在几点？' 即便后面带问号也是 chat_no_rag（escape 优先级最高）。"""
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("@chat 现在几点？", current_meeting_id=None)
+    assert r.kind == "chat_no_rag"
+    assert llm.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_route_genshe_pdf_keyword_priority(tmp_path: Path) -> None:
+    """'根据文档 / 在资料里' 等中文表述同样命中 RAG。"""
+    llm = _MockLLM(content="should not be called")
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    r = await router.route("根据文档说说这个产品", current_meeting_id=None)
+    assert r.kind == "search_rag"
+    # "根据文档" 命中强 RAG 短语，又包含 "说说" → 取强信号 0.9
+    assert r.confidence is not None
+    assert r.confidence >= 0.85
+    assert llm.calls == []

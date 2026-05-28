@@ -14,17 +14,26 @@
  *  POST /admin/speakers/reset
  */
 
-import { Drawer, Button, Modal, message, Spin, Tooltip, Input, Form } from "antd";
+import { Drawer, Button, Modal, message, Spin, Tooltip, Input, Form, Tag } from "antd";
 import {
   Database,
   Download,
+  Folder,
   FolderOpen,
+  FolderPlus,
   RefreshCw,
   Users,
   AlertTriangle,
   Server,
+  Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  workspaceAddDir,
+  workspaceRemoveDir,
+  workspaceScan,
+  workspaceStatus,
+} from "@/api";
 import { apiUrl } from "@/runtime";
 
 interface DataDirBreakdown {
@@ -105,6 +114,14 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
   },
 };
 
+interface WorkspaceStatusDTO {
+  configured_dirs: string[];
+  authorized_dirs: string[];
+  n_indexed: number;
+  max_file_mb: number;
+  scan_on_startup: boolean;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -144,6 +161,10 @@ export default function SettingsPanel({
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [form] = Form.useForm<Record<string, string>>();
+  // P4-fix-rag-chat：工作区目录配置
+  const [ws, setWs] = useState<WorkspaceStatusDTO | null>(null);
+  const [wsBusy, setWsBusy] = useState(false);
+  const [wsScanBusy, setWsScanBusy] = useState(false);
 
   const refreshDataDir = useCallback(async () => {
     setLoading(true);
@@ -181,12 +202,107 @@ export default function SettingsPanel({
     }
   }, [form]);
 
+  const refreshWorkspace = useCallback(async () => {
+    try {
+      const json = await workspaceStatus();
+      setWs(json);
+    } catch (e) {
+      message.error(`读取工作区状态失败：${(e as Error).message}`);
+      setWs(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (open) {
       void refreshDataDir();
       void refreshRemote();
+      void refreshWorkspace();
     }
-  }, [open, refreshDataDir, refreshRemote]);
+  }, [open, refreshDataDir, refreshRemote, refreshWorkspace]);
+
+  const onAddWorkspaceDir = useCallback(async () => {
+    // 优先用 Electron dialog；浏览器/纯 dev 模式回退到 prompt() 让用户手填路径
+    let picked: string | null | undefined;
+    try {
+      if (window.echo?.pickDirectory) {
+        picked = await window.echo.pickDirectory({
+          defaultPath: ws?.configured_dirs?.[0],
+        });
+      } else {
+        const v = window.prompt(
+          "输入要加入工作区的目录绝对路径（如 /Users/you/Documents）：",
+          ws?.configured_dirs?.[0] ?? "",
+        );
+        picked = v && v.trim() ? v.trim() : null;
+      }
+    } catch (e) {
+      message.error(`选择目录失败：${(e as Error).message}`);
+      return;
+    }
+    if (!picked) return; // 用户取消
+    setWsBusy(true);
+    try {
+      const r = await workspaceAddDir(picked);
+      if (r.added) {
+        message.success(`已加入：${r.path}（后台扫描索引中…）`);
+      } else {
+        message.info("该目录已在工作区，无需重复添加");
+      }
+      await refreshWorkspace();
+    } catch (e) {
+      message.error(`添加失败：${(e as Error).message}`);
+    } finally {
+      setWsBusy(false);
+    }
+  }, [ws, refreshWorkspace]);
+
+  const onRemoveWorkspaceDir = useCallback(
+    async (dir: string) => {
+      Modal.confirm({
+        title: "移除工作区目录？",
+        icon: <AlertTriangle className="w-4 h-4 text-amber-500" />,
+        content: (
+          <div className="text-[12px] leading-relaxed">
+            将移除 <span className="font-mono">{dir}</span>
+            。该目录下已索引的文件会在下次扫描时清理（保留其他来源的 RAG 数据）。
+          </div>
+        ),
+        okText: "移除",
+        okButtonProps: { danger: true },
+        cancelText: "取消",
+        onOk: async () => {
+          setWsBusy(true);
+          try {
+            const r = await workspaceRemoveDir(dir);
+            if (r.removed) {
+              message.success(`已移除：${dir}`);
+            }
+            await refreshWorkspace();
+          } catch (e) {
+            message.error(`移除失败：${(e as Error).message}`);
+          } finally {
+            setWsBusy(false);
+          }
+        },
+      });
+    },
+    [refreshWorkspace],
+  );
+
+  const onRescanWorkspace = useCallback(async () => {
+    setWsScanBusy(true);
+    try {
+      const r = await workspaceScan();
+      message.success(
+        `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped}`,
+      );
+      await refreshWorkspace();
+    } catch (e) {
+      message.error(`扫描失败：${(e as Error).message}`);
+    } finally {
+      setWsScanBusy(false);
+    }
+  }, [refreshWorkspace]);
 
   const onOpenDataDir = async () => {
     if (!dataDir?.path) return;
@@ -472,6 +588,103 @@ export default function SettingsPanel({
               </div>
             </Form>
           )}
+        </section>
+
+        <section>
+          <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
+            <Folder className="w-4 h-4" />
+            <span>工作区目录</span>
+            <Tooltip title="刷新">
+              <button
+                type="button"
+                onClick={() => void refreshWorkspace()}
+                className="ml-auto text-ink-400 hover:text-ink-700"
+                aria-label="刷新工作区状态"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </Tooltip>
+          </div>
+          <div className="bg-paper-150 rounded-md p-3 space-y-2">
+            {!ws ? (
+              <Spin size="small" />
+            ) : (
+              <>
+                <div className="text-[11px] text-ink-500 leading-relaxed">
+                  EchoDesk 会扫描这些目录下的可索引文件（PDF / Word / Excel / PPT /
+                  Markdown / TXT 等），自动入库 RAG，让"@查 / 提问"能覆盖整个文件夹。
+                  <br />
+                  当前已索引 <span className="font-mono text-accent">{ws.n_indexed}</span> 个文件
+                  · 单文件上限 {ws.max_file_mb} MB
+                </div>
+                {ws.configured_dirs.length === 0 ? (
+                  <div className="text-[12px] text-ink-400 italic">
+                    （暂未配置任何目录；点下方按钮添加）
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {ws.configured_dirs.map((d) => {
+                      const authorized = ws.authorized_dirs.includes(d);
+                      return (
+                        <div
+                          key={d}
+                          className="flex items-center gap-1.5 text-[11px]"
+                          data-testid="workspace-dir-row"
+                        >
+                          <Folder className="w-3 h-3 text-ink-400 shrink-0" />
+                          <span
+                            className="font-mono text-ink-700 truncate flex-1"
+                            title={d}
+                          >
+                            {d}
+                          </span>
+                          {!authorized && (
+                            <Tag color="warning" className="!m-0 !text-[10px]">
+                              未访问
+                            </Tag>
+                          )}
+                          <Tooltip title="从工作区移除">
+                            <button
+                              type="button"
+                              onClick={() => void onRemoveWorkspaceDir(d)}
+                              disabled={wsBusy}
+                              className="text-ink-400 hover:text-red-500 disabled:opacity-40"
+                              aria-label={`移除 ${d}`}
+                              data-testid={`workspace-remove-dir-${d}`}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </Tooltip>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="flex gap-1.5 pt-1.5">
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<FolderPlus className="w-3.5 h-3.5" />}
+                    loading={wsBusy}
+                    onClick={() => void onAddWorkspaceDir()}
+                    data-testid="workspace-add-dir"
+                  >
+                    添加目录
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<RefreshCw className="w-3.5 h-3.5" />}
+                    loading={wsScanBusy}
+                    onClick={() => void onRescanWorkspace()}
+                    disabled={ws.configured_dirs.length === 0}
+                    data-testid="workspace-rescan"
+                  >
+                    立即重扫
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         </section>
 
         <section>

@@ -28,6 +28,9 @@ interface ElectronEchoBridge {
   // Phase 4 M4 产物预览：用系统默认 App 打开 backend 落盘的绝对路径（pptx → Keynote）。
   // 失败时 reject(new Error(reason))；浏览器/纯 dev 模式下 undefined。
   openArtifactInSystem?: (filePath: string) => Promise<void>;
+  // P4-fix-rag-chat：选工作区目录。Promise<string | null>，null=用户取消。
+  // 浏览器/纯 dev 模式下 undefined（SettingsPanel 会用 prompt() 兜底）。
+  pickDirectory?: (opts?: { defaultPath?: string }) => Promise<string | null>;
 }
 
 declare global {

@@ -97,6 +97,7 @@ export type IntentKind =
   | "generate_pdf"
   | "generate_txt"
   | "summarize_meeting"
+  | "chat_no_rag"
   | "chat";
 
 export type MeetingMode = "idle" | "in_meeting";

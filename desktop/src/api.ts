@@ -358,6 +358,68 @@ export async function ragAsk(question: string): Promise<{
   };
 }
 
+/**
+ * P4-fix-rag-chat（2026-05-28）：纯 LLM 闲聊（不查 RAG）。
+ *
+ * 用户痛点：默认 chat 路径已改成走 RAG（解决"基于附件回答"被忽略 PDF 的痛点）；
+ * 但偶尔用户只是想跟 LLM 寒暄（"@chat 你好"），不需要 RAG 检索消耗时间。
+ * 这条函数对接 backend POST /chat（SSE）→ 把流累积成完整字符串。
+ *
+ * 与 ragAsk 的区别：
+ *  - ragAsk: POST /rag/ask，先检索 RAG/Web 再生成，返回 {answer, citations, ...}
+ *  - chatAsk: POST /chat，直接走 LLM，返回纯字符串答案
+ */
+export async function chatAsk(question: string): Promise<string> {
+  const u = await apiUrl("/chat");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${r.status} ${r.statusText}: ${text}`);
+  }
+  const ct = r.headers.get("content-type") ?? "";
+  if (!ct.includes("text/event-stream")) {
+    const obj = (await r.json()) as { delta?: string; content?: string };
+    return obj.delta ?? obj.content ?? "";
+  }
+
+  const reader = r.body?.getReader();
+  if (!reader) throw new Error("chat: response body unreadable");
+  const decoder = new TextDecoder("utf-8");
+  let buf = "";
+  let answer = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, nl);
+      buf = buf.slice(nl + 2);
+      const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
+      if (!dataLine) continue;
+      const payload = dataLine.slice("data: ".length);
+      if (payload === "[DONE]") continue;
+      try {
+        const obj = JSON.parse(payload) as { delta?: string; error?: string };
+        if (typeof obj.delta === "string") {
+          answer += obj.delta;
+        } else if (typeof obj.error === "string") {
+          throw new Error(obj.error);
+        }
+      } catch {
+        /* 单帧解析失败不致命 */
+      }
+    }
+  }
+
+  return answer;
+}
+
 // 用于预热缓存（main.tsx 调）
 export async function bootstrapBase(): Promise<void> {
   await backendBase();
@@ -456,6 +518,45 @@ export async function workspaceScan(): Promise<WorkspaceScanResult> {
 export async function workspaceClear(): Promise<{ n_removed: number }> {
   const u = await apiUrl("/workspace/clear");
   const r = await fetch(u, { method: "POST" });
+  return asJson(r);
+}
+
+/**
+ * P4-fix-rag-chat（2026-05-28）：让 SettingsPanel 一键把"~/Documents"等大目录
+ * 加进 workspace_dirs，并立即触发扫描，把整个文件夹的可索引文件批量入库。
+ *
+ * 痛点：旧 UX 让用户改 ~/.echodesk/config.json 里 ``workspace_dirs="xxx,yyy"``，
+ * 用户既不知道路径在哪也不知道字段名。新做法：GUI dialog 选目录 → 一键完成。
+ *
+ * 后端实现：把 path 追加到 user.json 的 workspace_dirs CSV，原地更新 settings，
+ * 然后 fire-and-forget 扫描。返回前先把新加的 dir 报回来用作 UI 反馈。
+ */
+export async function workspaceAddDir(
+  path: string,
+): Promise<{ added: boolean; path: string; configured_dirs: string[] }> {
+  const u = await apiUrl("/workspace/add-dir");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  return asJson(r);
+}
+
+/**
+ * 配合 add-dir：让用户能"减一个目录"，等同 add-dir 的反向操作。
+ * 不会清空已索引的 doc（保留 RAG 数据），只把该目录从配置里摘掉，
+ * 下次扫描时该目录下的文件会被识别为"消失"并 RAG.delete。
+ */
+export async function workspaceRemoveDir(
+  path: string,
+): Promise<{ removed: boolean; path: string; configured_dirs: string[] }> {
+  const u = await apiUrl("/workspace/remove-dir");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
   return asJson(r);
 }
 
