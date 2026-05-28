@@ -198,6 +198,41 @@ step6_install_deps() {
     ok "依赖装好"
 }
 
+# ---------- 步骤 6.5：装 ppt_ib_deck 的 node deps（phase4-doc-skills） ----------
+
+# 投行风 PPT skill 依赖 docxtemplater + pizzip；走 backend/app/adapters/skill/assets/ppt_ib_deck
+# 里的本地 package.json。没装 node 直接跳过（用户用 @生成 ppt 时会 fallback 到 legacy 或报错），
+# 不让整个 install 卡住。详见 prompts.py / llm_skill.py 的 phase4-doc-skills 注释。
+
+step6_5_install_ppt_deck_deps() {
+    local deck_dir="$BACKEND_DIR/app/adapters/skill/assets/ppt_ib_deck"
+    info "step 6.5: 装 ppt_ib_deck node deps（投行风 PPT skill 依赖）"
+    if [ ! -d "$deck_dir" ]; then
+        warn "ppt_ib_deck 资产目录不存在（$deck_dir），跳过"
+        return
+    fi
+    if [ ! -f "$deck_dir/package.json" ]; then
+        warn "ppt_ib_deck/package.json 缺失，跳过"
+        return
+    fi
+    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+        warn "node / npm 不在 PATH，跳过 ppt_ib_deck deps 安装"
+        warn "→ @生成 ppt 时会自动 fallback 到 legacy pptxgenjs（USE_LEGACY_HTML_PPT=true 等效路径）"
+        warn "  装 node 后重跑此脚本：bash $0"
+        return
+    fi
+    if [ -d "$deck_dir/node_modules" ] && [ -d "$deck_dir/node_modules/docxtemplater" ]; then
+        ok "ppt_ib_deck/node_modules 已装好，跳过 npm install"
+        return
+    fi
+    info "在 $deck_dir 跑 npm install（首次约 10-20s）..."
+    if ! (cd "$deck_dir" && npm install --silent --no-audit --no-fund 2>&1 | tail -5); then
+        warn "npm install 失败 → @生成 ppt 会 fallback 到 legacy；不阻塞主流程"
+        return
+    fi
+    ok "ppt_ib_deck node deps 装好"
+}
+
 # ---------- 步骤 7：写默认 config.json ----------
 
 # 默认 config 内容；不要把 yunwu / tavily key 内置（避免泄露）
@@ -309,6 +344,7 @@ step3_prepare_dirs
 step4_sync_backend
 step5_create_venv
 step6_install_deps
+step6_5_install_ppt_deck_deps
 step7_write_config
 step8_smoke
 

@@ -37,12 +37,20 @@ class FakeLLM:
         yield  # pragma: no cover
 
 
-def _settings(tmp_path: Path) -> Settings:
+def _settings(tmp_path: Path, *, use_legacy_html_pptx: bool = True) -> Settings:
+    """通用测试 Settings；默认 ``use_legacy_html_pptx=True``，保持本文件历史
+    用例（直写 Tailwind HTML / pptxgenjs js）仍走旧流水线。
+
+    新 phase4-doc-skills 用例（Kami one-pager / IB deck JSON）显式传
+    ``use_legacy_html_pptx=False``，对应测试在
+    ``tests/unit/test_skill_doc_skills.py`` 集中。
+    """
     return Settings(
         storage_dir=tmp_path,
         skill_executor_build_dir=tmp_path / "skill_build",
         skill_executor_timeout_s=30,
         skill_executor_max_tokens=80_000,
+        use_legacy_html_pptx=use_legacy_html_pptx,
     )
 
 
@@ -338,6 +346,7 @@ async def test_pptx_node_missing_marks_failure(tmp_path: Path) -> None:
             skill_executor_timeout_s=10,
             skill_executor_max_tokens=80_000,
             skill_node_bin="/non/existent/node-binary-xyz",
+            use_legacy_html_pptx=True,  # 测试 legacy pptxgenjs 路径下 node 缺失分支
         )
     )
     code = (
