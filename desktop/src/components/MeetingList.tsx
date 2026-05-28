@@ -34,9 +34,21 @@ export default function MeetingList(): JSX.Element {
   const currentId = useStore((s) => s.currentMeetingId);
   const select = useStore((s) => s.selectMeeting);
 
-  const items = Object.values(meetings).sort((a, b) =>
-    (b.started_at ?? "").localeCompare(a.started_at ?? ""),
-  );
+  // 过滤掉 < 10s 的鱼蚂会议（用户测试 manual_start → 立刻 manual_end 残留）
+  // 规则：state=ended（不是 finalized；finalized 留着）+ 持续 < 10s + 无 minutes
+  // 后端 cleanup script 已把已存在的脏数据清了；这里防御未来再产生
+  const SHORT_THRESHOLD_MS = 10_000;
+  const items = Object.values(meetings)
+    .filter((m) => {
+      if (m.state !== "ended") return true; // in_meeting / finalized 都留
+      if (m.minutes) return true; // 有纪要的留
+      if (!m.started_at || !m.ended_at) return true; // 时间字段不全的留（保守）
+      const dur = Date.parse(m.ended_at) - Date.parse(m.started_at);
+      return dur >= SHORT_THRESHOLD_MS;
+    })
+    .sort((a, b) =>
+      (b.started_at ?? "").localeCompare(a.started_at ?? ""),
+    );
 
   const ambientActive = currentId === null;
   const ambientButton = (
