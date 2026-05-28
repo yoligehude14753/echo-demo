@@ -1,8 +1,12 @@
-import { useState } from "react";
-import { Button, Empty, Spin, message } from "antd";
-import { AlertCircle, ChevronDown, ChevronRight, FileText, RefreshCw } from "lucide-react";
-import { retryMinutesGeneration } from "@/api";
+import { useEffect, useRef, useState } from "react";
+import { Button, Empty, message } from "antd";
+import { AlertCircle, ChevronDown, ChevronRight, FileText, Loader2, RefreshCw } from "lucide-react";
+import { getMeetingMinutes, retryMinutesGeneration } from "@/api";
 import { useStore } from "@/store";
+
+function isFinalizedLike(state: string | undefined): boolean {
+  return state === "ended" || state === "finalized";
+}
 
 function friendlyMinutesError(raw: string | null | undefined): {
   headline: string;
@@ -59,7 +63,36 @@ export default function MinutesView(): JSX.Element {
   const meeting = useStore((s) =>
     currentId ? s.meetings[currentId] : undefined,
   );
+  const upsertMeeting = useStore((s) => s.upsertMeeting);
   const [retrying, setRetrying] = useState(false);
+
+  // 切换 meeting 时若 store 没缓存 minutes 但后端已 finalized → 主动 fetch
+  // 修 bug：sqlite 里 m-7ffe56cc4ad8 state="finalized" minutes_json=YES，
+  // 但 store 只在 minutes.ready ws 事件时填充 minutes；用户事后从左侧列表
+  // 切回老会议时 store 没拿到 minutes，永远卡在「正在生成…」假象。
+  const fetchedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!currentId) return;
+    if (meeting?.minutes) return;
+    if (meeting?.minutes_status === "generation_failed") return;
+    if (!isFinalizedLike(meeting?.state)) return;
+    if (fetchedRef.current.has(currentId)) return;
+    fetchedRef.current.add(currentId);
+    getMeetingMinutes(currentId)
+      .then((m) => {
+        if (!m) return; // 真的 404 → 让 generating 状态自然展示
+        upsertMeeting(currentId, {
+          minutes: m,
+          title: m.title,
+          state: "ended",
+          minutes_status: "ok",
+          minutes_error: null,
+        });
+      })
+      .catch(() => {
+        // 网络错也不强转失败态，等 ws 事件再说
+      });
+  }, [currentId, meeting?.minutes, meeting?.minutes_status, meeting?.state, upsertMeeting]);
 
   const onRetry = async (): Promise<void> => {
     if (!currentId || !meeting) return;
@@ -91,23 +124,9 @@ export default function MinutesView(): JSX.Element {
     );
   }
 
-  // 3) 生成中：会议已结束、minutes_status 为 generating 或 null（事件还没到）
-  if (meeting?.state === "ended") {
-    return (
-      <div className="px-6 py-6 border-b border-paper-300">
-        <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
-          <FileText className="w-3.5 h-3.5 text-ink-500" />
-          <span>会议纪要</span>
-        </div>
-        <div
-          className="flex items-center gap-2 text-[12px] text-ink-500"
-          data-testid="minutes-generating"
-        >
-          <Spin size="small" />
-          <span>正在用 MiniMax-M2.7 生成纪要…</span>
-        </div>
-      </div>
-    );
+  // 3) 生成中 / 已 finalized 但 minutes 还没拿到：大转圈 + elapsed
+  if (isFinalizedLike(meeting?.state)) {
+    return <MinutesGeneratingCard endedAt={meeting?.ended_at} />;
   }
 
   // 4) 会议中（in_meeting）或没有任何 meeting
@@ -138,6 +157,60 @@ export default function MinutesView(): JSX.Element {
           </span>
         }
       />
+    </div>
+  );
+}
+
+function MinutesGeneratingCard({
+  endedAt,
+}: {
+  endedAt?: string | null;
+}): JSX.Element {
+  // elapsed 秒数计时（从会议结束时间开始；没 endedAt 就从挂载时间）
+  const start = endedAt ? Date.parse(endedAt) : Date.now();
+  const [elapsed, setElapsed] = useState(
+    Math.max(0, Math.round((Date.now() - start) / 1000)),
+  );
+  useEffect(() => {
+    const t = setInterval(() => {
+      setElapsed(Math.max(0, Math.round((Date.now() - start) / 1000)));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [start]);
+
+  // 阶段文案随时间渐变：让用户感受到"还在跑"，不是死了
+  let stage = "正在准备转写素材…";
+  if (elapsed > 5) stage = "正在用 MiniMax-M2.7 抽取要点…";
+  if (elapsed > 30) stage = "正在整理决议与待办…";
+  if (elapsed > 60) stage = "模型还在思考，长会议通常需要 60–120 秒…";
+  if (elapsed > 150) stage = "比预期久了一点，若超过 3 分钟可点重试…";
+
+  return (
+    <div className="px-6 py-8 border-b border-paper-300">
+      <div className="flex items-center gap-2 mb-6 text-[13px] text-ink-700 font-medium">
+        <FileText className="w-3.5 h-3.5 text-ink-500" />
+        <span>会议纪要</span>
+      </div>
+      <div
+        className="flex flex-col items-center justify-center py-8"
+        data-testid="minutes-generating"
+        role="status"
+        aria-live="polite"
+      >
+        <Loader2
+          className="w-14 h-14 text-rose-500/80 animate-spin mb-4"
+          strokeWidth={1.5}
+        />
+        <div className="text-[13.5px] font-medium text-ink-800 mb-1.5">
+          会议纪要生成中
+        </div>
+        <div className="text-[12px] text-ink-500 leading-5 mb-2 text-center max-w-[280px]">
+          {stage}
+        </div>
+        <div className="text-[11px] tabular-nums text-ink-400">
+          已等待 {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
+        </div>
+      </div>
     </div>
   );
 }
