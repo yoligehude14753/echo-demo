@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
@@ -21,6 +22,8 @@ from typing import Any
 
 from app.config import Settings
 from app.schemas.rag import RagChunk
+
+log = logging.getLogger("echodesk.rag")
 
 
 def _tokenize_cn_en(text: str) -> list[str]:
@@ -61,15 +64,39 @@ class BM25Rag:
         self._load_index()
 
     def _load_index(self) -> None:
-        """启动时把磁盘上所有 doc 的 chunks 全部加载进内存。"""
-        for f in self._index_dir.glob("*.json"):
+        """启动时把磁盘上所有 doc 的 chunks 全部加载进内存。
+
+        历史问题（2026-05-28，sub-scanner-fix）：原来 corrupt JSON / 半写文件被
+        ``except Exception: continue`` 静默吞掉。结果：scanner 刚才报 ``added=N``
+        但下次启动 ``list_docs`` 只剩 M < N 个，用户视角"我的文档不见了"且没有任何
+        日志。修法：把 corrupt 文件改为 warning 日志（含文件路径 + 异常），并把单
+        个 chunk schema 失败也单独 warn，避免整个 doc 因一个脏 chunk 全丢。
+        """
+        for f in sorted(self._index_dir.glob("*.json")):
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as e:
+                log.warning(
+                    "rag index file corrupt, skipping (doc 将不可用): %s → %s",
+                    f,
+                    e,
+                )
                 continue
+            doc_id = data.get("doc_id") or f.stem
+            loaded = 0
             for c in data.get("chunks", []):
-                self._chunks.append(RagChunk(**c))
-                self._tokens.append(c.get("tokens") or _tokenize_cn_en(c["text"]))
+                try:
+                    self._chunks.append(RagChunk(**c))
+                    self._tokens.append(c.get("tokens") or _tokenize_cn_en(c["text"]))
+                    loaded += 1
+                except Exception as e:
+                    log.warning(
+                        "rag chunk schema mismatch in %s, skipping chunk: %s",
+                        f.name,
+                        e,
+                    )
+            if loaded == 0 and data.get("chunks"):
+                log.warning("rag doc %s loaded 0 / %d chunks (全部 schema 失败)", doc_id, len(data["chunks"]))
         self._rebuild_bm25()
 
     def _rebuild_bm25(self) -> None:
@@ -176,7 +203,13 @@ class BM25Rag:
         return doc_id
 
     def _tag_source_meta(self, doc_id: str, source: str, source_path: str | None) -> None:
-        """给已入库 doc 的 chunks 打上 source/source_path（PDF 走 ingest_pdf 后补元数据）。"""
+        """给已入库 doc 的 chunks 打上 source/source_path（PDF 走 ingest_pdf 后补元数据）。
+
+        内存 chunks 的 metadata 直接 setdefault（无异常）；磁盘 json 重写曾经被
+        ``except Exception: pass`` 静默吞，下次启动 source/source_path 字段就掉了。
+        现在写盘失败 → log.warning（不抛，保证 ingest 主路径返回 doc_id 的语义不变；
+        但日志可见），方便用户在"我的 PDF 怎么没标成 workspace"时定位。
+        """
         for c in self._chunks:
             if c.doc_id == doc_id:
                 c.metadata.setdefault("source", source)
@@ -193,8 +226,12 @@ class BM25Rag:
                 if source_path:
                     meta.setdefault("source_path", source_path)
             f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(
+                "rag tag source meta failed for %s (在内存已打标，磁盘元数据未更新): %s",
+                doc_id,
+                e,
+            )
 
     def _ingest_pdf_sync(self, file_path: str, doc_title: str | None) -> str:
         try:

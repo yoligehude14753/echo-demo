@@ -266,7 +266,12 @@ class Settings(BaseSettings):
     # ── 授权工作区（M6：用户配置可索引的目录范围） ────────────
     # 多个目录用逗号分隔，例如 ECHO_WORKSPACE_DIRS=~/Documents/work,~/Notes
     workspace_dirs: str = ""
-    workspace_max_file_mb: float = 20.0
+    # 单文件上限。20 → 100：2026-05-28 用户痛点 —— 实测 102MB 文件夹里两个 30-40MB
+    # PDF 被 size 过滤静默丢弃（scanner 报 added=N，但 N 已含 size-skip 数差），
+    # markitdown/pdfplumber 对 100MB 以内的中文营销/技术 PDF 都能秒级抽取，
+    # 把默认放宽到 100MB，更贴合"我授权一个文件夹，常见 PDF 都会进 RAG"的直觉。
+    # 仍可通过 ECHO_WORKSPACE_MAX_FILE_MB env 覆盖。
+    workspace_max_file_mb: float = 100.0
     workspace_scan_on_startup: bool = True
     workspace_state_file: Path = Field(
         default=Path("~/.echodesk/workspace_state.json").expanduser()
