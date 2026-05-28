@@ -39,6 +39,33 @@ export interface CaptureStatus {
   /** 若 meeting 叠加层激活，指向 meeting_id */
   meetingOverlayId: string | null;
   errorMessage: string | null;
+  /**
+   * M_diag_brake：STT 熔断退避到期 epoch ms。
+   * null = 未熔断；>0 = 当前在熔断态，UI 显示倒计时。
+   */
+  sttCircuitOpenUntil: number | null;
+  /** 熔断态期间被直接 drop（未上传）的 chunk 累计数。 */
+  chunksDroppedCircuit: number;
+  /**
+   * AmbientCapturePipeline 7 道门处理结果计数（后端 GET /capture/stats）。
+   * UI Popover 用它显示根因分布；首次加载完成前为 null。
+   */
+  stats: CaptureStatsSnapshot | null;
+}
+
+/** 与 backend/app/use_cases/ambient_capture.py:AmbientStats 字段一致。 */
+export interface CaptureStatsSnapshot {
+  chunks_total: number;
+  gated_rms: number;
+  gated_low_speech: number;
+  stt_circuit_open: number;
+  stt_failed: number;
+  stt_empty: number;
+  hallu_dropped: number;
+  diarize_failed: number;
+  stored: number;
+  last_chunk_at: string | null;
+  last_stored_at: string | null;
 }
 
 /** 会议叠加层是否应激活（capture 仍始终上传，只是多带 meeting_id） */

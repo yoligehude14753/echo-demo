@@ -21,23 +21,60 @@ export async function startMeeting(meetingId: string): Promise<void> {
   if (!r.ok && r.status !== 204) throw new Error(`start ${r.status}`);
 }
 
-export async function uploadCaptureChunk(
-  blob: Blob,
-  sampleRate = 16000,
-  meetingId?: string,
-): Promise<{
+/**
+ * 7 道门处理结果分流标签（与 backend/app/schemas/capture.py:SttStatus 一一对应）。
+ * captureChunkRouter 用 `circuit_open` 触发优雅止血（指数退避停止上传）。
+ */
+export type SttStatus = "ok" | "empty" | "failed" | "circuit_open" | "gated";
+
+export interface CaptureChunkResponse {
   ambient_stored: boolean;
   ambient_text: string | null;
   audio_ref: string;
   meeting_segments: TranscriptSegment[];
-}> {
+  /** M_diag_brake：让前端能区分被哪道门吃了，仅 circuit_open 触发止血。 */
+  stt_status: SttStatus;
+}
+
+export async function uploadCaptureChunk(
+  blob: Blob,
+  sampleRate = 16000,
+  meetingId?: string,
+): Promise<CaptureChunkResponse> {
   const fd = new FormData();
   fd.append("audio", blob, "chunk.wav");
   fd.append("sample_rate", String(sampleRate));
   if (meetingId) fd.append("meeting_id", meetingId);
   const u = await apiUrl("/capture/chunk");
   const r = await fetch(u, { method: "POST", body: fd });
-  return asJson(r);
+  // backend 在引入 stt_status 字段前的旧版本可能不返回；缺省视为 "ok"。
+  const parsed = await asJson<CaptureChunkResponse>(r);
+  if (!parsed.stt_status) parsed.stt_status = "ok";
+  return parsed;
+}
+
+/**
+ * AmbientCapturePipeline 7 道门处理结果计数（进程级 in-memory，重启清零）。
+ * 与 backend/app/use_cases/ambient_capture.py:AmbientStats 一一对应。
+ */
+export interface CaptureStats {
+  chunks_total: number;
+  gated_rms: number;
+  gated_low_speech: number;
+  stt_circuit_open: number;
+  stt_failed: number;
+  stt_empty: number;
+  hallu_dropped: number;
+  diarize_failed: number;
+  stored: number;
+  last_chunk_at: string | null;
+  last_stored_at: string | null;
+}
+
+export async function getCaptureStats(): Promise<CaptureStats> {
+  const u = await apiUrl("/capture/stats");
+  const r = await fetch(u);
+  return asJson<CaptureStats>(r);
 }
 
 export async function endMeeting(meetingId: string): Promise<void> {

@@ -47,6 +47,8 @@ async def test_ambient_chunk_always_persisted_and_ingested(
     assert Path(result.audio_ref).exists()
     assert result.ambient_stored is True
     assert result.ambient_text == "ambient hello"
+    # M_diag_brake：成功入库的 chunk stt_status="ok"
+    assert result.stt_status == "ok"
     ambient_pipeline._rag.ingest_ambient_segment.assert_awaited_once()  # type: ignore[attr-defined]
     ambient_pipeline._meeting.ingest_from_stt.assert_not_awaited()  # type: ignore[attr-defined]
 
@@ -75,4 +77,6 @@ async def test_ambient_stt_fail_still_saves_audio(
     result = await ambient_pipeline.ingest_chunk(b"\x01" * 500)
     assert Path(result.audio_ref).exists()
     assert result.ambient_stored is False
+    # M_diag_brake：普通失败标 "failed"（非熔断），让前端继续上传
+    assert result.stt_status == "failed"
     ambient_pipeline._rag.ingest_ambient_segment.assert_not_awaited()  # type: ignore[attr-defined]
