@@ -55,6 +55,7 @@ export default function MeetingList(): JSX.Element {
     <button
       key="__ambient__"
       data-testid="meeting-item-ambient"
+      aria-current={ambientActive ? "true" : undefined}
       onClick={() => select(null)}
       className={`w-full text-left px-2.5 py-2 rounded-md transition-colors ${
         ambientActive
@@ -109,11 +110,15 @@ export default function MeetingList(): JSX.Element {
           (m.display_title && m.display_title.trim()) ||
           (m.title && m.title !== m.meeting_id ? m.title : null) ||
           m.meeting_id;
+        const segmentCount = m.segments.length > 0 ? m.segments.length : (m.n_segments ?? 0);
+        const speakerCount =
+          m.segments.length > 0 ? countDisplaySpeakers(m.segments) : (m.n_speakers ?? 0);
         return (
           <button
             key={m.meeting_id}
             data-testid="meeting-item"
             data-meeting-id={m.meeting_id}
+            aria-current={active ? "true" : undefined}
             onClick={() => select(m.meeting_id)}
             className={`w-full text-left px-2.5 py-2 rounded-md transition-colors ${
               active
@@ -134,11 +139,11 @@ export default function MeetingList(): JSX.Element {
             <div className="mt-1 text-[11px] text-ink-400 flex items-center gap-2 pl-3.5">
               <span>{label[m.state]}</span>
               <span>·</span>
-              <span>{m.segments.length} 段</span>
+              <span>{segmentCount} 段</span>
               <span>·</span>
               {/* 与 TranscriptStream 同源：基于 remap 后的 displayIdx
                   数 distinct，避免"显示到说话人 47 但列表写 86 人" */}
-              <span>{countDisplaySpeakers(m.segments)} 人</span>
+              <span>{speakerCount} 人</span>
             </div>
           </button>
         );

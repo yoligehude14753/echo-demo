@@ -183,8 +183,8 @@ def test_default_settings_uses_loosened_threshold(
     ):
         monkeypatch.delenv(key, raising=False)
     s = Settings(_env_file=None)  # type: ignore[call-arg]
-    assert s.diarizer_match_threshold == 0.55, (
-        "default threshold should be 0.55 after text-clarity PR; see config.py threshold 演进史"
+    assert s.diarizer_match_threshold == 0.50, (
+        "default threshold lowered to 0.50 (2026-06 fix: 2人误判成4人); see config.py 演进史"
     )
     assert s.diarizer_outlier_match_threshold == 0.50, (
         "outlier threshold should be 0.50 (lower than match) after text-clarity PR"

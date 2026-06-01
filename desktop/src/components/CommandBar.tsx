@@ -27,31 +27,27 @@ import {
   ingestFile,
   listRagDocs,
   listRecentAmbient,
-  ragAsk,
+  runAgent,
   routeIntent,
   workspaceStatus,
+  type ArtifactKind,
 } from "@/api";
-import { useStore } from "@/store";
-import type { IntentKind, IntentResult } from "@/types";
+import { type CommandBarPrefillMeta, useStore } from "@/store";
+import type { GeneratedArtifact, IntentResult } from "@/types";
+import { extractExplicitArtifactCommand } from "@/lib/explicitArtifactCommand";
+import type { TtsController } from "@/hooks/useTtsPlayer";
+import { toSpeakableAnswer } from "@/lib/voiceWake";
+import { createTtsSentenceStreamer } from "@/lib/ttsStream";
 interface PendingDoc {
   doc_id: string;
   title: string;
   filename: string;
 }
 
-const kindLabel: Record<IntentKind, string> = {
-  search_web: "联网搜索",
-  search_rag: "查知识库",
-  generate_html: "生成 HTML",
-  generate_pptx: "生成 PPT",
-  generate_xlsx: "生成 Excel",
-  generate_word: "生成 Word",
-  generate_markdown: "生成 Markdown",
-  generate_pdf: "生成 PDF",
-  generate_txt: "生成 TXT",
-  summarize_meeting: "总结会议",
-  chat_no_rag: "纯闲聊",
-  chat: "对话",
+const agentToolLabel: Record<string, string> = {
+  rag_search: "查知识库",
+  web_search: "联网搜索",
+  generate_artifact: "生成产物",
 };
 
 // 与后端 parsers.SUPPORTED_EXTS 保持一致的子集（最常用的；其他扩展名走 markitdown 也支持）
@@ -69,15 +65,18 @@ function pickExt(filename: string): string {
   return i >= 0 ? filename.slice(i).toLowerCase() : "";
 }
 
-export default function CommandBar(): JSX.Element {
+export default function CommandBar({ tts }: { tts?: TtsController }): JSX.Element {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(0);
   const [dropActive, setDropActive] = useState(false);
   const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
+  const [prefillMeta, setPrefillMeta] = useState<CommandBarPrefillMeta | null>(null);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
+  const beginRun = useStore((s) => s.beginRun);
   const applyEvent = useStore((s) => s.applyEvent);
+  const upsertMeeting = useStore((s) => s.upsertMeeting);
   const registerCommandBarPrefill = useStore((s) => s.registerCommandBarPrefill);
   const appendUserCommand = useStore((s) => s.appendUserCommand);
   const appendAssistantReply = useStore((s) => s.appendAssistantReply);
@@ -89,8 +88,9 @@ export default function CommandBar(): JSX.Element {
   // M_minutes_refactor：MinutesView「执行待办」按钮通过 store.prefillCommandBar
   // 把 suggested_command 一键填入；只 setText + focus，不自动 onSubmit 防误触。
   useEffect(() => {
-    const unregister = registerCommandBarPrefill((nextText) => {
+    const unregister = registerCommandBarPrefill((nextText, meta) => {
       setText(nextText);
+      setPrefillMeta(meta ?? null);
       textareaRef.current?.focus({ cursor: "end" });
     });
     return unregister;
@@ -242,6 +242,7 @@ export default function CommandBar(): JSX.Element {
           ? `请基于附件回答（${pendingDocs.map((d) => d.filename).join("、")}）`
           : "";
     if (!value) return;
+    const submitMeta = prefillMeta;
     // 用户 2026-05-28 反馈：「我输入的命令也要进转写流（右边）」+ 「这里 @ 应
     // 该是 @echo，不是空着」——立刻 append 一条 user_command 事件，文本前补
     // `@echo`（如果用户没主动打前缀），让气泡明确显示"在问 echo"。
@@ -261,9 +262,21 @@ export default function CommandBar(): JSX.Element {
     );
     setBusy(true);
     try {
-      const r = await routeIntent(value, currentMeetingId);
-      await dispatch(r, value, cmdId, replyId);
+      const explicitArtifact = extractExplicitArtifactCommand(value);
+      if (explicitArtifact) {
+        await runArtifactGenerationWorkflow(
+          explicitArtifact.artifactType,
+          explicitArtifact.brief,
+          submitMeta,
+          cmdId,
+          replyId,
+        );
+      } else {
+        const r = await routeIntent(value, submitMeta?.meeting_id ?? currentMeetingId);
+        await dispatch(r, value, cmdId, replyId, submitMeta);
+      }
       setText("");
+      setPrefillMeta(null);
       if (trimmed.length === 0 && pendingDocs.length > 0) {
         setPendingDocs([]);
       }
@@ -279,11 +292,228 @@ export default function CommandBar(): JSX.Element {
     }
   }
 
+  async function runAgentWorkflow(
+    question: string,
+    cmdId: string,
+    replyId: string,
+  ): Promise<void> {
+    const progressLines: string[] = [];
+    let finalAnswer = "";
+    let sawFinal = false;
+    let sawError = false;
+    let sawToolCall = false;
+    let artifacts: GeneratedArtifact[] = [];
+
+    const renderPending = (body = finalAnswer): void => {
+      patchAssistantReply(replyId, {
+        text: [progressLines.slice(-6).join("\n"), body].filter(Boolean).join("\n\n"),
+        status: "pending",
+      });
+    };
+
+    // 句级流式 TTS：边出文本边逐句播，避免播放比文本晚太多
+    const ttsStreamer = tts ? createTtsSentenceStreamer(tts) : null;
+    // 可中止：注册到全局运行控制，「停止」按钮会 abort + 停 TTS
+    const controller = new AbortController();
+    const endRun = beginRun(() => {
+      controller.abort();
+      tts?.cancel();
+    });
+    try {
+      // 初始只显示中性提示，不提"多工具"——简单问答根本不会调工具
+      renderPending("Echo 正在思考…");
+      const inlineContext = await buildInlineContext();
+      await runAgent(
+        question,
+        { inlineContext, maxIterations: 6, signal: controller.signal },
+        {
+          // onPlan 不再更新 UI，避免一上来就显示 1/6 步数
+          onPlan: () => {},
+          onToolCall: ({ name, reason }) => {
+            // 第一次真正调工具时才切换到"多工具"提示
+            if (!sawToolCall) {
+              sawToolCall = true;
+              renderPending("Echo 正在调用工具…");
+            }
+            const label = agentToolLabel[name] ?? name;
+            progressLines.push(`→ ${label}${reason ? `：${reason}` : ""}`);
+            renderPending();
+          },
+          onToolResult: ({ name, ok, summary }) => {
+            const label = agentToolLabel[name] ?? name;
+            progressLines.push(`${ok ? "✓" : "!"} ${label}${summary ? `：${summary}` : ""}`);
+            renderPending();
+          },
+          onArtifact: (artifact) => {
+            addArtifact(artifact);
+            artifacts = [
+              artifact,
+              ...artifacts.filter((a) => a.artifact_id !== artifact.artifact_id),
+            ];
+            progressLines.push(
+              `✓ 已生成 ${artifact.artifact_type}：${artifact.title || artifact.artifact_id}`,
+            );
+            patchAssistantReply(replyId, { artifacts });
+            renderPending();
+          },
+          onDelta: (chunk) => {
+            finalAnswer += chunk;
+            renderPending(finalAnswer);
+            ttsStreamer?.push(chunk);
+          },
+          onFinal: ({ answer, citations }) => {
+            sawFinal = true;
+            finalAnswer = answer;
+            const cites = (citations ?? [])
+              .filter((c) => c.kind === "rag" || c.kind === "web")
+              .slice(0, 20);
+            patchConversationStatus(cmdId, "done");
+            patchAssistantReply(replyId, {
+              text: answer,
+              kind: cites.length > 0 ? "rag_answer" : "assistant_reply",
+              citations: cites,
+              artifacts,
+              status: "done",
+            });
+            ttsStreamer?.finalize(toSpeakableAnswer(answer));
+          },
+          onError: ({ error, stage }) => {
+            sawError = true;
+            patchConversationStatus(cmdId, "failed");
+            patchAssistantReply(replyId, {
+              text: `多工具执行失败${stage ? `（${stage}）` : ""}：${error}`,
+              artifacts,
+              status: "failed",
+            });
+          },
+        },
+      );
+      if (!sawFinal && !sawError) {
+        patchConversationStatus(cmdId, "done");
+        patchAssistantReply(replyId, {
+          text: finalAnswer || progressLines.join("\n") || "任务已结束。",
+          artifacts,
+          status: "done",
+        });
+      }
+    } catch (e) {
+      if (controller.signal.aborted) {
+        patchConversationStatus(cmdId, "done");
+        patchAssistantReply(replyId, {
+          text: finalAnswer || "已停止。",
+          artifacts,
+          status: "done",
+        });
+      } else {
+        const raw = e instanceof Error ? e.message : String(e);
+        patchConversationStatus(cmdId, "failed");
+        patchAssistantReply(replyId, {
+          text: `多工具执行失败（连接异常）：${raw}`,
+          artifacts,
+          status: "failed",
+        });
+      }
+    } finally {
+      endRun();
+    }
+  }
+
+  async function runArtifactGenerationWorkflow(
+    artifactType: ArtifactKind,
+    brief: string,
+    meta: CommandBarPrefillMeta | null,
+    cmdId: string,
+    replyId: string,
+  ): Promise<void> {
+    let sawDone = false;
+    let sawError = false;
+    let lastProgress = "正在生成产物…";
+    const controller = new AbortController();
+    const endRun = beginRun(() => controller.abort());
+    try {
+      patchAssistantReply(replyId, {
+        text: "正在执行会议待办并生成产物…",
+        status: "pending",
+      });
+      // meeting_id 优先取 todo prefill 的，没有则用当前选中的会议
+      // （伴随时段 currentMeetingId === null，此时不传，产物归全局）
+      const effectiveMeetingId = meta?.meeting_id ?? currentMeetingId ?? undefined;
+      await generateArtifactStream(
+        {
+          artifact_type: artifactType,
+          brief,
+          meeting_id: effectiveMeetingId,
+          todo_id: meta?.todo_id,
+        },
+        {
+          onPhase: ({ msg, phase, total_chars }) => {
+            lastProgress = msg || phase || lastProgress;
+            const suffix =
+              typeof total_chars === "number" && total_chars > 0
+                ? `\n已收到 ${total_chars} 字符`
+                : "";
+            patchAssistantReply(replyId, {
+              text: `${lastProgress}${suffix}`,
+              status: "pending",
+            });
+          },
+          onLLMChunk: ({ text: chunk }) => {
+            patchAssistantReply(replyId, {
+              text: chunk.slice(-600) || lastProgress,
+              status: "pending",
+            });
+          },
+          onDone: (artifact) => {
+            sawDone = true;
+            addArtifact(artifact);
+            patchConversationStatus(cmdId, "done");
+            patchAssistantReply(replyId, {
+              text: `已生成 ${artifact.artifact_type}：${artifact.title || artifact.artifact_id}`,
+              artifacts: [artifact],
+              status: "done",
+            });
+          },
+          onError: ({ error, stage }) => {
+            sawError = true;
+            patchConversationStatus(cmdId, "failed");
+            patchAssistantReply(replyId, {
+              text: `生成失败${stage ? `（${stage}）` : ""}：${error}`,
+              status: "failed",
+            });
+          },
+        },
+        controller.signal,
+      );
+      if (!sawDone && !sawError) {
+        patchConversationStatus(cmdId, "failed");
+        patchAssistantReply(replyId, {
+          text: "生成失败：后端流结束但没有返回产物",
+          status: "failed",
+        });
+      }
+    } catch (e) {
+      if (controller.signal.aborted) {
+        patchConversationStatus(cmdId, "done");
+        patchAssistantReply(replyId, { text: "已停止。", status: "done" });
+      } else {
+        const raw = e instanceof Error ? e.message : String(e);
+        patchConversationStatus(cmdId, "failed");
+        patchAssistantReply(replyId, {
+          text: `生成失败（连接异常）：${raw}`,
+          status: "failed",
+        });
+      }
+    } finally {
+      endRun();
+    }
+  }
+
   async function dispatch(
     r: IntentResult,
     originalText: string,
     cmdId: string,
     replyId: string,
+    meta: CommandBarPrefillMeta | null,
   ): Promise<void> {
     switch (r.kind) {
       case "generate_html":
@@ -293,84 +523,18 @@ export default function CommandBar(): JSX.Element {
       case "generate_markdown":
       case "generate_pdf":
       case "generate_txt": {
-        const kind = (r.params.artifact_type as string | undefined) ?? "html";
-        const brief = (r.params.brief as string | undefined) ?? originalText;
-        if (!brief) {
-          patchConversationStatus(cmdId, "failed");
-          patchAssistantReply(replyId, {
-            text: "brief 为空，无法生成产物",
-            status: "failed",
-          });
-          return;
-        }
-        // 让 pending Echo 气泡继续转 spinner，同时把"已派发"文案 patch 进 text，
-        // 用户能看到"任务被识别 → 正在生成"两层进度。
-        patchAssistantReply(replyId, {
-          text: `已派发：${kindLabel[r.kind]}，准备 prompt 中…`,
-        });
-        // 用户原话："不管调用什么工具或者 skill，最好也能流式输出一些过程性的内容"。
-        // 走 SSE 版 /artifacts/generate/stream：把每个阶段（phase / llm_chunk /
-        // done / error）实时 patch 到 Echo 气泡，让用户看见生成全过程而不是 5
-        // 分钟 spinner。stream 函数本身只会因 fetch 失败抛错；业务错误走 onError。
-        let finalLabel = kindLabel[r.kind];
-        void generateArtifactStream(
-          {
-            artifact_type: kind as
-              | "html"
-              | "pptx"
-              | "xlsx"
-              | "word"
-              | "markdown"
-              | "pdf"
-              | "txt",
-            brief,
-          },
-          {
-            onPhase: (p) => {
-              // phase 类事件直接把 msg 当文案；缺 msg 时回退到 phase 名。
-              const human = p.msg ?? p.phase;
-              patchAssistantReply(replyId, {
-                text: `${kindLabel[r.kind]} · ${human}`,
-                status: "pending",
-              });
-            },
-            onLLMChunk: ({ text, total_chars }) => {
-              // 只显示尾部 ~300 字预览，避免气泡膨胀到几千字（HTML one-pager
-              // 6000+ chars，PPT JSON 27 字段 + 解释也常 2000+ chars）。
-              const tail = text.length > 300 ? text.slice(-300) : text;
-              patchAssistantReply(replyId, {
-                text: `${kindLabel[r.kind]} · 生成中（已收到 ${total_chars} 字符）…\n\n${tail}`,
-                status: "pending",
-              });
-            },
-            onDone: (art) => {
-              addArtifact(art);
-              finalLabel = art.artifact_type;
-              patchConversationStatus(cmdId, "done");
-              const sizeKb = (art.size_bytes / 1024).toFixed(1);
-              const title = art.title?.trim() ? art.title : art.artifact_id;
-              patchAssistantReply(replyId, {
-                text: `已生成 ${finalLabel} · ${title}（${sizeKb} KB）`,
-                status: "done",
-              });
-            },
-            onError: ({ error, stage }) => {
-              patchConversationStatus(cmdId, "failed");
-              const where = stage ? `（阶段 ${stage}）` : "";
-              patchAssistantReply(replyId, {
-                text: `生成失败${where}：${error}`,
-                status: "failed",
-              });
-            },
-          },
-        ).catch((e) => {
-          const raw = e instanceof Error ? e.message : String(e);
-          patchConversationStatus(cmdId, "failed");
-          patchAssistantReply(replyId, {
-            text: `生成失败（连接异常）：${raw}`,
-            status: "failed",
-          });
-        });
+        const artifactType = r.kind.replace("generate_", "") as ArtifactKind;
+        const brief =
+          (r.params.brief as string | undefined) ??
+          (r.params.text as string | undefined) ??
+          originalText;
+        await runArtifactGenerationWorkflow(
+          artifactType,
+          brief,
+          meta,
+          cmdId,
+          replyId,
+        );
         return;
       }
       case "summarize_meeting": {
@@ -384,8 +548,20 @@ export default function CommandBar(): JSX.Element {
           return;
         }
         patchAssistantReply(replyId, { text: `正在总结会议 ${mid}…` });
+        upsertMeeting(mid, {
+          state: "ended",
+          minutes_status: "generating",
+        });
         try {
           const minutes = await finalizeMeeting(mid, `会议 ${mid}`);
+          upsertMeeting(mid, {
+            minutes,
+            title: minutes.title,
+            display_title: minutes.title,
+            state: "ended",
+            minutes_status: "ok",
+            minutes_error: null,
+          });
           patchConversationStatus(cmdId, "done");
           patchAssistantReply(replyId, {
             text: `会议纪要已生成，共 ${minutes.sections.length} 节`,
@@ -449,10 +625,9 @@ export default function CommandBar(): JSX.Element {
         // 用户痛点截图：上传 PDF 后输入"请基于附件回答（XX.pdf）"被分到 chat
         // → 旧代码只 toast 用户原文 + TTS 复述 → LLM 完全没调用、PDF 没用上。
         //
-        // 新策略：chat / search_rag / search_web 都走 ragAsk（POST /rag/ask）。
-        // backend retrieve_and_answer 会自己分类 rag / web / either，所有已索引
-        // 的 docs（含 ambient + 上传 PDF + workspace 扫描结果）自动作为 context；
-        // LLM 真的基于 PDF 答题 + TTS 朗读 LLM 输出（不是用户原文）。
+        // 新策略：chat / search_rag / search_web 都走 agent（POST /agent/run）。
+        // backend agent 会自行串联 rag_search / web_search / generate_artifact；
+        // 所有已索引 docs（含 ambient + 上传 PDF + workspace 扫描结果）可作为 context。
         //
         // 显式 escape：r.kind="chat_no_rag"（@chat 前缀触发，见上面 case）→
         // 走 /chat 端点纯 LLM 闲聊，不查 RAG，避免"我就想说个'你好'还要 RAG"的浪费。
@@ -468,53 +643,9 @@ export default function CommandBar(): JSX.Element {
           return;
         }
         // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
-        // 不阻塞 ragAsk 主链路（并发触发）。
+        // 不阻塞 agent 主链路（并发触发）。
         void maybePromptWorkspaceConfig();
-
-        // 拼最近 ambient 转录作为 inline_context 喂给 Echo（用户 2026-05-28 反馈
-        // "回复没带上下文"）。buildInlineContext 失败返回 ""，不阻塞主链路
-        const inlineContext = await buildInlineContext();
-
-        void ragAsk(question, { inlineContext })
-          .then((ans) => {
-            applyEvent({
-              type: "rag.answer.done",
-              seq: 0,
-              ts: new Date().toISOString(),
-              payload: {
-                question,
-                answer: ans.answer,
-                citations: ans.citations,
-                arbitration: ans.arbitration,
-              } as unknown as Record<string, unknown>,
-            });
-            patchConversationStatus(cmdId, "done");
-            // 引用映射到 ConversationEvent 的 citations 字段
-            const cites = (ans.citations ?? [])
-              .filter((c): c is typeof c & { doc_id: string } =>
-                typeof c.doc_id === "string" && c.doc_id.length > 0,
-              )
-              .map((c) => ({
-                doc_id: c.doc_id,
-                chunk_id: (c as unknown as { chunk_id?: string }).chunk_id,
-                score: c.score,
-              }));
-            patchAssistantReply(replyId, {
-              text: ans.answer,
-              kind: "rag_answer",
-              citations: cites,
-              status: "done",
-            });
-            // 用户 2026-05-28：默认不 auto-speak（见上文 chat 分支注释）。
-          })
-          .catch((e) => {
-            const raw = e instanceof Error ? e.message : String(e);
-            patchConversationStatus(cmdId, "failed");
-            patchAssistantReply(replyId, {
-              text: `检索失败：${raw}`,
-              status: "failed",
-            });
-          });
+        await runAgentWorkflow(question, cmdId, replyId);
         return;
       }
     }
@@ -534,7 +665,7 @@ export default function CommandBar(): JSX.Element {
       {dropActive && (
         <div className="absolute inset-2 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-blue-400 bg-white/95 text-sm text-blue-700 pointer-events-none">
           <Upload className="w-4 h-4 mr-2" />
-          松手即可入库到 RAG（PDF / Word / Excel / PPT / md / txt / html / csv …）
+          松手即可加入知识库（PDF / Word / Excel / PPT / md / txt / html / csv …）
         </div>
       )}
 
@@ -577,7 +708,10 @@ export default function CommandBar(): JSX.Element {
         <Input.TextArea
           ref={textareaRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            setPrefillMeta(null);
+          }}
           onPressEnter={(e) => {
             if (!e.shiftKey) {
               e.preventDefault();
@@ -585,13 +719,13 @@ export default function CommandBar(): JSX.Element {
             }
           }}
           onPaste={onPaste}
-          placeholder="问 Echo（默认带知识库 + 网络 + 当前会议上下文）· @生成 PPT / @生成 HTML / @chat 闲聊 · 拖入文件入库 RAG · Shift+Enter 换行"
+          placeholder="问 Echo（默认带知识库、网络和当前会议上下文）· @生成 PPT / @生成 HTML / @chat 闲聊 · 拖入文件加入知识库 · Shift+Enter 换行"
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={busy}
           className="!rounded-md"
           data-testid="command-textarea"
         />
-        <Tooltip title="选择文件入库 RAG（多选可批量）">
+        <Tooltip title="选择文件加入知识库（多选可批量）">
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}

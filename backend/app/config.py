@@ -167,7 +167,10 @@ class Settings(BaseSettings):
     # 仍可通过 DIARIZER_MATCH_THRESHOLD env 覆盖。0.65/0.70 留作回退基线。
     #
     # 详见 docs/ARCH-AUDIT.md §4 root #3。
-    diarizer_match_threshold: float = 0.55
+    # 2026-06：用户反馈"2 人识别成 4 人"。VAD endpointing 后送进来的是完整一句、
+    # 更干净更长，同一人 cos 普遍更高更稳；把主阈值从 0.55 降到 0.50，让同一人
+    # 更容易匹配上、减少误注册新人（陌生人 cos 普遍 < 0.45，0.50 仍能区分）。
+    diarizer_match_threshold: float = 0.50
     # EMA centroid 融合系数（命中匹配时）；α=0.1 抄 echo backend/app/speaker/diarizer.py
     diarizer_centroid_ema_alpha: float = 0.1
     # spk-3：基于 VAD active seconds 决定"段够不够长可以注册新人"。
@@ -222,8 +225,9 @@ class Settings(BaseSettings):
     # 修法：ambient context 内 active speakers 数到达此 cap 后，新声音强制 reuse
     # active list 里 best_sim 最高的现有 ID，绝不分配 speaker_N+1。
     # - meeting context 不受此 cap 约束（meeting 内人数明确，cap 反而把不同人挤一起）
-    # - 6 来源：典型小会 3-4 人 + 2 路 buffer 给 ECAPA 误判；用户可调
-    diarizer_ambient_max_speakers: int = 6
+    # - 2026-06：6 → 4。典型自由对话 1-3 人；cap 越低越能抑制"编号爆炸"，
+    #   到达后强制 reuse 最像的现有 ID。真多人会议请走 meeting context（不受此 cap）。
+    diarizer_ambient_max_speakers: int = 4
 
     # ── 音频预过滤（防 STT 幻觉 + speaker 编号爆炸；移植自 echo）─────
     # 对齐基线：echo `backend/app/pipeline.py:570-577`（生产值 600 / 400 / 0.05 / 12）。

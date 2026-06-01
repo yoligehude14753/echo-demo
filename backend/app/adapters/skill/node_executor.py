@@ -186,17 +186,80 @@ async def exec_node_to_artifact(
     return NodeExecResult(False, None, f"rc={rc} stderr={stderr[:600]}", elapsed)
 
 
-def _path_env() -> str:
+def _node_search_paths() -> list[str]:
+    """返回 node/npm 可能存在的所有目录，覆盖 Electron 沙箱 + 终端环境两种情况。
+
+    Electron 通过 launchctl/open 启动时，子进程 PATH 通常只有
+    ``/usr/bin:/bin:/usr/sbin:/sbin``，homebrew/fnm/nvm/volta 全不在里面。
+    这里枚举所有常见安装前缀，保证在两种环境下都能找到 node。
+    """
+    import glob
     import os
 
-    return os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    candidates: list[str] = []
+
+    # 1. 当前进程已有的 PATH（终端直接跑时有效）
+    current = os.environ.get("PATH", "")
+    if current:
+        candidates.extend(current.split(":"))
+
+    home = str(Path.home())
+
+    # 2. Homebrew（Apple Silicon + Intel）
+    candidates += ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"]
+
+    # 3. fnm（Fast Node Manager）：版本 default alias 的 bin 目录
+    for fnm_root in [
+        f"{home}/.local/share/fnm",
+        f"{home}/.fnm",
+    ]:
+        for alias_link in glob.glob(f"{fnm_root}/aliases/default"):
+            try:
+                resolved = Path(alias_link).resolve()
+                candidates.append(str(resolved / "bin"))
+            except OSError:
+                pass
+        # 遍历已装版本，选最新的
+        for ver_bin in sorted(glob.glob(f"{fnm_root}/node-versions/*/installation/bin"), reverse=True):
+            candidates.append(ver_bin)
+
+    # 4. nvm
+    for nvm_root in [f"{home}/.nvm", f"{home}/.config/nvm"]:
+        for ver_bin in sorted(glob.glob(f"{nvm_root}/versions/node/*/bin"), reverse=True):
+            candidates.append(ver_bin)
+
+    # 5. volta
+    candidates.append(f"{home}/.volta/bin")
+
+    # 6. n / asdf
+    candidates += [f"{home}/.n/bin", f"{home}/.asdf/shims"]
+
+    # 系统兜底
+    candidates += ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+
+    # 去重，保留顺序
+    seen: set[str] = set()
+    result: list[str] = []
+    for p in candidates:
+        if p and p not in seen:
+            seen.add(p)
+            result.append(p)
+    return result
+
+
+def _path_env() -> str:
+    return ":".join(_node_search_paths())
 
 
 def _is_executable(bin_path: str) -> bool:
-    """检查 bin 是绝对路径并且文件存在/可执行，或者能通过 PATH 找到。"""
+    """检查 bin 是绝对路径并且文件存在/可执行，或者能通过扩展 PATH 找到。"""
     import os
     import shutil as _shutil
 
     if "/" in bin_path or "\\" in bin_path:
         return os.path.isfile(bin_path) and os.access(bin_path, os.X_OK)
+    # 先用扩展 PATH 搜，再 fallback 到系统 shutil.which
+    found = _shutil.which(bin_path, path=_path_env())
+    if found:
+        return True
     return _shutil.which(bin_path) is not None

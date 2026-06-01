@@ -22,6 +22,13 @@ const STATS_POLL_MS = 5_000;
 const CIRCUIT_TOAST_KEY = "stt-circuit-open";
 const FALLBACK_TOAST_KEY = "chunk-upload-error";
 
+interface UseEchoCaptureOptions {
+  onAmbientText?: (text: string) => void;
+  onAmbientSilence?: () => void;
+  /** 说话人这一轮"说完了"（静音达阈值）——用于自适应断点收尾。 */
+  onEndpoint?: () => void;
+}
+
 function formatRetryRemaining(retryAtMs: number): string {
   const remainingS = Math.max(0, Math.round((retryAtMs - Date.now()) / 1000));
   if (remainingS < 60) return `${remainingS} 秒后重试`;
@@ -30,7 +37,8 @@ function formatRetryRemaining(retryAtMs: number): string {
   return s > 0 ? `${m} 分 ${s} 秒后重试` : `${m} 分钟后重试`;
 }
 
-export function useEchoCapture(): CaptureStatus {
+export function useEchoCapture(options: UseEchoCaptureOptions = {}): CaptureStatus {
+  const { onAmbientText, onAmbientSilence, onEndpoint } = options;
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const meetingState = useStore((s) =>
     s.currentMeetingId ? s.meetings[s.currentMeetingId]?.state : undefined,
@@ -58,9 +66,15 @@ export function useEchoCapture(): CaptureStatus {
       }
     });
 
+    const offEndpoint = onEndpoint
+      ? audioCapture.onEndpoint(onEndpoint)
+      : () => undefined;
+
     const offRouter = attachCaptureChunkRouter({
       onChunkPosted: () => setAmbientChunks((n) => n + 1),
       onAmbientUploaded: () => setAmbientStored((n) => n + 1),
+      onAmbientText,
+      onAmbientSilence,
       onMeetingUploaded: () => setMeetingChunks((n) => n + 1),
       onConnectionLost: (e) => {
         const msg = e instanceof Error ? e.message : String(e);
@@ -113,10 +127,11 @@ export function useEchoCapture(): CaptureStatus {
       cancelled = true;
       window.clearInterval(statsTimer);
       offStatus();
+      offEndpoint();
       offRouter();
       audioCapture.stop();
     };
-  }, []);
+  }, [onAmbientText, onAmbientSilence, onEndpoint]);
 
   const meetingOverlayId =
     captureState === "capturing" &&

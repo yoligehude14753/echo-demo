@@ -24,6 +24,7 @@ import { useEchoCapture } from "@/capture/useEchoCapture";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
+import { useVoiceWakeAgent } from "@/hooks/useVoiceWakeAgent";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useMeetingHistory } from "@/hooks/useMeetingHistory";
 
@@ -32,9 +33,13 @@ const { Header, Sider, Content } = Layout;
 export default function App(): JSX.Element {
   useEchoWS();
   useMeetingHistory();
-  // 副作用保留：STT 熔断订阅 + /capture/stats 轮询；不再渲染 CaptureStatus chip。
-  useEchoCapture();
   const tts = useTtsPlayer();
+  const voiceWake = useVoiceWakeAgent({ tts });
+  // 副作用保留：STT 熔断订阅 + /capture/stats 轮询；不再渲染 CaptureStatus chip。
+  useEchoCapture({
+    onAmbientText: voiceWake.handleAmbientText,
+    onEndpoint: voiceWake.handleEndpoint,
+  });
   const connected = useStore((s) => s.connected);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const events = useStore((s) => s.events);
@@ -71,8 +76,11 @@ export default function App(): JSX.Element {
           />
           <span className="w-px h-3 bg-paper-300" aria-hidden />
           <MeetingStatusBar />
+          <StopButton tts={tts} />
           <TtsTopBarButton tts={tts} />
-          <span>事件 {events.length}</span>
+          <Tooltip title="后台事件流同步计数">
+            <span>同步 {events.length}</span>
+          </Tooltip>
           <span className="flex items-center gap-1.5">
             <span
               className={`w-1.5 h-1.5 rounded-full ${
@@ -130,8 +138,8 @@ export default function App(): JSX.Element {
                 转写流
               </span>
               {currentMeetingId && (
-                <span className="ml-2 text-[11px] text-ink-400 font-mono">
-                  {currentMeetingId}
+                <span className="ml-2 text-[11px] text-ink-400">
+                  当前会议
                 </span>
               )}
             </div>
@@ -139,7 +147,7 @@ export default function App(): JSX.Element {
               <TranscriptStream />
             </div>
             <div className="shrink-0">
-              <CommandBar />
+              <CommandBar tts={tts} />
             </div>
           </div>
 
@@ -153,15 +161,42 @@ export default function App(): JSX.Element {
   );
 }
 
+// ── 顶栏「停止」按钮：中止思考/对话 + 停止 TTS 播放 ─────────────────
+// 仅在有运行中的 agent/产物任务、或 TTS 正在播放时出现。
+function StopButton({
+  tts,
+}: {
+  tts: ReturnType<typeof useTtsPlayer>;
+}): JSX.Element | null {
+  const runningCount = useStore((s) => s.runningCount);
+  const stopAllRuns = useStore((s) => s.stopAllRuns);
+  const active = runningCount > 0 || tts.isSpeaking;
+  if (!active) return null;
+  const handleStop = (): void => {
+    stopAllRuns();
+    tts.cancel();
+  };
+  return (
+    <Tooltip title="停止：中止当前思考/对话并停止朗读">
+      <button
+        type="button"
+        onClick={handleStop}
+        data-testid="stop-button"
+        aria-label="停止"
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-err hover:bg-err/10 ring-1 ring-err/30 transition"
+      >
+        <Square className="w-3 h-3 fill-current" />
+        <span>停止</span>
+      </button>
+    </Tooltip>
+  );
+}
+
 // ── 顶栏 TTS 状态按钮 ──────────────────────────────────────────────
 //
-// 旧实现只显示 enabled/disabled，绿灯=开、灰=关；用户报"TTS 完全失效"时
-// 看到的就是绿灯——欺骗。M_tts_check 改成三态：
-//   - enabled + 健康 ok            → 绿 + 「TTS」
-//   - enabled + diag 报错 / lastError → 橙 + 三角警告 + 「TTS 异常」
-//   - disabled                       → 灰 + 「静音」
-//   - 播放中                         → 蓝标 + 「播放中」
-// Tooltip / aria-label 都带上 last error / diag detail，方便排错。
+// 顶栏 TTS 按钮是唯一用户开关：默认关闭=静默模式；打开后 Echo 回答才自动播放。
+// 文案固定为 "TTS"，避免再出现"静音/播放中/停止"多套语义；开关状态只用颜色、
+// data-tts-state 和 tooltip 表达。
 function TtsTopBarButton({
   tts,
 }: {
@@ -176,47 +211,30 @@ function TtsTopBarButton({
     (tts.synthHealth && !tts.synthHealth.ok
       ? `合成检查失败：${tts.synthHealth.detail ?? tts.synthHealth.state}`
       : null);
-  // 用户 2026-05-28 反馈：「TTS 自动播放且关不掉」。问题不是 cancel 不工作
-  // （setEnabled(false) 内部就调 cancel），而是 isSpeaking 时按钮还是普通
-  // 颜色 + 文字"播放中"，用户不会想到点它能停。
-  // 修法：isSpeaking 时按钮变红 + Square 图标 + 文字"停止"，点击直接 cancel
-  // （只 stop 当前播放队列，不切 enabled——下次仍可用）。
   const tooltip = tts.isSpeaking
-    ? "点击立即停止当前播放"
+    ? "TTS 正在播放：点击关闭并停止当前播放"
     : !tts.enabled
-      ? "TTS 已关"
+      ? "TTS 已关（静默模式）：点击打开，Echo 回答会自动播放"
       : unhealthy
         ? (healthDetail ?? "TTS 上游异常")
         : tts.synthHealth?.ok
-          ? `TTS 正常（合成 ${tts.synthHealth.latency_ms ?? "?"}ms）`
-          : "TTS 已开：点 Echo 气泡的 🔊 朗读，或点这里关闭";
-  const label = tts.isSpeaking
-    ? "停止"
-    : !tts.enabled
-      ? "静音"
-      : unhealthy
-        ? "TTS 异常"
-        : "TTS";
+          ? `TTS 已开：Echo 回答会自动播放（合成 ${tts.synthHealth.latency_ms ?? "?"}ms），点击关闭`
+          : "TTS 已开：Echo 回答会自动播放，点击关闭";
+  const label = "TTS";
   const color = tts.isSpeaking
-    ? "text-red-600 bg-red-50 hover:bg-red-100 ring-1 ring-red-300"
+    ? "text-accent bg-accent/10 hover:bg-paper-200 ring-1 ring-accent/30"
     : !tts.enabled
       ? "text-ink-400 hover:bg-paper-200"
       : unhealthy
         ? "text-amber-600 hover:bg-paper-200"
         : "text-accent hover:bg-paper-200";
-  const Icon = tts.isSpeaking
-    ? Square
-    : !tts.enabled
+  const Icon = !tts.enabled
       ? VolumeX
       : unhealthy
         ? AlertTriangle
         : Volume2;
   const handleClick = (): void => {
-    if (tts.isSpeaking) {
-      tts.cancel();
-    } else {
-      tts.setEnabled(!tts.enabled);
-    }
+    tts.setEnabled(!tts.enabled);
   };
   return (
     <Tooltip title={tooltip}>

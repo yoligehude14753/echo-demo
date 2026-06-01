@@ -31,7 +31,9 @@ test("LLM 生成失败 → 转写流错误气泡 + textarea 不被锁死", async
   );
 
   await installEchoMock(page, {
-    errorPaths: { "/artifacts/generate": 500 },
+    // 显式 @生成 HTML 走直连 skill 流；让它 500 触发失败气泡
+    errorPaths: { "/artifacts/generate/stream": 500 },
+    skipPaths: ["/intent/route"],
   });
   await page.goto("/");
   await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
@@ -69,7 +71,8 @@ test("RAG 检索失败 → 转写流错误气泡 不崩页", async ({ page }) =>
     }),
   );
   await installEchoMock(page, {
-    errorPaths: { "/rag/ask": 502 },
+    errorPaths: { "/agent/run": 502 },
+    skipPaths: ["/intent/route"],
   });
   await page.goto("/");
   await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
@@ -81,7 +84,7 @@ test("RAG 检索失败 → 转写流错误气泡 不崩页", async ({ page }) =>
   await expect(
     page
       .locator("[data-testid='conv-bubble-assistant_reply']")
-      .filter({ hasText: /检索失败/ }),
+      .filter({ hasText: /多工具执行失败/ }),
   ).toBeVisible({ timeout: 10_000 });
 
   // UI 仍能交互（顶部 brand 仍可见，textarea 仍可用）

@@ -44,7 +44,7 @@ async function mockTtsDiag(
   );
 }
 
-test("健康场景：/tts/diag=ok → 顶栏显示『TTS』绿色态", async ({ page }) => {
+test("默认静默，点击 TTS 后 /tts/diag=ok → 顶栏显示开启态", async ({ page }) => {
   await mockTtsDiag(page, { ok: true, state: "ok" });
   await installEchoMock(page);
   await page.goto("/");
@@ -53,6 +53,8 @@ test("健康场景：/tts/diag=ok → 顶栏显示『TTS』绿色态", async ({ 
   const toggle = page.getByTestId("tts-toggle");
   await expect(toggle).toBeVisible();
   await expect(toggle).toContainText(/^TTS$/);
+  await expect(toggle).toHaveAttribute("data-tts-state", "disabled");
+  await toggle.click();
   await expect(toggle).toHaveAttribute("data-tts-state", "ok");
 });
 
@@ -70,8 +72,10 @@ test("异常场景：/tts/diag=silent_output → 顶栏切『TTS 异常』+ Popo
   await page.waitForLoadState("networkidle");
 
   const toggle = page.getByTestId("tts-toggle");
+  await expect(toggle).toHaveAttribute("data-tts-state", "disabled");
+  await toggle.click();
   await expect(toggle).toHaveAttribute("data-tts-state", "unhealthy", { timeout: 10_000 });
-  await expect(toggle).toContainText("TTS 异常");
+  await expect(toggle).toContainText(/^TTS$/);
 
   // HeyiPopover：点 heyi 标签 → 看到合成回环行
   await page.getByTestId("pill-heyi").click();
@@ -102,8 +106,10 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
   await page.goto("/");
   await page.waitForLoadState("networkidle");
 
-  // 启动时 toggle 是绿色 ok
+  // 启动时默认静默；点击 TTS 才开启自动播放。
   const toggle = page.getByTestId("tts-toggle");
+  await expect(toggle).toHaveAttribute("data-tts-state", "disabled");
+  await toggle.click();
   await expect(toggle).toHaveAttribute("data-tts-state", "ok");
 
   // 触发 TTS：通过 WS 推一个 tts.suggested 事件（hook 会自动 fetch /tts/speak）
@@ -129,18 +135,21 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
   await expect(toggle).toHaveAttribute("data-tts-state", "unhealthy", {
     timeout: 10_000,
   });
-  await expect(toggle).toContainText("TTS 异常");
+  await expect(toggle).toContainText(/^TTS$/);
 });
 
-test("用户关 TTS：顶栏切『静音』+ 不再轮询 diag", async ({ page }) => {
+test("TTS 按钮是唯一开关：默认关，点击开，再点击关回静默", async ({ page }) => {
   await mockTtsDiag(page, { ok: true, state: "ok" });
   await installEchoMock(page);
   await page.goto("/");
   await page.waitForLoadState("networkidle");
 
   const toggle = page.getByTestId("tts-toggle");
+  await expect(toggle).toHaveAttribute("data-tts-state", "disabled");
+  await expect(toggle).toContainText(/^TTS$/);
+  await toggle.click();
   await expect(toggle).toHaveAttribute("data-tts-state", "ok");
   await toggle.click();
   await expect(toggle).toHaveAttribute("data-tts-state", "disabled");
-  await expect(toggle).toContainText("静音");
+  await expect(toggle).toContainText(/^TTS$/);
 });

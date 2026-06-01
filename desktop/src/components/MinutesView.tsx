@@ -136,11 +136,28 @@ export default function MinutesView(): JSX.Element {
   const onRetry = async (): Promise<void> => {
     if (!currentId || !meeting) return;
     setRetrying(true);
+    upsertMeeting(currentId, {
+      minutes_status: "generating",
+      minutes_error: null,
+    });
     try {
-      await retryMinutesGeneration(currentId, meeting.title || currentId);
-      message.success("已重新提交，等待 LLM 返回…");
+      const minutes = await retryMinutesGeneration(currentId, meeting.title || currentId);
+      upsertMeeting(currentId, {
+        minutes,
+        title: minutes.title,
+        display_title: minutes.title,
+        state: "ended",
+        minutes_status: "ok",
+        minutes_error: null,
+      });
+      message.success("会议纪要已重新生成");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      upsertMeeting(currentId, {
+        state: "ended",
+        minutes_status: "generation_failed",
+        minutes_error: msg,
+      });
       message.error(`重试失败：${msg}`);
     } finally {
       setRetrying(false);

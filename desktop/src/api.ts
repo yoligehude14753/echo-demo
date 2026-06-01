@@ -217,6 +217,13 @@ export async function getMeetingArtifacts(
   return asJson<GeneratedArtifact[]>(r);
 }
 
+export async function listArtifacts(limit = 100): Promise<GeneratedArtifact[]> {
+  const u = await apiUrl(`/artifacts?limit=${limit}`);
+  const r = await fetch(u);
+  if (r.status === 404) return [];
+  return asJson<GeneratedArtifact[]>(r);
+}
+
 // ── 待机时持续显示 ambient 转写片段 ──────────────────────────
 
 export interface AmbientSegment {
@@ -326,6 +333,7 @@ export async function generateArtifactStream(
     todo_id?: string;
   },
   callbacks: GenerateArtifactStreamCallbacks,
+  signal?: AbortSignal,
 ): Promise<void> {
   const u = await apiUrl("/artifacts/generate/stream");
   const r = await fetch(u, {
@@ -335,6 +343,7 @@ export async function generateArtifactStream(
       Accept: "text/event-stream",
     },
     body: JSON.stringify(req),
+    signal,
   });
   if (!r.ok) {
     const text = await r.text();
@@ -439,14 +448,7 @@ export async function ragAsk(
   options?: { inlineContext?: string },
 ): Promise<{
   answer: string;
-  citations: Array<{
-    kind: string;
-    doc_id?: string;
-    title?: string;
-    url?: string;
-    snippet?: string;
-    score?: number;
-  }>;
+  citations: RagCitationReference[];
   arbitration: string;
 }> {
   const u = await apiUrl("/rag/ask");
@@ -514,16 +516,147 @@ export async function ragAsk(
 
   return {
     answer,
-    citations: citations as Array<{
-      kind: string;
-      doc_id?: string;
-      title?: string;
-      url?: string;
-      snippet?: string;
-      score?: number;
-    }>,
+    citations: citations as unknown as RagCitationReference[],
     arbitration,
   };
+}
+
+export interface RagCitationReference {
+  kind: string;
+  doc_id?: string;
+  chunk_id?: string;
+  doc_title?: string;
+  title?: string;
+  page?: string | number | null;
+  source?: string;
+  url?: string;
+  snippet?: string;
+  text?: string;
+  score?: number;
+}
+
+export interface AgentPlanEvent {
+  step: number;
+  max_steps: number;
+}
+
+export interface AgentToolCallEvent {
+  name: string;
+  args?: Record<string, unknown>;
+  reason?: string;
+  step?: number;
+}
+
+export interface AgentToolResultEvent {
+  name: string;
+  ok: boolean;
+  summary?: string;
+  step?: number;
+}
+
+export interface AgentFinalEvent {
+  answer: string;
+  artifact_ids?: string[];
+  citations?: RagCitationReference[];
+}
+
+export interface AgentRunCallbacks {
+  onPlan?: (ev: AgentPlanEvent) => void;
+  onToolCall?: (ev: AgentToolCallEvent) => void;
+  onToolResult?: (ev: AgentToolResultEvent) => void;
+  onArtifact?: (artifact: GeneratedArtifact) => void;
+  onDelta?: (text: string) => void;
+  onFinal?: (ev: AgentFinalEvent) => void;
+  onError?: (err: { error: string; stage?: string }) => void;
+  onDone?: () => void;
+}
+
+export async function runAgent(
+  question: string,
+  options:
+    | { inlineContext?: string; maxIterations?: number; signal?: AbortSignal }
+    | undefined,
+  callbacks: AgentRunCallbacks,
+): Promise<void> {
+  const u = await apiUrl("/agent/run");
+  const body: Record<string, unknown> = { question };
+  if (options?.inlineContext?.trim()) body.inline_context = options.inlineContext;
+  if (options?.maxIterations && options.maxIterations > 0) {
+    body.max_iterations = options.maxIterations;
+  }
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    signal: options?.signal,
+  });
+  if (!r.ok) {
+    callbacks.onError?.({
+      error: `${r.status} ${r.statusText}: ${await r.text()}`,
+      stage: "http",
+    });
+    return;
+  }
+  const reader = r.body?.getReader();
+  if (!reader) {
+    callbacks.onError?.({ error: "agent/run: response body unreadable", stage: "fetch" });
+    return;
+  }
+  const decoder = new TextDecoder("utf-8");
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, nl);
+      buf = buf.slice(nl + 2);
+      let eventName = "message";
+      let dataPayload = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event: ")) eventName = line.slice("event: ".length).trim();
+        else if (line.startsWith("data: ")) dataPayload = line.slice("data: ".length);
+      }
+      if (!dataPayload) continue;
+      try {
+        const data = JSON.parse(dataPayload) as Record<string, unknown>;
+        switch (eventName) {
+          case "plan":
+            callbacks.onPlan?.(data as unknown as AgentPlanEvent);
+            break;
+          case "tool_call":
+            callbacks.onToolCall?.(data as unknown as AgentToolCallEvent);
+            break;
+          case "tool_result":
+            callbacks.onToolResult?.(data as unknown as AgentToolResultEvent);
+            break;
+          case "artifact":
+            callbacks.onArtifact?.(data as unknown as GeneratedArtifact);
+            break;
+          case "delta":
+            if (typeof data.text === "string") callbacks.onDelta?.(data.text);
+            break;
+          case "final":
+            callbacks.onFinal?.(data as unknown as AgentFinalEvent);
+            break;
+          case "error":
+            callbacks.onError?.({
+              error: typeof data.error === "string" ? data.error : "agent error",
+              stage: typeof data.stage === "string" ? data.stage : undefined,
+            });
+            break;
+          case "done":
+            callbacks.onDone?.();
+            break;
+          default:
+            break;
+        }
+      } catch {
+        // 单帧解析失败不致命
+      }
+    }
+  }
 }
 
 /**

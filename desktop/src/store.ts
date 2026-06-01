@@ -7,7 +7,7 @@ import type {
   TodoItem,
   TranscriptSegment,
 } from "@/types";
-import type { MeetingSummary } from "@/api";
+import type { MeetingSummary, RagCitationReference } from "@/api";
 import {
   buildFailedArtifact,
   FAILED_ARTIFACT_LIMIT,
@@ -45,12 +45,16 @@ export type CommandBarPrefillHandler = (
  */
 export interface ConversationEvent {
   id: string;
+  /** 归属会议；null 表示伴随时段。切换会议时 TranscriptStream 只显示当前 meeting 的对话。 */
+  meeting_id: string | null;
   /** ISO 时间戳，跟 STT segments 合并排序用 */
   ts: string;
   kind: "user_command" | "assistant_reply" | "rag_answer";
   text: string;
-  /** RAG 答案的引用，UI 显示 `[doc:xxx]` 形式 */
-  citations?: Array<{ doc_id: string; chunk_id?: string; score?: number }>;
+  /** RAG 答案的引用，UI 渲染成角标并在弹层展示原文片段。 */
+  citations?: RagCitationReference[];
+  /** 本轮对话生成的产物；全局 outputs 仍保留全部产物，这里只保留对话归属。 */
+  artifacts?: GeneratedArtifact[];
   /** 命令派发后的状态：'pending' 时 UI 显示「Echo 思考中…」spinner */
   status?: "pending" | "done" | "failed";
 }
@@ -66,6 +70,8 @@ interface Store {
    * 自然会通过 applyEvent 增量更新，无需重置该 flag。
    */
   meetingDetailLoaded: Record<string, boolean>;
+  /** WS 要求重同步时递增；useMeetingHistory 监听后从 DB 重新 hydrate。 */
+  meetingHistoryResyncNonce: number;
   artifacts: GeneratedArtifact[];
   failedArtifacts: FailedArtifact[];
   /**
@@ -90,6 +96,8 @@ interface Store {
   hydrateMeetings(summaries: MeetingSummary[]): void;
   /** 标记某 meeting detail 已加载完毕，避免重复 fetch。 */
   markMeetingDetailLoaded(id: string): void;
+  /** 不清空 UI，只触发历史列表和当前会议 detail 重新从后端同步。 */
+  requestMeetingHistoryResync(): void;
   addArtifact(a: GeneratedArtifact): void;
   /**
    * 清空全局 outputs 列表（顶栏「清空」按钮）。
@@ -122,6 +130,7 @@ interface Store {
     kind?: "assistant_reply" | "rag_answer",
     citations?: ConversationEvent["citations"],
     status?: ConversationEvent["status"],
+    artifacts?: ConversationEvent["artifacts"],
   ): string;
   /** 标记某条 user_command 已完成 / 失败（仅切 status，不动 text）。 */
   patchConversationStatus(id: string, status: "done" | "failed"): void;
@@ -131,12 +140,21 @@ interface Store {
     patch: {
       text?: string;
       citations?: ConversationEvent["citations"];
+      artifacts?: ConversationEvent["artifacts"];
       kind?: "assistant_reply" | "rag_answer";
       status?: "pending" | "done" | "failed";
     },
   ): void;
   /** 清空会话事件（顶栏「清空」按钮用，避免会议结束时残留）。 */
   clearConversationEvents(): void;
+
+  // ── 运行控制（中止思考/对话）─────────────────────────────────────
+  /** 正在进行中的 agent/产物运行数；> 0 时 UI 显示「停止」按钮。 */
+  runningCount: number;
+  /** 一次运行开始时注册其中止函数（abort + tts.cancel 由调用方组合）；返回结束回调。 */
+  beginRun(stop: () => void): () => void;
+  /** 用户点「停止」：中止所有在跑的运行。 */
+  stopAllRuns(): void;
 
   reset(): void;
 }
@@ -152,10 +170,14 @@ function emptyMeeting(id: string, title?: string): MeetingCard {
   };
 }
 
+// 在跑运行的中止函数集合（非响应式；reactive 计数走 runningCount）。
+const _stopFns = new Set<() => void>();
+
 export const useStore = create<Store>((set, get) => ({
   meetings: {},
   currentMeetingId: null,
   meetingDetailLoaded: {},
+  meetingHistoryResyncNonce: 0,
   artifacts: [],
   failedArtifacts: [],
   pendingArtifactBriefs: {},
@@ -163,6 +185,7 @@ export const useStore = create<Store>((set, get) => ({
   events: [],
   conversationEvents: [],
   _commandBarPrefillHandler: null,
+  runningCount: 0,
 
   setConnected: (v) => set({ connected: v }),
   selectMeeting: (id) => set({ currentMeetingId: id }),
@@ -171,6 +194,7 @@ export const useStore = create<Store>((set, get) => ({
     const id = `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const ev: ConversationEvent = {
       id,
+      meeting_id: get().currentMeetingId,
       ts: new Date().toISOString(),
       kind: "user_command",
       text,
@@ -181,14 +205,22 @@ export const useStore = create<Store>((set, get) => ({
     }));
     return id;
   },
-  appendAssistantReply: (text, kind = "assistant_reply", citations, status = "done") => {
+  appendAssistantReply: (
+    text,
+    kind = "assistant_reply",
+    citations,
+    status = "done",
+    artifacts,
+  ) => {
     const id = `reply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const ev: ConversationEvent = {
       id,
+      meeting_id: get().currentMeetingId,
       ts: new Date().toISOString(),
       kind,
       text,
       citations,
+      artifacts,
       status,
     };
     set((s) => ({
@@ -210,6 +242,7 @@ export const useStore = create<Store>((set, get) => ({
               ...e,
               ...(patch.text !== undefined ? { text: patch.text } : {}),
               ...(patch.citations !== undefined ? { citations: patch.citations } : {}),
+              ...(patch.artifacts !== undefined ? { artifacts: patch.artifacts } : {}),
               ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
               ...(patch.status !== undefined ? { status: patch.status } : {}),
             }
@@ -217,6 +250,29 @@ export const useStore = create<Store>((set, get) => ({
       ),
     })),
   clearConversationEvents: () => set({ conversationEvents: [] }),
+
+  beginRun: (stop) => {
+    _stopFns.add(stop);
+    set((s) => ({ runningCount: s.runningCount + 1 }));
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      _stopFns.delete(stop);
+      set((s) => ({ runningCount: Math.max(0, s.runningCount - 1) }));
+    };
+  },
+  stopAllRuns: () => {
+    for (const fn of [..._stopFns]) {
+      try {
+        fn();
+      } catch {
+        /* ignore */
+      }
+    }
+    _stopFns.clear();
+    set({ runningCount: 0 });
+  },
 
   registerCommandBarPrefill: (handler) => {
     set({ _commandBarPrefillHandler: handler });
@@ -238,6 +294,7 @@ export const useStore = create<Store>((set, get) => ({
       meetings: {},
       currentMeetingId: null,
       meetingDetailLoaded: {},
+      meetingHistoryResyncNonce: 0,
       artifacts: [],
       failedArtifacts: [],
       pendingArtifactBriefs: {},
@@ -262,6 +319,8 @@ export const useStore = create<Store>((set, get) => ({
           // M_minutes_refactor：display_title 一旦从后端拿到就持久化到 store
           display_title: sum.display_title ?? cur.display_title ?? null,
           state: uiState,
+          n_segments: sum.n_segments,
+          n_speakers: sum.n_speakers,
           started_at: cur.started_at ?? sum.started_at,
           ended_at: cur.ended_at ?? sum.ended_at ?? undefined,
         };
@@ -272,6 +331,12 @@ export const useStore = create<Store>((set, get) => ({
   markMeetingDetailLoaded: (id) =>
     set((s) => ({
       meetingDetailLoaded: { ...s.meetingDetailLoaded, [id]: true },
+    })),
+
+  requestMeetingHistoryResync: () =>
+    set((s) => ({
+      meetingDetailLoaded: {},
+      meetingHistoryResyncNonce: s.meetingHistoryResyncNonce + 1,
     })),
 
   dismissFailedArtifact: (id) =>
@@ -309,6 +374,13 @@ export const useStore = create<Store>((set, get) => ({
     }),
 
   applyEvent: (e) => {
+    const incomingSeq = typeof e.seq === "number" ? e.seq : 0;
+    if (
+      incomingSeq > 0 &&
+      get().events.some((prev) => prev.seq === incomingSeq)
+    ) {
+      return;
+    }
     set((s) => ({ events: [...s.events.slice(-200), e] }));
 
     const mid = e.meeting_id ?? undefined;
@@ -327,10 +399,63 @@ export const useStore = create<Store>((set, get) => ({
           set({ currentMeetingId: mid });
         }
         break;
+      case "meeting.auto_detected":
+        if (mid) {
+          get().upsertMeeting(mid, {
+            state: "in_meeting",
+            started_at: get().meetings[mid]?.started_at ?? e.ts,
+          });
+          set({ currentMeetingId: mid });
+        }
+        break;
+      case "meeting.auto_ended":
+        if (mid) {
+          get().upsertMeeting(mid, {
+            state: "ended",
+            ended_at: e.ts,
+            minutes_status: get().meetings[mid]?.minutes
+              ? "ok"
+              : (get().meetings[mid]?.minutes_status ?? "generating"),
+          });
+        }
+        break;
+      case "meeting.state_changed": {
+        if (!mid) break;
+        const p = (e.payload ?? {}) as {
+          mode?: "idle" | "in_meeting";
+          minutes_status?: MeetingCard["minutes_status"];
+          minutes_error?: string | null;
+        };
+        if (p.mode === "in_meeting") {
+          get().upsertMeeting(mid, {
+            state: "in_meeting",
+            started_at: get().meetings[mid]?.started_at ?? e.ts,
+            minutes_status: null,
+            minutes_error: null,
+          });
+          set({ currentMeetingId: mid });
+        } else if (p.mode === "idle") {
+          get().upsertMeeting(mid, {
+            state: "ended",
+            ended_at: get().meetings[mid]?.ended_at ?? e.ts,
+            minutes_status: p.minutes_status ?? get().meetings[mid]?.minutes_status ?? "generating",
+            minutes_error: p.minutes_error ?? get().meetings[mid]?.minutes_error ?? null,
+          });
+        }
+        break;
+      }
       case "meeting.segment": {
         if (!mid) break;
         const seg = e.payload as unknown as TranscriptSegment;
         const cur = get().meetings[mid] ?? emptyMeeting(mid);
+        const exists = cur.segments.some(
+          (prev) =>
+            prev.start_ms === seg.start_ms &&
+            prev.end_ms === seg.end_ms &&
+            prev.text === seg.text &&
+            (prev.speaker_id ?? null) === (seg.speaker_id ?? null),
+        );
+        if (exists) break;
         const speakers = new Set(cur.speakers);
         if (seg.speaker_label) speakers.add(seg.speaker_label);
         get().upsertMeeting(mid, {

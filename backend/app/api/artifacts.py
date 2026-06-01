@@ -15,12 +15,13 @@ import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import LLMError
 from app.adapters.skill import SkillError, SkillExecutor
+from app.adapters.skill.llm_skill import _mime_for
 from app.api.deps import get_event_bus
 from app.api.deps import get_llm_singleton as get_llm
 from app.config import Settings, get_settings
@@ -51,9 +52,66 @@ def reset_skill_singleton() -> None:
     _skill_singleton = None
 
 
+@router.get("/artifacts", response_model=list[GeneratedArtifact])
+async def list_artifacts(
+    settings: Settings = Depends(get_settings),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[GeneratedArtifact]:
+    """列出历史产物。
+
+    产物文件已由 SkillExecutor 持久化在 ``skill_executor_build_dir/<artifact_id>/``。
+    旧实现只有 download，没有 list，导致重启后前端 outputs 面板变空；这里按
+    output 文件 mtime 倒序恢复最近产物。
+    """
+    root = Path(settings.skill_executor_build_dir).expanduser()
+    if not root.exists() or not root.is_dir():
+        return []
+
+    restored: list[tuple[float, GeneratedArtifact]] = []
+    for build_dir in root.iterdir():
+        if not build_dir.is_dir():
+            continue
+        artifact_id = build_dir.name
+        outputs = sorted(build_dir.glob("output.*"))
+        if not outputs:
+            continue
+        output = outputs[0]
+        meta = _read_artifact_meta(build_dir)
+        ext = str(meta.get("ext") or output.suffix.lstrip("."))
+        artifact_type = str(meta.get("artifact_type") or _kind_from_artifact_id(artifact_id, ext))
+        title = str(meta.get("title") or artifact_id)
+        try:
+            stat = output.stat()
+        except OSError:
+            continue
+        restored.append(
+            (
+                stat.st_mtime,
+                GeneratedArtifact(
+                    artifact_id=artifact_id,
+                    artifact_type=artifact_type,
+                    title=title,
+                    file_path=str(output),
+                    mime_type=_mime_for(ext),
+                    size_bytes=stat.st_size,
+                    generation_latency_ms=0.0,
+                    model=str(meta.get("model") or "restored"),
+                    metadata={
+                        "restored": "true",
+                        "mtime": str(stat.st_mtime),
+                        "ext": ext,
+                    },
+                ),
+            )
+        )
+    restored.sort(key=lambda item: item[0], reverse=True)
+    return [artifact for _, artifact in restored[:limit]]
+
+
 @router.post("/artifacts/generate", response_model=GeneratedArtifact)
 async def generate(
     body: ArtifactRequest,
+    settings: Settings = Depends(get_settings),
     llm: LLMPort = Depends(get_llm),
     runner: SkillExecutorPort = Depends(get_skill),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
@@ -71,7 +129,11 @@ async def generate(
         EchoEvent(
             type="artifact.generating",
             meeting_id=body.meeting_id,
-            payload={"artifact_type": body.artifact_type, "brief": body.brief[:200]},
+            payload={
+                "artifact_type": body.artifact_type,
+                "brief": body.brief[:200],
+                "todo_id": body.todo_id,
+            },
         )
     )
     try:
@@ -87,7 +149,11 @@ async def generate(
             EchoEvent(
                 type="artifact.failed",
                 meeting_id=body.meeting_id,
-                payload={"artifact_type": body.artifact_type, "error": str(e)[:300]},
+                payload={
+                    "artifact_type": body.artifact_type,
+                    "error": str(e)[:300],
+                    "todo_id": body.todo_id,
+                },
             )
         )
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -103,6 +169,7 @@ async def generate(
                     "artifact_type": body.artifact_type,
                     "error": f"远程 LLM 不可达：{str(e)[:200]}",
                     "reason": "remote_llm",
+                    "todo_id": body.todo_id,
                 },
             )
         )
@@ -114,6 +181,11 @@ async def generate(
             meeting_id=body.meeting_id,
             todo_id=body.todo_id,
             artifact_id=artifact.artifact_id,
+        )
+    if body.meeting_id:
+        _patch_meta_meeting_id(
+            Path(settings.skill_executor_build_dir).expanduser() / artifact.artifact_id,
+            body.meeting_id,
         )
     payload = artifact.model_dump(mode="json")
     if body.meeting_id:
@@ -133,6 +205,7 @@ async def generate(
 @router.post("/artifacts/generate/stream")
 async def generate_stream_endpoint(
     body: ArtifactRequest,
+    settings: Settings = Depends(get_settings),
     llm: LLMPort = Depends(get_llm),
     runner: SkillExecutorPort = Depends(get_skill),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
@@ -168,7 +241,11 @@ async def generate_stream_endpoint(
         EchoEvent(
             type="artifact.generating",
             meeting_id=body.meeting_id,
-            payload={"artifact_type": body.artifact_type, "brief": body.brief[:200]},
+            payload={
+                "artifact_type": body.artifact_type,
+                "brief": body.brief[:200],
+                "todo_id": body.todo_id,
+            },
         )
     )
 
@@ -178,6 +255,7 @@ async def generate_stream_endpoint(
             runner=runner,
             event_bus=event_bus,
             body=body,
+            settings=settings,
         ),
         media_type="text/event-stream",
     )
@@ -189,6 +267,7 @@ async def _stream_skill_progress(
     runner: SkillExecutorPort,
     event_bus: InMemoryEventBus,
     body: ArtifactRequest,
+    settings: Settings,
 ) -> AsyncIterator[bytes]:
     """消费 ``SkillExecutor.generate_stream``，把每个 ``SkillProgress`` 映射到 SSE event。
 
@@ -232,6 +311,7 @@ async def _stream_skill_progress(
         body=body,
         artifact=last_artifact,
         error=last_error,
+        settings=settings,
     )
 
 
@@ -241,6 +321,7 @@ async def _broadcast_stream_outcome(
     body: ArtifactRequest,
     artifact: GeneratedArtifact | None,
     error: str | None,
+    settings: Settings,
 ) -> None:
     """SSE 流终态后通过事件总线广播 ``artifact.ready`` / ``artifact.failed``，与阻塞接口对齐。"""
     if artifact is not None:
@@ -249,6 +330,11 @@ async def _broadcast_stream_outcome(
                 meeting_id=body.meeting_id,
                 todo_id=body.todo_id,
                 artifact_id=artifact.artifact_id,
+            )
+        if body.meeting_id:
+            _patch_meta_meeting_id(
+                Path(settings.skill_executor_build_dir).expanduser() / artifact.artifact_id,
+                body.meeting_id,
             )
         payload = artifact.model_dump(mode="json")
         if body.meeting_id:
@@ -269,6 +355,8 @@ async def _broadcast_stream_outcome(
             "artifact_type": body.artifact_type,
             "error": error[:300],
         }
+        if body.todo_id:
+            payload_failed["todo_id"] = body.todo_id
         if reason is not None:
             payload_failed["reason"] = reason
         await event_bus.publish(
@@ -383,6 +471,32 @@ def _safe_title(raw: str) -> str:
     return s
 
 
+def _read_artifact_meta(build_dir: Path) -> dict[str, object]:
+    meta_path = build_dir / "meta.json"
+    if not meta_path.exists():
+        return {}
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _kind_from_artifact_id(artifact_id: str, ext: str) -> str:
+    prefix = artifact_id.split("-", 1)[0].lower()
+    if prefix in {"html", "pptx", "word", "xlsx", "markdown", "pdf", "txt"}:
+        return prefix
+    return {
+        "docx": "word",
+        "pptx": "pptx",
+        "xlsx": "xlsx",
+        "html": "html",
+        "md": "markdown",
+        "pdf": "pdf",
+        "txt": "txt",
+    }.get(ext.lower(), prefix or "txt")
+
+
 @router.get("/artifacts/{artifact_id}/download")
 async def download(
     artifact_id: str,
@@ -400,13 +514,67 @@ async def download(
     meta_path = build_dir / "meta.json"
     download_name = f.name
     if meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = _read_artifact_meta(build_dir)
+        if meta:
             raw_title = str(meta.get("title", "") or "")
             ext = str(meta.get("ext", "") or f.suffix.lstrip("."))
             safe = _safe_title(raw_title)
             download_name = f"{safe}_{artifact_id}.{ext}" if ext else f"{safe}_{artifact_id}"
-        except (OSError, json.JSONDecodeError, ValueError):
-            download_name = f.name
 
     return FileResponse(f, filename=download_name)
+
+
+def _patch_meta_meeting_id(build_dir: Path, meeting_id: str) -> None:
+    """把 meeting_id 追加写入 build_dir/meta.json，用于跨 session 关联。
+
+    只有 meeting_id 非空时才调；文件读写失败时静默忽略（产物本身已落盘，
+    关联信息丢失最多导致会议产物面板显示不全，不影响下载/预览）。
+    """
+    meta_path = build_dir / "meta.json"
+    try:
+        meta: dict[str, object] = {}
+        if meta_path.exists():
+            raw = meta_path.read_text(encoding="utf-8")
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                meta = parsed
+        meta["meeting_id"] = meeting_id
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+
+
+def _build_artifact_from_dir(
+    build_dir: Path, artifact_id: str
+) -> GeneratedArtifact | None:
+    """从 build_dir 重建 GeneratedArtifact；目录无效时返回 None。"""
+    outputs = sorted(build_dir.glob("output.*"))
+    if not outputs:
+        return None
+    output = outputs[0]
+    meta = _read_artifact_meta(build_dir)
+    ext = str(meta.get("ext") or output.suffix.lstrip("."))
+    artifact_type = str(
+        meta.get("artifact_type") or _kind_from_artifact_id(artifact_id, ext)
+    )
+    title = str(meta.get("title") or artifact_id)
+    try:
+        stat = output.stat()
+    except OSError:
+        return None
+    return GeneratedArtifact(
+        artifact_id=artifact_id,
+        artifact_type=artifact_type,
+        title=title,
+        file_path=str(output),
+        mime_type=_mime_for(ext),
+        size_bytes=stat.st_size,
+        generation_latency_ms=0.0,
+        model="restored",
+        metadata={
+            "restored": "true",
+            "mtime": str(stat.st_mtime),
+            "ext": ext,
+            **({"meeting_id": str(meta["meeting_id"])} if meta.get("meeting_id") else {}),
+        },
+    )

@@ -4,8 +4,8 @@
  * 覆盖功能：
  *  - 命令栏 @生成 HTML 输入 + Enter 提交
  *  - intent 路由分类（mock generate_html）
- *  - /artifacts/generate POST 调用
- *  - artifact.ready WS 事件推送 → ArtifactPanel 卡片展示
+ *  - /agent/run POST 调用
+ *  - agent SSE artifact 事件 → ArtifactPanel 卡片展示
  *
  * 视频里观察点：
  *  - 用户在底部 CommandBar 输入文本
@@ -13,7 +13,7 @@
  *  - WebSocket 状态 pill 全程绿色
  */
 import { test, expect } from "@playwright/test";
-import { installScenarioMock, publishArtifactReady } from "./_helpers";
+import { installScenarioMock } from "./_helpers";
 
 test("S04 · @生成 HTML 命令 → 产物卡片出现", async ({ page }) => {
   // intent/route mock：把任意 @生成 HTML 文本归类为 generate_html
@@ -33,7 +33,7 @@ test("S04 · @生成 HTML 命令 → 产物卡片出现", async ({ page }) => {
     });
   });
 
-  const mock = await installScenarioMock(page);
+  const mock = await installScenarioMock(page, { skipPaths: ["/intent/route"] });
 
   await test.step("打开主界面，等连接 OK", async () => {
     await page.goto("/");
@@ -47,14 +47,14 @@ test("S04 · @生成 HTML 命令 → 产物卡片出现", async ({ page }) => {
     await expect(textarea).toHaveValue("@生成 HTML 测试报告");
   });
 
-  await test.step("按 Enter 提交，命令被发送到 /artifacts/generate", async () => {
+  await test.step("按 Enter 提交，命令被发送到 /agent/run", async () => {
     await page.getByTestId("command-textarea").press("Enter");
     await expect
       .poll(
         async () => {
           const log = await mock.fetchLog();
           return log.find(
-            (r) => r.method === "POST" && r.url.includes("/artifacts/generate"),
+            (r) => r.method === "POST" && r.url.includes("/agent/run"),
           );
         },
         { timeout: 5_000 },
@@ -62,11 +62,9 @@ test("S04 · @生成 HTML 命令 → 产物卡片出现", async ({ page }) => {
       .toBeTruthy();
   });
 
-  await test.step("服务端 WS 推送 artifact.ready → 卡片出现", async () => {
-    const artifactId = await publishArtifactReady(mock, "html", 1, "mock-html-scenario-001");
-    // 卡片由 data-artifact-id 锚定（title 主显示、artifact_id 仅做 tooltip / 14 字符截断后副显）
+  await test.step("agent SSE 返回 artifact → 卡片出现", async () => {
     await expect(
-      page.locator(`[data-artifact-id="${artifactId}"]`),
+      page.getByTestId("artifact-card").filter({ hasText: "mock html 报告" }),
     ).toBeVisible({ timeout: 5_000 });
   });
 

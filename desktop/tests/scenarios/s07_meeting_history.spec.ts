@@ -193,11 +193,41 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     });
   });
 
+  await page.route(/\/(api\/)?intent\/route$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        kind: "chat",
+        confidence: 0.9,
+        params: {},
+        rationale: "scenario test",
+      }),
+    });
+  });
+  await page.route(/\/(api\/)?agent\/run$/, async (route) => {
+    const body = [
+      "event: final",
+      `data: ${JSON.stringify({ answer: "A 会议内 Echo 回复", citations: [] })}`,
+      "",
+      "event: done",
+      "data: {}",
+      "",
+    ].join("\n");
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream; charset=utf-8",
+      body,
+    });
+  });
+
   // 让上面的 page.route() 都生效（不被 _mock.ts 的 window.fetch 短路）
   const mock = await installScenarioMock(page, {
     skipPaths: [
       "/meetings",
       "/capture/recent",
+      "/intent/route",
+      "/agent/run",
     ],
   });
 
@@ -267,6 +297,13 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_B.artifact_id}"]`),
     ).toHaveCount(0);
+
+    // 在 A 会议内发起一次 Echo 对话：这些 user/Echo 气泡必须归属 A，
+    // 后续切到 B 时不能继续挂在转写流里。
+    await page.getByTestId("command-textarea").fill("@echo 这条只属于 A 会议");
+    await page.getByTestId("command-send-btn").click();
+    await expect(page.getByText("@echo 这条只属于 A 会议")).toBeVisible();
+    await expect(page.getByText("A 会议内 Echo 回复")).toBeVisible();
   });
 
   await test.step("点击会议 B → 转写流 / 纪要 / outputs 都切到 B", async () => {
@@ -279,9 +316,12 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     await expect(page.getByText("B-第二段：风险点")).toBeVisible();
     // A 的转写文本不应残留
     await expect(page.getByText("A-第一段：开场")).toHaveCount(0);
+    // A 的人机会话气泡也不应残留
+    await expect(page.getByText("@echo 这条只属于 A 会议")).toHaveCount(0);
+    await expect(page.getByText("A 会议内 Echo 回复")).toHaveCount(0);
 
-    // B 没纪要 → 显示空态
-    await expect(page.getByText(/纪要尚未生成/)).toBeVisible();
+    // B 没纪要且已结束 → 显示生成中状态，不应残留 A 的纪要。
+    await expect(page.getByText(/会议纪要生成中|纪要尚未生成/)).toBeVisible();
     // A 的纪要标题不应再出现
     await expect(page.getByText(/Q3 达成 95%/)).toHaveCount(0);
 
@@ -311,7 +351,7 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     // ambient lane（capture/recent 返回 []）→ 显示"等待环境音转写…"占位
     await expect(page.getByText("等待环境音转写…")).toBeVisible();
     // 纪要空态
-    await expect(page.getByText(/纪要尚未生成/)).toBeVisible();
+    await expect(page.getByText(/纪要尚未生成|结束会议后/)).toBeVisible();
     // outputs 切回 global，A、B 两条都应该可见（store.artifacts 是事件流积累的）
     await expect(page.getByTestId("artifact-list")).toHaveAttribute(
       "data-scope",

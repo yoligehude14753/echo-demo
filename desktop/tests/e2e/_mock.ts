@@ -214,8 +214,89 @@ export async function installEchoMock(
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      // agent/run 默认返回一条可消费的 SSE；生成类问题附带 artifact 事件。
+      if ((path === "/agent/run" || path === "/api/agent/run") && method === "POST") {
+        const body = JSON.parse(bodyText ?? "{}") as { question?: string };
+        const question = body.question ?? "";
+        const lower = question.toLowerCase();
+        const artifactType = lower.includes("ppt") || question.includes("PPT")
+          ? "pptx"
+          : lower.includes("excel") || lower.includes("xlsx") || question.includes("表格")
+            ? "xlsx"
+            : lower.includes("html") || question.includes("HTML")
+              ? "html"
+              : null;
+        const frames: string[] = [
+          "event: tool_call",
+          `data: ${JSON.stringify({ name: artifactType ? "generate_artifact" : "rag_search", reason: "mock", step: 1 })}`,
+          "",
+        ];
+        if (artifactType) {
+          const artifactId = `mock-agent-${artifactType}-${Date.now()}`;
+          const artifact = {
+            artifact_id: artifactId,
+            artifact_type: artifactType,
+            title: `mock ${artifactType} 报告`,
+            file_path: `/tmp/${artifactId}.out`,
+            mime_type: "application/octet-stream",
+            size_bytes: 12345,
+            generation_latency_ms: 1234,
+            model: "MiniMax-M2.7-mock",
+            metadata: { kind: artifactType, model: "MiniMax-M2.7-mock" },
+          };
+          frames.push(
+            "event: artifact",
+            `data: ${JSON.stringify(artifact)}`,
+            "",
+            "event: final",
+            `data: ${JSON.stringify({ answer: "已生成产物。", artifact_ids: [artifactId], citations: [] })}`,
+            "",
+          );
+        } else {
+          frames.push(
+            "event: final",
+            `data: ${JSON.stringify({ answer: "mock answer", artifact_ids: [], citations: [] })}`,
+            "",
+          );
+        }
+        frames.push("event: done", "data: {}", "");
+        return new Response(frames.join("\n"), {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+        });
+      }
+      if (
+        (path === "/artifacts/generate/stream" || path === "/api/artifacts/generate/stream") &&
+        method === "POST"
+      ) {
+        const body = JSON.parse(bodyText ?? "{}");
+        const artifactId = `mock-stream-${body.artifact_type}-${Date.now()}`;
+        const artifact = {
+          artifact_id: artifactId,
+          artifact_type: body.artifact_type === "ppt" ? "pptx" : body.artifact_type,
+          title: `mock ${body.artifact_type} 报告`,
+          file_path: `/tmp/${artifactId}.out`,
+          mime_type: "application/octet-stream",
+          size_bytes: 12345,
+          generation_latency_ms: 1234,
+          model: "MiniMax-M2.7-mock",
+          metadata: { kind: body.artifact_type, model: "MiniMax-M2.7-mock" },
+        };
+        return new Response(
+          [
+            "event: phase",
+            `data: ${JSON.stringify({ phase: "executor_run", msg: "mock generating" })}`,
+            "",
+            "event: done",
+            `data: ${JSON.stringify(artifact)}`,
+            "",
+            "",
+          ].join("\n"),
+          { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } },
+        );
+      }
       // 生成产物：先 ack 200，UI 显示生成中；2 步：测试触发 ws artifact.ready
-      if (path === "/artifacts/generate" && method === "POST") {
+      if ((path === "/artifacts/generate" || path === "/api/artifacts/generate") && method === "POST") {
         ctrl._seq += 1;
         const body = JSON.parse(bodyText ?? "{}");
         const artifactId = `mock-${body.artifact_type}-${Date.now()}`;
@@ -232,6 +313,18 @@ export async function installEchoMock(
           metadata: { kind: body.artifact_type, model: "MiniMax-M2.7-mock" },
         };
         return new Response(JSON.stringify(fake), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      // 会议历史列表：默认空（否则 useMeetingHistory 会 fall through 到 realFetch，
+      // 在本机真 backend 在跑时把真实会议泄漏进 mock 测试，污染断言）。
+      if ((path === "/meetings" || path === "/api/meetings" || path.startsWith("/meetings?") || path.startsWith("/api/meetings?")) && method === "GET") {
+        return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      // 会议详情（transcript / minutes / artifacts）：默认空，避免泄漏真 backend。
+      if (/^\/(api\/)?meetings\/[^/]+\/(transcript|minutes|artifacts)$/.test(path) && method === "GET") {
+        if (path.endsWith("/minutes")) {
+          return new Response(JSON.stringify(null), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       // meetings 类操作
       if (path.startsWith("/meetings/") && method === "POST") {

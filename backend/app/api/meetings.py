@@ -19,6 +19,7 @@ artifacts 的产品决策（PR body 详述）：现 schema ``artifacts`` 无 mee
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -244,26 +245,41 @@ async def get_minutes(
 async def get_meeting_artifacts(
     meeting_id: str,
     repository: Annotated[RepositoryPort, Depends(get_repository)],
+    settings: Settings = Depends(get_settings),
 ) -> list[GeneratedArtifact]:
-    """单会议产物（右下 outputs 面板用）。
+    """单会议产物：扫描 build_dir，按 meta.json 里的 meeting_id 过滤。
 
-    **当前实现**：返回空列表。原因：
-    1. ``artifacts`` schema 没 meeting_id 列，也没有 ``meeting_artifacts`` 关
-       联表。POST /artifacts/generate 不接受 meeting_id 参数。
-    2. 前端 ``store.meetings[*].artifacts`` 是 best-effort 视图（基于 WS
-       artifact.ready.meeting_id 字段维护，会话内有效）。
-    3. 真正的"持久化 per-meeting outputs"需要在 ArtifactRequest / events /
-       schema migration 三处一起改，超出 M_meeting_history 这个 PR 的范围。
-
-    保留这个 endpoint 让前端调用约定稳定（``getMeetingArtifacts(id)`` 是 4 个
-    detail endpoint 之一）；后续 PR 接 DB join 时只换实现，前端不动。
-
-    会议不存在时仍返回 404（让前端能区分"无产物"与"无会议"）。
+    生成产物时 artifacts.py 会把 meeting_id 写入 meta.json，因此重启后
+    依然能恢复会议 → 产物的关联关系，不依赖 WS 会话内存或 DB 新表。
     """
     meeting = await repository.get_meeting(meeting_id)
     if meeting is None:
         raise HTTPException(status_code=404, detail="meeting not found")
-    return []
+
+    from app.api.artifacts import _build_artifact_from_dir, _read_artifact_meta
+
+    root = Path(settings.skill_executor_build_dir).expanduser()
+    if not root.exists():
+        return []
+
+    results: list[tuple[float, GeneratedArtifact]] = []
+    for build_dir in root.iterdir():
+        if not build_dir.is_dir():
+            continue
+        meta = _read_artifact_meta(build_dir)
+        if str(meta.get("meeting_id", "")) != meeting_id:
+            continue
+        artifact = _build_artifact_from_dir(build_dir, build_dir.name)
+        if artifact is None:
+            continue
+        try:
+            mtime = float(str(meta.get("mtime") or 0))
+        except ValueError:
+            mtime = 0.0
+        results.append((mtime, artifact))
+
+    results.sort(key=lambda x: x[0], reverse=True)
+    return [a for _, a in results]
 
 
 @router.post("/{meeting_id}/start")

@@ -326,8 +326,8 @@ async def test_default_settings_have_phase4_diar_deep_values() -> None:
     assert s.diarizer_active_window_s == 60.0
     assert s.diarizer_active_match_threshold == 0.35
     assert s.diarizer_short_segment_continuity_ms == 1500
-    # 用户 2026-05-28 ambient 编号爆炸修复：cap 默认 6
-    assert s.diarizer_ambient_max_speakers == 6
+    # 用户 2026-06 ambient 编号爆炸修复：cap 6 → 4（典型自由对话 1-3 人）
+    assert s.diarizer_ambient_max_speakers == 4
 
 
 @pytest.mark.asyncio

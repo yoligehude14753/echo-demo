@@ -5,7 +5,7 @@
  * - 暴露 ``speak(text)`` 给应用：fetch /tts/speak 拿 PCM 16-bit mono 16kHz → 用 AudioContext 播放
  * - 监听 WS 事件 ``tts.suggested`` → 当用户开关 ``ttsEnabled === true`` 时自动 speak()
  * - 顺序队列：同一时刻只播一段，新请求排队（避免多段重叠出现的噪声）
- * - 开关持久化到 ``localStorage("echodesk.tts.enabled")``，默认开启
+ * - 开关持久化到 ``localStorage("echodesk.tts.enabled")``，默认关闭（静默模式）
  *
  * 设计上不依赖 ws.ts 的实现，只订阅 store.events（applyEvent 已经写完后会有更新）。
  *
@@ -23,6 +23,7 @@ import { ttsDiag, ttsSpeak, TtsSpeakError, type TtsDiagResult } from "@/api";
 import { useStore } from "@/store";
 
 const STORAGE_KEY = "echodesk.tts.enabled";
+const DEFAULT_OFF_MIGRATION_KEY = "echodesk.tts.defaultOffMigrated";
 const SAMPLE_RATE = 16_000;
 const DIAG_POLL_INTERVAL_MS = 30_000;
 // 同一条错误 30s 内只 toast 一次，避免 WS 连发多条 tts.suggested 时
@@ -30,13 +31,18 @@ const DIAG_POLL_INTERVAL_MS = 30_000;
 const ERROR_TOAST_DEDUPE_MS = 30_000;
 
 function loadEnabled(): boolean {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   try {
+    if (window.localStorage.getItem(DEFAULT_OFF_MIGRATION_KEY) !== "1") {
+      window.localStorage.setItem(STORAGE_KEY, "0");
+      window.localStorage.setItem(DEFAULT_OFF_MIGRATION_KEY, "1");
+      return false;
+    }
     const v = window.localStorage.getItem(STORAGE_KEY);
-    if (v === null) return true;
+    if (v === null) return false;
     return v === "1" || v === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -66,7 +72,7 @@ function pcm16ToAudioBuffer(
 export interface TtsController {
   enabled: boolean;
   setEnabled(v: boolean): void;
-  speak(text: string): Promise<void>;
+  speak(text: string, options?: { interrupt?: boolean }): Promise<void>;
   cancel(): void;
   isSpeaking: boolean;
   /** 最近一次失败的人话；播放成功后会清。null 表示当前健康。 */
@@ -86,6 +92,8 @@ export function useTtsPlayer(): TtsController {
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   const queueRef = useRef<string[]>([]);
   const inflightRef = useRef(false);
+  // 播放代次：cancel 时自增，让正在跑的 drain 循环检测到并立即退出。
+  const genRef = useRef(0);
   const lastSeqRef = useRef<number>(0);
   const lastToastRef = useRef<{ msg: string; at: number } | null>(null);
   const events = useStore((s) => s.events);
@@ -128,66 +136,102 @@ export function useTtsPlayer(): TtsController {
     return ctxRef.current;
   }, []);
 
-  const playNow = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      try {
-        const pcm = await ttsSpeak(trimmed);
-        const ctx = ensureCtx();
-        const buffer = pcm16ToAudioBuffer(ctx, pcm, SAMPLE_RATE);
-        const src = ctx.createBufferSource();
-        src.buffer = buffer;
-        src.connect(ctx.destination);
-        sourceRef.current = src;
-        setIsSpeaking(true);
-        setLastError(null);
-        await new Promise<void>((resolve) => {
-          src.onended = () => resolve();
-          src.start();
-        });
-      } catch (e) {
-        // 关键修复：以前这里只 console.warn 静默吞掉，用户看到顶栏 TTS 绿灯
-        // 却什么都没听到——以为整个 TTS 完全失效。现在走 message.error +
-        // setLastError + 触发 health 刷新，让 StatusBar 同步变红。
-        const msg =
-          e instanceof TtsSpeakError
-            ? e.message
-            : e instanceof Error
-              ? `TTS 播放失败：${e.message}`
-              : `TTS 播放失败：${String(e)}`;
-        console.warn("[tts] play failed", e);
-        reportError(msg);
-        // 后端报 silent_output / upstream_error 时立刻刷一次 diag，让 StatusBar
-        // 不必等下一个 30s 轮询周期。
-        void refreshHealth();
-      } finally {
-        sourceRef.current = null;
-        setIsSpeaking(false);
-      }
+  // 解码 + 播放一段 PCM（不含合成）。播放完成后 resolve。
+  const playPcm = useCallback(
+    async (pcm: ArrayBuffer) => {
+      const ctx = ensureCtx();
+      const buffer = pcm16ToAudioBuffer(ctx, pcm, SAMPLE_RATE);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(ctx.destination);
+      sourceRef.current = src;
+      await new Promise<void>((resolve) => {
+        src.onended = () => resolve();
+        src.start();
+      });
+      sourceRef.current = null;
     },
-    [ensureCtx, reportError, refreshHealth],
+    [ensureCtx],
   );
 
+  const reportSynthError = useCallback(
+    (e: unknown) => {
+      const msg =
+        e instanceof TtsSpeakError
+          ? e.message
+          : e instanceof Error
+            ? `TTS 播放失败：${e.message}`
+            : `TTS 播放失败：${String(e)}`;
+      console.warn("[tts] synth/play failed", e);
+      reportError(msg);
+      void refreshHealth();
+    },
+    [reportError, refreshHealth],
+  );
+
+  // 流水线播放：合成「下一句」与播放「当前句」并发（1 句前瞻），消除句间空档。
+  // 之前是串行（合成→播放→合成→播放），每句之间隔一次 ~1s 合成延迟，听起来又
+  // 慢又卡，被误以为"调了倍速"。
   const drain = useCallback(async () => {
     if (inflightRef.current) return;
     inflightRef.current = true;
+    const gen = genRef.current;
+    setIsSpeaking(true);
     try {
-      while (queueRef.current.length > 0) {
-        const next = queueRef.current.shift();
-        if (!next) continue;
-        await playNow(next);
+      const popText = (): string | null => {
+        const t = queueRef.current.shift();
+        const s = t?.trim();
+        return s && s.length > 0 ? s : null;
+      };
+      let curText = popText();
+      let curPromise: Promise<ArrayBuffer> | null =
+        curText !== null ? ttsSpeak(curText) : null;
+      while (curPromise !== null) {
+        // 先把下一句的合成发出去（与当前句播放并发）
+        const nextText = popText();
+        const aheadPromise = nextText !== null ? ttsSpeak(nextText) : null;
+        let pcm: ArrayBuffer | null = null;
+        try {
+          pcm = await curPromise;
+        } catch (e) {
+          reportSynthError(e);
+        }
+        if (gen !== genRef.current) return; // 已被 cancel
+        if (pcm) {
+          try {
+            await playPcm(pcm);
+            setLastError(null);
+          } catch (e) {
+            reportSynthError(e);
+          }
+        }
+        if (gen !== genRef.current) return;
+        curPromise = aheadPromise;
       }
     } finally {
       inflightRef.current = false;
+      setIsSpeaking(false);
+      // 播放期间若有新句子入队（且未被 cancel），补跑一轮，避免漏播。
+      if (gen === genRef.current && queueRef.current.length > 0) {
+        void drain();
+      }
     }
-  }, [playNow]);
+  }, [playPcm, reportSynthError]);
 
   const speak = useCallback(
-    async (text: string) => {
+    async (text: string, options?: { interrupt?: boolean }) => {
       if (!enabled) return;
       const t = text.trim();
       if (!t) return;
+      if (options?.interrupt) {
+        queueRef.current = [];
+        try {
+          sourceRef.current?.stop();
+        } catch {
+          /* ignore */
+        }
+        sourceRef.current = null;
+      }
       queueRef.current.push(t);
       void drain();
     },
@@ -195,7 +239,9 @@ export function useTtsPlayer(): TtsController {
   );
 
   const cancel = useCallback(() => {
+    genRef.current += 1; // 让正在跑的 drain 循环作废，丢弃 in-flight 合成结果
     queueRef.current = [];
+    inflightRef.current = false;
     try {
       sourceRef.current?.stop();
     } catch {
@@ -209,9 +255,18 @@ export function useTtsPlayer(): TtsController {
     (v: boolean) => {
       setEnabledState(v);
       persistEnabled(v);
-      if (!v) cancel();
+      if (v) {
+        try {
+          const ctx = ensureCtx();
+          if (ctx.state === "suspended") void ctx.resume();
+        } catch {
+          /* AudioContext 初始化失败会在实际 speak 时报告 */
+        }
+      } else {
+        cancel();
+      }
     },
-    [cancel],
+    [cancel, ensureCtx],
   );
 
   // 监听 store.events 里的 tts.suggested → 自动播

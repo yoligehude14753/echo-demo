@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Pencil } from "lucide-react";
+import { FileCode, FileSpreadsheet, FileText, FileType2, Globe, Loader2, Pencil, Presentation } from "lucide-react";
 import { Tooltip, message } from "antd";
 import { listRecentAmbient, renameSpeaker, type AmbientSegment } from "@/api";
 import { useStore, type ConversationEvent } from "@/store";
-import type { TranscriptSegment } from "@/types";
+import type { GeneratedArtifact, TranscriptSegment } from "@/types";
+import { CitationList, CitationText } from "@/components/CitationText";
+import ArtifactPreviewModal from "@/components/ArtifactPreviewModal";
 import {
   buildSpeakerDisplayMap,
   colorForDisplayIdx,
@@ -55,6 +57,7 @@ interface DisplaySegment {
   convKind?: ConversationEvent["kind"];
   convStatus?: ConversationEvent["status"];
   convCitations?: ConversationEvent["citations"];
+  convArtifacts?: ConversationEvent["artifacts"];
   convId?: string;
 }
 
@@ -66,8 +69,60 @@ function convToDisplay(ev: ConversationEvent): DisplaySegment {
     convKind: ev.kind,
     convStatus: ev.status,
     convCitations: ev.citations,
+    convArtifacts: ev.artifacts,
     convId: ev.id,
   };
+}
+
+const artifactIcon: Record<string, JSX.Element> = {
+  html: <Globe className="w-3.5 h-3.5" />,
+  pptx: <Presentation className="w-3.5 h-3.5" />,
+  ppt: <Presentation className="w-3.5 h-3.5" />,
+  xlsx: <FileSpreadsheet className="w-3.5 h-3.5" />,
+  excel: <FileSpreadsheet className="w-3.5 h-3.5" />,
+  word: <FileText className="w-3.5 h-3.5" />,
+  docx: <FileText className="w-3.5 h-3.5" />,
+  markdown: <FileCode className="w-3.5 h-3.5" />,
+  pdf: <FileType2 className="w-3.5 h-3.5" />,
+  txt: <FileText className="w-3.5 h-3.5" />,
+};
+
+function ConversationArtifactList({
+  artifacts = [],
+  onOpen,
+}: {
+  artifacts?: GeneratedArtifact[];
+  onOpen: (artifact: GeneratedArtifact) => void;
+}): JSX.Element | null {
+  if (artifacts.length === 0) return null;
+  return (
+    <div className="mt-2 pt-2 border-t border-violet-200/70 space-y-1.5">
+      {artifacts.map((artifact) => (
+        <button
+          key={artifact.artifact_id}
+          type="button"
+          data-testid="conversation-artifact-card"
+          data-artifact-id={artifact.artifact_id}
+          onClick={() => onOpen(artifact)}
+          className="w-full flex items-center gap-2 rounded-lg border border-violet-200 bg-white/85 px-2.5 py-2 text-left hover:bg-violet-50 transition"
+        >
+          <span className="inline-flex items-center gap-1 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-700">
+            {artifactIcon[artifact.artifact_type] ?? null}
+            {artifact.artifact_type}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[12px] font-medium text-ink-800">
+              {artifact.title || artifact.artifact_id}
+            </span>
+            <span className="block truncate font-mono text-[10px] text-ink-400">
+              {artifact.artifact_id}
+            </span>
+          </span>
+          <span className="text-[10px] text-violet-600">打开</span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function ambientToDisplay(s: AmbientSegment): DisplaySegment {
@@ -105,8 +160,13 @@ export default function TranscriptStream(): JSX.Element {
   const meeting = useStore((s) =>
     currentMeetingId ? s.meetings[currentMeetingId] : undefined,
   );
+  const meetingDetailLoaded = useStore((s) =>
+    currentMeetingId ? Boolean(s.meetingDetailLoaded[currentMeetingId]) : true,
+  );
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickyToBottomRef = useRef(true);
+  const [activeCitationKey, setActiveCitationKey] = useState<string | null>(null);
+  const [previewArtifact, setPreviewArtifact] = useState<GeneratedArtifact | null>(null);
 
   // 用户 2026-05-28：所有 speaker label 可改名。
   // 本地 overrides 优先：刚改完不等 ws 事件就能显示新名字；同时立刻 POST /speakers/{id}/rename
@@ -116,15 +176,21 @@ export default function TranscriptStream(): JSX.Element {
     Record<string, string>
   >({});
 
-  // 是否走"会议历史"分支：会议已选 + 已结束（ended/finalized 等）+ 有 segments
+  // 是否走"会议历史"分支：会议已选 + 已结束（ended/finalized 等）
   // 进行中会议仍走 ambient 分支保持实时性（ambient 是 chunk 写入的最近 100 条）
   const showMeetingHistory =
     currentMeetingId !== null &&
     meeting !== undefined &&
-    meeting.state === "ended" &&
-    meeting.segments.length > 0;
+    meeting.state === "ended";
 
   const conversationEvents = useStore((s) => s.conversationEvents);
+  const scopedConversationEvents = useMemo(
+    () =>
+      conversationEvents.filter(
+        (ev) => (ev.meeting_id ?? null) === currentMeetingId,
+      ),
+    [conversationEvents, currentMeetingId],
+  );
 
   // 合并 STT segments + 人机对话事件，按 ts 升序排
   const segs: DisplaySegment[] = useMemo(() => {
@@ -134,14 +200,14 @@ export default function TranscriptStream(): JSX.Element {
             meetingSegmentToDisplay(s, meeting.started_at),
           )
         : ambient.map(ambientToDisplay);
-    if (conversationEvents.length === 0) return base;
-    const convs = conversationEvents.map(convToDisplay);
+    if (scopedConversationEvents.length === 0) return base;
+    const convs = scopedConversationEvents.map(convToDisplay);
     const merged = [...base, ...convs];
     merged.sort((a, b) =>
       new Date(a.captured_at).getTime() - new Date(b.captured_at).getTime(),
     );
     return merged;
-  }, [showMeetingHistory, meeting, ambient, conversationEvents]);
+  }, [showMeetingHistory, meeting, ambient, scopedConversationEvents]);
 
   const speakerDisplayMap = useMemo(
     () => buildSpeakerDisplayMap(segs),
@@ -216,7 +282,16 @@ export default function TranscriptStream(): JSX.Element {
 
   if (segs.length === 0) {
     if (showMeetingHistory) {
-      // 历史会议但 segments 为空：理论上不会走到（hook 触发了 fetch 才标 loaded）
+      if (!meetingDetailLoaded) {
+        return (
+          <div className="flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
+            <div>正在加载该会议转写…</div>
+            <div className="text-[10px] text-ink-300">
+              切换会议后只显示当前会议内容，不再回退到伴随时段
+            </div>
+          </div>
+        );
+      }
       return (
         <div className="flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
           <div>该会议未保存逐字稿</div>
@@ -438,29 +513,36 @@ export default function TranscriptStream(): JSX.Element {
                       aria-label="生成中"
                     />
                   ) : null}
-                  {s.text}
+                  {isEchoReply && s.convCitations && s.convCitations.length > 0 ? (
+                    <CitationText
+                      text={s.text}
+                      citations={s.convCitations}
+                      appendUnreferenced={s.convKind === "rag_answer"}
+                      activeKey={activeCitationKey}
+                      onActiveKeyChange={setActiveCitationKey}
+                    />
+                  ) : (
+                    s.text
+                  )}
                   {isEchoReply && s.convStatus === "pending" && !s.text && (
                     <span className="inline-flex items-center gap-1 text-[11px] opacity-80">
                       <Loader2 className="w-3 h-3 animate-spin" />
                       Echo 思考中…
                     </span>
                   )}
-                  {s.convKind === "rag_answer" &&
-                    s.convCitations &&
-                    s.convCitations.length > 0 && (
-                      <div className="mt-1.5 pt-1.5 border-t border-violet-200/60 text-[10.5px] text-ink-500 flex flex-wrap gap-x-2 gap-y-0.5">
-                        引用：
-                        {s.convCitations.slice(0, 5).map((cit) => (
-                          <span
-                            key={cit.chunk_id ?? cit.doc_id}
-                            className="font-mono"
-                            title={cit.chunk_id ?? cit.doc_id}
-                          >
-                            {cit.doc_id.slice(0, 24)}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                  {s.convKind === "rag_answer" && s.convCitations && (
+                    <CitationList
+                      citations={s.convCitations}
+                      activeKey={activeCitationKey}
+                      onActiveKeyChange={setActiveCitationKey}
+                    />
+                  )}
+                  {isEchoReply && (
+                    <ConversationArtifactList
+                      artifacts={s.convArtifacts}
+                      onOpen={setPreviewArtifact}
+                    />
+                  )}
                   <span
                     className={`absolute top-1/2 -translate-y-1/2 text-[10px] text-ink-400 font-mono opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap select-none ${
                       isSelf ? "right-full mr-2" : "left-full ml-2"
@@ -475,6 +557,10 @@ export default function TranscriptStream(): JSX.Element {
           );
         })}
       </div>
+      <ArtifactPreviewModal
+        artifact={previewArtifact}
+        onClose={() => setPreviewArtifact(null)}
+      />
     </div>
   );
 }

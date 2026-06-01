@@ -193,26 +193,46 @@ def _grep_boost(chunk: RagChunk, norm_query: str, keywords: list[str]) -> float:
     return boost
 
 
-def _source_priority(c: RagChunk) -> int:
-    """source 优先级:PDF/workspace > meeting > ambient。
+# 「对话类查询」信号:用户在问之前说过/会上聊过/某时段发生的事 → 应优先 ambient/meeting。
+_CONVERSATION_QUERY_RE = re.compile(
+    r"(上午|下午|早上|晚上|昨天|今天|前天|刚才|刚刚|之前|先前|方才|当时|那天|这边|"
+    r"会上|会里|会议|开会|纪要|聊到|说到|提到|讲到|谈到|聊过|说过|提过|讲过|"
+    r"讨论|谁说|谁讲|谁负责|刚说|刚讲|刚提|对话|聊的|说的)"
+)
 
-    PDF/workspace 是用户**主动入库**的内容,优先级最高。
-    meeting 是会议结束后入库的纪要,中等。
-    ambient 是后台实时录音转录,容易被 BM25 length normalization 偏置,
-    应当排在最后(同时配合 _AMBIENT_BM25_PENALTY 削分)。
-    """
+
+def _is_conversation_query(query: str) -> bool:
+    """查询是否在问"之前对话/会议里说过的内容"。"""
+    return bool(_CONVERSATION_QUERY_RE.search(query))
+
+
+def _chunk_kind(c: RagChunk) -> str:
+    """归一出 chunk 来源:ambient / meeting / doc。"""
     src = c.metadata.get("source", "")
     kind = c.metadata.get("kind", "")
     if src == "ambient" or kind == "ambient":
-        return 0
+        return "ambient"
     if kind == "meeting" or src == "meeting":
-        return 1
-    return 2
+        return "meeting"
+    return "doc"
 
 
-def _adjusted_score(c: RagChunk) -> float:
-    src = c.metadata.get("source", "")
-    if src == "ambient":
+def _source_nudge(c: RagChunk, *, conv_query: bool) -> float:
+    """source 作为**小幅**加权(不再当排序主键)。
+
+    - 对话类查询:ambient/meeting **加分**(用户就是在问对话里说过的内容)。
+    - 普通(事实)查询:文档略占优,ambient 略降(避免日常闲聊霸榜),但都是软调,
+      不会像以前那样把对话内容硬压到所有文档之后。
+    """
+    k = _chunk_kind(c)
+    if conv_query:
+        return {"meeting": 2.0, "ambient": 1.5, "doc": 0.0}[k]
+    return {"doc": 0.5, "meeting": 0.0, "ambient": -0.5}[k]
+
+
+def _adjusted_score(c: RagChunk, *, conv_query: bool) -> float:
+    """ambient 削分仅用于"普通事实查询";对话类查询不削(否则查不到对话内容)。"""
+    if _chunk_kind(c) == "ambient" and not conv_query:
         return c.score * _AMBIENT_BM25_PENALTY
     return c.score
 
@@ -220,13 +240,13 @@ def _adjusted_score(c: RagChunk) -> float:
 def _rerank_diverse_with_priority_and_grep_boost(
     chunks: list[RagChunk], query: str
 ) -> list[RagChunk]:
-    """D-new (rag_redesign_2026-05-28):doc-cap=12 + grep 字面提升 + source 软排序。
+    """doc-cap=12 + grep 字面提升 + source **软加权**(相关度才是排序主键)。
 
+    2026-06 修复:以前按 ``(source优先级, score)`` 元组排序,source 当主键 → 不管
+    相关度多高,ambient/会议内容永远排在所有文档之后 → 跨对话查询查不到。现改为:
     1) 按 doc_id 分组,每 doc 仅保留分数最高的前 _DOC_CHUNK_CAP=12 chunks
-       (避免 ambient daily 1236-chunk 长文档霸榜)
-    2) 对每个剩余 chunk 计算 grep boost
-       (precise 子串 +2.0;keyword 多数命中 +0.5)
-    3) 按 (source 优先级, adjusted_score + grep_boost) 降序排
+    2) 单一相关度排序:adjusted_score + grep_boost + source_nudge(小幅)
+    3) 对话类查询里 ambient/会议获得正向加分,而非被压制
     4) 返回 top-_PROMPT_RENDER_TOP_N=80
     """
     by_doc: dict[str, list[RagChunk]] = defaultdict(list)
@@ -240,11 +260,16 @@ def _rerank_diverse_with_priority_and_grep_boost(
 
     norm_query = _normalize_for_grep(query)
     keywords = _extract_keywords(query)
+    conv_query = _is_conversation_query(query)
 
     def boosted(c: RagChunk) -> float:
-        return _adjusted_score(c) + _grep_boost(c, norm_query, keywords)
+        return (
+            _adjusted_score(c, conv_query=conv_query)
+            + _grep_boost(c, norm_query, keywords)
+            + _source_nudge(c, conv_query=conv_query)
+        )
 
-    capped.sort(key=lambda c: (_source_priority(c), boosted(c)), reverse=True)
+    capped.sort(key=boosted, reverse=True)
     return capped[:_PROMPT_RENDER_TOP_N]
 
 

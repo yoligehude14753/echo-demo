@@ -125,6 +125,12 @@ class Qwen3TTS:
                         "input": text,
                         "voice": use_voice,
                         "stream": False,
+                        # 抑制"乱唱歌"：明确要求平稳播报语气（OpenAI 兼容 instructions 字段，
+                        # heyi qwen3-tts 实测接受且不报错；不支持的服务会忽略未知字段）。
+                        "instructions": (
+                            "用正常、平稳的语速朗读，保持自然的新闻播报语气；"
+                            "始终说话，不要唱歌、不要加旋律或节奏。"
+                        ),
                     },
                     headers={"Authorization": "Bearer x"},
                 )

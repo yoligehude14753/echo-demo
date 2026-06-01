@@ -1,7 +1,10 @@
 /** PCM / WAV 工具（Capture 层，与 UI / 会议无关） */
 
 export const CAPTURE_SAMPLE_RATE = 16_000;
-export const CAPTURE_CHUNK_SECONDS = 6;
+// 4s 分块：比 6s 更快出 STT/回复（响应延迟 -33%）。跨 chunk 拆分由
+// voiceWake 的"已唤醒窗口"兜底，所以缩短窗口不会丢唤醒指令。
+// 仍 ≥3s，满足后端 cps 幻觉门与 min_speech_frame_ratio 的判定条件。
+export const CAPTURE_CHUNK_SECONDS = 4;
 export const CAPTURE_CHUNK_SAMPLES = CAPTURE_SAMPLE_RATE * CAPTURE_CHUNK_SECONDS;
 
 export function floatTo16BitPCM(input: Float32Array): Int16Array {

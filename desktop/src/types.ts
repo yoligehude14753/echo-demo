@@ -167,6 +167,10 @@ export interface MeetingCard {
   state: MeetingState;
   segments: TranscriptSegment[];
   speakers: Set<string>;
+  /** 启动期 GET /meetings summary 给出的历史段数；detail transcript 尚未加载时用于列表显示。 */
+  n_segments?: number;
+  /** 启动期 GET /meetings summary 给出的历史参与人数；detail transcript 尚未加载时用于列表显示。 */
+  n_speakers?: number;
   minutes?: MeetingMinutes;
   /**
    * 纪要生成状态（仅 state="ended" / "in_meeting" 时有意义；

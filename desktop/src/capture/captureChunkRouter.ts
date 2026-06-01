@@ -27,6 +27,11 @@ export interface CaptureRouterHandlers {
   onChunkPosted?: () => void;
   /** chunk 已落库 + STT 出非空文本。 */
   onAmbientUploaded?: () => void;
+  /** chunk 已落库时把 STT 文本交给语音唤醒/指令链路。 */
+  onAmbientText?: (text: string) => void;
+  /** chunk 成功处理但没有可用文本（被门控/空/幻觉丢弃）= 用户停顿/静音。
+   *  语音指令累积用它做 endpoint 信号（真实停顿才执行，不靠标点）。 */
+  onAmbientSilence?: () => void;
   onMeetingUploaded?: () => void;
   /** 进入持续失败状态（连续 N 次失败）。 */
   onConnectionLost?: (err: unknown) => void;
@@ -118,7 +123,13 @@ export function attachCaptureChunkRouter(
       }
       failStreak = 0;
       handlers?.onChunkPosted?.();
-      if (result.ambient_stored) handlers?.onAmbientUploaded?.();
+      if (result.ambient_stored && result.ambient_text) {
+        handlers?.onAmbientUploaded?.();
+        handlers?.onAmbientText?.(result.ambient_text);
+      } else {
+        // 门控/空/幻觉丢弃 → 这一段没有可用语音 = 用户停顿，作为 endpoint 信号
+        handlers?.onAmbientSilence?.();
+      }
       if (result.meeting_segments.length > 0) handlers?.onMeetingUploaded?.();
     } catch (e) {
       failStreak += 1;

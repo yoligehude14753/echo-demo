@@ -178,7 +178,7 @@ function WelcomeStep({ dataDirPath }: { dataDirPath: string | null }): JSX.Eleme
       </div>
       <div className="text-ink-600">
         EchoDesk 是一个本地优先的会议与办公助理：环境音转写、会议纪要、
-        基于工作区的检索问答、文档/PPT/Excel 生成都跑在你自己的电脑上。
+        基于工作区的问答、文档/PPT/Excel 生成都跑在你自己的电脑上。
       </div>
       <div className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]">
         <div className="flex items-center gap-1.5 font-medium mb-1">
@@ -189,7 +189,7 @@ function WelcomeStep({ dataDirPath }: { dataDirPath: string | null }): JSX.Eleme
           {dataDirPath ?? "~/.echodesk/"}
         </div>
         <div className="text-ink-400 mt-1.5">
-          会议数据库、录音、RAG 索引、日志全部都在这里。可在「设置 → 数据」
+          会议数据库、录音、知识库索引、日志全部都在这里。可在「设置 → 数据」
           里查看占用 / 一键导出 / 卸载。
         </div>
       </div>
@@ -216,7 +216,7 @@ function MicStep({
       </div>
       <div className="text-ink-600">
         EchoDesk 需要麦克风权限才能转写会议。所有音频只发送给你配置的
-        STT 服务（默认是 heyi-bj 内网，不出公网）。
+        语音转写服务。
       </div>
 
       <div className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]">

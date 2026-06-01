@@ -10,7 +10,7 @@
  *
  * 抖动恢复：
  * - 记录每条业务事件的 seq；重连时发 client_hello(last_seq)
- * - server_resync 时清缓存 + 全量重订阅
+ * - server_resync 时触发 DB hydrate + 全量重订阅，不清空当前 UI
  * - 超过 WS_INACTIVE_RECONNECT_MS 没收到任何消息 → 主动重连
  */
 import { useEffect, useRef } from "react";
@@ -67,9 +67,9 @@ export function useEchoWS(): void {
 
     const handleProtocol = (e: EchoEvent): void => {
       if (e.type === "server_resync") {
-        console.warn("[ws] server_resync, drop client cache", e.payload);
+        console.warn("[ws] server_resync, hydrate from backend snapshot", e.payload);
         lastSeqRef.current = 0;
-        useStore.getState().reset();
+        useStore.getState().requestMeetingHistoryResync();
       } else if (e.type === "server_hello") {
         const max = (e.payload as { max_seq?: number })?.max_seq ?? 0;
         if (max < lastSeqRef.current) lastSeqRef.current = max;

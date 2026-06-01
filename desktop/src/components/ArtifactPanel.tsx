@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Modal } from "antd";
+import { Modal, message } from "antd";
 import {
   AlertCircle,
   Download,
@@ -13,19 +13,24 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { artifactDownloadUrl } from "@/api";
+import {
+  artifactDownloadUrl,
+  generateArtifactStream,
+  listArtifacts,
+  type ArtifactKind,
+} from "@/api";
 import { useStore } from "@/store";
 import type { GeneratedArtifact } from "@/types";
 import { formatRelativeTime, type FailedArtifact } from "@/lib/failedArtifact";
 import ArtifactPreviewModal from "@/components/ArtifactPreviewModal";
 
 /**
- * outputs 面板：展示历史产物列表（只读）+ 7 类 in-app 预览。
+ * 产物面板：展示历史产物列表（只读）+ 7 类 in-app 预览。
  *
  * 2026-05 修订（P4.1 M4）：
  * - 全部 7 类（html / pptx / xlsx / word / markdown / pdf / txt）整条都可点击预览
  *   - pptx 走 Electron shell.openPath → Keynote；其他类型在 Modal 内渲染
- * - 顶栏新增「清空 outputs」按钮（confirm 后清空 store.artifacts；不动失败卡片）
+ * - 顶栏新增「清空产物」按钮（confirm 后清空 store.artifacts；不动失败卡片）
  * - 单条 hover 显示「×」删除按钮（不二次确认，单条删错代价低）
  * - 标题主、artifact_id 副（title 缺失时退化为 artifact_id）
  */
@@ -59,8 +64,29 @@ const typeBadge: Record<string, string> = {
   text: "bg-paper-200 text-ink-700",
 };
 
+const retryableArtifactKinds = new Set<string>([
+  "word",
+  "docx",
+  "xlsx",
+  "excel",
+  "pptx",
+  "ppt",
+  "html",
+  "markdown",
+  "md",
+  "mdown",
+  "pdf",
+  "txt",
+  "text",
+]);
+
+function toArtifactKind(value: string): ArtifactKind | null {
+  return retryableArtifactKinds.has(value) ? (value as ArtifactKind) : null;
+}
+
 export default function ArtifactPanel(): JSX.Element {
   const globalArtifacts = useStore((s) => s.artifacts);
+  const addArtifact = useStore((s) => s.addArtifact);
   const failedArtifacts = useStore((s) => s.failedArtifacts);
   const dismissFailedArtifact = useStore((s) => s.dismissFailedArtifact);
   const clearArtifacts = useStore((s) => s.clearArtifacts);
@@ -71,6 +97,39 @@ export default function ArtifactPanel(): JSX.Element {
   );
   const [previewArtifact, setPreviewArtifact] =
     useState<GeneratedArtifact | null>(null);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  // 启动期加载历史产物，带指数退避重试（与 useMeetingHistory 同模式）。
+  // 原先 catch 里 setHistoryLoaded(true) 会让失败后永不重试，导致后端比
+  // 前端晚起来时（常见情况）产物列表一直是空。
+  useEffect(() => {
+    if (historyLoaded || globalArtifacts.length > 0) return;
+    let alive = true;
+    const delays = [0, 500, 1500, 4000, 8000];
+    void (async () => {
+      for (let i = 0; i < delays.length && alive; i++) {
+        if (delays[i] > 0) {
+          await new Promise<void>((res) => setTimeout(res, delays[i]));
+        }
+        if (!alive) return;
+        try {
+          const items = await listArtifacts(100);
+          if (!alive) return;
+          for (const artifact of [...items].reverse()) {
+            addArtifact(artifact);
+          }
+          setHistoryLoaded(true);
+          return; // 成功即止
+        } catch {
+          // 继续下一轮重试，最后一次失败才放弃
+          if (i === delays.length - 1 && alive) setHistoryLoaded(true);
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [addArtifact, globalArtifacts.length, historyLoaded]);
 
   // 选中具体会议 → 仅展示该会议的产物（meeting.artifacts 由 ws 事件维护，
   // 详见 store.ts 的 artifact.ready handler）。"伴随时段"（currentMeetingId
@@ -83,7 +142,7 @@ export default function ArtifactPanel(): JSX.Element {
 
   function onClearAll(): void {
     Modal.confirm({
-      title: "清空 outputs",
+      title: "清空产物列表",
       content: `确定清空 ${globalArtifacts.length} 条历史产物？该操作不可撤回（文件本身仍保留在磁盘）。`,
       okText: "清空",
       okType: "danger",
@@ -95,8 +154,8 @@ export default function ArtifactPanel(): JSX.Element {
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-paper-50">
       <div className="flex items-center justify-between px-6 h-11 border-b border-paper-300 shrink-0">
-        <span className="text-[13px] text-ink-700 font-medium lowercase tracking-wider">
-          {scopedToMeeting ? "本会议产物" : "outputs"}
+        <span className="text-[13px] text-ink-700 font-medium tracking-wider">
+          {scopedToMeeting ? "本会议产物" : "全部产物"}
         </span>
         <span className="flex items-center gap-2">
           <span className="text-[11px] text-ink-400">
@@ -108,10 +167,10 @@ export default function ArtifactPanel(): JSX.Element {
             <button
               type="button"
               data-testid="clear-artifacts-btn"
-              aria-label="清空 outputs"
+              aria-label="清空产物列表"
               onClick={onClearAll}
               className="p-1 rounded text-ink-400 hover:text-err hover:bg-paper-150 transition-colors"
-              title="清空 outputs"
+              title="清空产物列表"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -209,7 +268,12 @@ export default function ArtifactPanel(): JSX.Element {
               <div className="text-[11px] text-ink-400 mt-1 flex items-center gap-2 pl-1">
                 <span>{(a.size_bytes / 1024).toFixed(1)} KB</span>
                 <span>·</span>
-                <span>{(a.generation_latency_ms / 1000).toFixed(1)}s</span>
+                {/* 历史恢复的产物没有真实生成耗时，显示「历史」而非误导的 0.0s */}
+                <span>
+                  {a.model === "restored" || a.generation_latency_ms <= 0
+                    ? "历史"
+                    : `${(a.generation_latency_ms / 1000).toFixed(1)}s`}
+                </span>
                 <span>·</span>
                 <span className="font-mono text-[10px]">{a.model}</span>
               </div>
@@ -234,14 +298,16 @@ interface FailedArtifactCardProps {
 /**
  * 失败产物卡片：红色描边 + 错误原因 + 重试/关闭。
  *
- * 重试按钮当前是占位（P2.2 范围内只落事件 → 渲染卡片）；真正的重试链路要等
- * P2.5 设置面板实现后再接入。先 console.log 出来，避免给用户假象。
+ * 重试会复用失败事件里回填的原始 brief，并继续携带 meeting_id/todo_id，
+ * 这样来自会议待办的产物失败后仍能回写对应 todo。
  */
 function FailedArtifactCard({
   failed,
   onDismiss,
 }: FailedArtifactCardProps): JSX.Element {
+  const addArtifact = useStore((s) => s.addArtifact);
   const [now, setNow] = useState(() => Date.now());
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     // 让相对时间每分钟自动刷一次（同一面板里多张卡片共用一个 tick 也 OK）。
@@ -253,10 +319,46 @@ function FailedArtifactCard({
   const typeBadgeClass =
     typeBadge[failed.artifact_type] ?? "bg-paper-200 text-ink-700";
 
-  function onRetry(e: React.MouseEvent): void {
+  async function onRetry(e: React.MouseEvent): Promise<void> {
     e.stopPropagation();
-    // P2.2 占位：等 P2.5 设置面板的 retry mechanism 后再接真实链路。
-    console.log("TODO: retry artifact", failed);
+    const artifactType = toArtifactKind(failed.artifact_type);
+    if (!artifactType || !failed.intent_text) {
+      message.error("缺少可重试的原始指令，请重新在输入框发起生成");
+      return;
+    }
+    setRetrying(true);
+    let sawDone = false;
+    let sawError = false;
+    try {
+      await generateArtifactStream(
+        {
+          artifact_type: artifactType,
+          brief: failed.intent_text,
+          meeting_id: failed.meeting_id ?? undefined,
+          todo_id: failed.todo_id ?? undefined,
+        },
+        {
+          onDone: (artifact) => {
+            sawDone = true;
+            addArtifact(artifact);
+            message.success(`已重新生成：${artifact.title || artifact.artifact_id}`);
+            onDismiss();
+          },
+          onError: ({ error }) => {
+            sawError = true;
+            message.error(`重试失败：${error}`);
+          },
+        },
+      );
+      if (!sawDone && !sawError) {
+        message.error("重试失败：后端流结束但没有返回产物");
+      }
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      message.error(`重试失败：${raw}`);
+    } finally {
+      setRetrying(false);
+    }
   }
 
   return (
@@ -317,10 +419,11 @@ function FailedArtifactCard({
         <button
           type="button"
           onClick={onRetry}
+          disabled={retrying}
           className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] text-err border border-err/30 hover:bg-err/10 transition-colors"
         >
-          <RotateCcw className="w-3 h-3" />
-          <span>重试</span>
+          <RotateCcw className={`w-3 h-3 ${retrying ? "animate-spin" : ""}`} />
+          <span>{retrying ? "重试中" : "重试"}</span>
         </button>
       </div>
     </div>

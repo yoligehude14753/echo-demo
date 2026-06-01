@@ -13,8 +13,54 @@ from app.use_cases.retrieve_and_answer import (
     _DEFAULT_RAG_TOP_K,
     _DOC_CHUNK_CAP,
     _PROMPT_RENDER_TOP_N,
+    _rerank_diverse_with_priority_and_grep_boost,
     retrieve_and_answer,
 )
+
+
+def _mk(doc_id: str, text: str, score: float, source: str) -> RagChunk:
+    return RagChunk(
+        doc_id=doc_id,
+        doc_title=doc_id,
+        chunk_id=f"{doc_id}-c",
+        text=text,
+        score=score,
+        metadata={"source": source, "kind": source},
+    )
+
+
+@pytest.mark.unit
+def test_conversation_query_lets_ambient_rank_above_doc() -> None:
+    """跨对话查询修复：问"上午说到X"时，含 X 的 ambient 段不应被文档硬压到后面。
+
+    旧实现按 (source优先级, score) 排序，ambient 永远排在所有文档之后 → 查不到。
+    新实现以相关度为主键 + 对话类查询给 ambient 加分。
+    """
+    # 真实场景：用户复述会上说过的话，ambient 转写里就含这些词（grep 精确命中）。
+    ambient = _mk(
+        "ambient-20260601",
+        "上午说到CPU和GPU的异构方案是什么，主要是王文新在讲硬件",
+        3.0,
+        "ambient",
+    )
+    doc = _mk("manual.pdf", "本产品支持多种网络协议与安全特性，适用于企业部署", 5.0, "pdf")
+    ranked = _rerank_diverse_with_priority_and_grep_boost(
+        [doc, ambient], "上午说到CPU和GPU的异构方案是什么"
+    )
+    # ambient 必须被检索到，且排在不相关文档之前
+    assert ambient in ranked
+    assert ranked.index(ambient) < ranked.index(doc)
+
+
+@pytest.mark.unit
+def test_factual_query_still_prefers_doc_over_ambient_chatter() -> None:
+    """普通事实查询：文档仍略优先于无关 ambient 闲聊（未被本次修复破坏）。"""
+    chatter = _mk("ambient-20260601", "今天天气不错我们出去走走吃个饭", 3.0, "ambient")
+    doc = _mk("spec.pdf", "网络协议规格：支持 TCP/UDP 与 TLS 加密传输", 3.0, "pdf")
+    ranked = _rerank_diverse_with_priority_and_grep_boost(
+        [chatter, doc], "网络协议规格是什么"
+    )
+    assert ranked.index(doc) < ranked.index(chatter)
 
 
 class FakeLLM:

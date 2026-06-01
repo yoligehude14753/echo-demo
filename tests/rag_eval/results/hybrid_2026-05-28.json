@@ -1,0 +1,1618 @@
+{
+  "tag": "hybrid_2026-05-28",
+  "endpoint": "http://localhost:8769/rag/ask",
+  "rag_top_k": 50,
+  "generated_at": "2026-05-28T21:41:57",
+  "per_query": [
+    {
+      "id": "q001",
+      "query": "褐蚁的竞品有哪些",
+      "category": "technical_qa",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-eff3f1d7b3ee",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pptx-e88fe986ea6f",
+        "pdf-eaf00ac8e7e8",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779954231",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 11.23,
+      "notes": "褐蚁 AI 工作站产品手册前页通常含市场对比章节; 说明书 wzr12.5 含友商功率/规格对照."
+    },
+    {
+      "id": "q002",
+      "query": "褐蚁工作站的产品定位是什么",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pdf-eff3f1d7b3ee",
+        "pdf-bea09a0ef299",
+        "pdf-eaf00ac8e7e8",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779953535",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 11.32,
+      "notes": "工作站产品手册和全线产品手册首页基本都有产品定位章节."
+    },
+    {
+      "id": "q003",
+      "query": "褐蚁AI工作站的GPU配置",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "csv-301bcacbee44"
+      ],
+      "top_doc_ids": [
+        "pdf-be59a1550076",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pdf-bea09a0ef299",
+        "pdf-eaf00ac8e7e8",
+        "pptx-e88fe986ea6f",
+        "csv-301bcacbee44",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.5,
+        "first_hit_rank": 2
+      },
+      "elapsed_s": 12.61,
+      "notes": "工作站手册的规格表 + 硬件 BOM (csv) 含 GPU 型号字段."
+    },
+    {
+      "id": "q004",
+      "query": "褐蚁说明书里的电源功率",
+      "category": "technical_qa",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eaf00ac8e7e8",
+        "pdf-be59a1550076",
+        "pptx-e88fe986ea6f",
+        "csv-301bcacbee44",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-auto-1779954231",
+        "meeting-auto-1779959260",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 9.23,
+      "notes": "wzr12.5 说明书是 74 chunks 的主说明书, 含详细电源参数."
+    },
+    {
+      "id": "q005",
+      "query": "褐蚁AI工作站产品手册的BOM清单",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "csv-301bcacbee44",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pdf-be59a1550076",
+        "pdf-bea09a0ef299",
+        "pptx-e88fe986ea6f",
+        "pdf-eaf00ac8e7e8",
+        "meeting-m-4f1dedae3feb",
+        "meeting-m-bdd1da4e7e21",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.6666666666666666,
+          "@30": 0.6666666666666666
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 8.18,
+      "notes": "HY90 BOM csv 是 BOM 唯一权威源; 工作站手册可能含简化 BOM 表."
+    },
+    {
+      "id": "q006",
+      "query": "褐蚁AI大模型一体机的高校案例",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pdf-be59a1550076"
+      ],
+      "top_doc_ids": [
+        "pdf-be59a1550076",
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299",
+        "pdf-eaf00ac8e7e8",
+        "meeting-auto-1779955846",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-m-57d43dd37ad5",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 9.94,
+      "notes": "案例集 PDF 是唯一相关 doc."
+    },
+    {
+      "id": "q007",
+      "query": "褐蚁全线产品有哪些型号",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pdf-bea09a0ef299",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pptx-e88fe986ea6f",
+        "pdf-bea09a0ef299",
+        "pdf-be59a1550076",
+        "pdf-eaf00ac8e7e8",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779953535",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 10.0,
+      "notes": "全线产品手册是型号清单主源."
+    },
+    {
+      "id": "q008",
+      "query": "褐蚁工作站的内存容量",
+      "category": "technical_qa",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "csv-301bcacbee44"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-be59a1550076",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pdf-bea09a0ef299",
+        "pptx-e88fe986ea6f",
+        "pdf-eaf00ac8e7e8",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.6666666666666666,
+          "@30": 0.6666666666666666
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 8.68,
+      "notes": "规格表 + BOM."
+    },
+    {
+      "id": "q009",
+      "query": "褐蚁支持哪些大模型",
+      "category": "technical_qa",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pdf-bea09a0ef299"
+      ],
+      "top_doc_ids": [
+        "pdf-be59a1550076",
+        "pdf-aa9c2de77e3e",
+        "pdf-eff3f1d7b3ee",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299",
+        "pdf-eaf00ac8e7e8",
+        "pptx-e88fe986ea6f",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 16.55,
+      "notes": "AI 工作站手册 + 一体机案例集都覆盖支持模型列表."
+    },
+    {
+      "id": "q010",
+      "query": "褐蚁产品的价格",
+      "category": "technical_qa",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "pdf-bea09a0ef299",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd"
+      ],
+      "top_doc_ids": [],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 0.0
+        },
+        "mrr": 0.0,
+        "first_hit_rank": null
+      },
+      "elapsed_s": 29.49,
+      "notes": "全线产品手册末尾或工作站手册末页一般含报价; 实际不一定齐, 标 hard."
+    },
+    {
+      "id": "q011",
+      "query": "褐蚁工作站的网络接口",
+      "category": "technical_qa",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-be59a1550076",
+        "pdf-eaf00ac8e7e8",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pptx-e88fe986ea6f",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 14.05,
+      "notes": "工作站手册规格章节 + 说明书接口示意图."
+    },
+    {
+      "id": "q012",
+      "query": "褐蚁工作站的存储配置",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "csv-301bcacbee44"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-be59a1550076",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8",
+        "pdf-bea09a0ef299",
+        "pptx-e88fe986ea6f",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.6666666666666666,
+          "@30": 0.6666666666666666
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 15.49,
+      "notes": "硬盘 SSD 字段."
+    },
+    {
+      "id": "q013",
+      "query": "褐蚁说明书的散热设计",
+      "category": "technical_qa",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eaf00ac8e7e8",
+        "pdf-be59a1550076",
+        "meeting-auto-1779948835",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 17.68,
+      "notes": "wzr12.5 说明书含散热与温控章节."
+    },
+    {
+      "id": "q014",
+      "query": "褐蚁的尺寸和重量",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pptx-e88fe986ea6f",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 8.82,
+      "notes": "外观规格表常含尺寸/重量."
+    },
+    {
+      "id": "q015",
+      "query": "褐蚁使用手册里的故障排查",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pdf-eaf00ac8e7e8",
+        "pdf-eff3f1d7b3ee"
+      ],
+      "top_doc_ids": [
+        "pdf-eaf00ac8e7e8",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pdf-be59a1550076",
+        "pptx-e88fe986ea6f",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779959260",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 11.26,
+      "notes": "使用手册 + 详细说明书会有 troubleshooting 章节."
+    },
+    {
+      "id": "q016",
+      "query": "褐蚁说明书的安全操作注意事项",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-be59a1550076",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eaf00ac8e7e8",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 7.68,
+      "notes": "说明书首页一般是安全操作; 使用手册有补充."
+    },
+    {
+      "id": "q017",
+      "query": "更新褐蚁引擎和镜像的步骤",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "pptx-e88fe986ea6f",
+        "pdf-eaf00ac8e7e8"
+      ],
+      "top_doc_ids": [
+        "pptx-e88fe986ea6f",
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8",
+        "pdf-be59a1550076",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "meeting-auto-1779962034",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779938090",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 12.11,
+      "notes": "更新褐蚁引擎和镜像.pptx 是主要 doc; 使用手册补充."
+    },
+    {
+      "id": "q018",
+      "query": "HY90 硬件清单",
+      "category": "technical_qa",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "csv-301bcacbee44"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-eff3f1d7b3ee",
+        "pdf-bea09a0ef299",
+        "pdf-ae42fdded1dd",
+        "csv-301bcacbee44",
+        "meeting-auto-1779954231",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.2,
+        "first_hit_rank": 5
+      },
+      "elapsed_s": 15.27,
+      "notes": "csv 标题就是 'HY90 BOM'."
+    },
+    {
+      "id": "q019",
+      "query": "褐蚁工作站的应用场景",
+      "category": "technical_qa",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pdf-bea09a0ef299"
+      ],
+      "top_doc_ids": [
+        "pdf-be59a1550076",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8",
+        "pptx-e88fe986ea6f",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.75,
+          "@30": 0.75
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 5.73,
+      "notes": "工作站手册 + 案例集 + 全线手册都讲应用场景."
+    },
+    {
+      "id": "q020",
+      "query": "褐蚁产品的技术架构",
+      "category": "technical_qa",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-bea09a0ef299",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pdf-eaf00ac8e7e8",
+        "pptx-e88fe986ea6f",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779948835",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.75,
+          "@30": 0.75
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 13.21,
+      "notes": "全线产品手册讲架构; 各工作站手册分述."
+    },
+    {
+      "id": "q021",
+      "query": "上次公司团队介绍聊了什么",
+      "category": "summary",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "meeting-m-4f1dedae3feb"
+      ],
+      "top_doc_ids": [
+        "pdf-bea09a0ef299",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779954231",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-auto-1779953535",
+        "meeting-auto-1779964288",
+        "meeting-auto-1779948835",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.5,
+        "first_hit_rank": 2
+      },
+      "elapsed_s": 14.05,
+      "notes": "m-4f1dedae3feb 标题就是'公司团队介绍与产品规划讨论', 29 chunks."
+    },
+    {
+      "id": "q022",
+      "query": "河南职校AI平台对接方案",
+      "category": "summary",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "meeting-m-57d43dd37ad5",
+        "meeting-auto-1779955846"
+      ],
+      "top_doc_ids": [
+        "pdf-be59a1550076",
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-bea09a0ef299",
+        "pdf-ae42fdded1dd",
+        "pdf-eaf00ac8e7e8",
+        "meeting-m-57d43dd37ad5",
+        "meeting-auto-1779955846",
+        "meeting-m-bdd1da4e7e21",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.14285714285714285,
+        "first_hit_rank": 7
+      },
+      "elapsed_s": 10.68,
+      "notes": "m-57d43dd37ad5 + auto-1779955846 都讲河南高校 AI 项目."
+    },
+    {
+      "id": "q023",
+      "query": "AI会议助手产品定位讨论",
+      "category": "summary",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "meeting-auto-1779953535"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299",
+        "pdf-be59a1550076",
+        "pdf-eaf00ac8e7e8",
+        "meeting-auto-1779953535",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-m-57d43dd37ad5",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779954231",
+        "meeting-auto-1779948835",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.14285714285714285,
+        "first_hit_rank": 7
+      },
+      "elapsed_s": 6.99,
+      "notes": "auto-1779953535 标题就是 AI 会议助手产品定位."
+    },
+    {
+      "id": "q024",
+      "query": "RISE保险讲解的会议",
+      "category": "summary",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "meeting-auto-1779959260"
+      ],
+      "top_doc_ids": [
+        "meeting-auto-1779959260",
+        "meeting-m-1df96a55f109",
+        "meeting-auto-1779953535",
+        "meeting-auto-1779962034",
+        "meeting-auto-1779968534",
+        "meeting-auto-1779948835",
+        "meeting-m-4f1dedae3feb",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-m-6af16d049596",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779964288",
+        "meeting-auto-1779881361",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-auto-1779938090",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 12.32,
+      "notes": "auto-1779959260 标题含 RISE 保险讲解."
+    },
+    {
+      "id": "q025",
+      "query": "自动测评工具与开源项目跟踪平台",
+      "category": "summary",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "meeting-auto-1779954231"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-bea09a0ef299",
+        "pdf-ae42fdded1dd",
+        "pdf-aa9c2de77e3e",
+        "pdf-be59a1550076",
+        "meeting-auto-1779954231",
+        "meeting-m-57d43dd37ad5",
+        "meeting-auto-1779951656",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.16666666666666666,
+        "first_hit_rank": 6
+      },
+      "elapsed_s": 4.49,
+      "notes": "auto-1779954231 标题即此."
+    },
+    {
+      "id": "q026",
+      "query": "数据监控与自动化测试方案",
+      "category": "summary",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "meeting-auto-1779951656"
+      ],
+      "top_doc_ids": [
+        "pdf-bea09a0ef299",
+        "pdf-eff3f1d7b3ee",
+        "pdf-be59a1550076",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "meeting-auto-1779951656",
+        "meeting-auto-1779954231",
+        "meeting-auto-1779948835",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.16666666666666666,
+        "first_hit_rank": 6
+      },
+      "elapsed_s": 8.14,
+      "notes": "auto-1779951656 标题即此."
+    },
+    {
+      "id": "q027",
+      "query": "GPU 南侧 lpgd 布局更新",
+      "category": "summary",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "meeting-auto-1779938090"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "csv-301bcacbee44",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299",
+        "meeting-auto-1779938090",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779962034",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.16666666666666666,
+        "first_hit_rank": 6
+      },
+      "elapsed_s": 6.49,
+      "notes": "auto-1779938090 minutes 含 GPU lpgd 布局 + PCIe 引脚."
+    },
+    {
+      "id": "q028",
+      "query": "红屏拦截事件的演示复盘",
+      "category": "summary",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "meeting-m-7ffe56cc4ad8"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-auto-1779938090",
+        "meeting-auto-1779968534",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779948835",
+        "meeting-auto-1779953535",
+        "meeting-auto-1779959260",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.5,
+        "first_hit_rank": 2
+      },
+      "elapsed_s": 22.45,
+      "notes": "m-7ffe56cc4ad8 内容: '宁断不漏可信AI' 红屏事件."
+    },
+    {
+      "id": "q029",
+      "query": "AI辅助编程时代程序员的角色",
+      "category": "summary",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "meeting-m-bdd1da4e7e21"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-m-57d43dd37ad5",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.16666666666666666,
+        "first_hit_rank": 6
+      },
+      "elapsed_s": 26.17,
+      "notes": "m-bdd1da4e7e21 含语法已死、逻辑为王讨论."
+    },
+    {
+      "id": "q030",
+      "query": "产品功能与校准实现方案技术讨论",
+      "category": "summary",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "meeting-auto-1779948835"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-eff3f1d7b3ee",
+        "pdf-be59a1550076",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299",
+        "meeting-auto-1779948835",
+        "meeting-auto-1779968534",
+        "meeting-auto-1779881361",
+        "meeting-m-4f1dedae3feb",
+        "meeting-m-1df96a55f109",
+        "meeting-auto-1779953535",
+        "meeting-auto-1779962034",
+        "meeting-auto-1779879582",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.16666666666666666,
+        "first_hit_rank": 6
+      },
+      "elapsed_s": 9.41,
+      "notes": "auto-1779948835 标题即此."
+    },
+    {
+      "id": "q031",
+      "query": "褐蚁不同型号工作站的差异",
+      "category": "cross_doc",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299",
+        "pdf-eff3f1d7b3ee"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-be59a1550076",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pptx-e88fe986ea6f",
+        "pdf-eaf00ac8e7e8",
+        "pdf-bea09a0ef299",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 30.72,
+      "notes": "工作站手册新旧版本 + 全线产品手册 + wzr12.5 说明书四方对比."
+    },
+    {
+      "id": "q032",
+      "query": "褐蚁产品手册新旧版本变化",
+      "category": "cross_doc",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pptx-e88fe986ea6f",
+        "pdf-eaf00ac8e7e8",
+        "meeting-auto-1779954231",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779938090",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.5,
+        "first_hit_rank": 2
+      },
+      "elapsed_s": 12.8,
+      "notes": "两个 'AI工作站产品手册' (260416 与 '新') 对比."
+    },
+    {
+      "id": "q033",
+      "query": "褐蚁说明书和使用手册的内容覆盖差异",
+      "category": "cross_doc",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 13.81,
+      "notes": "wzr12.5 说明书 vs 使用手册."
+    },
+    {
+      "id": "q034",
+      "query": "RAG 技术、向量搜索和知识库管理的讨论",
+      "category": "cross_doc",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "meeting-auto-1779882039"
+      ],
+      "top_doc_ids": [
+        "pdf-bea09a0ef299",
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779953535",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779954231",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-auto-1779881361",
+        "meeting-auto-1779959260",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.16666666666666666,
+        "first_hit_rank": 6
+      },
+      "elapsed_s": 9.83,
+      "notes": "auto-1779882039 minutes 标 RAG/向量搜索/skill 工具."
+    },
+    {
+      "id": "q035",
+      "query": "河南高校AI项目的整体进展",
+      "category": "cross_doc",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "meeting-m-57d43dd37ad5",
+        "meeting-auto-1779955846"
+      ],
+      "top_doc_ids": [
+        "pdf-be59a1550076",
+        "pdf-bea09a0ef299",
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8",
+        "meeting-auto-1779955846",
+        "meeting-m-57d43dd37ad5",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-auto-1779954231",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.2,
+        "first_hit_rank": 5
+      },
+      "elapsed_s": 8.46,
+      "notes": "两个河南职校 / 高校 AI 会议."
+    },
+    {
+      "id": "q036",
+      "query": "公司团队分工和产品规划",
+      "category": "cross_doc",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "meeting-m-4f1dedae3feb"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-eff3f1d7b3ee",
+        "pdf-ae42fdded1dd",
+        "pdf-be59a1550076",
+        "pdf-bea09a0ef299",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779954231",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.16666666666666666,
+        "first_hit_rank": 6
+      },
+      "elapsed_s": 5.16,
+      "notes": "m-4f1dedae3feb 是团队介绍 + 产品规划讨论的主 doc."
+    },
+    {
+      "id": "q037",
+      "query": "自动测评工具和AI会议助手如何配合",
+      "category": "cross_doc",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "meeting-auto-1779954231",
+        "meeting-auto-1779953535"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-bea09a0ef299",
+        "pdf-be59a1550076",
+        "pdf-ae42fdded1dd",
+        "pdf-aa9c2de77e3e",
+        "pdf-eaf00ac8e7e8",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-auto-1779954231",
+        "meeting-auto-1779953535",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-m-57d43dd37ad5",
+        "meeting-auto-1779951656",
+        "meeting-auto-1779882039",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.125,
+        "first_hit_rank": 8
+      },
+      "elapsed_s": 17.24,
+      "notes": "需要从两个不同主题会议拼接."
+    },
+    {
+      "id": "q038",
+      "query": "褐蚁工作站BOM和说明书功率的对应",
+      "category": "cross_doc",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "csv-301bcacbee44",
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-be59a1550076",
+        "pdf-ae42fdded1dd",
+        "pdf-eaf00ac8e7e8",
+        "meeting-auto-1779954231",
+        "meeting-auto-1779962034",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.6666666666666666,
+          "@30": 0.6666666666666666
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 8.1,
+      "notes": "需 BOM csv + 说明书功率 + 工作站手册电源."
+    },
+    {
+      "id": "q039",
+      "query": "AI编程趋势和团队培训",
+      "category": "cross_doc",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "meeting-m-bdd1da4e7e21",
+        "meeting-auto-1779954231"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299",
+        "pdf-eff3f1d7b3ee",
+        "pdf-eaf00ac8e7e8",
+        "pdf-be59a1550076",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-m-4f1dedae3feb",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.5,
+          "@30": 0.5
+        },
+        "mrr": 0.14285714285714285,
+        "first_hit_rank": 7
+      },
+      "elapsed_s": 5.22,
+      "notes": "AI 编程角色变化 + 新人参与自动测评工具学习."
+    },
+    {
+      "id": "q040",
+      "query": "公司在AI会议产品上的技术路线和市场策略",
+      "category": "cross_doc",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "meeting-auto-1779953535",
+        "meeting-m-4f1dedae3feb"
+      ],
+      "top_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-be59a1550076",
+        "pdf-eaf00ac8e7e8",
+        "pdf-bea09a0ef299",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779953535",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-auto-1779882039",
+        "meeting-m-57d43dd37ad5",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 1.0,
+          "@30": 1.0
+        },
+        "mrr": 0.14285714285714285,
+        "first_hit_rank": 7
+      },
+      "elapsed_s": 20.33,
+      "notes": "AI 会议助手定位会议 + 公司团队/产品规划会议."
+    },
+    {
+      "id": "q041",
+      "query": "今天的 ambient 录音内容",
+      "category": "time_range",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "ambient-20260528"
+      ],
+      "top_doc_ids": [],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 0.0
+        },
+        "mrr": 0.0,
+        "first_hit_rank": null
+      },
+      "elapsed_s": 14.16,
+      "notes": "今天 = 2026-05-28, ambient-20260528 是唯一一份 ambient."
+    },
+    {
+      "id": "q042",
+      "query": "5月28日的环境录音里讨论了什么",
+      "category": "time_range",
+      "difficulty": "easy",
+      "expected_doc_ids": [
+        "ambient-20260528"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pdf-bea09a0ef299",
+        "meeting-auto-1779953535",
+        "meeting-auto-1779962034",
+        "meeting-auto-1779948835",
+        "meeting-auto-1779969534",
+        "meeting-auto-1779881361",
+        "meeting-auto-1779959260",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779878747",
+        "meeting-auto-1779879582",
+        "meeting-m-bdd1da4e7e21",
+        "meeting-auto-1779968534",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-m-6af16d049596",
+        "meeting-m-57d43dd37ad5",
+        "meeting-auto-1779881888",
+        "meeting-auto-1779938090",
+        "meeting-m-1df96a55f109",
+        "meeting-auto-1779964288",
+        "meeting-auto-1779954231",
+        "meeting-auto-1779951656",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 1.0
+        },
+        "mrr": 0.04,
+        "first_hit_rank": 25
+      },
+      "elapsed_s": 15.81,
+      "notes": "明确指日期 + source=ambient."
+    },
+    {
+      "id": "q043",
+      "query": "今天上午的会议有哪些",
+      "category": "time_range",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "meeting-m-bdd1da4e7e21",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779938090",
+        "meeting-m-6af16d049596",
+        "meeting-m-7ffe56cc4ad8",
+        "meeting-auto-1779879582",
+        "meeting-auto-1779881070",
+        "meeting-auto-1779881361"
+      ],
+      "top_doc_ids": [],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 0.0
+        },
+        "mrr": 0.0,
+        "first_hit_rank": null
+      },
+      "elapsed_s": 16.07,
+      "notes": "今天上午 = 2026-05-28 03:30-09:00 之间的会议; 标 top-8 个上午开始的."
+    },
+    {
+      "id": "q044",
+      "query": "本周关于褐蚁产品的对话或资料",
+      "category": "time_range",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "pdf-eff3f1d7b3ee",
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-bea09a0ef299",
+        "ambient-20260528"
+      ],
+      "top_doc_ids": [
+        "pdf-aa9c2de77e3e",
+        "pdf-ae42fdded1dd",
+        "pdf-eff3f1d7b3ee",
+        "pdf-be59a1550076",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779953535",
+        "meeting-auto-1779959260",
+        "meeting-auto-1779948835",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.8,
+          "@30": 0.8
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 36.71,
+      "notes": "褐蚁 PDF + ambient 录音 (可能含产品讨论)."
+    },
+    {
+      "id": "q045",
+      "query": "今天聊得最多的话题",
+      "category": "time_range",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779948835",
+        "meeting-auto-1779959260",
+        "meeting-auto-1779954231",
+        "ambient-20260528"
+      ],
+      "top_doc_ids": [],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 0.0
+        },
+        "mrr": 0.0,
+        "first_hit_rank": null
+      },
+      "elapsed_s": 5.74,
+      "notes": "最大的几个会议 (chunk 数最多) + ambient."
+    },
+    {
+      "id": "q046",
+      "query": "今天的工作记录",
+      "category": "time_range",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "ambient-20260528",
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779948835",
+        "meeting-auto-1779953535"
+      ],
+      "top_doc_ids": [],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 0.0
+        },
+        "mrr": 0.0,
+        "first_hit_rank": null
+      },
+      "elapsed_s": 6.05,
+      "notes": "ambient + 几个有实质 minutes 的会议."
+    },
+    {
+      "id": "q047",
+      "query": "今天开会聊到了什么 AI 项目",
+      "category": "time_range",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "meeting-auto-1779953535",
+        "meeting-auto-1779954231",
+        "meeting-m-57d43dd37ad5",
+        "meeting-auto-1779955846"
+      ],
+      "top_doc_ids": [],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 0.0
+        },
+        "mrr": 0.0,
+        "first_hit_rank": null
+      },
+      "elapsed_s": 5.34,
+      "notes": "AI 会议助手 / 自动测评 / 河南职校 / 河南高校 4 个 AI 主题会议."
+    },
+    {
+      "id": "q048",
+      "query": "本周下午的会议有哪些",
+      "category": "time_range",
+      "difficulty": "hard",
+      "expected_doc_ids": [
+        "meeting-auto-1779955846",
+        "meeting-auto-1779959260",
+        "meeting-m-57d43dd37ad5"
+      ],
+      "top_doc_ids": [
+        "meeting-auto-1779953535",
+        "meeting-m-1df96a55f109",
+        "meeting-m-4f1dedae3feb",
+        "meeting-m-6af16d049596",
+        "meeting-auto-1779964288",
+        "meeting-auto-1779881361",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779951656",
+        "meeting-auto-1779954231",
+        "meeting-auto-1779962034",
+        "meeting-auto-1779938090",
+        "meeting-auto-1779948835",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 0.0
+        },
+        "mrr": 0.0,
+        "first_hit_rank": null
+      },
+      "elapsed_s": 11.86,
+      "notes": "2026-05-28 下午时段 (>=12:00) 的会议; 08:00-10:30 UTC ≈ 16:00-18:30 北京时间. (auto-1779962034 在 meetings/ 但 /rag/docs 已过滤, 不计入 expected.)"
+    },
+    {
+      "id": "q049",
+      "query": "今天 ambient 录音里关于褐蚁的片段",
+      "category": "time_range",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "ambient-20260528"
+      ],
+      "top_doc_ids": [],
+      "metrics": {
+        "recall": {
+          "@10": 0.0,
+          "@30": 0.0
+        },
+        "mrr": 0.0,
+        "first_hit_rank": null
+      },
+      "elapsed_s": 24.13,
+      "notes": "ambient-20260528 是唯一一份 ambient doc."
+    },
+    {
+      "id": "q050",
+      "query": "最近的产品讨论会议",
+      "category": "time_range",
+      "difficulty": "medium",
+      "expected_doc_ids": [
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779953535",
+        "meeting-auto-1779948835",
+        "meeting-auto-1779954231"
+      ],
+      "top_doc_ids": [
+        "meeting-m-4f1dedae3feb",
+        "meeting-auto-1779948835",
+        "meeting-auto-1779953535",
+        "meeting-auto-1779881361",
+        "meeting-m-6af16d049596",
+        "meeting-m-1df96a55f109",
+        "meeting-auto-1779962034",
+        "meeting-auto-1779882039",
+        "meeting-auto-1779968534",
+        "ambient-20260528"
+      ],
+      "metrics": {
+        "recall": {
+          "@10": 0.75,
+          "@30": 0.75
+        },
+        "mrr": 1.0,
+        "first_hit_rank": 1
+      },
+      "elapsed_s": 6.53,
+      "notes": "团队介绍/AI 会议助手定位/产品功能校准/自动测评 是 2026-05-28 4 个核心产品讨论."
+    }
+  ],
+  "summary": {
+    "overall": {
+      "count": 50,
+      "recall_at_10": 0.7643333333333334,
+      "recall_at_30": 0.7843333333333333,
+      "mrr": 0.5460619047619047,
+      "zero_recall_count": 8
+    },
+    "by_category": {
+      "technical_qa": {
+        "count": 20,
+        "recall_at_10": 0.875,
+        "recall_at_30": 0.875,
+        "mrr": 0.885,
+        "zero_recall_count": 1
+      },
+      "summary": {
+        "count": 10,
+        "recall_at_10": 1.0,
+        "recall_at_30": 1.0,
+        "mrr": 0.3119047619047619,
+        "zero_recall_count": 0
+      },
+      "cross_doc": {
+        "count": 10,
+        "recall_at_10": 0.9166666666666666,
+        "recall_at_30": 0.9166666666666666,
+        "mrr": 0.44440476190476186,
+        "zero_recall_count": 0
+      },
+      "time_range": {
+        "count": 10,
+        "recall_at_10": 0.155,
+        "recall_at_30": 0.255,
+        "mrr": 0.20400000000000001,
+        "zero_recall_count": 7
+      }
+    },
+    "by_difficulty": {
+      "medium": {
+        "count": 20,
+        "recall_at_10": 0.7958333333333333,
+        "recall_at_30": 0.7958333333333333,
+        "mrr": 0.5933333333333334,
+        "zero_recall_count": 3
+      },
+      "easy": {
+        "count": 20,
+        "recall_at_10": 0.8666666666666666,
+        "recall_at_30": 0.9166666666666666,
+        "mrr": 0.6012857142857142,
+        "zero_recall_count": 1
+      },
+      "hard": {
+        "count": 10,
+        "recall_at_10": 0.4966666666666667,
+        "recall_at_30": 0.4966666666666667,
+        "mrr": 0.3410714285714286,
+        "zero_recall_count": 4
+      }
+    }
+  }
+}

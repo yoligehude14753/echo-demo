@@ -53,3 +53,4 @@ python-json-logger==2.0.7
 # ── 工具链 ──────────────────────────────────────────────────
 tenacity==9.0.0           # retry
 anyio==4.6.0
+json-repair==0.59.10      # 兜底修复 LLM 偶发非法 JSON（deck schema 漏逗号/多括号/截断）

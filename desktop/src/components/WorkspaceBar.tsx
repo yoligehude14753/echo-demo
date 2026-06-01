@@ -1,7 +1,7 @@
 /**
  * WorkspaceBar：顶部状态栏，展示授权工作区配置与索引状态。
  *
- * - 配置入口：仅展示 `ECHO_WORKSPACE_DIRS` 配置的目录（后端 settings）
+ * - 配置入口：展示已授权目录；添加/移除目录在设置面板完成
  * - 状态：N 目录 · M 文档 · 上次扫描结果
  * - 操作：手动触发扫描 / 清空 workspace 索引
  */
@@ -99,7 +99,7 @@ export default function WorkspaceBar(): JSX.Element {
           title={
             status?.authorized_dirs.length
               ? status.authorized_dirs.join("\n")
-              : "未配置；在 backend .env 设置 WORKSPACE_DIRS=路径1,路径2 后重启 backend"
+              : "未添加工作区目录；打开设置 → 工作区目录可添加"
           }
         >
           <Tag
@@ -173,14 +173,12 @@ export default function WorkspaceBar(): JSX.Element {
         <div className="text-[13px] space-y-3">
           <div>
             <div className="font-medium mb-1">配置方式</div>
-            <pre className="bg-paper-100 rounded p-2 text-[11px] leading-snug">
-              {`# 在 .env 中设置（多目录用逗号分隔）
-WORKSPACE_DIRS=~/Documents/work,~/Notes
-WORKSPACE_MAX_FILE_MB=20
-WORKSPACE_SCAN_ON_STARTUP=true`}
-            </pre>
+            <div className="bg-paper-100 rounded p-2 text-[12px] leading-relaxed text-ink-600">
+              打开右上角「设置」→「工作区目录」，选择需要纳入知识库的文件夹。
+              添加后 EchoDesk 会在后台扫描，聊天时可引用这些文档回答。
+            </div>
             <div className="text-[11px] text-ink-500">
-              启动 backend 时自动扫描；前端这里展示状态并可手动重新扫描。
+              这里展示当前索引状态，也可以手动重新扫描或清空工作区索引。
             </div>
           </div>
 

@@ -33,6 +33,7 @@ export function useMeetingHistory(): void {
   const upsertMeeting = useStore((s) => s.upsertMeeting);
   const markDetailLoaded = useStore((s) => s.markMeetingDetailLoaded);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
+  const meetingHistoryResyncNonce = useStore((s) => s.meetingHistoryResyncNonce);
   // 用 ref 避开 selector 依赖闭包：currentMeetingId 频繁变化但我们只需当下读 1 次
   const detailLoadedRef = useRef<Record<string, boolean>>({});
   const meetingsRef = useRef<ReturnType<typeof useStore.getState>["meetings"]>(
@@ -81,7 +82,7 @@ export function useMeetingHistory(): void {
     return () => {
       alive = false;
     };
-  }, [hydrateMeetings]);
+  }, [hydrateMeetings, meetingHistoryResyncNonce]);
 
   // 选中后按需拉 detail
   useEffect(() => {
@@ -120,5 +121,5 @@ export function useMeetingHistory(): void {
     return () => {
       alive = false;
     };
-  }, [currentMeetingId, upsertMeeting, markDetailLoaded]);
+  }, [currentMeetingId, meetingHistoryResyncNonce, upsertMeeting, markDetailLoaded]);
 }

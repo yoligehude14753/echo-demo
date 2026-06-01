@@ -39,6 +39,21 @@ def _is_safe_python(code: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _normalize_python_code(code: str) -> str:
+    """Fix common LLM slips before sandboxed execution."""
+    fixed = re.sub(
+        r"(line_spacing\s*=\s*)WD_LINE_SPACING\.AUTO",
+        r"\1None",
+        code,
+    )
+    fixed = re.sub(
+        r"(set_parm_fmt\([^)]*?,\s*line\s*=\s*)WD_LINE_SPACING\.AUTO",
+        r"\1None",
+        fixed,
+    )
+    return fixed
+
+
 @dataclass
 class ExecResult:
     success: bool
@@ -69,6 +84,8 @@ async def exec_python_to_artifact(
 
     await asyncio.to_thread(build_dir.mkdir, parents=True, exist_ok=True)
     output_path = build_dir / f"output.{expected_ext}"
+
+    code = _normalize_python_code(code)
 
     # 重写 save()/output() 路径为绝对路径
     code_norm = re.sub(
@@ -112,6 +129,23 @@ async def exec_python_to_artifact(
 
     if rc == 0 and await asyncio.to_thread(_ok):
         return ExecResult(True, output_path, "", elapsed)
+    if rc == 0:
+        generated = await asyncio.to_thread(
+            lambda: sorted(
+                (
+                    p
+                    for p in build_dir.glob(f"*.{expected_ext}")
+                    if p.is_file() and p.stat().st_size > 100
+                ),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        )
+        if generated:
+            alt = generated[0]
+            if alt != output_path:
+                await asyncio.to_thread(alt.replace, output_path)
+            return ExecResult(True, output_path, "", elapsed)
     return ExecResult(False, None, f"rc={rc} stderr={stderr[:600]}", elapsed)
 
 

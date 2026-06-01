@@ -178,7 +178,18 @@ async def rag_ask(
                 "rag_count": len(result.retrieval.rag_chunks),
                 "web_count": len(result.retrieval.web_hits),
                 "citations": [
-                    {"kind": "rag", "doc_id": c.doc_id, "chunk_id": c.chunk_id, "score": c.score}
+                    {
+                        "kind": "rag",
+                        "doc_id": c.doc_id,
+                        "chunk_id": c.chunk_id,
+                        "doc_title": c.doc_title,
+                        "title": c.doc_title,
+                        "page": c.metadata.get("page"),
+                        "source": c.metadata.get("source") or c.metadata.get("kind") or "rag",
+                        "score": c.score,
+                        "text": c.text,
+                        "snippet": c.text[:240],
+                    }
                     for c in result.retrieval.rag_chunks
                 ]
                 + [

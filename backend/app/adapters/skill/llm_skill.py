@@ -27,13 +27,19 @@ import shutil
 import subprocess
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Final
 
 from app.adapters.llm.openai_compatible import LLMError
 from app.adapters.skill.node_executor import exec_node_to_artifact
-from app.adapters.skill.prompts import get_skill_prompt
+from app.adapters.skill.prompts import (
+    PPT_STRATEGY_JSON_SYSTEM,
+    PPT_STRATEGY_SYSTEM,
+    WORD_GENERAL_SYSTEM,
+    XLSX_GENERAL_SYSTEM,
+    get_skill_prompt,
+)
 from app.adapters.skill.python_executor import (
     ExecResult,
     exec_python_to_artifact,
@@ -68,6 +74,10 @@ _STREAM_CONNECT_TIMEOUT_S: Final[float] = 1800.0
 # 太小（每个 token 一推）→ 前端 patchAssistantReply 太密导致 React 重渲染卡；
 # 太大（>1k）→ 用户感知不到进度。200 chars ≈ 80-120 汉字，对应每 1-3s 一推。
 _LLM_CHUNK_FLUSH_CHARS: Final[int] = 200
+# 云雾偶发"连接建好但 0 token 停顿"（idle timeout，received 0 chars）。这种
+# "压根没开始吐"的失败重连一次几乎总能恢复；只在尚未产出任何内容时才重试，
+# 避免吞掉/重复已经流式吐出的半截内容。
+_LLM_STREAM_MAX_ATTEMPTS: Final[int] = 2
 
 # 项目内置的中文字体（PDF 生成依赖）：backend/app/adapters/skill/fonts/...
 _PDF_FONT_PATH: Final[Path] = Path(__file__).resolve().parent / "fonts" / "NotoSansSC-Regular.ttf"
@@ -121,6 +131,40 @@ _EMOJI_RE: Final[re.Pattern[str]] = re.compile(
     "\U00002600-\U000026ff"
     "\U00002700-\U000027bf"
     "]"
+)
+
+_PPT_INVESTMENT_TERMS: Final[tuple[str, ...]] = (
+    "股票",
+    "证券研究",
+    "投研",
+    "投资展望",
+    "投资分析",
+    "估值",
+    "目标价",
+    "上行空间",
+    "buy",
+    "hold",
+    "sell",
+    "dcf",
+    "财报",
+)
+_PPT_STRATEGY_TERMS: Final[tuple[str, ...]] = (
+    "pitch",
+    "方案",
+    "解决方案",
+    "产品",
+    "教育",
+    "高校",
+    "教学",
+    "科研",
+    "实训",
+    "一体化",
+    "工作站",
+    "硬件",
+    "软件",
+    "竞品",
+    "市场调研",
+    "项目申报",
 )
 
 
@@ -185,6 +229,60 @@ def _make_title(brief: str, max_len: int = 40) -> str:
     if len(cleaned) <= max_len:
         return cleaned
     return cleaned[:max_len] + "…"
+
+
+def _select_pptx_variant(brief: str) -> str:
+    """选择 PPT 生成路线。
+
+    投行母版只适合明确股票/估值/投资展望场景；产品方案、教育 pitch、竞品调研
+    默认走通用方案 deck，避免把所有 PPT 都写成 BUY/目标价。
+    """
+    lower = brief.lower()
+    if any(term in lower for term in _PPT_INVESTMENT_TERMS):
+        return "ib"
+    if any(term in lower for term in _PPT_STRATEGY_TERMS):
+        return "strategy"
+    return "strategy"
+
+
+# word / xlsx 同样按内容自适应：只有明确金融/投研信号才走"投行研报 / 财务模型"
+# 模板，否则走通用文档 / 通用表格模板，避免给"值日表""通知"硬套 DCF / 研报结构。
+_DOC_FINANCE_TERMS: Final[tuple[str, ...]] = (
+    "估值",
+    "目标价",
+    "dcf",
+    "wacc",
+    "财务模型",
+    "财务建模",
+    "现金流折现",
+    "自由现金流",
+    "利润表",
+    "资产负债",
+    "现金流量表",
+    "营收预测",
+    "盈利预测",
+    "投资分析",
+    "投资展望",
+    "投研",
+    "研报",
+    "研究报告",
+    "证券",
+    "股票",
+    "估值倍数",
+    "市盈率",
+    "敏感性分析",
+)
+
+
+def _select_doc_variant(kind: str, brief: str) -> str:
+    """word / xlsx 选模板：``finance``（投行研报/财务模型）vs ``general``（通用）。
+
+    其它 kind 返回空串（不参与文档变体路由）。
+    """
+    if kind not in {"word", "xlsx"}:
+        return ""
+    lower = brief.lower()
+    return "finance" if any(term in lower for term in _DOC_FINANCE_TERMS) else "general"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -293,6 +391,279 @@ def _parse_ib_deck_json(raw: str) -> dict[str, str]:
     raise SkillError(f"无法解析 ib_pptx JSON: {last_err}")
 
 
+def _parse_deck_json(raw: str) -> dict[str, object]:
+    """从 LLM 输出抽出**保留结构**的 deck JSON（含 slides 数组）。
+
+    与 ``_parse_ib_deck_json`` 区别：不把 value 拍平成 string —— strategy deck
+    需要 ``slides: [...]`` 的嵌套结构。解析失败抛 ``SkillError``。
+    """
+    candidates: list[str] = [raw.strip()]
+    for mode in (False, True):
+        stripped = _strip_code_fence(raw, text_mode=mode)
+        if stripped and stripped not in candidates:
+            candidates.append(stripped)
+    m = _JSON_OBJ_RE.search(raw)
+    if m and m.group(0) not in candidates:
+        candidates.append(m.group(0))
+
+    last_err: Exception | None = None
+    for c in candidates:
+        try:
+            parsed = json.loads(c)
+        except json.JSONDecodeError as e:
+            last_err = e
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+        last_err = TypeError(f"JSON 顶层不是 object: {type(parsed).__name__}")
+
+    # 严格解析全失败 → 用 json_repair 兜底（LLM 偶发漏逗号/多逗号/截断），
+    # 仅当修复结果真的含 slides/sections 才采纳，避免"修成空壳"也算成功。
+    repaired = _repair_deck_json(candidates)
+    if repaired is not None:
+        return repaired
+    raise SkillError(f"无法解析 strategy deck JSON: {last_err}")
+
+
+def _repair_deck_json(candidates: list[str]) -> dict[str, object] | None:
+    """对解析失败的候选用 ``json_repair`` 兜底修复，返回含内容的 deck dict。
+
+    ``json_repair`` 遇到"多一个右括号"等错位时可能返回 ``list``（把碎片拆成多
+    个顶层对象）——这里统一展开，挑出第一个真正含 slides/sections 的 dict。
+    """
+    try:
+        from json_repair import repair_json
+    except ImportError:
+        return None
+
+    def _pick(obj: object) -> dict[str, object] | None:
+        if isinstance(obj, dict):
+            return obj if _count_deck_slides(obj) > 0 else None
+        if isinstance(obj, list):
+            for el in obj:
+                got = _pick(el)
+                if got is not None:
+                    return got
+        return None
+
+    for c in candidates:
+        try:
+            fixed = repair_json(c, return_objects=True)
+        except (ValueError, RecursionError):
+            continue
+        got = _pick(fixed)
+        if got is not None:
+            logger.info("strategy deck JSON 经 json_repair 兜底修复成功")
+            return got
+    return None
+
+
+# strategy deck 的固定 pptxgenjs 模板。LLM 只产 JSON 数据，数据通过
+# ``json.dumps`` 注入为合法 JS 字面量（JSON ⊂ JS），从根上消除"LLM 直写 JS
+# 里中文引号/未转义引号导致 SyntaxError"这一类故障（真链路 E2E 实测复现）。
+_STRATEGY_DECK_JS_TEMPLATE: Final[str] = """const PptxGenJS = require('pptxgenjs');
+const DECK = __DECK_JSON__;
+// 设计语言对齐已定版 N-docxtemplater-v3（Goldman sell-side 风）：
+// 深海军蓝 #001E3C + 暗金 #C4953A + 米白 #F5F2EA + 钢灰 + serif 标题。
+// 仍是"LLM 只产 JSON、固定模板渲染"，数据经 json.dumps 注入，杜绝直写 JS 语法错。
+const NAVY = "001E3C", GOLD = "C4953A", CREAM = "F5F2EA", INK = "141B29", MUTED = "7A8293", STEEL = "404C5A", WHITE = "FFFFFF", LINE = "E4DECB";
+const SERIF = "Songti SC", SANS = "PingFang SC";
+const pres = new PptxGenJS();
+pres.layout = "LAYOUT_WIDE";
+const W = 13.333, H = 7.5;
+function T(v) { return (v === null || v === undefined) ? "" : String(v); }
+function pad2(n) { return String(n).padStart(2, "0"); }
+
+// 归一化：优先用嵌套 sections；否则用 flat slides + section 标记自动分组
+//（flat 比深层嵌套更不易让 LLM 漏括号/逗号，是首选 schema）。
+let sections = Array.isArray(DECK.sections)
+  ? DECK.sections.filter((s) => s && Array.isArray(s.slides) && s.slides.length)
+  : [];
+if (!sections.length) {
+  const flat = Array.isArray(DECK.slides) ? DECK.slides : [];
+  flat.forEach((sl) => {
+    if (!sl || typeof sl !== "object") return;
+    const sec = T(sl.section).trim();
+    const cur = sections[sections.length - 1];
+    if (!cur || (sec && sec !== cur.name)) {
+      sections.push({ name: sec, subtitle: T(sl.section_subtitle), slides: [] });
+    }
+    sections[sections.length - 1].slides.push(sl);
+  });
+}
+const namedSections = sections.filter((s) => T(s.name).trim());
+const showToc = namedSections.length >= 2;
+const useDividers = namedSections.length >= 2;
+
+let pageNo = 1;
+function chrome(slide, crumb) {
+  pageNo += 1;
+  slide.addShape(pres.ShapeType.line, { x: 0.6, y: 0.52, w: 12.13, h: 0, line: { color: GOLD, width: 0.75 } });
+  slide.addText(T(DECK.title) || "EchoDesk", { x: 0.6, y: 0.18, w: 8, h: 0.3, fontSize: 9, color: MUTED, fontFace: SANS });
+  if (crumb) slide.addText(T(crumb), { x: 7.3, y: 0.18, w: 5.43, h: 0.3, fontSize: 9, color: GOLD, align: "right", fontFace: SANS });
+  slide.addText(pad2(pageNo), { x: 12.2, y: 7.06, w: 0.55, h: 0.3, fontSize: 9, color: GOLD, align: "right", fontFace: SANS });
+  slide.addText(T(DECK.footer) || "", { x: 0.6, y: 7.06, w: 9, h: 0.3, fontSize: 8, color: MUTED, fontFace: SANS });
+}
+
+// ── 封面：米白底 + 左侧暗金竖条 + serif 大标题 + 金色细线 ──
+const cover = pres.addSlide();
+cover.background = { color: CREAM };
+cover.addShape(pres.ShapeType.rect, { x: 0, y: 0, w: 0.18, h: H, fill: { color: GOLD } });
+cover.addText(T(DECK.title) || "演示文稿", { x: 0.95, y: 2.45, w: 11.4, h: 1.9, fontSize: 40, bold: true, color: NAVY, fontFace: SERIF, valign: "top" });
+cover.addShape(pres.ShapeType.line, { x: 1.0, y: 4.45, w: 3.4, h: 0, line: { color: GOLD, width: 1.5 } });
+if (DECK.subtitle) cover.addText(T(DECK.subtitle), { x: 1.0, y: 4.65, w: 11, h: 0.8, fontSize: 18, color: STEEL, fontFace: SANS });
+cover.addText(T(DECK.footer) || "EchoDesk", { x: 0.95, y: 6.7, w: 11, h: 0.3, fontSize: 11, color: MUTED, fontFace: SANS });
+
+// ── 目录：金色序号 + 章节名 + 虚线 leader ──
+if (showToc) {
+  const toc = pres.addSlide();
+  toc.background = { color: CREAM };
+  toc.addText("目  录", { x: 0.95, y: 0.7, w: 6, h: 0.8, fontSize: 30, bold: true, color: NAVY, fontFace: SERIF });
+  toc.addShape(pres.ShapeType.line, { x: 1.0, y: 1.6, w: 2.2, h: 0, line: { color: GOLD, width: 1.5 } });
+  let ty = 2.05;
+  namedSections.forEach((s, i) => {
+    toc.addText(pad2(i + 1), { x: 1.0, y: ty, w: 0.95, h: 0.55, fontSize: 22, bold: true, color: GOLD, fontFace: SERIF, valign: "middle" });
+    toc.addText(T(s.name), { x: 2.05, y: ty, w: 10.2, h: 0.55, fontSize: 17, color: INK, fontFace: SANS, valign: "middle" });
+    toc.addShape(pres.ShapeType.line, { x: 2.05, y: ty + 0.55, w: 10.2, h: 0, line: { color: "D8D2C2", width: 0.5, dashType: "dash" } });
+    ty += 0.75;
+  });
+}
+
+let secIdx = 0;
+sections.forEach((s) => {
+  const name = T(s.name).trim();
+  if (name && useDividers) {
+    secIdx += 1;
+    // ── 章节扉页：整屏海军蓝 + 巨型金色序号 + 白色章节名 ──
+    const d = pres.addSlide();
+    d.background = { color: NAVY };
+    d.addText(pad2(secIdx), { x: 0.6, y: 1.5, w: 5.2, h: 4.0, fontSize: 200, bold: true, color: GOLD, fontFace: SERIF, align: "left", valign: "middle" });
+    d.addShape(pres.ShapeType.line, { x: 6.5, y: 3.05, w: 0, h: 1.35, line: { color: GOLD, width: 1.5 } });
+    d.addText(name, { x: 6.9, y: 3.0, w: 6, h: 1.0, fontSize: 30, bold: true, color: WHITE, fontFace: SERIF, valign: "middle" });
+    if (s.subtitle) d.addText(T(s.subtitle), { x: 6.92, y: 4.05, w: 6, h: 0.7, fontSize: 14, color: "9FB0C2", fontFace: SANS });
+  }
+  (Array.isArray(s.slides) ? s.slides : []).forEach((sl) => {
+    const slide = pres.addSlide();
+    slide.background = { color: CREAM };
+    chrome(slide, name);
+    slide.addText(T(sl.title), { x: 0.6, y: 0.82, w: 12.1, h: 0.8, fontSize: 24, bold: true, color: NAVY, fontFace: SERIF, valign: "middle" });
+    slide.addShape(pres.ShapeType.line, { x: 0.65, y: 1.62, w: 2.0, h: 0, line: { color: GOLD, width: 1.5 } });
+    let y = 1.95;
+
+    // 关键指标 → hero 数字卡（米白卡 + 金色顶线 + serif 大数字）
+    const metrics = Array.isArray(sl.metrics) ? sl.metrics.filter((m) => m && T(m.value).trim()) : [];
+    if (metrics.length) {
+      const list = metrics.slice(0, 4);
+      const gap = 0.3, cw = (12.1 - gap * (list.length - 1)) / list.length;
+      list.forEach((m, mi) => {
+        const x = 0.6 + mi * (cw + gap);
+        slide.addShape(pres.ShapeType.rect, { x: x, y: y, w: cw, h: 1.95, fill: { color: WHITE }, line: { color: LINE, width: 0.75 } });
+        slide.addShape(pres.ShapeType.rect, { x: x, y: y, w: cw, h: 0.07, fill: { color: GOLD } });
+        slide.addText(T(m.value), { x: x + 0.18, y: y + 0.32, w: cw - 0.36, h: 0.95, fontSize: 32, bold: true, color: NAVY, fontFace: SERIF, align: "left", valign: "middle" });
+        slide.addText(T(m.label), { x: x + 0.18, y: y + 1.3, w: cw - 0.36, h: 0.5, fontSize: 12, color: STEEL, fontFace: SANS });
+      });
+      y += 2.25;
+    }
+
+    const bullets = Array.isArray(sl.bullets) ? sl.bullets.filter((b) => T(b).trim()) : [];
+    if (bullets.length) {
+      slide.addText(
+        bullets.map((b) => ({ text: T(b), options: { bullet: { code: "25AA", indent: 18 }, fontSize: 16, color: INK, paraSpaceAfter: 11, lineSpacingMultiple: 1.14 } })),
+        { x: 0.7, y: y, w: 11.9, h: Math.max(1.0, H - y - 0.7), valign: "top", fontFace: SANS }
+      );
+      y += Math.min(4.6, 0.5 * bullets.length + 0.3);
+    }
+
+    const tbl = sl.table;
+    if (tbl && Array.isArray(tbl.headers) && Array.isArray(tbl.rows)) {
+      // pptxgenjs 表格会强制 lang="en-US"，导致 Keynote/PowerPoint 用 Latin 字体
+      // 渲染中文出现方块。改用 addText 文字框模拟表格——字体语言由 OS 自动判断。
+      const ty0 = Math.min(y + 0.1, 4.7);
+      const cols = tbl.headers.length || 1;
+      const tw = 12.1;
+      const colW = tw / cols;
+      const rowH = 0.42;
+      const allRows = [tbl.headers, ...tbl.rows];
+      allRows.forEach((row, ri) => {
+        const isHead = ri === 0;
+        const bg = isHead ? NAVY : (ri % 2 === 1 ? WHITE : CREAM);
+        const fg = isHead ? WHITE : INK;
+        const cells = Array.isArray(row) ? row : [row];
+        cells.forEach((cell, ci) => {
+          const cx = 0.6 + ci * colW;
+          const cy = ty0 + ri * rowH;
+          slide.addShape(pres.ShapeType.rect, { x: cx, y: cy, w: colW, h: rowH, fill: { color: bg }, line: { color: LINE, width: 0.5 } });
+          slide.addText(T(cell), { x: cx + 0.08, y: cy, w: colW - 0.16, h: rowH, fontSize: 11.5, bold: isHead, color: fg, fontFace: SANS, valign: "middle", wrap: true });
+        });
+      });
+    }
+  });
+});
+
+// ── 闭幕页：整屏海军蓝 + 居中金色 serif 大字 ──
+const close = pres.addSlide();
+close.background = { color: NAVY };
+close.addText(T(DECK.closing) || "感　谢", { x: 0, y: 2.6, w: W, h: 1.6, fontSize: 54, bold: true, color: GOLD, align: "center", fontFace: SERIF, charSpacing: 8 });
+close.addShape(pres.ShapeType.line, { x: 5.4, y: 4.35, w: 2.5, h: 0, line: { color: GOLD, width: 1 } });
+close.addText(T(DECK.closing_subtitle) || "感谢聆听 · 欢迎交流", { x: 0, y: 4.5, w: W, h: 0.6, fontSize: 16, color: "9FB0C2", align: "center", fontFace: SANS });
+
+pres.writeFile({ fileName: "output.pptx" });
+"""
+
+
+# 执行失败时允许的自动修复重试次数（LLM 直写代码偶发 API 误用）。
+_REPAIR_MAX_ATTEMPTS: Final[int] = 1
+# 只有"LLM 直写可执行代码"的 kind 才值得修复重试；text 类直接落盘不会执行失败。
+_REPAIRABLE_KINDS: Final[frozenset[str]] = frozenset({"xlsx", "word", "pdf", "pptx"})
+
+
+def _repair_lang(kind: str) -> str:
+    return "JavaScript（pptxgenjs）" if kind == "pptx" else "Python"
+
+
+def _repair_system_prompt(kind: str) -> str:
+    lang = _repair_lang(kind)
+    return (
+        f"你是 {lang} 调试专家。用户的脚本在执行时抛了异常。"
+        "请阅读报错，只修复导致失败的具体问题（如 API 误用、属性名错误、未定义变量、"
+        "字符串转义），保持原有内容与结构不变。"
+        f"只输出修正后的**完整 {lang} 代码**，不要 markdown 围栏、不要任何解释。"
+    )
+
+
+def _repair_user_prompt(kind: str, brief: str, code: str, stderr: str) -> str:
+    return (
+        f"原始需求：{brief}\n\n"
+        f"执行报错（stderr）：\n{stderr[:1200]}\n\n"
+        f"出错的代码：\n{code}\n\n"
+        "请输出修正后的完整代码。"
+    )
+
+
+def _count_deck_slides(data: dict[str, object]) -> int:
+    """统计 deck JSON 的内容页数（支持 sections[].slides 或顶层 slides）。"""
+    sections = data.get("sections")
+    if isinstance(sections, list):
+        total = 0
+        for sec in sections:
+            if isinstance(sec, dict) and isinstance(sec.get("slides"), list):
+                total += len(sec["slides"])
+        if total:
+            return total
+    flat = data.get("slides")
+    return len(flat) if isinstance(flat, list) else 0
+
+
+def _build_strategy_deck_js(data: dict[str, object]) -> str:
+    """把 deck JSON 注入固定模板，得到一段保证语法合法的 pptxgenjs 脚本。
+
+    关键：``json.dumps`` 输出是合法 JSON，而 JSON 是 JS 的子集，作为
+    ``const DECK = {...};`` 的右值 100% 语法合法，不受内容里任何引号/换行影响。
+    """
+    deck_json = json.dumps(data, ensure_ascii=False)
+    return _STRATEGY_DECK_JS_TEMPLATE.replace("__DECK_JSON__", deck_json)
+
+
 class SkillExecutor:
     """实现 ports.skill.SkillExecutorPort（7 产物生成 + 别名归一）。
 
@@ -341,7 +712,7 @@ class SkillExecutor:
             raise SkillError("generate_stream 完成但未产出 artifact（缺少 done 事件）")
         return final
 
-    async def generate_stream(
+    async def generate_stream(  # noqa: PLR0912
         self,
         *,
         llm: LLMPort,
@@ -423,17 +794,38 @@ class SkillExecutor:
                         yield ev
                     return
             if kind == "pptx" and not self._use_legacy_html_pptx:
-                # PPT 不加 fallback：ib_deck JSON 字段校验失败常意味着 LLM 严重跑偏。
-                async for ev in self._generate_ib_pptx_stream(
-                    llm=llm,
-                    brief=brief,
-                    extra_instructions=extra_instructions,
-                    artifact_id=artifact_id,
-                    build_dir=build_dir,
-                ):
-                    yield ev
+                pptx_variant = _select_pptx_variant(brief)
+                if pptx_variant == "ib":
+                    # 明确股票/估值/投资展望请求才使用 14 页 IB 母版。
+                    async for ev in self._generate_ib_pptx_stream(
+                        llm=llm,
+                        brief=brief,
+                        extra_instructions=extra_instructions,
+                        artifact_id=artifact_id,
+                        build_dir=build_dir,
+                    ):
+                        yield ev
+                else:
+                    async for ev in self._generate_strategy_pptx_stream(
+                        llm=llm,
+                        brief=brief,
+                        extra_instructions=extra_instructions,
+                        artifact_id=artifact_id,
+                        build_dir=build_dir,
+                    ):
+                        yield ev
                 return
 
+            # word / xlsx：按内容自适应选模板（通用 vs 投行研报/财务模型），
+            # 避免给"值日表/通知"硬套 DCF / 研报结构。其它 kind 走默认 prompt。
+            doc_variant = _select_doc_variant(kind, brief)
+            doc_prompt: str | None = None
+            doc_pipeline_variant: str | None = None
+            if doc_variant == "general":
+                doc_prompt = XLSX_GENERAL_SYSTEM if kind == "xlsx" else WORD_GENERAL_SYSTEM
+                doc_pipeline_variant = f"{kind}_general"
+            elif doc_variant == "finance":
+                doc_pipeline_variant = f"{kind}_finance"  # 模板沿用默认 get_skill_prompt
             async for ev in self._generate_via_default_pipeline_stream(
                 llm=llm,
                 kind=kind,
@@ -441,6 +833,8 @@ class SkillExecutor:
                 extra_instructions=extra_instructions,
                 artifact_id=artifact_id,
                 build_dir=build_dir,
+                system_prompt=doc_prompt,
+                pipeline_variant=doc_pipeline_variant,
             ):
                 yield ev
         except (SkillError, LLMError) as e:
@@ -462,13 +856,15 @@ class SkillExecutor:
         artifact_id: str,
         build_dir: Path,
         legacy_fallback_reason: str | None = None,
+        system_prompt: str | None = None,
+        pipeline_variant: str | None = None,
     ) -> AsyncIterator[SkillProgress]:
         """Stream 版默认流水线。yield ``llm_stream_*`` + ``executor_run`` + ``saved`` + ``done``。
 
         ``legacy_fallback_reason`` 非空时表示这是 HTML one-pager 失败后的降级路径，
         会在 metadata 写 ``legacy_pipeline="true"`` + ``fallback_reason``。
         """
-        sys_prompt = get_skill_prompt(kind, legacy=self._use_legacy_html_pptx)
+        sys_prompt = system_prompt or get_skill_prompt(kind, legacy=self._use_legacy_html_pptx)
         yield SkillProgress(
             stage="llm_stream_start",
             msg=f"调用 {self._settings.llm_main_model}（{kind} 默认流水线）…",
@@ -491,6 +887,35 @@ class SkillExecutor:
             msg=f"执行 {kind} 生成器（{_executor_tool_for_kind(kind)}）…",
         )
         result = await self._exec_for_kind(kind, code, build_dir, ext)
+
+        # 自动修复重试：LLM 直写的 python/js 偶发 API 误用（如 openpyxl 用了
+        # 不存在的 ws.name）。把报错回喂给 LLM 修一次再执行，显著提升可用性。
+        repair_attempts = 0
+        while (
+            (not result.success or result.output_path is None)
+            and kind in _REPAIRABLE_KINDS
+            and repair_attempts < _REPAIR_MAX_ATTEMPTS
+        ):
+            repair_attempts += 1
+            yield SkillProgress(
+                stage="executor_run",
+                tool=_executor_tool_for_kind(kind),
+                msg=f"{kind} 执行失败，按报错自动修复重试（第 {repair_attempts} 次）…",
+            )
+            repaired = ""
+            async for ev in self._call_llm_stream(
+                llm,
+                _repair_system_prompt(kind),
+                _repair_user_prompt(kind, brief, code, result.stderr),
+                None,
+            ):
+                yield ev
+                if ev.stage == "llm_stream_done":
+                    repaired = ev.text or ""
+            if repaired.strip():
+                code = _strip_code_fence(repaired, text_mode=kind in _TEXT_KINDS)
+                result = await self._exec_for_kind(kind, code, build_dir, ext)
+
         if not result.success or result.output_path is None:
             raise SkillError(f"skill {kind} execution failed: {result.stderr[:400]}")
         output_path = result.output_path
@@ -501,33 +926,16 @@ class SkillExecutor:
             "model": self._settings.llm_main_model,
             "exec_elapsed_s": f"{result.elapsed_s:.2f}",
             "code_size": str(len(code)),
+            "repair_attempts": str(repair_attempts),
         }
         if legacy_fallback_reason is not None:
             metadata["legacy_pipeline"] = "true"
             metadata["fallback_reason"] = legacy_fallback_reason[:200]
         elif self._use_legacy_html_pptx and kind in {"html", "pptx"}:
             metadata["legacy_pipeline"] = "true"
-
-        bag = code.lower()
-        if kind == "html":
-            metadata["chars"] = str(len(code))
-            metadata["has_tailwind"] = str("tailwindcss" in bag)
-            metadata["has_svg"] = str("<svg" in bag)
-        elif kind == "xlsx":
-            metadata["formula_count"] = str(len(re.findall(r"=[A-Z]+\(", code)))
-        elif kind == "pptx":
-            metadata["slide_count_hint"] = str(len(re.findall(r"\.addSlide\(", code)))
-            metadata["table_count_hint"] = str(len(re.findall(r"\.addTable\(", code)))
-        elif kind == "markdown":
-            metadata["chars"] = str(len(code))
-            metadata["heading_count"] = str(len(re.findall(r"(?m)^#{1,6}\s", code)))
-            metadata["table_count"] = str(len(re.findall(r"(?m)^\s*\|.+\|\s*$", code)))
-        elif kind == "txt":
-            metadata["chars"] = str(len(code))
-            metadata["line_count"] = str(code.count("\n") + 1)
-        elif kind == "pdf":
-            metadata["pages_hint"] = str(len(re.findall(r"\.add_page\(\)", code)))
-            metadata["uses_noto_font"] = str("noto" in bag)
+        if pipeline_variant:
+            metadata["skill_variant"] = pipeline_variant
+        metadata.update(_kind_code_metadata(kind, code))
 
         self._write_meta(build_dir, title=title, kind=kind, ext=ext)
 
@@ -627,6 +1035,105 @@ class SkillExecutor:
     # ─────────────────────────────────────────────────────────────────────
     # phase4-doc-skills：14 页投行风 PPT（ib_master + docxtemplater）
     # ─────────────────────────────────────────────────────────────────────
+
+    async def _generate_strategy_pptx_stream(
+        self,
+        *,
+        llm: LLMPort,
+        brief: str,
+        extra_instructions: str | None,
+        artifact_id: str,
+        build_dir: Path,
+    ) -> AsyncIterator[SkillProgress]:
+        """通用方案 PPT：LLM 产 JSON → 固定模板渲染 pptxgenjs（杜绝直写 JS 语法错）。
+
+        真链路 E2E 复现过 LLM 直写 pptxgenjs 时把中文内容里的引号写进双引号
+        字符串导致 ``SyntaxError`` → 整个 PPT 生成失败。改为"LLM 只产 JSON
+        数据 + 固定 JS 模板"后，内容里任何引号/换行都被 ``json.dumps`` 正确转义。
+
+        鲁棒性兜底：若 JSON 解析失败（LLM 不守约），降级回旧的"直写 JS"路径，
+        保住可用性。
+        """
+        yield SkillProgress(
+            stage="llm_stream_start",
+            msg=f"调用 {self._settings.llm_main_model}（strategy deck JSON）…",
+        )
+        raw = ""
+        llm_latency_ms = 0.0
+        async for ev in self._call_llm_stream(
+            llm, PPT_STRATEGY_JSON_SYSTEM, brief, extra_instructions
+        ):
+            yield ev
+            if ev.stage == "llm_stream_done":
+                raw = ev.text or ""
+                llm_latency_ms = ev.latency_ms or 0.0
+
+        yield SkillProgress(stage="invariants_check", msg="校验 deck JSON 结构 / 片假名…")
+        if _KATAKANA_RE.search(raw):
+            raise SkillError("LLM 输出含日文片假名（M2.7 偶发），拒绝渲染；建议重试")
+
+        try:
+            data = _parse_deck_json(raw)
+            slide_count = _count_deck_slides(data)
+            if slide_count == 0:
+                raise SkillError("strategy deck JSON 缺少非空 slides/sections")
+            code = _build_strategy_deck_js(data)
+        except SkillError as e:
+            # JSON 不达标 → 降级到旧的"LLM 直写 pptxgenjs JS"路径，保住可用性。
+            logger.warning(
+                "strategy deck JSON 解析失败，降级直写 JS 路径: %s (artifact_id=%s)",
+                e,
+                artifact_id,
+            )
+            yield SkillProgress(
+                stage="prompt_build", msg=f"deck JSON 不达标（{e}），降级直写 JS 流水线…"
+            )
+            async for ev in self._generate_via_default_pipeline_stream(
+                llm=llm,
+                kind="pptx",
+                brief=brief,
+                extra_instructions=extra_instructions,
+                artifact_id=artifact_id,
+                build_dir=build_dir,
+                system_prompt=PPT_STRATEGY_SYSTEM,
+                pipeline_variant="strategy_pitch_deck_jsfallback",
+            ):
+                yield ev
+            return
+
+        yield SkillProgress(
+            stage="executor_run",
+            tool="exec_node_to_artifact",
+            msg=f"渲染通用方案 PPT（IB 风固定模板，约 {slide_count} 页内容）…",
+        )
+        result = await self._exec_for_kind("pptx", code, build_dir, "pptx")
+        if not result.success or result.output_path is None:
+            raise SkillError(f"strategy pptx render 失败: {result.stderr[:400]}")
+        output_path = result.output_path
+
+        title = _make_title(brief)
+        metadata: dict[str, str] = {
+            "kind": "pptx",
+            "model": self._settings.llm_main_model,
+            "exec_elapsed_s": f"{result.elapsed_s:.2f}",
+            "skill_variant": "strategy_pitch_deck",
+            "slide_count_hint": str(slide_count),
+            "code_size": str(len(code)),
+        }
+        self._write_meta(build_dir, title=title, kind="pptx", ext="pptx")
+        artifact = GeneratedArtifact(
+            artifact_id=artifact_id,
+            artifact_type="pptx",
+            title=title,
+            file_path=str(output_path),
+            mime_type=_mime_for("pptx"),
+            size_bytes=output_path.stat().st_size,
+            generation_latency_ms=llm_latency_ms + result.elapsed_s * 1000.0,
+            model=self._settings.llm_main_model,
+            metadata=metadata,
+        )
+        yield SkillProgress(stage="saved", msg=f"产物 {artifact_id} 已保存")
+        yield SkillProgress(stage="done", artifact=artifact)
 
     async def _generate_ib_pptx_stream(
         self,
@@ -841,18 +1348,6 @@ class SkillExecutor:
             ChatMessage(role="system", content=sys_prompt),
             ChatMessage(role="user", content=user_msg),
         ]
-        t_start = time.monotonic()
-        chunks: list[str] = []
-        last_flush_total = 0
-        # chat_stream 内部仅用 timeout_s 限制 *建立 SSE 连接* 的最长等待；连接建好后
-        # 每个 chunk 由我们这里的 idle window 把守。给 chat_stream 一个**远大于
-        # ``self._timeout_s``** 的 connect timeout，避免长输出在快收完时被一刀切。
-        agen = llm.chat_stream(
-            messages,
-            max_tokens=self._max_tokens,
-            temperature=0.4,
-            timeout_s=_STREAM_CONNECT_TIMEOUT_S,
-        )
         # ── 为什么没有 wall-clock 兜底 ────────────────────────────────────
         # E2E 实测（2026-05-28 17:58）：MiniMax-M2.7 输出 ~25k chars 的 HTML
         # one-pager 单次 wall-clock 已逼近 300s。HTML invariants 要求 ≥6000
@@ -860,42 +1355,69 @@ class SkillExecutor:
         # "只怕效率没打满，质量没打满"——意思是只要 LLM 还在吐 token 就让它
         # 吐完，不要为了"看起来不卡"提前砍掉。idle window 已经足够区分
         # "LLM 还在生成" vs "上游真挂了/被防火墙阻断"。
-        try:
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(agen.__anext__(), timeout=_STREAM_IDLE_TIMEOUT_S)
-                except StopAsyncIteration:
-                    break
-                except TimeoutError as e:
-                    elapsed = time.monotonic() - t_start
-                    raise LLMError(
-                        f"{self._settings.llm_main_model} skill stream idle timeout"
-                        f" after {_STREAM_IDLE_TIMEOUT_S:.0f}s without new tokens"
-                        f" (received {sum(len(c) for c in chunks)} chars in"
-                        f" {elapsed:.0f}s before stall)"
-                    ) from e
-                chunks.append(chunk)
-                total = sum(len(c) for c in chunks)
-                if total - last_flush_total >= _LLM_CHUNK_FLUSH_CHARS:
-                    acc = "".join(chunks)
-                    yield SkillProgress(
-                        stage="llm_chunk",
-                        text=acc,
-                        total_chars=len(acc),
+        last_err: LLMError | None = None
+        for attempt in range(_LLM_STREAM_MAX_ATTEMPTS):
+            t_start = time.monotonic()
+            chunks: list[str] = []
+            last_flush_total = 0
+            produced_any = False
+            agen = llm.chat_stream(
+                messages,
+                max_tokens=self._max_tokens,
+                temperature=0.4,
+                timeout_s=_STREAM_CONNECT_TIMEOUT_S,
+            )
+            try:
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            agen.__anext__(), timeout=_STREAM_IDLE_TIMEOUT_S
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError as e:
+                        elapsed = time.monotonic() - t_start
+                        raise LLMError(
+                            f"{self._settings.llm_main_model} skill stream idle timeout"
+                            f" after {_STREAM_IDLE_TIMEOUT_S:.0f}s without new tokens"
+                            f" (received {sum(len(c) for c in chunks)} chars in"
+                            f" {elapsed:.0f}s before stall)"
+                        ) from e
+                    chunks.append(chunk)
+                    total = sum(len(c) for c in chunks)
+                    if total - last_flush_total >= _LLM_CHUNK_FLUSH_CHARS:
+                        produced_any = True
+                        acc = "".join(chunks)
+                        yield SkillProgress(stage="llm_chunk", text=acc, total_chars=len(acc))
+                        last_flush_total = total
+            except LLMError as e:
+                last_err = e
+                await _aclose_quietly(agen)
+                # 只有"尚未产出任何内容"时重连重试，避免重复/错乱已流式吐出的内容。
+                if not produced_any and attempt + 1 < _LLM_STREAM_MAX_ATTEMPTS:
+                    logger.warning(
+                        "skill LLM 0-token stall, retry %d/%d: %s",
+                        attempt + 2,
+                        _LLM_STREAM_MAX_ATTEMPTS,
+                        e,
                     )
-                    last_flush_total = total
-        finally:
-            close = getattr(agen, "aclose", None)
-            if close is not None:
-                with contextlib.suppress(Exception):
-                    await close()
-        content = "".join(chunks)
-        yield SkillProgress(
-            stage="llm_stream_done",
-            text=content,
-            total_chars=len(content),
-            latency_ms=(time.monotonic() - t_start) * 1000.0,
-        )
+                    yield SkillProgress(
+                        stage="llm_stream_start",
+                        msg=f"上游 0 token 停顿，重连重试（第 {attempt + 2} 次）…",
+                    )
+                    continue
+                raise
+            await _aclose_quietly(agen)
+            content = "".join(chunks)
+            yield SkillProgress(
+                stage="llm_stream_done",
+                text=content,
+                total_chars=len(content),
+                latency_ms=(time.monotonic() - t_start) * 1000.0,
+            )
+            return
+        if last_err is not None:  # pragma: no cover - 循环必经 return 或 raise
+            raise last_err
 
     async def _exec_for_kind(self, kind: str, code: str, build_dir: Path, ext: str) -> ExecResult:
         """按 canonical kind 路由到对应执行器。
@@ -943,6 +1465,47 @@ class SkillExecutor:
             (build_dir / "meta.json").write_text(
                 json.dumps(meta, ensure_ascii=False), encoding="utf-8"
             )
+
+
+async def _aclose_quietly(agen: object) -> None:
+    """关闭异步生成器，吞掉关闭期异常（重连/正常收尾共用）。"""
+    close = getattr(agen, "aclose", None)
+    if close is not None:
+        with contextlib.suppress(Exception):
+            await close()
+
+
+def _kind_code_metadata(kind: str, code: str) -> dict[str, str]:
+    """按 kind 抽取产物代码的观测性 metadata（slide/公式/字数等）。
+
+    从 ``_generate_via_default_pipeline_stream`` 抽出，避免该函数分支/语句超阈值。
+    用 dispatch 表而非多 return，规避 PLR0911。
+    """
+    bag = code.lower()
+    builders: dict[str, Callable[[], dict[str, str]]] = {
+        "html": lambda: {
+            "chars": str(len(code)),
+            "has_tailwind": str("tailwindcss" in bag),
+            "has_svg": str("<svg" in bag),
+        },
+        "xlsx": lambda: {"formula_count": str(len(re.findall(r"=[A-Z]+\(", code)))},
+        "pptx": lambda: {
+            "slide_count_hint": str(len(re.findall(r"\.addSlide\(", code))),
+            "table_count_hint": str(len(re.findall(r"\.addTable\(", code))),
+        },
+        "markdown": lambda: {
+            "chars": str(len(code)),
+            "heading_count": str(len(re.findall(r"(?m)^#{1,6}\s", code))),
+            "table_count": str(len(re.findall(r"(?m)^\s*\|.+\|\s*$", code))),
+        },
+        "txt": lambda: {"chars": str(len(code)), "line_count": str(code.count("\n") + 1)},
+        "pdf": lambda: {
+            "pages_hint": str(len(re.findall(r"\.add_page\(\)", code))),
+            "uses_noto_font": str("noto" in bag),
+        },
+    }
+    builder = builders.get(kind)
+    return builder() if builder else {}
 
 
 def _executor_tool_for_kind(kind: str) -> str:

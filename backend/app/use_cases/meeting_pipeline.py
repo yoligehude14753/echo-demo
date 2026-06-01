@@ -533,13 +533,7 @@ class MeetingPipeline:
             )
         await self._publish("meeting.ended", meeting_id, {"duration_sec": duration_sec})
         await self._publish("minutes.ready", meeting_id, minutes.model_dump(mode="json"))
-        # 主动建议前端 TTS 播一句简短的纪要 ack（前端可按 tts_enabled 决定真不真的播）
-        ack_text = f"会议{llm_title}已结束，纪要已生成。{minutes.summary}"
-        await self._publish(
-            "tts.suggested",
-            meeting_id,
-            {"text": ack_text[:400], "kind": "minutes"},
-        )
+        # 不再主动播放纪要：用户明确表示纪要不需要 TTS 朗读，仅文字展示即可。
         return minutes
 
     @staticmethod

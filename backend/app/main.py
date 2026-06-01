@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.adapters.repo.migrator import run_migrations
 from app.api.admin import router as admin_router
+from app.api.agent import router as agent_router
 from app.api.artifacts import router as artifacts_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
@@ -315,6 +316,7 @@ def create_app() -> FastAPI:
     app.include_router(meetings_router)
     app.include_router(speakers_router)
     app.include_router(intent_router)
+    app.include_router(agent_router)
     app.include_router(tts_router)
     app.include_router(ws_router)
     # P2.5：数据管理 endpoints（data-dir / meeting export / speaker reset）
