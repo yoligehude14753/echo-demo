@@ -77,3 +77,18 @@ jobs:
             desktop/release/SHA256SUMS-Windows.txt
           if-no-files-found: error
 
+      - name: Upload to public release
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Missing PUBLIC_RELEASE_TOKEN secret" >&2
+            exit 1
+          fi
+          gh release upload v0.2.0 \
+            desktop/release/*.exe \
+            desktop/release/SHA256SUMS-Windows.txt \
+            --repo yoligehude14753/echodesk-public \
+            --clobber
+
