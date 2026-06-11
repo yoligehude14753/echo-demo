@@ -133,6 +133,7 @@ class ECAPADiarizer:
     ) -> None:
         self._settings = settings
         self._threshold = settings.diarizer_match_threshold
+        self._merge_threshold = getattr(settings, "diarizer_merge_threshold", 0.70)
         self._alpha = settings.diarizer_centroid_ema_alpha
         self._enabled = settings.diarizer_enabled
         self._repo = repository
@@ -314,6 +315,74 @@ class ECAPADiarizer:
         self._profiles[sid] = new
         return new
 
+    @staticmethod
+    def _speaker_num(sid: str) -> int:
+        """speaker_N 取 N（用于"保留更老的 ID"）；非标准 id 视为很大。"""
+        m = _SPEAKER_ID_RE.match(sid)
+        return int(m.group(1)) if m else 1_000_000_000
+
+    @staticmethod
+    def _closest_profile_pair(
+        profiles: dict[str, Any], threshold: float
+    ) -> tuple[str, str] | None:
+        """找一对质心 cos ≥ threshold 的 profile，返回 (survivor, victim)。
+
+        survivor = speaker_N 编号更小者（更老、更稳）；victim 被并入。纯函数，可单测。
+        """
+        import numpy as np
+
+        ids = list(profiles)
+        best: tuple[str, str] | None = None
+        best_sim = threshold
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a, b = ids[i], ids[j]
+                sim = float(np.dot(profiles[a], profiles[b]))
+                if sim >= best_sim:
+                    best_sim = sim
+                    lo, hi = (
+                        (a, b)
+                        if ECAPADiarizer._speaker_num(a) <= ECAPADiarizer._speaker_num(b)
+                        else (b, a)
+                    )
+                    best = (lo, hi)
+        return best
+
+    def _consolidate_profiles(self) -> None:
+        """把质心已漂移到很相近（≥ merge_threshold）的 profile 两两合并。
+
+        同一人因首段噪声被拆成多 ID 时，随 EMA 其质心会互相靠拢；本方法把它们并回
+        一个 ID（保留更老的），并在所有 context 的 active list / last_speaker 里改名。
+        反复合并直到没有可并对为止（profile 数很少，开销可忽略）。
+        """
+        import numpy as np
+
+        while True:
+            pair = self._closest_profile_pair(self._profiles, self._merge_threshold)
+            if pair is None:
+                return
+            survivor, victim = pair
+            merged = self._profiles[survivor] + self._profiles[victim]
+            norm = float(np.linalg.norm(merged))
+            self._profiles[survivor] = merged / (norm + 1e-8)
+            del self._profiles[victim]
+            # 所有 context：把 victim 改名成 survivor（active 去重 + last_speaker 重指）
+            for ctx in self._contexts.values():
+                kept: list[_ActiveSpeaker] = []
+                seen: set[str] = set()
+                for a in ctx.active:
+                    sid = survivor if a.speaker_id == victim else a.speaker_id
+                    if sid in seen:
+                        continue
+                    seen.add(sid)
+                    a.speaker_id = sid
+                    if sid == survivor:
+                        a.centroid = self._profiles[survivor]
+                    kept.append(a)
+                ctx.active = kept
+                if ctx.last_speaker == victim:
+                    ctx.last_speaker = survivor
+
     async def _persist(self, sid: str, vec: Any) -> None:
         # phase4-speaker-reset：persist=False（默认）时不写 speakers 表（embedding 仅内存）。
         # _profiles 仍在内存里维护，所以 active list / 全局 _profiles 匹配照常工作；
@@ -463,6 +532,8 @@ class ECAPADiarizer:
         self._touch_active(ctx, new_id, vec, now)
         ctx.last_speaker = new_id
         await self._persist(new_id, vec)
+        # 同人合并：把已漂移到很相近的历史 profile 并掉，抑制"同一人多 ID"。
+        self._consolidate_profiles()
         return new_id
 
     async def identify(

@@ -27,7 +27,7 @@ class TestHostPortFromUrl:
     @pytest.mark.parametrize(
         "url,want",
         [
-            ("http://100.87.251.9:8090", ("100.87.251.9", 8090)),
+            ("http://localhost:8090", ("localhost", 8090)),
             ("https://yunwu.ai/v1", ("yunwu.ai", 443)),
             ("http://localhost:7860/v1", ("localhost", 7860)),
             ("http://example.com", ("example.com", 80)),

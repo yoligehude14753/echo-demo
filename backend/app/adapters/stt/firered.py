@@ -36,6 +36,8 @@ class FireRedSTT:
         self._settings = settings
         self._base = settings.stt_firered_url.rstrip("/")
         self._default_language = settings.stt_language
+        # 直连 heyi 时为 "x"（服务端忽略）；网关模式为客户端 token（网关校验）。
+        self._auth_token = settings.upstream_audio_token
         self._timeout = timeout_s
         self._fail_count = 0
         self._last_fail: float = 0.0
@@ -71,7 +73,7 @@ class FireRedSTT:
                 resp = await client.post(
                     url,
                     # FireRed server schema 默认 model="whisper-1" 也接受，固定写 firered-asr-aed 更清晰
-                    headers={"Authorization": "Bearer x"},
+                    headers={"Authorization": f"Bearer {self._auth_token}"},
                     data={
                         "model": "firered-asr-aed",
                         "language": lang,

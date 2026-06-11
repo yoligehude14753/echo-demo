@@ -104,7 +104,7 @@ async def get_audio_fixture(kind: str = "short") -> bytes | None:
     if cache.exists() and cache.stat().st_size > 30_000:
         return cache.read_bytes()
 
-    if not _can_connect("100.87.251.9", 8094):
+    if not _can_connect("localhost", 8094):
         return None
 
     script = SCRIPT_SHORT if kind == "short" else SCRIPT_LONG

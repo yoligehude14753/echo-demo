@@ -53,6 +53,37 @@ def test_conversation_query_lets_ambient_rank_above_doc() -> None:
 
 
 @pytest.mark.unit
+def test_time_window_boosts_in_window_ambient() -> None:
+    """时间感知：'上午说到X' → 上午时间窗内的 ambient 段排到窗外段之前。
+
+    captured_at 存 UTC，用户说本地'上午'；用 aware datetime 跨时区比较。
+    本地 UTC+8：上午 06-12 = UTC 22:00(前一天)-04:00。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.use_cases.retrieve_and_answer import (
+        _time_boost,
+        _time_window_from_query,
+    )
+
+    local = timezone(timedelta(hours=8))
+    now = datetime(2026, 6, 2, 15, 0, tzinfo=local)
+    window = _time_window_from_query("上午说到CPU和GPU", now)
+    assert window is not None
+
+    in_win = _mk("ambient-20260602", "上午聊了CPU和GPU异构", 3.0, "ambient")
+    in_win.metadata["captured_at"] = "2026-06-02T03:00:00+00:00"  # 本地 11:00
+    out_win = _mk("ambient-20260602", "下午聊了别的CPU话题", 3.0, "ambient")
+    out_win.metadata["captured_at"] = "2026-06-02T08:00:00+00:00"  # 本地 16:00
+    assert _time_boost(in_win, window) > _time_boost(out_win, window)
+
+    ranked = _rerank_diverse_with_priority_and_grep_boost(
+        [out_win, in_win], "上午说到CPU和GPU", now=now
+    )
+    assert ranked.index(in_win) < ranked.index(out_win)
+
+
+@pytest.mark.unit
 def test_factual_query_still_prefers_doc_over_ambient_chatter() -> None:
     """普通事实查询：文档仍略优先于无关 ambient 闲聊（未被本次修复破坏）。"""
     chatter = _mk("ambient-20260601", "今天天气不错我们出去走走吃个饭", 3.0, "ambient")

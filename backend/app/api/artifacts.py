@@ -24,13 +24,16 @@ from app.adapters.skill import SkillError, SkillExecutor
 from app.adapters.skill.llm_skill import _mime_for
 from app.api.deps import get_event_bus
 from app.api.deps import get_llm_singleton as get_llm
+from app.api.retrieval import get_rag
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
+from app.ports.rag import RagPort
 from app.ports.skill import SkillExecutorPort
 from app.schemas.artifact import ArtifactRequest, GeneratedArtifact
 from app.schemas.events import EchoEvent
 from app.schemas.skill_progress import SkillProgress
 from app.use_cases.generate_artifact import generate_artifact
+from app.use_cases.style_template import merge_extra_instructions, resolve_docx_style_template
 
 _log = logging.getLogger("echodesk.artifacts")
 
@@ -50,6 +53,24 @@ def get_skill(settings: Settings = Depends(get_settings)) -> SkillExecutorPort:
 def reset_skill_singleton() -> None:
     global _skill_singleton  # noqa: PLW0603
     _skill_singleton = None
+
+
+async def _apply_kb_style_template(rag: RagPort, body: ArtifactRequest) -> str:
+    """生成 Word 前：在知识库自动发现同类 .docx 模板，抽样式并入 extra_instructions。
+
+    就地改写 ``body.extra_instructions``；返回参考模板名（无则空串）。失败静默不阻断。
+    """
+    if str(body.artifact_type).lower() not in {"word", "docx"}:
+        return ""
+    try:
+        tpl = await resolve_docx_style_template(rag, body.brief)
+    except Exception as e:
+        _log.warning("kb style template discovery failed: %s", e)
+        return ""
+    if tpl is None:
+        return ""
+    body.extra_instructions = merge_extra_instructions(body.extra_instructions, tpl.instructions)
+    return tpl.title
 
 
 @router.get("/artifacts", response_model=list[GeneratedArtifact])
@@ -115,6 +136,7 @@ async def generate(
     llm: LLMPort = Depends(get_llm),
     runner: SkillExecutorPort = Depends(get_skill),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
+    rag: RagPort = Depends(get_rag),
 ) -> GeneratedArtifact:
     """生成产物。artifact_type 走 ArtifactKind 枚举校验（含 ppt/pptx/word/xlsx/excel/html 别名）。
 
@@ -125,6 +147,7 @@ async def generate(
     """
     if not body.brief.strip():
         raise HTTPException(status_code=400, detail="brief empty")
+    await _apply_kb_style_template(rag, body)
     await event_bus.publish(
         EchoEvent(
             type="artifact.generating",
@@ -209,6 +232,7 @@ async def generate_stream_endpoint(
     llm: LLMPort = Depends(get_llm),
     runner: SkillExecutorPort = Depends(get_skill),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
+    rag: RagPort = Depends(get_rag),
 ) -> StreamingResponse:
     """流式版产物生成。SSE 推送阶段事件（phase / llm_chunk / done / error）。
 
@@ -237,6 +261,7 @@ async def generate_stream_endpoint(
     """
     if not body.brief.strip():
         raise HTTPException(status_code=400, detail="brief empty")
+    await _apply_kb_style_template(rag, body)
     await event_bus.publish(
         EchoEvent(
             type="artifact.generating",

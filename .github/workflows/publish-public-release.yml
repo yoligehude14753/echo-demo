@@ -1,0 +1,156 @@
+name: Publish Public Release
+
+# 私有源码仓构建安装包，公开仓只接收文档 + Release 二进制。
+# 需要在私有仓配置 secret：PUBLIC_RELEASE_TOKEN
+# token 需有 yoligehude14753/echodesk-public 的 contents:write 权限。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, e.g. v0.2.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PUBLIC_REPO: yoligehude14753/echodesk-public
+
+jobs:
+  build:
+    name: build installer / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: app:dist
+            artifact: echodesk-macos
+            glob: "desktop/release/*.{dmg,zip}"
+          - os: windows-latest
+            script: app:dist:win
+            artifact: echodesk-windows
+            glob: "desktop/release/*.exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build backend binary
+        working-directory: backend
+        shell: bash
+        run: |
+          python -m venv .venv
+          if [ "$RUNNER_OS" = "Windows" ]; then PY=.venv/Scripts/python; else PY=.venv/bin/python; fi
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install -r requirements.txt
+          "$PY" -m pip install -r packaging/requirements-build.txt
+          "$PY" -m PyInstaller --noconfirm packaging/echodesk-backend.spec
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build desktop installer
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run ${{ matrix.script }}
+
+      - name: Guard public build contents
+        shell: bash
+        run: |
+          found="$(find desktop/dist backend/dist desktop/release \
+            \( -name '*.map' -o -name '.env' -o -name '*.pem' -o -name '*.key' \) \
+            -print 2>/dev/null || true)"
+          if [ -n "$found" ]; then
+            echo "Forbidden files found in public build:" >&2
+            echo "$found" >&2
+            exit 1
+          fi
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd desktop/release
+          shopt -s nullglob
+          files=(*.dmg *.zip *.exe)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No release files found" >&2
+            exit 1
+          fi
+          shasum -a 256 "${files[@]}" > "SHA256SUMS-${RUNNER_OS}.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.exe
+            desktop/release/SHA256SUMS-*.txt
+          if-no-files-found: error
+
+  publish:
+    name: publish docs and public release
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: public-release-assets
+          merge-multiple: true
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync public repository docs
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          PUBLIC_REPO: ${{ env.PUBLIC_REPO }}
+        shell: bash
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Missing PUBLIC_RELEASE_TOKEN secret" >&2
+            exit 1
+          fi
+          ./scripts/sync-public-repo.sh
+
+      - name: Publish public GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          PUBLIC_REPO: ${{ env.PUBLIC_REPO }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        shell: bash
+        run: |
+          cd public-release-assets
+          gh release view "$TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$PUBLIC_REPO" --title "EchoDesk $TAG" --notes-file ../public/README.md
+          gh release upload "$TAG" ./* --repo "$PUBLIC_REPO" --clobber
+

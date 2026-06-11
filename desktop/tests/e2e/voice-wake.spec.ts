@@ -5,7 +5,12 @@
  * "鲁棒召回 + 不误触" 两条线。相对路径 import，避免依赖 @ alias。
  */
 import { expect, test } from "@playwright/test";
-import { containsWakeWord, extractEchoWakeCommand } from "../../src/lib/voiceWake";
+import {
+  containsWakeWord,
+  extractEchoWakeCommand,
+  isDailyRecapCommand,
+  isLikelyEchoFollowup,
+} from "../../src/lib/voiceWake";
 
 // [输入, 期望抽取出的指令]
 const POSITIVE: Array<[string, string]> = [
@@ -84,6 +89,63 @@ test.describe("cross-chunk wake stitching", () => {
   for (const input of NO_WAKE) {
     test(`非唤醒词不应被检测为唤醒: ${JSON.stringify(input)}`, () => {
       expect(containsWakeWord(input)).toBe(false);
+    });
+  }
+});
+
+// 免唤醒续聊判定：窗口内只有"像在问 Echo/下指令"的话才触发，背景闲聊/应声不触发。
+test.describe("follow-up (免唤醒续聊) gating", () => {
+  const FOLLOWUP_YES: string[] = [
+    "那它的价格是多少",
+    "帮我把这个总结成 PPT",
+    "再查一下竞品",
+    "为什么会这样",
+    "继续",
+    "换一个主题",
+    "这个怎么用",
+  ];
+  for (const input of FOLLOWUP_YES) {
+    test(`应触发续聊: ${input}`, () => {
+      expect(isLikelyEchoFollowup(input)).toBe(true);
+    });
+  }
+
+  const FOLLOWUP_NO: string[] = [
+    "嗯", "啊", "好的", "对对", "这个", "然后", "ok", // 应声词
+    "我觉得这个方案不错", // 普通陈述（不是在问 Echo）
+    "昨天我们去吃饭了", // 背景闲聊
+    "", // 空
+  ];
+  for (const input of FOLLOWUP_NO) {
+    test(`不应触发续聊: ${JSON.stringify(input)}`, () => {
+      expect(isLikelyEchoFollowup(input)).toBe(false);
+    });
+  }
+});
+
+// 今日回顾语音意图：明确"今日/今天 + 回顾/总结"才触发，普通问答不误判。
+test.describe("daily recap voice intent", () => {
+  const RECAP_YES = [
+    "今日回顾",
+    "回顾一下今天",
+    "帮我总结今天发生了什么",
+    "今天都聊了什么",
+    "梳理一下今天",
+  ];
+  for (const input of RECAP_YES) {
+    test(`应触发今日回顾: ${input}`, () => {
+      expect(isDailyRecapCommand(input)).toBe(true);
+    });
+  }
+  const RECAP_NO = [
+    "总结一下英伟达财报", // 总结但不是今天
+    "今天天气怎么样", // 今天但不是回顾
+    "生成一个 PPT",
+    "",
+  ];
+  for (const input of RECAP_NO) {
+    test(`不应触发今日回顾: ${JSON.stringify(input)}`, () => {
+      expect(isDailyRecapCommand(input)).toBe(false);
     });
   }
 });

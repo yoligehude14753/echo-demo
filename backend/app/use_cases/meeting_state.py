@@ -298,6 +298,9 @@ class MeetingState:
         - 当前 in_meeting(manual)：把 manual_meeting_id 喂进 detector 让其让步
         - 返回 effective_meeting_id，供 ambient pipeline 叠加 meeting overlay
         """
+        if await self._auto_meeting_exceeded_max_duration(now):
+            return None
+
         manual_mid = (
             self._current.meeting_id
             if self._current is not None and self._current.started_by == "manual"
@@ -315,6 +318,35 @@ class MeetingState:
             elif ev.kind == "end":
                 await self._apply_auto_end(ev.meeting_id, reason=ev.reason)
         return self._current.meeting_id if self._current else None
+
+    async def _auto_meeting_exceeded_max_duration(self, now: datetime) -> bool:
+        """运行中 auto meeting 硬上限兜底。
+
+        ``AutoMeetingDetector`` 本身也有 max-duration，但 backend 重启后 detector
+        的内存状态丢失，而 ``MeetingState.hydrate`` 会从 DB 恢复 current meeting。
+        这会导致当前 auto meeting 不再受 detector 的硬上限约束，持续讲话时永远
+        不触发 silence_timeout，UI 一直显示"会议进行中"且没有纪要。
+        """
+        cur = self._current
+        if cur is None or cur.started_by != "auto":
+            return False
+        started_at = cur.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        now_aware = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+        age_s = (now_aware - started_at).total_seconds()
+        if age_s <= self._max_meeting_duration_s:
+            return False
+
+        logger.warning(
+            "auto meeting max duration exceeded: %s age=%.1fs max=%.1fs; auto-ending",
+            cur.meeting_id,
+            age_s,
+            self._max_meeting_duration_s,
+        )
+        self._detector.force_end(now=now_aware, reason="max_duration_exceeded")
+        await self._apply_auto_end(cur.meeting_id, reason="max_duration_exceeded")
+        return True
 
     async def _apply_auto_start(self, meeting_id: str, *, reason: str) -> None:
         now = datetime.now(UTC)

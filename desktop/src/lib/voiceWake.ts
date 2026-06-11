@@ -56,6 +56,8 @@ const RE_EN_START = new RegExp(`${SENTENCE_START}(?:${ECHO_EN})${BOUNDARY_AFTER}
 // （大量"开口/出口/门口/小狗"等首字不在谐音集，已被 ECHO_FIRST 天然排除。）
 const FUZZY_BLOCKLIST = new Set([
   "一口", "一扣", "两口", "三口", "几口", "鱼口", "玉口", "余口",
+  // 真实词：爱狗人士 / 爱狗群体，不是 Echo 唤醒。
+  "爱狗", "艾狗",
 ]);
 
 // 归一化：去掉所有标点 / 空白，让 body 匹配不受 STT 乱插标点影响。
@@ -91,11 +93,16 @@ const RE_MENTION_ABOUT = new RegExp(
   `(提到|提起|说到|聊到|讲到|说过|讲过|关于)\\s*["']?${ECHO_NAME}`,
   "iu",
 );
+// 英文/拼音歧义词被提及为品牌/名字，而不是对 Echo 下指令。
+// 例："pico 是一款 VR 设备"、"aiko 这个名字挺可爱"、"iqoo 这款手机怎么样"。
+const RE_AMBIGUOUS_NAME_MENTION =
+  /^(?:pico|aiko|aico|eiko|iqoo)\s*(?:是|这个|这个名字|这名字|这款|那款|手机|vr|设备)/iu;
 
 /** 命中唤醒词后，判断是否「真在对 Echo 说话」（排除提及/转述）。 */
 function isGenuineWake(text: string): boolean {
   if (RE_MENTION_NEARBY.test(text)) return false;
   if (RE_MENTION_ABOUT.test(text)) return false;
+  if (RE_AMBIGUOUS_NAME_MENTION.test(text.trim())) return false;
   return true;
 }
 
@@ -133,6 +140,50 @@ export function containsWakeWord(raw: string): boolean {
   if (!isGenuineWake(text)) return false;
   if (findWake(text) !== null) return true;
   return findWake(normalizeForWake(text)) !== null;
+}
+
+// ── 续聊判定（免唤醒多轮）─────────────────────────────────────────────
+// Echo 刚答完后开一个续聊窗口，期间用户不用再喊"echo"。但 ambient 环境里有
+// 别人闲聊、背景声，必须保守：只有"明显在向 Echo 提问/下指令"的话才续聊，
+// 纯应声（嗯/啊/好的）和普通陈述一律不触发。
+const BACKCHANNEL = new Set([
+  "嗯", "嗯嗯", "嗯哼", "啊", "哦", "噢", "喔", "额", "呃", "唉", "诶",
+  "对", "对对", "对的", "好", "好的", "行", "是", "是的", "这个", "那个",
+  "然后", "就是", "ok", "okay", "yeah", "yes",
+]);
+const _QUESTION_SIG =
+  /[？?]|(吗|呢|吧|嘛|几|多少|怎么|为什么|为啥|哪|谁|什么|啥|如何|是不是|能不能|可不可以|有没有)/;
+const _REQUEST_SIG =
+  /(帮我|帮你|给我|替我|麻烦|查一?下|查询|搜一?下|搜索|生成|做一?[个份张]|写一?[个份篇]|总结|归纳|介绍|解释|说明|告诉我|继续|接着|再来|再说|换一?[个种]|打开|播放|提醒|记一?下|记录|算一?下|计算|对比|分析|安排|整理)/;
+
+/**
+ * 判断一句话是否在让 Echo「回顾今天」（语音触发今日回顾，比泛化 agent 更准）。
+ * 保守：要么明确"今日/今天回顾"，要么"今天/今日 + 回顾/总结/聊了什么…"同时出现。
+ */
+export function isDailyRecapCommand(raw: string): boolean {
+  const t = raw.trim();
+  if (!t) return false;
+  if (/今[日天]\s*回顾|回顾\s*一?下?\s*今[日天]/.test(t)) return true;
+  const today = /(今天|今日|这一天|今儿|一整天)/.test(t);
+  const recap =
+    /(回顾|总结|小结|梳理|发生了什么|聊了(些|什么)|说了(些|什么)|做了(些|什么)|有(什么|啥)事|过一遍)/.test(
+      t,
+    );
+  return today && recap;
+}
+
+/**
+ * 判断一句话是否"像在向 Echo 提问/下指令"（用于续聊窗口免唤醒触发）。
+ * 保守策略：只认问句或请求句；应声词与普通陈述返回 false，避免背景闲聊误触。
+ */
+export function isLikelyEchoFollowup(raw: string): boolean {
+  const t = raw.trim();
+  if (t.length < 2) return false;
+  const bare = t.replace(/[。.,，！!？?、:：;；\s]/g, "").toLowerCase();
+  if (BACKCHANNEL.has(bare)) return false;
+  if (_QUESTION_SIG.test(t)) return true;
+  if (_REQUEST_SIG.test(t)) return true;
+  return false;
 }
 
 /** 把 Markdown / 代码块答案转成适合 TTS 朗读的纯文本，并限制长度。 */

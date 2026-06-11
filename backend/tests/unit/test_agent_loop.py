@@ -59,6 +59,35 @@ class _ScriptedLLM:
         yield ""  # pragma: no cover
 
 
+class _StreamingLLM:
+    """fast-path 用：chat_stream 按 ``chunks`` 逐块吐；chat 返回 ``chat_response``（兜底用）。"""
+
+    def __init__(
+        self, *, chunks: Sequence[str], chat_response: str = ""
+    ) -> None:
+        self._chunks = list(chunks)
+        self._chat_response = chat_response
+        self.chat_calls = 0
+        self.stream_calls = 0
+
+    async def chat(self, messages: list[ChatMessage], **_: Any) -> LLMResponse:
+        self.chat_calls += 1
+        return LLMResponse(
+            content=self._chat_response,
+            model="test-model",
+            finish_reason="stop",
+            usage=LLMUsage(),
+            latency_ms=1.0,
+        )
+
+    async def chat_stream(
+        self, messages: list[ChatMessage], **_: Any
+    ) -> AsyncIterator[str]:
+        self.stream_calls += 1
+        for c in self._chunks:
+            yield c
+
+
 class _FakeRag:
     def __init__(
         self,
@@ -353,6 +382,7 @@ async def test_invalid_json_then_valid_recovers(tmp_path: Path) -> None:
             skill=_FakeSkill(),
             settings=_settings(tmp_path),
             question="x",
+            auto_retrieve=False,
         )
     ]
     # 第一步 invalid 不应产 tool_call 或 final
@@ -496,6 +526,7 @@ async def test_unknown_tool_is_reported_but_loop_continues(tmp_path: Path) -> No
             skill=_FakeSkill(),
             settings=_settings(tmp_path),
             question="x",
+            auto_retrieve=False,
         )
     ]
     tool_result = next(ev for ev in events if ev.type == "tool_result")
@@ -556,8 +587,11 @@ async def test_repeated_identical_tool_call_is_intercepted(tmp_path: Path) -> No
             settings=_settings(tmp_path),
             question="x",
             max_iterations=5,
+            enable_fast_path=False,
+            auto_retrieve=False,
         )
     ]
+    # 注：auto_retrieve=False 关掉默认检索，确保只统计循环里脚本化的 rag 调用
     assert len(rag.queries) == 1  # 第二次相同调用被拦截, rag 只真正查了一次
     final = next(ev for ev in events if ev.type == "final")
     assert final.payload["answer"] == "已基于检索结果作答。"
@@ -599,6 +633,7 @@ async def test_llm_step_retries_once_on_transient_error(tmp_path: Path) -> None:
             settings=_settings(tmp_path),
             question="hi",
             max_iterations=3,
+            enable_fast_path=False,
         )
     ]
     assert llm.calls == 2  # 第一次失败 + 重试一次成功
@@ -626,12 +661,224 @@ async def test_generate_artifact_failure_feeds_back_to_llm(tmp_path: Path) -> No
             skill=skill,
             settings=_settings(tmp_path),
             question="@生成 HTML x",
+            auto_retrieve=False,
         )
     ]
     tool_result = next(ev for ev in events if ev.type == "tool_result")
     assert tool_result.payload["ok"] is False
     assert not any(ev.type == "artifact" for ev in events)
     assert events[-1].type == "done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_required_artifact_final_is_nudged_to_generate_first(tmp_path: Path) -> None:
+    """用户明确要 PPT, 但模型想空手 final → 纠偏一次让它先 generate_artifact, 再 final。
+
+    复合任务闭环守卫: 修复"调研X并输出PPT"被 rag 完直接文字收尾、产物丢失的问题。
+    """
+    llm = _ScriptedLLM(
+        [
+            '{"action":"final","answer":"这是PPT大纲: 1. 封面 2. 现状 3. 展望"}',
+            '{"action":"tool_call","tool":"generate_artifact","args":{"artifact_type":"pptx","brief":"按大纲生成"},"reason":"补生成产物"}',
+            '{"action":"final","answer":"已按你的要求生成 PPT, 见弹窗。"}',
+        ]
+    )
+    skill = _FakeSkill(artifact=_artifact(tmp_path, "pptx"))
+    events = [
+        ev
+        async for ev in run_agent(
+            main_llm=llm,
+            rag=_FakeRag(),
+            web=_FakeWeb(),
+            skill=skill,
+            settings=_settings(tmp_path),
+            question="把上午的讨论整理成一个PPT",
+        )
+    ]
+    # 守卫纠偏一次 → 共 3 次 LLM 调用, skill 真正生成了产物
+    assert llm.calls != []
+    assert len(skill.calls) == 1
+    assert skill.calls[0]["artifact_type"] == "pptx"
+    assert any(ev.type == "artifact" for ev in events)
+    final = next(ev for ev in events if ev.type == "final")
+    assert "PPT" in final.payload["answer"]
+    assert final.payload["artifact_ids"] == ["pptx-abc"]
+    # 第二次 LLM 调用的上下文里应包含纠偏提示
+    nudge_seen = any(
+        "generate_artifact" in m.content and "还没有调用" in m.content
+        for m in llm.calls[1]
+    )
+    assert nudge_seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_required_artifact_nudge_fires_only_once(tmp_path: Path) -> None:
+    """守卫只纠偏一次: 模型若仍坚持空手 final, 第二次 final 必须被接受, 不死循环。"""
+    llm = _ScriptedLLM(
+        [
+            '{"action":"final","answer":"第一次空手收尾"}',
+            '{"action":"final","answer":"第二次仍空手收尾, 应被接受"}',
+        ]
+    )
+    events = [
+        ev
+        async for ev in run_agent(
+            main_llm=llm,
+            rag=_FakeRag(),
+            web=_FakeWeb(),
+            skill=_FakeSkill(),
+            settings=_settings(tmp_path),
+            question="帮我做一个PPT",
+        )
+    ]
+    final = next(ev for ev in events if ev.type == "final")
+    assert final.payload["answer"] == "第二次仍空手收尾, 应被接受"
+    assert len(llm.calls) == 2  # 只纠偏一次
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_fast_path_streams_direct_answer(tmp_path: Path) -> None:
+    """首字延迟优化：纯寒暄走流式直答，token 边到边吐、不经 JSON 决策、不检索。"""
+    llm = _StreamingLLM(chunks=["你好", "！有什么", "可以帮你"])
+    events = [
+        ev
+        async for ev in run_agent(
+            main_llm=llm,
+            rag=_FakeRag(),
+            web=_FakeWeb(),
+            skill=_FakeSkill(),
+            settings=_settings(tmp_path),
+            question="你好",
+            enable_fast_path=True,
+        )
+    ]
+    types = [ev.type for ev in events]
+    # 纯寒暄走流式直答：有 plan + 多个 delta + final + done，绝无 tool_call
+    assert "tool_call" not in types
+    assert "tool_result" not in types
+    deltas = [ev.payload["text"] for ev in events if ev.type == "delta"]
+    assert deltas == ["你好", "！有什么", "可以帮你"]
+    final = next(ev for ev in events if ev.type == "final")
+    assert final.payload["answer"] == "你好！有什么可以帮你"
+    assert events[-1].type == "done"
+    # 纯流式：没有走非流式 .chat()
+    assert llm.stream_calls == 1
+    assert llm.chat_calls == 0
+
+
+@pytest.mark.unit
+def test_trivial_chitchat_detection() -> None:
+    """只有封闭集合里的纯寒暄才跳过检索；任何实质问题都不跳过（默认带知识库）。"""
+    from app.use_cases.agent_loop import _is_trivial_chitchat
+
+    for q in ["你好", "您好", "在吗？", "谢谢！", "ok", "好的。"]:
+        assert _is_trivial_chitchat(q) is True, q
+
+    for q in [
+        "前几天河南的需求对接是谁负责?",
+        "前几天河南高校的需求遗留了什么待办?",
+        "上次会上讨论的进展怎么样",
+        "帮我生成一个 PPT",
+        "介绍一下这个项目",
+    ]:
+        assert _is_trivial_chitchat(q) is False, q
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_history_question_runs_rag_prelude_not_fast_path(tmp_path: Path) -> None:
+    """历史问题应跑 rag_search 预置工具，而不是 fast-path 只看最近转录。"""
+    llm = _ScriptedLLM(['{"action":"final","answer":"根据历史对话，河南需求由张三负责。"}'])
+    rag = _FakeRag([_chunk("ambient-1", title="Ambient", text="河南的需求对接由张三负责")])
+    events = [
+        ev
+        async for ev in run_agent(
+            main_llm=llm,
+            rag=rag,
+            web=_FakeWeb(),
+            skill=_FakeSkill(),
+            settings=_settings(tmp_path),
+            question="前几天河南的需求对接是谁负责?",
+            enable_fast_path=True,
+        )
+    ]
+    # rag_search 被作为 prelude 真正执行
+    assert len(rag.queries) >= 1
+    tool_calls = [ev for ev in events if ev.type == "tool_call" and ev.payload["name"] == "rag_search"]
+    assert tool_calls, "历史问题必须触发 rag_search"
+    final = next(ev for ev in events if ev.type == "final")
+    assert "河南" in final.payload["answer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_local_datetime_question_bypasses_llm(tmp_path: Path) -> None:
+    """今天星期几这类问题必须由本机时间确定性回答，不能交给模型说不知道。"""
+    llm = _ScriptedLLM([])
+    events = [
+        ev
+        async for ev in run_agent(
+            main_llm=llm,
+            rag=_FakeRag(),
+            web=_FakeWeb(),
+            skill=_FakeSkill(),
+            settings=_settings(tmp_path),
+            question="今天星期几",
+            enable_fast_path=True,
+        )
+    ]
+    final = next(ev for ev in events if ev.type == "final")
+    assert "今天是" in final.payload["answer"]
+    assert "星期" in final.payload["answer"]
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_fast_path_disabled_uses_agent_loop(tmp_path: Path) -> None:
+    """enable_fast_path=False 时简单问答仍走 agent 循环（保持旧行为，便于内部测试）。"""
+    llm = _ScriptedLLM(['{"action":"final","answer":"循环直答"}'])
+    events = [
+        ev
+        async for ev in run_agent(
+            main_llm=llm,
+            rag=_FakeRag(),
+            web=_FakeWeb(),
+            skill=_FakeSkill(),
+            settings=_settings(tmp_path),
+            question="你好呀，随便聊聊",
+            enable_fast_path=False,
+        )
+    ]
+    final = next(ev for ev in events if ev.type == "final")
+    assert final.payload["answer"] == "循环直答"
+    assert len(llm.calls) == 1  # 经过 agent 循环的 .chat() 决策
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_fast_path_empty_stream_falls_back_to_loop(tmp_path: Path) -> None:
+    """流式一个字都没出来时，fast-path 不收尾，落回完整 agent 循环兜底。"""
+    llm = _StreamingLLM(chunks=[], chat_response='{"action":"final","answer":"兜底直答"}')
+    events = [
+        ev
+        async for ev in run_agent(
+            main_llm=llm,
+            rag=_FakeRag(),
+            web=_FakeWeb(),
+            skill=_FakeSkill(),
+            settings=_settings(tmp_path),
+            question="你好",
+            enable_fast_path=True,
+        )
+    ]
+    final = next(ev for ev in events if ev.type == "final")
+    assert final.payload["answer"] == "兜底直答"
+    assert llm.stream_calls == 1  # 试过流式
+    assert llm.chat_calls >= 1  # 流式空 → 落回循环用 .chat()
 
 
 @pytest.mark.asyncio

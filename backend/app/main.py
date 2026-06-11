@@ -41,6 +41,7 @@ from app.api.health import start_prober, stop_prober
 from app.api.intent import router as intent_router
 from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
+from app.api.recap import router as recap_router
 from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
 from app.api.speakers import router as speakers_router
@@ -317,6 +318,7 @@ def create_app() -> FastAPI:
     app.include_router(speakers_router)
     app.include_router(intent_router)
     app.include_router(agent_router)
+    app.include_router(recap_router)
     app.include_router(tts_router)
     app.include_router(ws_router)
     # P2.5：数据管理 endpoints（data-dir / meeting export / speaker reset）

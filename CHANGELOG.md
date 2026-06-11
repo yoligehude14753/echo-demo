@@ -137,7 +137,7 @@ EchoDesk Phase 1 最小可用版（M1–M4 合并）。
 - **多文档 + 会议 RAG**：jieba 分词 + BM25Okapi，9 query 并发 1.28s，
   `doc_cite=100%`。
 - **声纹识别**：SpeechBrain ECAPA-TDNN 默认参数，本地 CPU 推理。
-- **STT / TTS / LLM**：FireRedASR2-AED + Qwen3 TTS（heyi-bj 100.87.251.9）+
+- **STT / TTS / LLM**：FireRedASR2-AED + Qwen3 TTS（heyi-bj localhost）+
   Yunwu MiniMax-M2.7（主）+ 本地 Qwen3-1.7B（fast）。
 - **Web Search 仲裁**：Inspiro 主 + Tavily 备 + DDG 兜底。
 - **Electron + React 18 UI**：Ant Design 5 + Tailwind，WebSocket 推送会议状态

@@ -5,6 +5,22 @@
 > **快速安装**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
 > **远程后端 stable HTTPS endpoint（Phase 4 · 不依赖 Tailscale）**：见 [`docs/REMOTE_API.md`](docs/REMOTE_API.md)
+> **公开分发仓（闭源安装包 + Access Key）**：见 [`docs/PUBLIC_DISTRIBUTION.md`](docs/PUBLIC_DISTRIBUTION.md)
+
+## 公版用户快速使用
+
+公版用户不需要安装 Python、Node、Docker，也不需要任何 yunwu/heyi 的真实密钥。用户只需要：
+
+1. 下载并安装对应平台的 EchoDesk 安装包（macOS `.dmg` / Windows `.exe`）。
+2. 第一次启动后进入「设置 → 远程服务」。
+3. 填入：
+   - 服务网关地址：`https://echodesk.yoliyoli.uk`
+   - 访问 Key：由维护者单独分发给该用户
+4. 保存后即可使用主 LLM、fast LLM、TTS、STT 等联网能力。
+
+浏览器直接打开 `https://echodesk.yoliyoli.uk/` 返回 `{"detail":"Not Found"}` 是正常现象：它是 API 网关，不是网页。健康检查地址是 `https://echodesk.yoliyoli.uk/health`；客户端实际调用 `/v1/chat/completions`、`/v1/audio/speech`、`/v1/audio/transcriptions` 等 OpenAI 兼容接口。
+
+服务端真实密钥只保存在 heyi-bj 上的 `echo-gateway`，不会写入公开仓库，也不会下发到客户端。没有访问 Key 的请求会返回 `401`。
 
 ## 状态摘要 (2026-05-28)
 

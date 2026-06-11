@@ -37,7 +37,9 @@ from app.ports.web_search import WebSearchPort
 from app.schemas.agent import AgentEvent, ToolResult
 from app.schemas.artifact import SUPPORTED_KINDS, GeneratedArtifact
 from app.schemas.llm import ChatMessage
+from app.use_cases.local_datetime import answer_local_datetime
 from app.use_cases.retrieve_and_answer import _rerank_diverse_with_priority_and_grep_boost
+from app.use_cases.style_template import merge_extra_instructions, resolve_docx_style_template
 
 _log = logging.getLogger("echodesk.agent")
 
@@ -312,12 +314,20 @@ async def _tool_generate_artifact(args: dict[str, Any], deps: _ToolDeps) -> Tool
             content="generate_artifact 参数错误: brief 为空",
             summary="参数错误",
         )
+    # 自动发现知识库里的同类 .docx 当样式模板，抽离版式注入（仅 Word）。
+    eff_extra = extra_instructions
+    template_note = ""
+    if artifact_type.lower() in {"word", "docx"}:
+        tpl = await resolve_docx_style_template(deps.rag, brief)
+        if tpl is not None:
+            eff_extra = merge_extra_instructions(extra_instructions, tpl.instructions)
+            template_note = f", 参考知识库模板: {tpl.title}"
     try:
         artifact: GeneratedArtifact = await deps.skill.generate(
             llm=deps.main_llm,
             artifact_type=artifact_type,
             brief=brief,
-            extra_instructions=extra_instructions,
+            extra_instructions=eff_extra,
         )
     except (SkillError, LLMError) as e:
         _log.warning("agent generate_artifact failed: %s", e)
@@ -335,7 +345,7 @@ async def _tool_generate_artifact(args: dict[str, Any], deps: _ToolDeps) -> Tool
         name="generate_artifact",
         ok=True,
         content=(
-            f"{summary}, 标题: {artifact.title or '(无)'}, "
+            f"{summary}, 标题: {artifact.title or '(无)'}{template_note}, "
             f"latency_ms={artifact.generation_latency_ms:.0f}, "
             f"path={artifact.file_path}"
         ),
@@ -351,9 +361,50 @@ _TOOLS: Final[dict[str, _ToolHandler]] = {
 }
 
 
-def _needs_initial_rag(question: str) -> bool:
-    lower = question.lower()
-    return any(term in lower for term in _GROUNDING_TERMS)
+# 纯寒暄/客套的封闭集合：只有这些"明显不需要知识库"的问题才跳过检索。
+# 设计原则（2026-06-04 用户事故复盘）：跨对话/历史检索不能靠关键词正则去"猜"
+# 是不是历史查询——命中率不可控。改为"默认带知识库"（与 UI 文案一致）：除下面
+# 这个封闭集合外，任何实质问题都先 rag_search，命中交给 BM25 + 相关度排序。
+# 把"跳过"判错也无害：顶多对一句寒暄多跑一次本地 BM25。
+_TRIVIAL_CHITCHAT: Final[frozenset[str]] = frozenset(
+    {
+        "你好",
+        "您好",
+        "哈喽",
+        "哈罗",
+        "嗨",
+        "hi",
+        "hello",
+        "hey",
+        "在吗",
+        "在不在",
+        "在",
+        "你在吗",
+        "谢谢",
+        "多谢",
+        "感谢",
+        "谢啦",
+        "再见",
+        "拜拜",
+        "晚安",
+        "早",
+        "早上好",
+        "晚上好",
+        "ok",
+        "okay",
+        "好的",
+        "好",
+        "嗯",
+        "收到",
+    }
+)
+_TRIVIAL_STRIP_RE = re.compile(r"[\s,，。.!！?？~、:：;；@]+")
+
+
+def _is_trivial_chitchat(question: str) -> bool:
+    """判断是否为纯寒暄（去标点后落在封闭集合）。仅用于"跳过检索"，判错无害。"""
+    q = _TRIVIAL_STRIP_RE.sub("", question.strip()).lower()
+    return q in _TRIVIAL_CHITCHAT
 
 
 def _needs_initial_web(question: str) -> bool:
@@ -512,20 +563,9 @@ async def _direct_chat_answer(
     问的其实是个可直接回答的问题（如"总结 X 市场现状"）时，退回最朴素、最稳的
     一次性问答——不要求任何 JSON 协议，几乎不会再失败。带上已检索到的证据。
     """
-    sys = (
-        "你是 EchoDesk 桌面助手 Echo。直接用简洁、有条理的中文 markdown 回答用户问题。"
-        "若提供了参考资料就结合资料作答，并在末尾标注来源；没有就用你已有的知识回答。"
-        "不要输出 JSON、不要任何工具协议、不要解释你的思考过程。"
-    )
-    user = question.strip()
-    if evidence_parts:
-        user += "\n\n# 参考资料\n" + "\n\n".join(evidence_parts[-4:])
     try:
         resp = await main_llm.chat(
-            [
-                ChatMessage(role="system", content=sys),
-                ChatMessage(role="user", content=user),
-            ],
+            _direct_answer_messages(question, evidence_parts, None),
             max_tokens=2000,
             temperature=0.4,
             timeout_s=_LLM_TIMEOUT_S,
@@ -534,6 +574,46 @@ async def _direct_chat_answer(
     except LLMError as e:
         _log.warning("direct chat answer failed: %s", e)
         return ""
+
+
+def _direct_answer_messages(
+    question: str, evidence_parts: list[str], inline_context: str | None
+) -> list[ChatMessage]:
+    """组装"纯直答"的 messages（流式/非流式共用，保证两条路答案口径一致）。"""
+    now = datetime.now(timezone.utc).astimezone()  # noqa: UP017 - 保留 timezone.utc（曾因 datetime.UTC 触发 AttributeError）
+    current_dt_str = now.strftime("%Y年%m月%d日 %H:%M %Z（%A）")
+    sys = (
+        "你是 EchoDesk 桌面助手 Echo。直接用简洁、有条理的中文 markdown 回答用户问题。"
+        "若提供了参考资料就结合资料作答，并在末尾标注来源；没有就用你已有的知识回答。"
+        f"当前本地时间是：{current_dt_str}。"
+        "不要输出 JSON、不要任何工具协议、不要解释你的思考过程。"
+    )
+    user = question.strip()
+    if inline_context and inline_context.strip():
+        user += "\n\n# 当前上下文(最近转录, 仅供参考)\n" + inline_context.strip()[:2000]
+    if evidence_parts:
+        user += "\n\n# 参考资料\n" + "\n\n".join(evidence_parts[-4:])
+    return [
+        ChatMessage(role="system", content=sys),
+        ChatMessage(role="user", content=user),
+    ]
+
+
+async def _direct_chat_answer_stream(
+    main_llm: LLMPort,
+    question: str,
+    evidence_parts: list[str],
+    inline_context: str | None = None,
+) -> AsyncIterator[str]:
+    """流式版直答：首字延迟优化的核心——token 一到就吐给前端，不等整段生成完。"""
+    async for chunk in main_llm.chat_stream(
+        _direct_answer_messages(question, evidence_parts, inline_context),
+        max_tokens=2000,
+        temperature=0.4,
+        timeout_s=_LLM_TIMEOUT_S,
+    ):
+        if chunk:
+            yield chunk
 
 
 async def _forced_final_answer(
@@ -577,7 +657,7 @@ async def _forced_final_answer(
     return "抱歉，这个问题这次没能处理完。请把问题拆细一些或换个问法，我再试一次。"
 
 
-async def run_agent(  # noqa: PLR0912, PLR0915 - agent loop is intentionally linear for auditability
+async def run_agent(  # noqa: PLR0911, PLR0912, PLR0915 - agent loop is intentionally linear for auditability
     *,
     main_llm: LLMPort,
     rag: RagPort,
@@ -587,6 +667,8 @@ async def run_agent(  # noqa: PLR0912, PLR0915 - agent loop is intentionally lin
     question: str,
     inline_context: str | None = None,
     max_iterations: int = _DEFAULT_MAX_ITERATIONS,
+    enable_fast_path: bool = False,
+    auto_retrieve: bool = True,
 ) -> AsyncIterator[AgentEvent]:
     """跑一轮 agent 循环, 输出 AgentEvent stream。
 
@@ -598,8 +680,19 @@ async def run_agent(  # noqa: PLR0912, PLR0915 - agent loop is intentionally lin
         yield AgentEvent(type="done")
         return
 
+    local_answer = answer_local_datetime(question)
+    if local_answer is not None:
+        async for delta in _chunked_deltas(local_answer):
+            yield AgentEvent(type="delta", payload={"text": delta})
+        yield AgentEvent(
+            type="final",
+            payload={"answer": local_answer, "artifact_ids": [], "citations": []},
+        )
+        yield AgentEvent(type="done")
+        return
+
     deps = _ToolDeps(rag=rag, web=web, skill=skill, main_llm=main_llm, settings=settings)
-    now = datetime.now(timezone.utc).astimezone()
+    now = datetime.now(timezone.utc).astimezone()  # noqa: UP017 - 保留 timezone.utc（曾因 datetime.UTC 触发 AttributeError）
     current_dt_str = now.strftime("%Y年%m月%d日 %H:%M %Z（%A）")
     sys_prompt = _SYS_PROMPT_TEMPLATE.format(current_datetime=current_dt_str)
     messages: list[ChatMessage] = [ChatMessage(role="system", content=sys_prompt)]
@@ -618,14 +711,23 @@ async def run_agent(  # noqa: PLR0912, PLR0915 - agent loop is intentionally lin
     format_retries = 0
     max_format_retries = 2
     seen_calls: set[str] = set()
+    # 用户明确要产物时,记录该类型;若模型想空手 final,先纠偏一次让它真正生成产物
+    # （复合任务"调研X并输出PPT"经常 rag 完就文字收尾,不闭环）。
+    required_artifact = _requested_artifact_type(question)
+    artifact_nudged = False
+    artifact_attempted = False  # 是否已尝试过 generate_artifact（成功或失败都算）
 
     prelude_calls: list[tuple[str, dict[str, Any], str]] = []
-    if _needs_initial_rag(question):
+    # 默认带知识库：除纯寒暄外，任何实质问题都先检索本地知识库/历史对话。
+    # 命中靠 BM25 + 相关度排序，而不是用关键词正则去猜"是不是历史查询"
+    # （修 2026-06-04 跨对话历史检索失效：用户问"前几天河南的需求对接谁负责"
+    # 因不含 grounding 关键词被当寒暄直答，从不检索历史）。
+    if auto_retrieve and not _is_trivial_chitchat(question):
         prelude_calls.append(
             (
                 "rag_search",
                 {"query": _rag_grounding_query(question), "top_k": 40},
-                "先查本地知识库做事实锚定",
+                "默认检索本地知识库/历史对话做事实锚定",
             )
         )
     if _needs_initial_web(question):
@@ -636,6 +738,29 @@ async def run_agent(  # noqa: PLR0912, PLR0915 - agent loop is intentionally lin
                 "补充外部市场/竞品信息",
             )
         )
+
+    # 首字延迟优化：无需任何工具锚定的简单问答(不查库/不联网/不产物) → 直接走流式直答，
+    # 省掉"非流式 JSON 决策 + 整段回放"的首字延迟，token 一到就吐给前端。
+    if enable_fast_path and not prelude_calls and required_artifact is None:
+        yield AgentEvent(type="plan", payload={"step": 1, "max_steps": max_iterations})
+        acc: list[str] = []
+        try:
+            async for chunk in _direct_chat_answer_stream(
+                main_llm, question, evidence_parts, inline_context
+            ):
+                acc.append(chunk)
+                yield AgentEvent(type="delta", payload={"text": chunk})
+        except LLMError as e:
+            _log.warning("fast-path 流式直答失败，回退完整 agent 循环: %s", e)
+        answer = "".join(acc).strip()
+        if answer:
+            yield AgentEvent(
+                type="final",
+                payload={"answer": answer, "artifact_ids": [], "citations": []},
+            )
+            yield AgentEvent(type="done")
+            return
+        # 流式一个字都没出来 → 不在此收尾，落到下面完整 agent 循环兜底（更稳）
 
     for tool_name, args, reason in prelude_calls:
         yield AgentEvent(
@@ -782,6 +907,29 @@ async def run_agent(  # noqa: PLR0912, PLR0915 - agent loop is intentionally lin
 
         action = parsed["action"]
         if action == "final":
+            # 复合任务闭环守卫:用户明确要产物,但模型从没尝试过 generate_artifact 就想
+            # final → 纠偏一次让它先生成。已尝试过(哪怕失败)则放行,避免吞掉失败说明,
+            # 也只纠偏一次,避免和模型死循环。
+            if (
+                required_artifact
+                and not artifact_ids
+                and not artifact_attempted
+                and not artifact_nudged
+            ):
+                artifact_nudged = True
+                messages.append(ChatMessage(role="assistant", content=raw))
+                messages.append(
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            f"用户明确要求产出 {required_artifact} 产物，但你还没有调用 "
+                            f"generate_artifact 生成它。请先用 action='tool_call' 调用 "
+                            f"generate_artifact（artifact_type='{required_artifact}'，"
+                            "brief 写清结构与要点，基于上面已检索到的证据），生成成功后再 final。"
+                        ),
+                    )
+                )
+                continue
             answer = str(parsed.get("answer", "")).strip()
             if len(answer) < _MIN_FINAL_ANSWER_CHARS:
                 answer = "(模型没有生成有效回答, 请重试或换个问法。)"
@@ -834,6 +982,8 @@ async def run_agent(  # noqa: PLR0912, PLR0915 - agent loop is intentionally lin
                 summary="重复调用已拦截",
             )
         else:
+            if tool_name == "generate_artifact":
+                artifact_attempted = True
             seen_calls.add(call_sig)
             result = await handler(args, deps)
 

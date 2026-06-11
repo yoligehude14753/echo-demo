@@ -94,17 +94,48 @@ function resolveBackendCwd() {
 
 // ---------- Python 解析（P1.6） ----------
 
-// 候选顺序：env > 用户安装位置 (P1.7) > dev 仓库 venv > 系统 python3 > PATH
+// 候选顺序：env > 用户安装位置 (P1.7) > dev 仓库 venv > 系统 python > PATH
+// 跨平台：Windows venv 在 Scripts\python.exe，Unix 在 bin/python。
+function venvPython(root) {
+  return process.platform === "win32"
+    ? path.join(root, ".venv", "Scripts", "python.exe")
+    : path.join(root, ".venv", "bin", "python");
+}
 function pythonCandidates() {
   const cands = [];
   if (process.env.ECHO_PYTHON) cands.push(process.env.ECHO_PYTHON);
-  cands.push(
-    path.join(os.homedir(), ".echodesk", "source", "backend", ".venv", "bin", "python"),
-  );
-  cands.push(path.join(projectRoot(), "backend", ".venv", "bin", "python"));
-  cands.push("/usr/bin/python3");
-  cands.push("python3");
+  cands.push(venvPython(path.join(os.homedir(), ".echodesk", "source", "backend")));
+  cands.push(venvPython(path.join(projectRoot(), "backend")));
+  if (process.platform === "win32") {
+    cands.push("python.exe");
+    cands.push("python");
+  } else {
+    cands.push("/usr/bin/python3");
+    cands.push("python3");
+  }
   return cands;
+}
+
+// 打包后端二进制（PyInstaller onedir）：装机后随 .app/.exe 一起分发，无需系统 Python。
+// 找到即优先用它；找不到回退系统 Python + 源码（dev / 旧装机方式）。
+function resolveBundledBackend() {
+  const exe = process.platform === "win32" ? "echodesk-backend.exe" : "echodesk-backend";
+  const cands = [];
+  if (process.env.ECHO_BACKEND_BIN) cands.push(process.env.ECHO_BACKEND_BIN);
+  // 打包态：Electron extraResources → resources/backend-dist/echodesk-backend/<exe>
+  if (process.resourcesPath) {
+    cands.push(path.join(process.resourcesPath, "backend-dist", "echodesk-backend", exe));
+  }
+  // dev 态：仓库 backend/dist/echodesk-backend/<exe>（本地 pyinstaller 产物）
+  cands.push(path.join(projectRoot(), "backend", "dist", "echodesk-backend", exe));
+  for (const c of cands) {
+    try {
+      if (c && fs.existsSync(c)) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
 }
 
 // 每个候选 fs.existsSync + spawnSync --version 验证；返回第一个能跑的
@@ -112,7 +143,7 @@ function resolvePython() {
   const searched = [];
   for (const c of pythonCandidates()) {
     searched.push(c);
-    const isAbs = c.startsWith("/");
+    const isAbs = path.isAbsolute(c);
     if (isAbs) {
       try {
         if (!fs.existsSync(c)) continue;
@@ -336,64 +367,95 @@ function spawnBackendAndWatch() {
     return;
   }
 
-  // resolvePython 在 startBackend 已经跑过；这里防御性兜底
-  if (!pythonResolved || !pythonResolved.python) {
-    pythonResolved = resolvePython();
-  }
-  if (!pythonResolved.python) {
-    emitStatus({
-      state: "python-not-found",
-      searched: pythonResolved.searched,
-      help_url: "docs/INSTALL.md",
-    });
-    return;
-  }
-
-  const cwd = resolveBackendCwd();
-  if (!cwd || !fs.existsSync(path.join(cwd, "app", "main.py"))) {
-    emitStatus({
-      state: "backend-source-not-found",
-      searched: [
-        process.env.ECHO_BACKEND_CWD,
-        path.join(os.homedir(), ".echodesk", "source", "backend"),
-        path.join(projectRoot(), "backend"),
-      ].filter(Boolean),
-      help_url: "docs/INSTALL.md",
-    });
-    return;
+  // 决定启动命令：优先打包二进制（无需系统 Python），否则回退系统 Python + 源码。
+  let spawnCmd;
+  let spawnArgs;
+  let spawnCwd;
+  const bundled = resolveBundledBackend();
+  if (bundled) {
+    spawnCmd = bundled;
+    spawnArgs = [];
+    spawnCwd = path.dirname(bundled);
+    log(`[backend] using bundled binary: ${bundled}`);
+  } else {
+    // resolvePython 在 startBackend 已经跑过；这里防御性兜底
+    if (!pythonResolved || !pythonResolved.python) {
+      pythonResolved = resolvePython();
+    }
+    if (!pythonResolved.python) {
+      emitStatus({
+        state: "python-not-found",
+        searched: pythonResolved.searched,
+        help_url: "docs/INSTALL.md",
+      });
+      return;
+    }
+    const cwd = resolveBackendCwd();
+    if (!cwd || !fs.existsSync(path.join(cwd, "app", "main.py"))) {
+      emitStatus({
+        state: "backend-source-not-found",
+        searched: [
+          process.env.ECHO_BACKEND_CWD,
+          path.join(os.homedir(), ".echodesk", "source", "backend"),
+          path.join(projectRoot(), "backend"),
+        ].filter(Boolean),
+        help_url: "docs/INSTALL.md",
+      });
+      return;
+    }
+    spawnCmd = pythonResolved.python;
+    spawnArgs = [
+      "-m",
+      "uvicorn",
+      "app.main:app",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(BACKEND_PORT),
+      "--log-level",
+      "info",
+    ];
+    spawnCwd = cwd;
+    log(`[backend] spawn ${spawnCmd} -m uvicorn (cwd=${cwd})`);
   }
   emitStatus({ state: "starting" });
-  log(`[backend] spawn ${pythonResolved.python} -m uvicorn (cwd=${cwd})`);
+
+  const childEnv = {
+    ...process.env,
+    // 打包二进制通过这些 env 读端口/host/日志级别（run_server.py）；
+    // python 路径走 --port 参数，这些 env 无害。
+    ECHO_BACKEND_HOST: "127.0.0.1",
+    ECHO_BACKEND_PORT: String(BACKEND_PORT),
+    ECHO_LOG_LEVEL: "info",
+    // localhost 流量走代理会导致 uvicorn 自己 GET healthz 都失败
+    HTTP_PROXY: "",
+    HTTPS_PROXY: "",
+    ALL_PROXY: "",
+    http_proxy: "",
+    https_proxy: "",
+    all_proxy: "",
+  };
+  // 冻结二进制自带 Python + dylib：若继承用户环境里的 DYLD_*/PYTHON* 变量
+  // （不少用户为 CUDA/homebrew 设过 DYLD_LIBRARY_PATH），内置解释器/动态库会错乱
+  // 甚至 SIGSEGV。spawn 前一律剥离，确保用干净环境（E2E 实测发现的崩溃根因）。
+  for (const k of [
+    "DYLD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_FRAMEWORK_PATH",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "__PYVENV_LAUNCHER__",
+  ]) {
+    delete childEnv[k];
+  }
 
   try {
-    backendProc = spawn(
-      pythonResolved.python,
-      [
-        "-m",
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(BACKEND_PORT),
-        "--log-level",
-        "info",
-      ],
-      {
-        cwd,
-        env: {
-          ...process.env,
-          // localhost 流量走代理会导致 uvicorn 自己 GET healthz 都失败
-          HTTP_PROXY: "",
-          HTTPS_PROXY: "",
-          ALL_PROXY: "",
-          http_proxy: "",
-          https_proxy: "",
-          all_proxy: "",
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    backendProc = spawn(spawnCmd, spawnArgs, {
+      cwd: spawnCwd,
+      env: childEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch (e) {
     log(`[backend] spawn threw: ${e.message}`);
     backendProc = null;

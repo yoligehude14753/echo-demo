@@ -5,9 +5,12 @@ import {
   Mic,
   Settings,
   Square,
+  Sparkles,
   Volume2,
   VolumeX,
 } from "lucide-react";
+import { message } from "antd";
+import { getDailyRecap } from "@/api";
 import { useState } from "react";
 import MeetingList from "@/components/MeetingList";
 import TranscriptStream from "@/components/TranscriptStream";
@@ -76,6 +79,7 @@ export default function App(): JSX.Element {
           />
           <span className="w-px h-3 bg-paper-300" aria-hidden />
           <MeetingStatusBar />
+          <DailyRecapButton tts={tts} />
           <StopButton tts={tts} />
           <TtsTopBarButton tts={tts} />
           <Tooltip title="后台事件流同步计数">
@@ -158,6 +162,68 @@ export default function App(): JSX.Element {
         </Content>
       </Layout>
     </Layout>
+  );
+}
+
+// ── 顶栏「今日回顾」：主动把今天被动记录的对话/会议汇成回顾（陪伴能力）──
+function DailyRecapButton({
+  tts,
+}: {
+  tts: ReturnType<typeof useTtsPlayer>;
+}): JSX.Element {
+  const [loading, setLoading] = useState(false);
+  const appendAssistantReply = useStore((s) => s.appendAssistantReply);
+  const patchAssistantReply = useStore((s) => s.patchAssistantReply);
+
+  const onRecap = async (): Promise<void> => {
+    if (loading) return;
+    setLoading(true);
+    const replyId = appendAssistantReply(
+      "正在回顾今天…",
+      "assistant_reply",
+      undefined,
+      "pending",
+    );
+    try {
+      const r = await getDailyRecap();
+      if (r.empty) {
+        patchAssistantReply(replyId, {
+          text: "今天还没有记录到可回顾的对话或会议。",
+          status: "done",
+        });
+        return;
+      }
+      const todoCount = r.todos?.length ?? 0;
+      const banner =
+        todoCount > 0 ? `> 📌 今天有 **${todoCount}** 件待办待跟进\n\n` : "";
+      patchAssistantReply(replyId, {
+        text: banner + r.recap_markdown,
+        status: "done",
+      });
+      if (tts.enabled) void tts.speak(r.recap_markdown, { interrupt: true });
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      patchAssistantReply(replyId, { text: `今日回顾失败：${raw}`, status: "failed" });
+      message.error("今日回顾失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Tooltip title="今日回顾：把今天的对话与会议汇成一份小结">
+      <button
+        type="button"
+        onClick={() => void onRecap()}
+        disabled={loading}
+        data-testid="daily-recap"
+        aria-label="今日回顾"
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-ink-500 hover:text-accent hover:bg-paper-200 transition disabled:opacity-50"
+      >
+        <Sparkles className="w-3.5 h-3.5" />
+        <span>{loading ? "回顾中…" : "今日回顾"}</span>
+      </button>
+    </Tooltip>
   );
 }
 

@@ -1,0 +1,5 @@
+# PyInstaller 冻结后端所需的额外构建依赖（在 backend/requirements.txt 之外）
+# CI 与本地打包都用：先装 requirements.txt，再装本文件，然后跑 pyinstaller spec。
+pyinstaller==6.11.1
+# pkg_resources 运行时 hook 依赖（jaraco.context → backports.tarfile），缺则冻结二进制启动即崩
+backports.tarfile==1.2.0

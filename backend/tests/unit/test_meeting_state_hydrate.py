@@ -11,6 +11,7 @@ started_at 超过 max_meeting_duration_s，就强制 force-end 并把 _current=N
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,25 @@ class _PipelineStub:
         return None
 
 
+class _FinalizingPipelineStub(_PipelineStub):
+    def __init__(self, repo: SQLiteRepository) -> None:
+        self.repo = repo
+        self.finalized: list[tuple[str, str]] = []
+
+    async def finalize_meeting(self, meeting_id: str, *, title: str) -> None:
+        self.finalized.append((meeting_id, title))
+        await self.repo.update_meeting_state(
+            meeting_id,
+            state="finalized",
+            finalized_at=datetime.now(UTC),
+            minutes_json=json.dumps(
+                {"meeting_id": meeting_id, "summary": "ok", "sections": []}
+            ),
+            minutes_status="ok",
+            minutes_error="",
+        )
+
+
 async def _make_repo(tmp_path: Path) -> SQLiteRepository:
     repo = SQLiteRepository(tmp_path / "echo.db")
     await repo.init()
@@ -44,9 +64,10 @@ def _make_state(
     repo: SQLiteRepository,
     *,
     max_meeting_duration_s: float = 1800.0,
+    pipeline: Any | None = None,
 ) -> MeetingState:
     return MeetingState(
-        pipeline=_PipelineStub(),  # type: ignore[arg-type]
+        pipeline=pipeline or _PipelineStub(),  # type: ignore[arg-type]
         detector=AutoMeetingDetector(),
         repository=repo,
         event_bus=None,
@@ -136,5 +157,46 @@ async def test_hydrate_keeps_old_manual_meeting(tmp_path: Path) -> None:
         rec = await repo.get_meeting("m-deadbeef00")
         assert rec is not None
         assert rec.state == "in_meeting"
+    finally:
+        await repo.aclose()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_observe_chunk_force_ends_hydrated_auto_meeting_after_max_duration(
+    tmp_path: Path,
+) -> None:
+    """运行中兜底：hydrate 保留的 auto meeting 若之后超过 max，下一次 chunk 应自动结束。
+
+    这覆盖截图里的真实问题：backend 重启后 ``MeetingState`` 恢复了
+    ``auto-...`` current meeting，但 ``AutoMeetingDetector`` 丢了内存 start time；
+    如果只有 detector 自己判断 max_duration，这场会一直 in_meeting，400+ 段也不
+    生成纪要。
+    """
+    repo = await _make_repo(tmp_path)
+    try:
+        base_now = datetime.now(UTC)
+        started = base_now - timedelta(minutes=29)
+        await repo.create_meeting("auto-1900000000", started_at=started, auto_started=True)
+
+        pipe = _FinalizingPipelineStub(repo)
+        state = _make_state(repo, max_meeting_duration_s=1800.0, pipeline=pipe)
+        await state.hydrate()
+        assert state.current is not None
+
+        effective_mid = await state.observe_chunk(
+            speaker_id="speaker_1",
+            duration_ms=1000,
+            now=base_now + timedelta(minutes=2),
+        )
+        await state.await_pending_finalizations()
+
+        assert effective_mid is None
+        assert state.current is None
+        assert pipe.finalized == [("auto-1900000000", "会议 auto-1900000000")]
+        rec = await repo.get_meeting("auto-1900000000")
+        assert rec is not None
+        assert rec.state == "finalized"
+        assert rec.minutes_status == "ok"
     finally:
         await repo.aclose()

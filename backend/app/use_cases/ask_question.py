@@ -15,12 +15,13 @@ from collections.abc import AsyncIterator
 
 from app.ports.llm import LLMPort
 from app.schemas.llm import ChatMessage
+from app.use_cases.local_datetime import answer_local_datetime
 
 SYSTEM_PROMPT = """你是 EchoDesk，会议+办公场景下的个人数字分身。
 特点：
 - 中文优先，回答简洁清晰，必要时分点
 - 不知道就说不知道，不要编造
-- 任何涉及"最新""今天""现在"的问题应说明你没有联网（本 PR 阶段 RAG/Web 未接入）
+- 当前日期/时间类问题由系统本地时间直接处理；其它需要实时外部信息的问题才说明未联网
 """
 
 
@@ -39,6 +40,11 @@ async def ask_question(
         history: 可选历史消息（多轮上下文）
         model: 显式指定模型（None → MAIN 默认）
     """
+    local_answer = answer_local_datetime(question)
+    if local_answer is not None:
+        yield local_answer
+        return
+
     messages: list[ChatMessage] = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
     if history:
         messages.extend(history)

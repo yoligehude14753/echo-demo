@@ -44,7 +44,7 @@ def _yunwu_alive() -> bool:
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not _can_connect("100.87.251.9", 8090),
+        not _can_connect("localhost", 8090),
         reason="heyi-bj :8090 STT (FireRed) 不可达",
     ),
     pytest.mark.skipif(not _yunwu_alive(), reason="Yunwu LLM 不可达"),

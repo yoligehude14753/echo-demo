@@ -388,6 +388,10 @@ async def reset_speakers(
 # 顺序与 SettingsPanel UI 一致
 _REMOTE_FIELDS: list[tuple[str, str, bool]] = [
     # (config key in ~/.echodesk/config.json, Settings 属性, 是否 sensitive)
+    # 网关模式（推荐）：填这两项即开启，所有上游走 echo-gateway，无需配下面的直连项。
+    # echo_gateway_token 是发给用户的「访问 key」——拿到 key 的人填进来就能用。
+    ("echo_gateway_url", "echo_gateway_url", False),
+    ("echo_gateway_token", "echo_gateway_token", True),
     ("llm_main_base_url", "llm_main_base_url", False),
     ("yunwu_open_key", "yunwu_open_key", True),
     ("llm_fast_base_url", "llm_fast_base_url", False),

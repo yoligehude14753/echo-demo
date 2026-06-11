@@ -81,7 +81,7 @@ def _make_tts_settings(**overrides: Any) -> Settings:
     defaults: dict[str, Any] = {
         "tts_enabled": True,
         "tts_provider": "qwen3_tts",
-        "tts_qwen3_url": "http://100.87.251.9:8094",
+        "tts_qwen3_url": "http://localhost:8094",
         "tts_qwen3_voice": "aiden",
     }
     defaults.update(overrides)

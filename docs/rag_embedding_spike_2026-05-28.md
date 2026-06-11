@@ -4,7 +4,7 @@
 >
 > **目标**：确认 EchoDesk 中期 Hybrid RAG（见 `docs/rag_redesign_2026-05-28.md §C.3`）的 dense embedding 通道走哪一路：
 > A. 云雾 OpenAI 兼容 `/v1/embeddings`
-> B. heyi-bj 远端（`100.87.251.9`，与现有 fast LLM / STT / TTS 同机）
+> B. heyi-bj 远端（`localhost`，与现有 fast LLM / STT / TTS 同机）
 > C. 本地 bge-m3（sentence-transformers / FlagEmbedding）
 >
 > **测试机器**：M2 Pro, macOS 25.4.0, 仓库 `/Users/yoligehude/Desktop/all/echo-demo`，凭证读自 `~/.echodesk/config.json`。
@@ -64,7 +64,7 @@
 
 ---
 
-## 3. B 路 · heyi-bj 远端（`100.87.251.9` tailscale 内网）
+## 3. B 路 · heyi-bj 远端（`localhost` tailscale 内网）
 
 ### 3.1 端口扫描结果
 
@@ -239,7 +239,7 @@ curl -sS -X POST https://yunwu.ai/v1/embeddings \
 
 # B 路扫描
 for p in 7860 7861 7862 7863 8000 8001 8080 8090 8091 8092 8093 8094 8095 9090 11434; do
-  curl -sS -m 3 http://100.87.251.9:${p}/v1/models -w "|%{http_code}\n"
+  curl -sS -m 3 http://localhost:${p}/v1/models -w "|%{http_code}\n"
 done
 # → 仅 7860 / 7862 返回 chat 模型；其他全不可用
 

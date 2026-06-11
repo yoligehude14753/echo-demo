@@ -234,19 +234,14 @@ def test_hallucination_rejects_text_below_min_chars() -> None:
     assert is_hallu_4chars_old is False, "在 echo 基线下 4 字应当能过（对照）"
 
 
-# ── case 6: 12 字 6s cps=2 → hallucination gate 单独不拒（当前逻辑限制）──
+# ── case 6: 长重复低 cps 也应被 hallucination gate 拒 ──────────────
 
 
-def test_hallucination_does_not_catch_long_repetition_via_cps_alone() -> None:
+def test_hallucination_rejects_long_repetition_even_when_cps_low() -> None:
     """STT 输出 "嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯"（12 字），音频 6s → cps=2.0。
 
-    `is_likely_hallucination` 当前实现只用 cps 判长文本复读、用 min_chars 判短噪声幻觉，
-    对"长但单字重复"的幻觉无能为力。本测试钉死这个已知限制，避免后续误以为该层能
-    挡住它。
-
-    架构上的根因：要识别"嗯嗯嗯..."这种长重复幻觉应该走 token-distinct 判断
-    （参考 echo `app/dream/consolidator.py` 的 AMBIENT_MIN_ROW_CHARS + trivial 正则）。
-    spk-4 不动 audio_gate.py 算法，仅记录这个 follow-up。
+    事故回归（2026-06-03）：真实环境里 STT 低速输出大量 "对对对/哈哈哈/这个这个"，
+    cps 不高但仍污染 meeting_segments 和 diarizer。文本层必须能挡住这种复读幻觉。
     """
     s = _new_thresholds()
     audio = _silence(6.0)  # 6s 整段，duration_s = 6.0
@@ -258,13 +253,41 @@ def test_hallucination_does_not_catch_long_repetition_via_cps_alone() -> None:
         max_cps=s.ambient_max_cps,
         min_chars=s.ambient_min_stt_chars,
     )
-    # 12 字 ≥ min_chars=5、cps=2.0 < max_cps=10 → 当前实现放行
-    assert is_hallu is False, f"当前 hallucination gate 不应拦截长重复，实际 reason={reason}"
-    assert reason == "ok"
+    assert is_hallu is True
+    assert reason in {"repeated_unit", "repeated_filler_char", "filler_dominant"}
 
-    # 注：实际生产链路里这种音频在 pre_stt_gate 阶段就被拒了
-    # （全静音 → rms_too_low，根本不会到达 hallucination gate）。
-    # 这里只断言 hallucination gate 自己不背锅。
+
+def test_hallucination_rejects_repeated_common_bad_stt_outputs() -> None:
+    """覆盖真实截图/DB 中出现的垃圾转写。"""
+    s = _new_thresholds()
+    audio = _silence(12.0)
+    for text in [
+        "对对对对对",
+        "哈哈哈哈哈哈",
+        "走走走走走走",
+        "来来来来来",
+        "这个这个这个这个这个这个",
+    ]:
+        is_hallu, reason = is_likely_hallucination(
+            text,
+            audio,
+            max_cps=s.ambient_max_cps,
+            min_chars=s.ambient_min_stt_chars,
+        )
+        assert is_hallu is True, f"{text!r} should be dropped, got {reason}"
+
+
+def test_hallucination_keeps_normal_short_ack_with_content() -> None:
+    """不要误伤正常短答：含具体内容时应保留。"""
+    s = _new_thresholds()
+    audio = _silence(3.0)
+    is_hallu, reason = is_likely_hallucination(
+        "对，这个方案可以",
+        audio,
+        max_cps=s.ambient_max_cps,
+        min_chars=s.ambient_min_stt_chars,
+    )
+    assert is_hallu is False, reason
 
 
 # ── case 7: 长文本 cps=11.0 在旧基线能过，新基线 (10) 拒 ───────────
@@ -287,13 +310,6 @@ def test_hallucination_rejects_long_text_with_cps_above_new_max() -> None:
         min_chars=s.ambient_min_stt_chars,
     )
     assert is_hallu_new is True
-    assert "cps_too_high" in reason_new
+    assert reason_new in {"cps_too_high(11.0>10.0)", "repeated_unit", "repeated_filler_char"}
 
-    # 对照：echo 基线 max_cps=12 时同样输入不会被 cps 拒
-    is_hallu_old, _ = is_likely_hallucination(
-        text,
-        audio,
-        max_cps=12.0,
-        min_chars=4,
-    )
-    assert is_hallu_old is False, "在 echo 基线下 cps=11 应当过（对照）"
+    # 现在复读门先于 cps 生效，避免低速/高速复读都漏过。

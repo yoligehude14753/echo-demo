@@ -1,0 +1,79 @@
+name: Release
+
+# 打 tag v* 触发：mac + windows 双 runner 产出安装包并上传到 GitHub Release（私有仓）。
+# 手动触发也可（workflow_dispatch），便于先验证构建。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: app:dist
+            glob: "desktop/release/*.@(dmg|zip)"
+          - os: windows-latest
+            script: app:dist:win
+            glob: "desktop/release/*.@(exe)"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1) 用 PyInstaller 把 backend 冻结成自带二进制（无需用户装 Python） ──
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: build backend binary (PyInstaller)
+        working-directory: backend
+        shell: bash
+        run: |
+          python -m venv .venv
+          if [ "$RUNNER_OS" = "Windows" ]; then PY=.venv/Scripts/python; else PY=.venv/bin/python; fi
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install -r requirements.txt
+          "$PY" -m pip install -r packaging/requirements-build.txt
+          "$PY" -m PyInstaller --noconfirm packaging/echodesk-backend.spec
+          ls -la dist/echodesk-backend | head
+
+      # ── 2) electron-builder 打安装包（extraResources 自动带上 dist/echodesk-backend） ──
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: install deps
+        working-directory: desktop
+        run: npm ci
+
+      - name: build installer
+        working-directory: desktop
+        env:
+          # 关闭 electron-builder 自动公证（mac 需证书；后续配 secrets 再开）
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run ${{ matrix.script }}
+
+      - name: upload build artifacts (CI 留存)
+        uses: actions/upload-artifact@v4
+        with:
+          name: echodesk-${{ matrix.os }}
+          path: ${{ matrix.glob }}
+          if-no-files-found: error
+
+      - name: publish to release (仅 tag 触发)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.glob }}
+          draft: true
+          generate_release_notes: true

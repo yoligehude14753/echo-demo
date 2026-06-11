@@ -189,3 +189,26 @@ def test_default_settings_uses_loosened_threshold(
     assert s.diarizer_outlier_match_threshold == 0.50, (
         "outlier threshold should be 0.50 (lower than match) after text-clarity PR"
     )
+    assert s.diarizer_merge_threshold == 0.70, "同人合并阈值默认 0.70"
+
+
+@pytest.mark.unit
+def test_closest_profile_pair_merges_same_speaker_not_distinct() -> None:
+    """同人合并核心逻辑：质心相近(≥0.70)的两个 ID 配对（保留更老的）；不同人不并。"""
+    from app.adapters.diarizer.ecapa import ECAPADiarizer
+
+    def u(v: list[float]) -> np.ndarray:
+        a = np.asarray(v, dtype=np.float32)
+        return a / np.linalg.norm(a)
+
+    # speaker_1 与 speaker_3 是同一人漂移（cos≈0.95），speaker_2 是另一个人
+    profiles = {
+        "speaker_1": u([1.0, 0.0, 0.0]),
+        "speaker_3": u([0.95, 0.05, 0.31]),
+        "speaker_2": u([0.0, 1.0, 0.0]),
+    }
+    pair = ECAPADiarizer._closest_profile_pair(profiles, 0.70)
+    assert pair == ("speaker_1", "speaker_3")  # 保留更老的 speaker_1
+
+    distinct = {"speaker_1": u([1.0, 0.0, 0.0]), "speaker_2": u([0.0, 1.0, 0.0])}
+    assert ECAPADiarizer._closest_profile_pair(distinct, 0.70) is None

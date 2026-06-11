@@ -16,6 +16,9 @@
     "postinstall": "node electron/scripts/brand-dev-electron.cjs || true",
     "app:build": "npm run build && electron-builder --mac --dir",
     "app:dist": "npm run build && electron-builder --mac",
+    "app:dist:win": "npm run build && electron-builder --win",
+    "app:dist:linux": "npm run build && electron-builder --linux",
+    "app:dist:all": "npm run build && electron-builder -mwl",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
     "e2e:real": "playwright test --config=playwright.real.config.ts",
@@ -66,13 +69,40 @@
       "electron/**",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../backend/dist/echodesk-backend",
+        "to": "backend-dist/echodesk-backend"
+      }
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "electron/icons/echodesk.icns",
       "target": [
-        "dmg",
-        "zip"
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
       ]
+    },
+    "win": {
+      "icon": "electron/icons/echodesk.png",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "EchoDesk"
+    },
+    "linux": {
+      "icon": "electron/icons/echodesk.png",
+      "category": "Office",
+      "target": ["AppImage"]
     }
   }
 }

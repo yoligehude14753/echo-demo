@@ -70,3 +70,18 @@ async def test_ask_question_forwards_model() -> None:
     async for _ in ask_question(llm, "hi", model="Qwen3-1.7B"):
         pass
     assert llm.captured_model == "Qwen3-1.7B"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ask_question_answers_weekday_without_llm() -> None:
+    llm = FakeLLM(["模型不应被调用"])
+    out: list[str] = []
+
+    async for c in ask_question(llm, "今天星期几"):
+        out.append(c)
+
+    assert out
+    assert "星期" in "".join(out)
+    assert "今天是" in "".join(out)
+    assert llm.captured_messages is None

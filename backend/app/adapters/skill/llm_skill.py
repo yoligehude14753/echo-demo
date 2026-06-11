@@ -37,7 +37,9 @@ from app.adapters.skill.prompts import (
     PPT_STRATEGY_JSON_SYSTEM,
     PPT_STRATEGY_SYSTEM,
     WORD_GENERAL_SYSTEM,
+    WORD_GOVDOC_SYSTEM,
     XLSX_GENERAL_SYSTEM,
+    XLSX_GOVFORM_SYSTEM,
     get_skill_prompt,
 )
 from app.adapters.skill.python_executor import (
@@ -274,15 +276,85 @@ _DOC_FINANCE_TERMS: Final[tuple[str, ...]] = (
 )
 
 
-def _select_doc_variant(kind: str, brief: str) -> str:
-    """word / xlsx 选模板：``finance``（投行研报/财务模型）vs ``general``（通用）。
+# 机关材料（Word）：聚焦基层/体制内**高频但不重要、还折磨人**的三类常写材料——
+# ①工作总结 ②工作信息/简报/动态 ③经验材料/亮点做法。不做红头公文（重要文件用户不会让 AI 出）。
+_GOVDOC_TERMS: Final[tuple[str, ...]] = (
+    # —— ①工作总结类 ——
+    "工作总结",
+    "总结",
+    "述职",
+    "述责",
+    "年度总结",
+    "季度总结",
+    "月度总结",
+    "工作小结",
+    "汇报材料",
+    "工作汇报",
+    # —— ②工作信息/简报/动态类 ——
+    "工作信息",
+    "信息报送",
+    "简报",
+    "工作动态",
+    "快报",
+    "工作专报",
+    "动态信息",
+    # —— ③经验材料/亮点做法类 ——
+    "经验材料",
+    "经验做法",
+    "亮点",
+    "典型案例",
+    "特色做法",
+    "做法",
+    "实践与探索",
+    "可复制",
+    # —— 兼容旧的通用事务文书（兜底，仍走同变体的总结/简报骨架）——
+    "周报",
+    "月报",
+    "日报",
+    "情况说明",
+)
 
+# 制式报表（Excel）：政务/行政常见的统计报表 / 台账 / 审批登记表 → 走制式报表版式。
+_GOVFORM_TERMS: Final[tuple[str, ...]] = (
+    "报表",
+    "制式",
+    "台账",
+    "台帐",
+    "审批表",
+    "登记表",
+    "申请表",
+    "汇总表",
+    "统计表",
+    "明细表",
+    "花名册",
+    "排班表",
+    "考勤表",
+    "值班表",
+    "信息表",
+    "上报",
+    "填报",
+)
+
+
+def _select_doc_variant(kind: str, brief: str) -> str:
+    """word / xlsx 选模板。
+
+    word：``finance``（投研）> ``govdoc``（政务公文）> ``general``（通用）。
+    xlsx：``finance``（财务模型）> ``govform``（制式报表）> ``general``（通用）。
     其它 kind 返回空串（不参与文档变体路由）。
+
+    finance 优先级最高：避免"研究报告/投资分析"被政务"报告"关键词误抓走。
     """
     if kind not in {"word", "xlsx"}:
         return ""
     lower = brief.lower()
-    return "finance" if any(term in lower for term in _DOC_FINANCE_TERMS) else "general"
+    if any(term in lower for term in _DOC_FINANCE_TERMS):
+        return "finance"
+    if kind == "word" and any(term in lower for term in _GOVDOC_TERMS):
+        return "govdoc"
+    if kind == "xlsx" and any(term in lower for term in _GOVFORM_TERMS):
+        return "govform"
+    return "general"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -824,6 +896,14 @@ class SkillExecutor:
             if doc_variant == "general":
                 doc_prompt = XLSX_GENERAL_SYSTEM if kind == "xlsx" else WORD_GENERAL_SYSTEM
                 doc_pipeline_variant = f"{kind}_general"
+            elif doc_variant == "govdoc":
+                # 政务公文（Word）：GB/T 9704-2012 党政机关公文版式
+                doc_prompt = WORD_GOVDOC_SYSTEM
+                doc_pipeline_variant = "word_govdoc"
+            elif doc_variant == "govform":
+                # 制式报表（Excel）：统计报表/台账/审批登记表
+                doc_prompt = XLSX_GOVFORM_SYSTEM
+                doc_pipeline_variant = "xlsx_govform"
             elif doc_variant == "finance":
                 doc_pipeline_variant = f"{kind}_finance"  # 模板沿用默认 get_skill_prompt
             async for ev in self._generate_via_default_pipeline_stream(

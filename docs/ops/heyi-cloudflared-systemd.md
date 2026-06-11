@@ -1,7 +1,7 @@
 # heyi-bj · cloudflared named tunnel · systemd-user 守护 SOP
 
 > Phase 4 · M_heyi_systemd · 2026-05-28
-> 目标：heyi-bj 重启后 4 个 `*.yoliyoli.uk` 对外 HTTPS endpoint 自动恢复，无需人工 `nohup`。
+> 目标：heyi-bj 重启后 4 个 `*.example.com` 对外 HTTPS endpoint 自动恢复，无需人工 `nohup`。
 
 ---
 
@@ -11,18 +11,18 @@
 
 | 公网域名 | 后端 (heyi 内网) | 用途 |
 |---|---|---|
-| `https://echo.yoliyoli.uk` | `http://localhost:8765` | echo backend |
-| `https://stt.yoliyoli.uk` | `http://localhost:8090` | FireRedASR2 |
-| `https://llm-fast.yoliyoli.uk` | `http://localhost:7860` | sglang vLLM Qwen3-1.7B |
-| `https://tts.yoliyoli.uk` | `http://localhost:8094` | Qwen3-TTS |
+| `https://echo.example.com` | `http://localhost:8765` | echo backend |
+| `https://stt.example.com` | `http://localhost:8090` | FireRedASR2 |
+| `https://llm-fast.example.com` | `http://localhost:7860` | sglang vLLM Qwen3-1.7B |
+| `https://tts.example.com` | `http://localhost:8094` | Qwen3-TTS |
 
-全部走同一个 cloudflared named tunnel `bfd33448-3605-47c5-813d-70924ae5cd09`，路由表见 `/home/ai/.cloudflared/config.yml`。
+全部走同一个 cloudflared named tunnel `your-tunnel-id`，路由表见 `/home/ai/.cloudflared/config.yml`。
 
 ### 1.2 systemd-user 单元命名约定（避免歧义）
 
 | 单元名 | 职责 | 当前状态 |
 |---|---|---|
-| `cloudflared-echo.service` | **真正承担** 4 个 `*.yoliyoli.uk` 的 named tunnel 守护进程 | ✅ active running，已 enabled |
+| `cloudflared-echo.service` | **真正承担** 4 个 `*.example.com` 的 named tunnel 守护进程 | ✅ active running，已 enabled |
 | `echo-tunnel.service.bak` | 历史遗留的 quick tunnel (`--url http://localhost:8765` → `*.trycloudflare.com`)，**无任何业务作用**。改名 `.bak` 防止后人误启动 | 已 disable + 改名归档 |
 
 > ⚠️ **PR #50 (M_remote_api) body 中说"cloudflared 是手工 nohup 的孤儿进程 PID 1910186"是误判**：诊断时 `ps -ef` 显示 PPID=2386（即 user systemd PID 1 of user@1000），实际就是 `cloudflared-echo.service` 在守护。本 PR 在此基础上做了清理 + 演练验证。
@@ -43,14 +43,14 @@ Linger=yes
 ### 2.1 前置条件
 
 - 已安装 `cloudflared` 到 `/usr/local/bin/cloudflared`（当前版本 `2026.5.0`）
-- 已有 named tunnel `bfd33448-3605-47c5-813d-70924ae5cd09`，credentials JSON 在 `/home/ai/.cloudflared/bfd33448-3605-47c5-813d-70924ae5cd09.json`
-- Cloudflare DNS 已配 CNAME：`echo / stt / llm-fast / tts.yoliyoli.uk` → `<tunnel-id>.cfargotunnel.com`
+- 已有 named tunnel `your-tunnel-id`，credentials JSON 在 `/home/ai/.cloudflared/your-tunnel-id.json`
+- Cloudflare DNS 已配 CNAME：`echo / stt / llm-fast / tts.example.com` → `<tunnel-id>.cfargotunnel.com`
 
 ### 2.2 写 `~/.cloudflared/config.yml`
 
 ```yaml
-tunnel: bfd33448-3605-47c5-813d-70924ae5cd09
-credentials-file: /home/ai/.cloudflared/bfd33448-3605-47c5-813d-70924ae5cd09.json
+tunnel: your-tunnel-id
+credentials-file: /home/ai/.cloudflared/your-tunnel-id.json
 
 originRequest:
   connectTimeout: 10s
@@ -61,13 +61,13 @@ originRequest:
   noTLSVerify: true
 
 ingress:
-  - hostname: echo.yoliyoli.uk
+  - hostname: echo.example.com
     service: http://localhost:8765
-  - hostname: stt.yoliyoli.uk
+  - hostname: stt.example.com
     service: http://localhost:8090
-  - hostname: llm-fast.yoliyoli.uk
+  - hostname: llm-fast.example.com
     service: http://localhost:7860
-  - hostname: tts.yoliyoli.uk
+  - hostname: tts.example.com
     service: http://localhost:8094
   - service: http_status:404
 ```
@@ -76,7 +76,7 @@ ingress:
 
 ```ini
 [Unit]
-Description=Cloudflare Tunnel (echo.yoliyoli.uk → localhost:8765)
+Description=Cloudflare Tunnel (echo.example.com → localhost:8765)
 After=network-online.target
 Wants=network-online.target
 
@@ -91,7 +91,7 @@ TimeoutStopSec=20
 WantedBy=default.target
 ```
 
-> Description 历史原因写的是 `echo.yoliyoli.uk`，实际承担 4 个域名，路由表以 `config.yml` 的 ingress 为准。后续如需更名，必须先 `systemctl --user disable` 再删 symlink 改名再 enable，避免破坏开机自启。
+> Description 历史原因写的是 `echo.example.com`，实际承担 4 个域名，路由表以 `config.yml` 的 ingress 为准。后续如需更名，必须先 `systemctl --user disable` 再删 symlink 改名再 enable，避免破坏开机自启。
 
 ### 2.4 一键启用 + 守护
 
@@ -130,10 +130,10 @@ INF Registered tunnel connection connIndex=3 ...
 
 ```bash
 for url in \
-  https://echo.yoliyoli.uk/health \
-  https://stt.yoliyoli.uk/docs \
-  https://llm-fast.yoliyoli.uk/v1/models \
-  https://tts.yoliyoli.uk/; do
+  https://echo.example.com/health \
+  https://stt.example.com/docs \
+  https://llm-fast.example.com/v1/models \
+  https://tts.example.com/; do
   printf "%-50s " "$url"
   curl -sS -o /dev/null -w "%{http_code} %{time_total}s\n" --max-time 8 "$url"
 done
@@ -184,7 +184,7 @@ sudo mkdir -p /var/log/journal && sudo systemctl restart systemd-journald
 #   ERR Cannot determine default origin certificate path
 # 这不影响 tunnel 运行（cert.pem 仅用于 management API 操作，run 不需要）
 # 要查 tunnel 状态请直接看 systemd status 的最近 INF Registered tunnel connection 行
-/usr/local/bin/cloudflared tunnel info bfd33448-3605-47c5-813d-70924ae5cd09 || true
+/usr/local/bin/cloudflared tunnel info your-tunnel-id || true
 
 # 列出本机上所有 cloudflared 进程
 ps -ef | grep cloudflared | grep -v grep
@@ -236,8 +236,8 @@ echo "pid=$!"   # 记录下来
 
 # 3) 验证 4 endpoint
 for url in echo stt llm-fast tts; do
-  printf "%-50s " "https://$url.yoliyoli.uk/"
-  curl -sS -o /dev/null -w "%{http_code}\n" --max-time 5 "https://$url.yoliyoli.uk/"
+  printf "%-50s " "https://$url.example.com/"
+  curl -sS -o /dev/null -w "%{http_code}\n" --max-time 5 "https://$url.example.com/"
 done
 
 # 4) 24h 内务必切回 systemd（见 §2.4），切回前先 kill 这个 nohup pid
@@ -267,7 +267,7 @@ systemctl --user show cloudflared-echo.service -p MainPID,ActiveState --value
 #   active
 
 # 再次 endpoint 健康检查
-for url in https://stt.yoliyoli.uk/docs https://llm-fast.yoliyoli.uk/v1/models https://tts.yoliyoli.uk/; do
+for url in https://stt.example.com/docs https://llm-fast.example.com/v1/models https://tts.example.com/; do
   printf "%-50s " "$url"
   curl -sS -o /dev/null -w "%{http_code} %{time_total}s\n" --max-time 8 "$url"
 done
@@ -283,9 +283,9 @@ done
 [after]  ActiveState = active
 
 drill 后 endpoint:
-  https://stt.yoliyoli.uk/docs                       200 0.855981s
-  https://llm-fast.yoliyoli.uk/v1/models             200 0.842579s
-  https://tts.yoliyoli.uk/                           404 0.819379s   (root 无路由属正常)
+  https://stt.example.com/docs                       200 0.855981s
+  https://llm-fast.example.com/v1/models             200 0.842579s
+  https://tts.example.com/                           404 0.819379s   (root 无路由属正常)
 
 journalctl tail (status 命令末尾):
   10:12:42 Started cloudflared
@@ -314,7 +314,7 @@ journalctl tail (status 命令末尾):
 |---|---|
 | `/usr/local/bin/cloudflared` | 二进制（版本 `2026.5.0`） |
 | `/home/ai/.cloudflared/config.yml` | tunnel 路由配置（4 个 ingress） |
-| `/home/ai/.cloudflared/bfd33448-3605-47c5-813d-70924ae5cd09.json` | tunnel credentials（**含密钥，不要外泄**） |
+| `/home/ai/.cloudflared/your-tunnel-id.json` | tunnel credentials（**含密钥，不要外泄**） |
 | `/home/ai/.cloudflared/config.yml.bak-*` | config 历史快照 |
 | `/home/ai/.config/systemd/user/cloudflared-echo.service` | **真正的** named tunnel 守护单元 |
 | `/home/ai/.config/systemd/user/echo-tunnel.service.bak` | 历史 quick tunnel 单元（已废弃） |

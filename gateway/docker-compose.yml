@@ -1,0 +1,18 @@
+services:
+  echo-gateway:
+    build: .
+    image: echo-gateway:latest
+    container_name: echo-gateway
+    restart: unless-stopped
+    ports:
+      - "${ECHO_GATEWAY_HOST_PORT:-8080}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    # 真实凭证只从 .env 注入，不写入镜像
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

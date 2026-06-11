@@ -140,6 +140,21 @@ export function useTtsPlayer(): TtsController {
   const playPcm = useCallback(
     async (pcm: ArrayBuffer) => {
       const ctx = ensureCtx();
+      // 关键修复（"打开后没声音"）：autoplay 策略 / 窗口后台会让 AudioContext
+      // 处于 suspended，此时 src.start() 不出声。播放前**等待 resume 完成**；
+      // 仍非 running 则明确报错而非静默吞掉。
+      if (ctx.state !== "running") {
+        try {
+          await ctx.resume();
+        } catch {
+          /* 下面统一判断 state */
+        }
+      }
+      if (ctx.state !== "running") {
+        throw new Error(
+          "音频未解锁（AudioContext suspended）：在窗口内点一下再试，或重开 App",
+        );
+      }
       const buffer = pcm16ToAudioBuffer(ctx, pcm, SAMPLE_RATE);
       const src = ctx.createBufferSource();
       src.buffer = buffer;
@@ -299,6 +314,26 @@ export function useTtsPlayer(): TtsController {
       lastSeqRef.current = init[init.length - 1].seq || 0;
     }
   }, []);
+
+  // 全局音频解锁：任意一次用户交互（点击/按键）都尝试创建并 resume AudioContext，
+  // 保证后续编程式 tts.speak 不会因 autoplay 策略卡在 suspended 而静音。
+  useEffect(() => {
+    const unlock = (): void => {
+      try {
+        const ctx = ensureCtx();
+        if (ctx.state !== "running") void ctx.resume();
+      } catch {
+        /* 忽略：真正失败会在 playPcm 时报错 */
+      }
+    };
+    const opts = { capture: true } as const;
+    window.addEventListener("pointerdown", unlock, opts);
+    window.addEventListener("keydown", unlock, opts);
+    return () => {
+      window.removeEventListener("pointerdown", unlock, opts);
+      window.removeEventListener("keydown", unlock, opts);
+    };
+  }, [ensureCtx]);
 
   // /tts/diag 定期轮询：第一次 mount 立刻拉，之后 30s 一轮。
   // 不依赖 enabled——即使用户关了 TTS，pill 也应该说"TTS 当前关闭"而不是

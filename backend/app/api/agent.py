@@ -76,6 +76,7 @@ async def agent_run(
                 question=body.question,
                 inline_context=body.inline_context,
                 max_iterations=max_iter,
+                enable_fast_path=True,
             ):
                 yield _sse_frame(ev)
         except Exception as e:  # pragma: no cover - defensive: don't leave client hanging

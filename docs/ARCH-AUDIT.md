@@ -12,7 +12,7 @@
   echo-demo 是从它**简化 + Ports & Adapters 重构**而来，但很多决策来自 echo 实战
 - 任何对架构的怀疑，先去 echo 源头核对，**不要看 echo-demo 的变量名做判断**
 
-## 1. 模型 / 远程服务事实表（heyi-bj on Tailscale 100.87.251.9）
+## 1. 模型 / 远程服务事实表（heyi-bj on Tailscale localhost）
 
 | 端口 | echo-demo `config.py` 命名 | swagger 实际服务 | 用途 | 状态 |
 |---|---|---|---|---|
@@ -31,7 +31,7 @@
 
 ```python
 tts_provider: str = "cosyvoice"
-tts_cosyvoice_url: str = "http://100.87.251.9:8094"   # 实际是 faster-qwen3-tts
+tts_cosyvoice_url: str = "http://localhost:8094"   # 实际是 faster-qwen3-tts
 tts_cosyvoice_voice: str = "aiden"                     # qwen3-tts 唯一 speaker
 ```
 

@@ -1,0 +1,22 @@
+[project]
+name = "echo-gateway"
+version = "0.1.0"
+description = "OpenAI-compatible authenticated reverse proxy for yunwu + heyi-bj (EchoDesk)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ASYNC", "RUF"]
+# RUF001/2/3：中文全角标点在字符串/注释/docstring 的"歧义"误报，中文库统一忽略
+ignore = ["S104", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "SLF001"]
+"app/upstream.py" = ["SLF001"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

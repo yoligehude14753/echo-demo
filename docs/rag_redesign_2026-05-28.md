@@ -70,7 +70,7 @@
 | **OpenAI text-embedding-3-large** | 3072 | ★★★★ | ★★★★★ | API | 0 | 质量稳，**但走 OpenAI 直连违反 06-platforms.mdc**，且打包后台账隐私敏感语料外发不可接受 |
 | **OpenAI text-embedding-3-small** | 1536 | ★★★★ | ★★★★ | API | 0 | 同上 |
 | **云雾 yunwu embedding API** | 取决于底层 | 取决于 | 取决于 | API | 0 | 走现有 `yunwu_open_key` 路由，需先确认云雾是否暴露 embedding endpoint 及 SLA |
-| **Qwen3-embedding** (heyi 本地) | 1024 | ★★★★★ | ★★★★ | vLLM/Triton @ heyi-bj | 远端零本地体积 | **若 heyi 已部署最佳**——零本地下载、走 `llm-fast.yoliyoli.uk` 同通道 |
+| **Qwen3-embedding** (heyi 本地) | 1024 | ★★★★★ | ★★★★ | vLLM/Triton @ heyi-bj | 远端零本地体积 | **若 heyi 已部署最佳**——零本地下载、走 `llm-fast.example.com` 同通道 |
 
 **推荐配置**：**bge-m3 本地 + Qwen3-embedding 远端**两手准备。本地 bge-m3 用 sentence-transformers 加载（首次启动后台下载，体积 2.2GB 用户能接受；若启动慢，可分块下载与 RAG 初始化解耦），远端走 heyi-bj 内网作为加速/降级备份。bge-m3 同时输出 sparse vector，未来可天然支持混合检索而无需额外服务。
 

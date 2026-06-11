@@ -1,6 +1,11 @@
 import { message } from "antd";
 import { useCallback, useRef } from "react";
-import { generateArtifactStream, listRecentAmbient, runAgent } from "@/api";
+import {
+  generateArtifactStream,
+  getDailyRecap,
+  listRecentAmbient,
+  runAgent,
+} from "@/api";
 import type { TtsController } from "@/hooks/useTtsPlayer";
 import { extractExplicitArtifactCommand } from "@/lib/explicitArtifactCommand";
 // 唤醒词匹配 + 朗读文本归一统一走 @/lib/voiceWake（单一真源）。
@@ -8,6 +13,8 @@ import { extractExplicitArtifactCommand } from "@/lib/explicitArtifactCommand";
 import {
   containsWakeWord,
   extractEchoWakeCommand,
+  isDailyRecapCommand,
+  isLikelyEchoFollowup,
   toSpeakableAnswer,
 } from "@/lib/voiceWake";
 import { createTtsSentenceStreamer } from "@/lib/ttsStream";
@@ -33,6 +40,9 @@ const GRACE_AFTER_ENDPOINT_MS = 900; // endpoint 后宽限：接住最后一句 
 // 兜底：万一 endpoint 信号一直不来（持续背景噪声使静音不足阈值），也别永不执行。
 const CMD_FALLBACK_MS = 6_000;
 const CMD_BUFFER_MAX_MS = 30_000;
+// 免唤醒续聊窗口：Echo 答完后这段时间内，向它提问/下指令无需再喊"echo"。
+// 像打电话一样自然多轮；保守判定（仅问句/请求触发）避免背景闲聊误触。
+const FOLLOWUP_WINDOW_MS = 14_000;
 
 const agentToolLabel: Record<string, string> = {
   rag_search: "查知识库",
@@ -73,20 +83,32 @@ export function useVoiceWakeAgent({
   const endpointSeenRef = useRef<boolean>(false); // 本轮是否已收到静音 endpoint
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const maxWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const followUpUntilRef = useRef<number>(0); // 免唤醒续聊窗口截止时间戳
+  const currentAbortRef = useRef<(() => void) | null>(null); // 中止当前 run（barge-in）
+  const pendingCommandRef = useRef<string | null>(null); // 被打断后排队的新指令
+  const runVoiceCommandRef = useRef<((c: string) => Promise<void>) | null>(null);
 
   const runVoiceCommand = useCallback(
     async (command: string) => {
+      // 打断（barge-in）：Echo 还在答时来了新指令 → 立即中止当前回答，把新指令排队，
+      // 当前 run 的 finally 会接力执行它。像真人对话一样可随时插话。
       if (busyRef.current) {
-        message.info("Echo 正在回答上一条语音指令");
+        pendingCommandRef.current = command;
+        currentAbortRef.current?.();
+        message.info({ content: "好，听你的…", key: "echo-bargein", duration: 1.2 });
         return;
       }
       busyRef.current = true;
-      // 可中止：注册到全局运行控制，「停止」按钮 abort + 停 TTS。
+      // 可中止：注册到全局运行控制（「停止」按钮）+ 暴露给 barge-in。
       const controller = new AbortController();
       const endRun = beginRun(() => {
         controller.abort();
         tts.cancel();
       });
+      currentAbortRef.current = () => {
+        controller.abort();
+        tts.cancel();
+      };
       // 语音 @echo 不再造右侧"用户"气泡——用户说的话已作为左侧说话人转写出现，
       // 再造一条会重复（汉宜口今天星期几 / @echo 今天星期几）。这里只在左侧
       // 追加一条 Echo 回复气泡（pending → done/failed），与转写流自然衔接。
@@ -106,6 +128,20 @@ export function useVoiceWakeAgent({
 
       try {
         renderPending("Echo 正在思考…");
+        // 语音触发「今日回顾」：用专用回顾（比泛化 agent 更准、更结构化）。
+        if (isDailyRecapCommand(command)) {
+          renderPending("正在回顾今天…");
+          const r = await getDailyRecap();
+          sawFinal = true;
+          const answer = r.empty
+            ? "今天还没有记录到可回顾的对话或会议。"
+            : r.recap_markdown;
+          patchAssistantReply(replyId, { text: answer, status: "done" });
+          if (tts.enabled && !r.empty) {
+            void tts.speak(toSpeakableAnswer(answer), { interrupt: true });
+          }
+          return;
+        }
         const explicitArtifact = extractExplicitArtifactCommand(command);
         if (explicitArtifact) {
           for (let attempt = 1; attempt <= 2 && !sawFinal; attempt += 1) {
@@ -256,11 +292,23 @@ export function useVoiceWakeAgent({
         }
       } finally {
         endRun();
+        currentAbortRef.current = null;
         busyRef.current = false;
+        // 成功答复后开启免唤醒续聊窗口（像打电话一样自然多轮）；失败则不开，
+        // 避免在出错语境里继续误触。
+        if (sawFinal) {
+          followUpUntilRef.current = Date.now() + FOLLOWUP_WINDOW_MS;
+        }
+        // barge-in：若期间被新指令打断并排了队，接力执行它（走 ref 避免闭包陈旧）。
+        const next = pendingCommandRef.current;
+        pendingCommandRef.current = null;
+        if (next) void runVoiceCommandRef.current?.(next);
       }
     },
     [addArtifact, appendAssistantReply, patchAssistantReply, beginRun, tts],
   );
+  // 最新 runVoiceCommand 暴露给 barge-in 接力调用，避免 useCallback 自引用陈旧。
+  runVoiceCommandRef.current = runVoiceCommand;
 
   const dispatchCommand = useCallback(
     (command: string): void => {
@@ -292,12 +340,21 @@ export function useVoiceWakeAgent({
       const command = extractEchoWakeCommand(text); // 唤醒词 + 同段指令
       const isWake = command !== null || containsWakeWord(text);
 
-      // 既不是唤醒、缓冲也没开 → 普通环境转写，忽略。
-      if (!isWake && !bufOpenRef.current) return;
+      // 免唤醒续聊：Echo 刚答完的窗口内、无唤醒词、缓冲未开，且这句明显是在
+      // 向 Echo 提问/下指令 → 当作新指令直接开始（保守判定防背景闲聊误触）。
+      const inFollowup =
+        !isWake &&
+        !bufOpenRef.current &&
+        Date.now() < followUpUntilRef.current &&
+        isLikelyEchoFollowup(text);
+      if (inFollowup) followUpUntilRef.current = 0; // 消费窗口，避免本句重复触发
+
+      // 既不是唤醒、不是续聊、缓冲也没开 → 普通环境转写，忽略。
+      if (!isWake && !inFollowup && !bufOpenRef.current) return;
 
       // 计算本段要追加进缓冲的内容：
       // - 唤醒段：取唤醒词之后的指令（command，可能为空=只喊了 echo）
-      // - 续聊段（缓冲已开、无唤醒词）：整段都算指令的后续
+      // - 续聊段 / 缓冲已开续接：整段都算指令
       const piece = command !== null ? command : isWake ? "" : text.trim();
       if (piece) {
         cmdBufRef.current = cmdBufRef.current

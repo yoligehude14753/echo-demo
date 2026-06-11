@@ -81,7 +81,8 @@ class Settings(BaseSettings):
     # ── LLM 快速通道（Qwen3-1.7B on heyi-bj） ────────────────────
     llm_fast_provider: str = "heyi-local"
     llm_fast_model: str = "Qwen3-1.7B"
-    llm_fast_base_url: str = "https://llm-fast.yoliyoli.uk/v1"
+    # 直连模式默认端点；公开分发走网关模式（echo_gateway_url），此默认会被覆盖。
+    llm_fast_base_url: str = "http://localhost:7860/v1"
     llm_local_api_key: str = "EMPTY"
     llm_fast_max_tokens: int = 512
 
@@ -92,7 +93,8 @@ class Settings(BaseSettings):
     # 选项老让人误判"换 backend 能修 X"）。详见 docs/ARCH-AUDIT.md §2。
     # 保留 stt_backend 字段供未来扩展（如本地化离线 STT）。
     stt_backend: str = "firered"
-    stt_firered_url: str = "https://stt.yoliyoli.uk"
+    # 直连模式默认端点；公开分发走网关模式，此默认会被覆盖。
+    stt_firered_url: str = "http://localhost:8090"
     stt_language: str = "zh"
     stt_llm_correct: bool = False
 
@@ -120,7 +122,7 @@ class Settings(BaseSettings):
     )
     # 兼容旧 env：TTS_COSYVOICE_URL / TTS_COSYVOICE_VOICE 仍能正确加载
     tts_qwen3_url: str = Field(
-        default="https://tts.yoliyoli.uk",
+        default="http://localhost:8094",
         validation_alias=AliasChoices(
             "tts_qwen3_url",
             "TTS_QWEN3_URL",
@@ -171,6 +173,10 @@ class Settings(BaseSettings):
     # 更干净更长，同一人 cos 普遍更高更稳；把主阈值从 0.55 降到 0.50，让同一人
     # 更容易匹配上、减少误注册新人（陌生人 cos 普遍 < 0.45，0.50 仍能区分）。
     diarizer_match_threshold: float = 0.50
+    # 同人合并阈值（远高于匹配阈值）：两个 profile 质心 cos ≥ 此值视为同一人，
+    # 合并成一个 ID。应对"同一人首段噪声被拆成多 ID、随 EMA 漂移到很相近"。
+    # 0.70 足够保守（陌生人 cos 普遍 < 0.45），不会把不同人误并。
+    diarizer_merge_threshold: float = 0.70
     # EMA centroid 融合系数（命中匹配时）；α=0.1 抄 echo backend/app/speaker/diarizer.py
     diarizer_centroid_ema_alpha: float = 0.1
     # spk-3：基于 VAD active seconds 决定"段够不够长可以注册新人"。
@@ -354,6 +360,30 @@ class Settings(BaseSettings):
     # 设 true 可回滚到旧版 prompt（HTML=Tailwind dark，PPT=LLM 直写 pptxgenjs js）—
     # 用于灰度对比 / 紧急止血。详见 `prompts.LEGACY_SKILL_PROMPTS`。
     use_legacy_html_pptx: bool = False
+
+    # ── 网关模式（推荐对外分发用） ────────────────────────────────
+    # 设了 ECHO_GATEWAY_URL（如 https://your-gateway.example.com）即开启：所有上游
+    # （主/快 LLM、STT、TTS）统一指向 echo-gateway，凭证用 ECHO_GATEWAY_TOKEN
+    # 这个客户端 token。真实 yunwu key / heyi 地址只在网关服务端，客户端不再持有。
+    # 不设则保持直连模式（开发/自建可继续直接配 yunwu_open_key + heyi 各地址）。
+    echo_gateway_url: str = ""
+    echo_gateway_token: str = ""
+    # STT/TTS 上游鉴权 token；直连 heyi（无鉴权）时为占位 "x"，网关模式自动改成客户端 token。
+    upstream_audio_token: str = "x"
+
+    def model_post_init(self, _context: object) -> None:
+        """网关模式：把全部上游地址/凭证重写到 echo-gateway（详见字段注释）。"""
+        gw = self.echo_gateway_url.strip().rstrip("/")
+        if not gw:
+            return
+        tok = self.echo_gateway_token or "EMPTY"
+        self.llm_main_base_url = f"{gw}/v1"
+        self.llm_fast_base_url = f"{gw}/v1"
+        self.yunwu_open_key = tok
+        self.llm_local_api_key = tok
+        self.stt_firered_url = gw
+        self.tts_qwen3_url = gw
+        self.upstream_audio_token = tok
 
     # ── DB ────────────────────────────────────────────────────────
     db_path: Path = Field(default=Path("~/.echodesk/echodesk.db").expanduser())

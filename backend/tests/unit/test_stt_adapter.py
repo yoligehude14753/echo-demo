@@ -20,7 +20,7 @@ from app.config import Settings
 def settings() -> Settings:
     return Settings(
         stt_backend="firered",
-        stt_firered_url="http://100.87.251.9:8090",
+        stt_firered_url="http://localhost:8090",
     )
 
 

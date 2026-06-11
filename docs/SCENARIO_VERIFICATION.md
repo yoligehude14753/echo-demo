@@ -75,7 +75,7 @@ bash scripts/collect-scenario-videos.sh   # 整理成 webm + mp4
 |---|---|---|---|
 | 1 | 点齿轮 → Drawer 打开 | `remote-settings-form` 可见 | ✅ |
 | 2 | 数据目录 section | 显示 `/Users/test/.echodesk` | ✅ |
-| 3 | 远端服务表单 | `llm_main_base_url=https://yunwu.ai/v1`、`stt_firered_url=http://100.87.251.9:8090` 预填，`user.json` 标签出现在 `yunwu_open_key` 行 | ✅ |
+| 3 | 远端服务表单 | `llm_main_base_url=https://yunwu.ai/v1`、`stt_firered_url=http://localhost:8090` 预填，`user.json` 标签出现在 `yunwu_open_key` 行 | ✅ |
 | 4 | 改 `llm_main_base_url` → 保存 | toast「已写入 1 项」出现 | ✅ |
 | 5 | `restart-backend-after-config` 按钮浮现 | ✅ |
 | 6 | 点重启 → Electron IPC `manualRestartBackend` 被调用 + 「已发送重启请求」toast | ✅ |

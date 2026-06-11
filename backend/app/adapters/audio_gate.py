@@ -21,10 +21,15 @@ VAD 句级切片（PR echodesk-spk-2 新增）：
 from __future__ import annotations
 
 import math
+import re
 import struct
+from collections import Counter
 from dataclasses import dataclass
 
 _SAMPLE_RATE = 16_000  # 全链路约定 16kHz int16 mono
+_TEXT_NOISE_RE = re.compile(r"[\s，。！？、,.!?;:'\"（）()【】\[\]…—\-_/\\]+")
+_FILLER_CHARS = set("对好嗯啊呃额哈呵嘿哼啦哒走来")
+_REPEATED_UNIT_RE = re.compile(r"^(.{1,3})\1{2,}$")
 
 
 @dataclass(slots=True)
@@ -109,9 +114,10 @@ def is_likely_hallucination(
     max_cps: float = 12.0,
     min_chars: int = 4,
 ) -> tuple[bool, str]:
-    """STT 后置过滤：字符速率 + 最短长度。
+    """STT 后置过滤：字符速率 + 最短长度 + 文本复读。
 
     - text 短于 min_chars 直接判幻觉（< 4 字大概率是 "嗯。" "ですね" 等噪声幻觉）
+    - 明显同字/短词复读直接判幻觉（"对对对对对" / "这个这个这个" / "哈哈哈哈"）
     - 仅对长音频（≥3s 且 ≥12 chars）跑 cps 阈值；短句 cps 天然偏高，不计
     - cps > max_cps → 视为复读/幻觉
 
@@ -120,11 +126,37 @@ def is_likely_hallucination(
     t = text.strip()
     if len(t) < min_chars:
         return True, f"too_short({len(t)}<{min_chars})"
+    normalized = _TEXT_NOISE_RE.sub("", t).lower()
+    repeated, repeated_reason = _looks_like_repetitive_noise(normalized)
+    if repeated:
+        return True, repeated_reason
     duration_s = len(audio_bytes) / (_SAMPLE_RATE * 2)  # int16 mono = 32000 B/s
     if duration_s >= 3.0 and len(t) >= 12:
         cps = len(t) / duration_s
         if cps > max_cps:
             return True, f"cps_too_high({cps:.1f}>{max_cps})"
+    return False, "ok"
+
+
+def _looks_like_repetitive_noise(text: str) -> tuple[bool, str]:
+    """识别 STT 在噪声/回声上常见的低速复读幻觉。
+
+    保守策略：
+    - 至少 5 个有效字符才判断，避免误伤 "对对" 这类正常应答。
+    - 同一短单元重复 3 次以上（如 "这个"*N / "对"*N）直接拒。
+    - 填充字符占比极高且 unique 很少（如 "哈哈哈哈" / "走走走"）拒。
+    """
+    if len(text) < 5:
+        return False, "ok"
+    if _REPEATED_UNIT_RE.fullmatch(text):
+        return True, "repeated_unit"
+    counts = Counter(text)
+    most_common_char, most_common_count = counts.most_common(1)[0]
+    if most_common_char in _FILLER_CHARS and most_common_count / len(text) >= 0.72:
+        return True, "repeated_filler_char"
+    filler_count = sum(n for ch, n in counts.items() if ch in _FILLER_CHARS)
+    if filler_count / len(text) >= 0.85 and len(counts) <= 4:
+        return True, "filler_dominant"
     return False, "ok"
 
 

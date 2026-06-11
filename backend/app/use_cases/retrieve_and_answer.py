@@ -26,6 +26,7 @@ import re
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from app.ports.llm import LLMPort
 from app.ports.rag import RagPort
@@ -195,9 +196,11 @@ def _grep_boost(chunk: RagChunk, norm_query: str, keywords: list[str]) -> float:
 
 # 「对话类查询」信号:用户在问之前说过/会上聊过/某时段发生的事 → 应优先 ambient/meeting。
 _CONVERSATION_QUERY_RE = re.compile(
-    r"(上午|下午|早上|晚上|昨天|今天|前天|刚才|刚刚|之前|先前|方才|当时|那天|这边|"
+    r"(上午|下午|早上|晚上|昨天|今天|前天|前几天|前两天|这几天|上次|上回|早些|早前|"
+    r"刚才|刚刚|之前|先前|方才|当时|那天|这边|"
     r"会上|会里|会议|开会|纪要|聊到|说到|提到|讲到|谈到|聊过|说过|提过|讲过|"
-    r"讨论|谁说|谁讲|谁负责|刚说|刚讲|刚提|对话|聊的|说的)"
+    r"讨论|谁说|谁讲|谁负责|刚说|刚讲|刚提|对话|聊的|说的|"
+    r"遗留|待办|跟进|对接|进展|安排)"
 )
 
 
@@ -237,8 +240,70 @@ def _adjusted_score(c: RagChunk, *, conv_query: bool) -> float:
     return c.score
 
 
+# ── 时间感知检索：把"上午/昨天/刚才说到 X"里的时间词解析成时间窗 ──────────
+# ambient chunk 带 captured_at（UTC ISO）；窗内段加分、窗外 ambient 段降权，
+# 让"上午说到 X"这类按时间回忆的查询更精准（不靠时间词时此功能整体不生效）。
+_TIME_BOOST_IN_WINDOW = 1.5
+_TIME_PENALTY_OUT_WINDOW = 0.8
+_RECENT_MINUTES = 40
+
+
+# 时段词 → (起,止) 小时；按列表顺序取首个命中（表驱动，避免一长串 if 分支）。
+_TIME_OF_DAY: tuple[tuple[str, tuple[int, int]], ...] = (
+    (r"早上|早晨|一早|清晨", (5, 10)),
+    (r"上午", (6, 12)),
+    (r"中午|午间", (11, 14)),
+    (r"下午", (12, 18)),
+    (r"傍晚", (17, 20)),
+    (r"晚上|晚间|夜里|半夜|昨晚|今晚", (18, 24)),
+)
+_DAY_OFFSET: tuple[tuple[str, int], ...] = (
+    (r"前天", -2),
+    (r"昨天|昨晚|昨日", -1),
+    (r"今天|今日|今早|今晚|今儿", 0),
+)
+
+
+def _time_window_from_query(
+    query: str, now: datetime
+) -> tuple[datetime, datetime] | None:
+    """从查询里解析时间窗（本地时区 aware）；无时间词返回 None。"""
+    if re.search(r"刚才|刚刚|方才|刚说|刚提|刚讲|这会儿", query):
+        return (now - timedelta(minutes=_RECENT_MINUTES), now)
+
+    day_off = next((off for pat, off in _DAY_OFFSET if re.search(pat, query)), None)
+    tod = next((hrs for pat, hrs in _TIME_OF_DAY if re.search(pat, query)), None)
+
+    if day_off is None and tod is None:
+        return None
+    base = (now + timedelta(days=day_off or 0)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    if tod is None:
+        return (base, base + timedelta(days=1))
+    return (base + timedelta(hours=tod[0]), base + timedelta(hours=tod[1]))
+
+
+def _time_boost(c: RagChunk, window: tuple[datetime, datetime] | None) -> float:
+    """按 chunk 的 captured_at 是否落在时间窗内给加/降权。"""
+    if window is None:
+        return 0.0
+    raw = c.metadata.get("captured_at")
+    if not raw:
+        return 0.0  # 没时间戳（如文档）不参与时间加权
+    try:
+        ts = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return 0.0
+    start, end = window
+    # aware/naive 兼容：captured_at 缺 tz 时按窗口 tz 补齐再比较
+    if ts.tzinfo is None and start.tzinfo is not None:
+        ts = ts.replace(tzinfo=start.tzinfo)
+    return _TIME_BOOST_IN_WINDOW if start <= ts <= end else -_TIME_PENALTY_OUT_WINDOW
+
+
 def _rerank_diverse_with_priority_and_grep_boost(
-    chunks: list[RagChunk], query: str
+    chunks: list[RagChunk], query: str, *, now: datetime | None = None
 ) -> list[RagChunk]:
     """doc-cap=12 + grep 字面提升 + source **软加权**(相关度才是排序主键)。
 
@@ -261,12 +326,14 @@ def _rerank_diverse_with_priority_and_grep_boost(
     norm_query = _normalize_for_grep(query)
     keywords = _extract_keywords(query)
     conv_query = _is_conversation_query(query)
+    window = _time_window_from_query(query, now or datetime.now().astimezone())
 
     def boosted(c: RagChunk) -> float:
         return (
             _adjusted_score(c, conv_query=conv_query)
             + _grep_boost(c, norm_query, keywords)
             + _source_nudge(c, conv_query=conv_query)
+            + _time_boost(c, window)
         )
 
     capped.sort(key=boosted, reverse=True)

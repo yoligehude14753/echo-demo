@@ -87,8 +87,10 @@ def test_get_remote_settings_returns_masked_keys(
 
     fields_by_key = {f["key"]: f for f in body["fields"]}
 
-    # 7 个字段都在
+    # 网关模式两项 + 7 个直连字段都在
     assert set(fields_by_key.keys()) == {
+        "echo_gateway_url",
+        "echo_gateway_token",
         "llm_main_base_url",
         "yunwu_open_key",
         "llm_fast_base_url",
@@ -113,8 +115,8 @@ def test_get_remote_settings_returns_masked_keys(
     # 未被 user 覆盖的字段 source=default
     stt = fields_by_key["stt_firered_url"]
     assert stt["source"] == "default"
-    # default 切到 Cloudflare HTTPS（2026-05-28 fix/llm-fast-cloudflare-default）
-    assert stt["value"].startswith("https://")
+    # default 已泛化为中性占位（开源脱敏：不再硬编码私有基础设施地址）
+    assert stt["value"].startswith("http://")
 
 
 @pytest.mark.unit

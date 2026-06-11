@@ -478,14 +478,48 @@ def test_doc_variant_routes_general_away_from_finance_template() -> None:
     # 日常表格/文档 → general，不该套财务模型 / 投行研报
     assert _select_doc_variant("xlsx", "做一个班级值日表，按周排班") == "general"
     assert _select_doc_variant("xlsx", "公司物资库存清单，含数量和位置") == "general"
-    assert _select_doc_variant("word", "写一份端午放假通知") == "general"
-    assert _select_doc_variant("word", "整理今天的会议纪要，列出待办") == "general"
+    # 纯通用 Word（无公文文种信号）→ general
+    assert _select_doc_variant("word", "帮我写一段产品介绍文案") == "general"
 
 
 @pytest.mark.unit
 def test_doc_variant_keeps_finance_template_on_finance_brief() -> None:
     assert _select_doc_variant("xlsx", "搭一个英伟达 DCF 估值财务模型") == "finance"
     assert _select_doc_variant("word", "写一份英伟达投资分析研究报告，含估值") == "finance"
+    # finance 优先级最高：投研"研究报告"含"报告"但不该被政务公文抢走
+    assert _select_doc_variant("word", "做一份新能源板块投研研究报告") == "finance"
+
+
+@pytest.mark.unit
+def test_doc_variant_routes_govdoc_for_office_documents() -> None:
+    # 三类高频机关材料 → govdoc（①总结 ②信息/简报 ③经验材料；不做红头）
+    # ①工作总结类
+    assert _select_doc_variant("word", "帮我写季度工作总结") == "govdoc"
+    assert _select_doc_variant("word", "写一份2025年度个人述职报告") == "govdoc"
+    assert _select_doc_variant("word", "整理科室年度工作汇报材料") == "govdoc"
+    # ②工作信息/简报/动态类
+    assert _select_doc_variant("word", "出一期单位工作简报") == "govdoc"
+    assert _select_doc_variant("word", "写一条街道工作信息报送上级") == "govdoc"
+    assert _select_doc_variant("word", "整理本月工作动态") == "govdoc"
+    # ③经验材料/亮点做法类
+    assert _select_doc_variant("word", "提炼一份基层治理经验做法材料") == "govdoc"
+    assert _select_doc_variant("word", "写一份可复制的亮点典型案例") == "govdoc"
+    # 兜底通用事务文书
+    assert _select_doc_variant("word", "写一份本周工作周报") == "govdoc"
+    assert _select_doc_variant("word", "写一份设备故障情况说明") == "govdoc"
+    # 材料是 Word，不是 xlsx
+    assert _select_doc_variant("xlsx", "把这个简报做成表格") != "govdoc"
+
+
+@pytest.mark.unit
+def test_doc_variant_routes_govform_for_official_tables() -> None:
+    # 制式报表 / 台账 / 审批登记表 → govform
+    assert _select_doc_variant("xlsx", "做一张月度经费统计报表，要合计行") == "govform"
+    assert _select_doc_variant("xlsx", "建一个固定资产台账") == "govform"
+    assert _select_doc_variant("xlsx", "设计一张请假审批表") == "govform"
+    assert _select_doc_variant("xlsx", "人员花名册信息表") == "govform"
+    # govform 只对 xlsx 生效，word 不走 govform
+    assert _select_doc_variant("word", "做一张考勤表") != "govform"
 
 
 @pytest.mark.unit

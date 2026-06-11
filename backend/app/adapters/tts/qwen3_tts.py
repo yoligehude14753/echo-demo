@@ -76,6 +76,8 @@ class Qwen3TTS:
         self._base = settings.tts_qwen3_url.rstrip("/")
         self._default_voice = settings.tts_qwen3_voice
         self._timeout = timeout_s
+        # 直连 heyi 时为 "x"（服务端忽略）；网关模式为客户端 token（网关校验）。
+        self._auth_token = settings.upstream_audio_token
 
     @property
     def base_url(self) -> str:
@@ -132,7 +134,7 @@ class Qwen3TTS:
                             "始终说话，不要唱歌、不要加旋律或节奏。"
                         ),
                     },
-                    headers={"Authorization": "Bearer x"},
+                    headers={"Authorization": f"Bearer {self._auth_token}"},
                 )
                 resp.raise_for_status()
                 ct = resp.headers.get("content-type", "")

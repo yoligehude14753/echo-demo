@@ -10,10 +10,10 @@
 
 | 服务 | 公网 HTTPS（**默认**） | Tailscale（可选备选） | 背后实现 |
 |---|---|---|---|
-| FireRedASR2 STT | **`https://stt.yoliyoli.uk`** | `http://100.87.251.9:8090` | heyi-bj :8090 (FireRedASR2-AED) |
-| Qwen3-1.7B fast LLM | **`https://llm-fast.yoliyoli.uk/v1`** | `http://100.87.251.9:7860/v1` | heyi-bj :7860 (sglang vLLM) |
-| Qwen3-TTS | **`https://tts.yoliyoli.uk`** | `http://100.87.251.9:8094` | heyi-bj :8094 |
-| Echo backend (老 echo 项目) | `https://echo.yoliyoli.uk` | — | heyi-bj :8765（**与本文无关，不要混用**）|
+| FireRedASR2 STT | **`https://stt.example.com`** | `http://localhost:8090` | heyi-bj :8090 (FireRedASR2-AED) |
+| Qwen3-1.7B fast LLM | **`https://llm-fast.example.com/v1`** | `http://localhost:7860/v1` | heyi-bj :7860 (sglang vLLM) |
+| Qwen3-TTS | **`https://tts.example.com`** | `http://localhost:8094` | heyi-bj :8094 |
+| Echo backend (老 echo 项目) | `https://echo.example.com` | — | heyi-bj :8765（**与本文无关，不要混用**）|
 
 ## 1.1 为什么默认走公网 HTTPS（而不是 Tailscale）
 
@@ -35,7 +35,7 @@
 ```
 Mac (echo-demo backend)
    │
-   ├── Tailscale 路径：直连 100.87.251.9:<port>（局域网最低延迟，但依赖 mac 端 Tailscale daemon）
+   ├── Tailscale 路径：直连 localhost:<port>（局域网最低延迟，但依赖 mac 端 Tailscale daemon）
    │
    └── 公网路径：HTTPS → Cloudflare 边缘 → cloudflared tunnel(heyi-bj) → localhost:<port>
         ↑ 失败时直接抛 DNS / TLS / HTTP 错误码，故障可见
@@ -57,22 +57,22 @@ cloudflared tunnel 是 outbound persistent connection（heyi-bj 主动连到 Clo
 
 ```bash
 # 公网 HTTPS endpoint（默认）
-# STT_FIRERED_URL=https://stt.yoliyoli.uk
+# STT_FIRERED_URL=https://stt.example.com
 # 备选：Tailscale 内网
-STT_FIRERED_URL=http://100.87.251.9:8090
+STT_FIRERED_URL=http://localhost:8090
 
-# LLM_FAST_BASE_URL=https://llm-fast.yoliyoli.uk/v1
-LLM_FAST_BASE_URL=http://100.87.251.9:7860/v1
+# LLM_FAST_BASE_URL=https://llm-fast.example.com/v1
+LLM_FAST_BASE_URL=http://localhost:7860/v1
 
-# TTS_QWEN3_URL=https://tts.yoliyoli.uk
-TTS_QWEN3_URL=http://100.87.251.9:8094
+# TTS_QWEN3_URL=https://tts.example.com
+TTS_QWEN3_URL=http://localhost:8094
 ```
 
 然后重启 backend（`pkill -f 'uvicorn.*echodesk'` 或 EchoDesk 桌面端 Settings → Restart Backend）。
 
 **回切前自检（2 步）**：
-1. `tailscale status` 看 `100.87.251.9` 是否 online（不是 `expired` / `offline`）
-2. `nc -zv 100.87.251.9 8090` 在 1 秒内返回 `succeeded`
+1. `tailscale status` 看 `localhost` 是否 online（不是 `expired` / `offline`）
+2. `nc -zv localhost 8090` 在 1 秒内返回 `succeeded`
 
 任一不过 → **不要切回 Tailscale**，留在默认公网。
 
@@ -82,9 +82,9 @@ EchoDesk 桌面端 Settings Panel（Phase 3 已上线，PR #44）支持远端配
 
 ```json
 {
-  "stt_firered_url": "http://100.87.251.9:8090",
-  "llm_fast_base_url": "http://100.87.251.9:7860/v1",
-  "tts_qwen3_url": "http://100.87.251.9:8094"
+  "stt_firered_url": "http://localhost:8090",
+  "llm_fast_base_url": "http://localhost:7860/v1",
+  "tts_qwen3_url": "http://localhost:8094"
 }
 ```
 
@@ -93,7 +93,7 @@ EchoDesk 启动时会优先读这个文件并 override `.env`（详见 `backend/
 ### 方式 C：单条 endpoint 临时切（debug）
 
 ```bash
-STT_FIRERED_URL=http://100.87.251.9:8090 \
+STT_FIRERED_URL=http://localhost:8090 \
   uvicorn echodesk.main:app --reload --port 8769
 ```
 
@@ -115,9 +115,9 @@ STT_FIRERED_URL=http://100.87.251.9:8090 \
 
 | 路径 | 测点 | RTT (root path → 404) |
 |---|---|---|
-| heyi-bj 自身回环 → stt.yoliyoli.uk（CF 全球） | heyi-bj 公网出 | ~0.85s 首次 / ~0.10s 复用连接 |
-| Mac BJ wifi → 100.87.251.9 (Tailscale LAN) | 本地 | ~0.02s（直连）|
-| Mac BJ wifi → stt.yoliyoli.uk (Tailscale DNS 异常时) | 本地 | DNS / TLS 失败，明确报错 |
+| heyi-bj 自身回环 → stt.example.com（CF 全球） | heyi-bj 公网出 | ~0.85s 首次 / ~0.10s 复用连接 |
+| Mac BJ wifi → localhost (Tailscale LAN) | 本地 | ~0.02s（直连）|
+| Mac BJ wifi → stt.example.com (Tailscale DNS 异常时) | 本地 | DNS / TLS 失败，明确报错 |
 
 **结论**：默认公网 HTTPS（容错优先）；只在确认 Tailscale 健康且想要 < 50ms 延迟时手工切回。
 
@@ -129,16 +129,16 @@ STT_FIRERED_URL=http://100.87.251.9:8090 \
 
 **触发条件**：任一症状
 - 桌面端连续 ≥ 3 次 STT/LLM/TTS 请求收到 `502 / 503 / 504` 或 DNS 解析失败
-- `~/.echodesk/logs/backend.log` 出现大量 `SSLError` / `ConnectionError` 指向 `*.yoliyoli.uk`
-- `curl -m 10 https://stt.yoliyoli.uk/docs` 直接超时
+- `~/.echodesk/logs/backend.log` 出现大量 `SSLError` / `ConnectionError` 指向 `*.example.com`
+- `curl -m 10 https://stt.example.com/docs` 直接超时
 
 **切换步骤（回到 Tailscale 当备用，约 5 分钟）**：
 
 1. **先确认 Tailscale 链路本身健康**：
    ```bash
-   tailscale status                       # 看 100.87.251.9 是否 online
-   nc -zv 100.87.251.9 8090               # 1 秒内 succeeded 才 OK
-   curl -m 5 http://100.87.251.9:8090/docs | head -c 100
+   tailscale status                       # 看 localhost 是否 online
+   nc -zv localhost 8090               # 1 秒内 succeeded 才 OK
+   curl -m 5 http://localhost:8090/docs | head -c 100
    ```
 
    如果 Tailscale 也异常 → 公网和 Tailscale 都断了，去查 heyi-bj（机器宕机 / 断电 / 断网）。
@@ -163,15 +163,15 @@ STT_FIRERED_URL=http://100.87.251.9:8090 \
 
 ### 涉及组件
 - `cloudflared` v2026.5.0
-- tunnel id: `bfd33448-3605-47c5-813d-70924ae5cd09`（name=`echo-heyi`，已存在）
+- tunnel id: `your-tunnel-id`（name=`echo-heyi`，已存在）
 - config: `/home/ai/.cloudflared/config.yml`
 - 备份: `/home/ai/.cloudflared/config.yml.bak-1779931059`
 
 ### 新 ingress 配置（已部署）
 
 ```yaml
-tunnel: bfd33448-3605-47c5-813d-70924ae5cd09
-credentials-file: /home/ai/.cloudflared/bfd33448-3605-47c5-813d-70924ae5cd09.json
+tunnel: your-tunnel-id
+credentials-file: /home/ai/.cloudflared/your-tunnel-id.json
 
 originRequest:
   connectTimeout: 10s
@@ -182,13 +182,13 @@ originRequest:
   noTLSVerify: true
 
 ingress:
-  - hostname: echo.yoliyoli.uk          # 老 echo 项目，不动
+  - hostname: echo.example.com          # 老 echo 项目，不动
     service: http://localhost:8765
-  - hostname: stt.yoliyoli.uk
+  - hostname: stt.example.com
     service: http://localhost:8090
-  - hostname: llm-fast.yoliyoli.uk
+  - hostname: llm-fast.example.com
     service: http://localhost:7860
-  - hostname: tts.yoliyoli.uk
+  - hostname: tts.example.com
     service: http://localhost:8094
   - service: http_status:404
 ```
@@ -196,9 +196,9 @@ ingress:
 ### DNS（已添加 3 条 Cloudflare proxied CNAME）
 
 ```
-stt.yoliyoli.uk       CNAME  bfd33448-3605-47c5-813d-70924ae5cd09.cfargotunnel.com  (proxied)
-llm-fast.yoliyoli.uk  CNAME  bfd33448-3605-47c5-813d-70924ae5cd09.cfargotunnel.com  (proxied)
-tts.yoliyoli.uk       CNAME  bfd33448-3605-47c5-813d-70924ae5cd09.cfargotunnel.com  (proxied)
+stt.example.com       CNAME  your-tunnel-id.cfargotunnel.com  (proxied)
+llm-fast.example.com  CNAME  your-tunnel-id.cfargotunnel.com  (proxied)
+tts.example.com       CNAME  your-tunnel-id.cfargotunnel.com  (proxied)
 ```
 
 通过本机 `cloudflared tunnel route dns echo-heyi <hostname>` 命令添加（origin cert 在 Mac 本机）。
@@ -234,13 +234,13 @@ ExecStart=/usr/local/bin/cloudflared tunnel --config /home/ai/.cloudflared/confi
 部署后（2026-05-28）从 heyi-bj 自己 curl 公网 endpoint 全通：
 
 ```
-echo.yoliyoli.uk/          http=404 time=0.85s  remote_ip=104.21.61.190  ✅ 回归
-stt.yoliyoli.uk/docs       Swagger UI HTML       ✅ FireRedASR2
-llm-fast.yoliyoli.uk/v1/models  {"id":"Qwen3-1.7B"}  ✅ sglang vLLM
-tts.yoliyoli.uk/           http=404 (root 无路由)  ✅ Qwen3-TTS
+echo.example.com/          http=404 time=0.85s  remote_ip=104.21.61.190  ✅ 回归
+stt.example.com/docs       Swagger UI HTML       ✅ FireRedASR2
+llm-fast.example.com/v1/models  {"id":"Qwen3-1.7B"}  ✅ sglang vLLM
+tts.example.com/           http=404 (root 无路由)  ✅ Qwen3-TTS
 ```
 
-> **本机 Mac 没法直接 curl 验证**：Tailscale magic DNS 把 `*.yoliyoli.uk` 劫持到 `198.18.0.X`（Tailscale 4via6），导致 SSL connect 失败。这是 Tailscale 客户端行为，**不代表公网 endpoint 异常**。
+> **本机 Mac 没法直接 curl 验证**：Tailscale magic DNS 把 `*.example.com` 劫持到 `198.18.0.X`（Tailscale 4via6），导致 SSL connect 失败。这是 Tailscale 客户端行为，**不代表公网 endpoint 异常**。
 > 真实验证方式：
 > - 从 heyi-bj 自己 curl（如上）
 > - 从手机 4G/5G 网络（脱离 Tailscale）
@@ -252,17 +252,17 @@ tts.yoliyoli.uk/           http=404 (root 无路由)  ✅ Qwen3-TTS
 
 > **What**：在 cloudflared 与本地服务之间插入一个 nginx 容器 `heyi-gateway`（监听 `127.0.0.1:8081`），按 `Host` 头分流到各 GPU 服务并校验 `Authorization: Bearer <token>`。
 >
-> **Why**：原 4 个公网 endpoint 是裸跑无 auth（见 §6 历史版本），任何知道域名的人都可白嫖 GPU；同时新增 `llm.yoliyoli.uk` 暴露 Qwen3-32B-AWQ + `tts2.yoliyoli.uk` 暴露 CosyVoice2，对公网开放就必须有 auth。
+> **Why**：原 4 个公网 endpoint 是裸跑无 auth（见 §6 历史版本），任何知道域名的人都可白嫖 GPU；同时新增 `llm.example.com` 暴露 Qwen3-32B-AWQ + `tts2.example.com` 暴露 CosyVoice2，对公网开放就必须有 auth。
 
 ### 8.1 当前公网域名一览（2026-05-28）
 
 | 域名 | 后端 | 模型 | Auth 模式 | OpenAI 兼容 |
 |---|---|---|---|---|
-| `stt.yoliyoli.uk` | `:8090` firered | FireRedASR2-AED | optional Bearer | `/v1/audio/transcriptions` |
-| `llm-fast.yoliyoli.uk` | `:7860` sglang | Qwen3-1.7B | optional Bearer | `/v1/{models,chat/completions,completions}` |
-| `tts.yoliyoli.uk` | `:8094` fasterqwen3-tts | Qwen3-TTS (CustomVoice) | optional Bearer | `/v1/audio/speech` + `/v1/voices` |
-| **`llm.yoliyoli.uk`** _(新)_ | `:7862` sglang | **Qwen3-32B-AWQ** | **strict Bearer** | `/v1/{models,chat/completions,completions}` |
-| **`tts2.yoliyoli.uk`** _(新)_ | `:8092` cosyvoice2 | **CosyVoice2** | **strict Bearer** | `/v1/audio/speech` |
+| `stt.example.com` | `:8090` firered | FireRedASR2-AED | optional Bearer | `/v1/audio/transcriptions` |
+| `llm-fast.example.com` | `:7860` sglang | Qwen3-1.7B | optional Bearer | `/v1/{models,chat/completions,completions}` |
+| `tts.example.com` | `:8094` fasterqwen3-tts | Qwen3-TTS (CustomVoice) | optional Bearer | `/v1/audio/speech` + `/v1/voices` |
+| **`llm.example.com`** _(新)_ | `:7862` sglang | **Qwen3-32B-AWQ** | **strict Bearer** | `/v1/{models,chat/completions,completions}` |
+| **`tts2.example.com`** _(新)_ | `:8092` cosyvoice2 | **CosyVoice2** | **strict Bearer** | `/v1/audio/speech` |
 
 > "optional Bearer" = 不带 token 放过；带 token 必须正确（否则 401）。"strict Bearer" = 必须带正确 token。
 
@@ -283,7 +283,7 @@ from pathlib import Path
 TOKEN = Path("~/.echodesk/heyi_gateway.token").expanduser().read_text().strip()
 
 # Qwen3-32B-AWQ
-client = OpenAI(base_url="https://llm.yoliyoli.uk/v1", api_key=TOKEN)
+client = OpenAI(base_url="https://llm.example.com/v1", api_key=TOKEN)
 print(client.chat.completions.create(
     model="Qwen3-32B-AWQ",
     messages=[{"role": "user", "content": "hi"}],
@@ -291,7 +291,7 @@ print(client.chat.completions.create(
 ).choices[0].message.content)
 
 # Qwen3-1.7B fast（老域名也支持带 token）
-fast = OpenAI(base_url="https://llm-fast.yoliyoli.uk/v1", api_key=TOKEN)
+fast = OpenAI(base_url="https://llm-fast.example.com/v1", api_key=TOKEN)
 ```
 
 ### 8.4 curl 验证（从 Mac，避开 Tailscale magic DNS 拦截）
@@ -300,25 +300,25 @@ fast = OpenAI(base_url="https://llm-fast.yoliyoli.uk/v1", api_key=TOKEN)
 TOKEN=$(cat ~/.echodesk/heyi_gateway.token)
 
 # 1. 新增 32B（strict auth）
-curl -H "Authorization: Bearer $TOKEN" https://llm.yoliyoli.uk/v1/models
-curl -H "Authorization: Bearer $TOKEN" -X POST https://llm.yoliyoli.uk/v1/chat/completions \
+curl -H "Authorization: Bearer $TOKEN" https://llm.example.com/v1/models
+curl -H "Authorization: Bearer $TOKEN" -X POST https://llm.example.com/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"Qwen3-32B-AWQ","messages":[{"role":"user","content":"用一句话自我介绍"}],"max_tokens":80}'
 
 # 2. 老域名（optional auth，带不带 token 都通）
-curl https://llm-fast.yoliyoli.uk/v1/models
-curl -H "Authorization: Bearer $TOKEN" https://llm-fast.yoliyoli.uk/v1/models   # 等价
+curl https://llm-fast.example.com/v1/models
+curl -H "Authorization: Bearer $TOKEN" https://llm-fast.example.com/v1/models   # 等价
 
 # 3. 错误 token 应该被拒
-curl -H "Authorization: Bearer wrong" https://llm-fast.yoliyoli.uk/v1/models    # → 401
+curl -H "Authorization: Bearer wrong" https://llm-fast.example.com/v1/models    # → 401
 
 # 4. 新 CosyVoice2
-curl -H "Authorization: Bearer $TOKEN" -X POST https://tts2.yoliyoli.uk/v1/audio/speech \
+curl -H "Authorization: Bearer $TOKEN" -X POST https://tts2.example.com/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -d '{"model":"cosyvoice2","input":"你好","voice":"default"}' --output /tmp/cosy.wav
 ```
 
-> Tailscale magic DNS 会把 `*.yoliyoli.uk` 劫持到 `198.18.0.X`（4via6）导致 SSL connect 失败。临时绕过：`sudo tailscale set --accept-dns=false`（测完记得恢复）。
+> Tailscale magic DNS 会把 `*.example.com` 劫持到 `198.18.0.X`（4via6）导致 SSL connect 失败。临时绕过：`sudo tailscale set --accept-dns=false`（测完记得恢复）。
 
 ### 8.5 heyi-bj 端实施记录
 
@@ -337,21 +337,21 @@ ssh heyi 'cat ~/.cloudflared/config.yml'
 ssh heyi 'ps aux | grep cloudflared | grep -v grep'
 ```
 
-cloudflared **保留旧 `echo.yoliyoli.uk → :8765` 不动**（echo backend 直通，无 auth；与本项目无关，按原状）。其余 5 个全部指向 `localhost:8081`（nginx gateway）。
+cloudflared **保留旧 `echo.example.com → :8765` 不动**（echo backend 直通，无 auth；与本项目无关，按原状）。其余 5 个全部指向 `localhost:8081`（nginx gateway）。
 
 ### 8.6 已知 TODO（ambiguity 兜底）
 
 | # | 项 | 当前状态 | 卡在哪 | 用户需做 |
 |---|---|---|---|---|
-| 1 | **DNS for `llm.yoliyoli.uk` / `tts2.yoliyoli.uk`** | nginx + cloudflared ingress 已就绪，DNS 未解析 | heyi 上无 `cert.pem`，`cloudflared tunnel route dns` 跑不了 | 在 Cloudflare Dashboard `yoliyoli.uk` 区里手工加两条 CNAME（见下） |
+| 1 | **DNS for `llm.example.com` / `tts2.example.com`** | nginx + cloudflared ingress 已就绪，DNS 未解析 | heyi 上无 `cert.pem`，`cloudflared tunnel route dns` 跑不了 | 在 Cloudflare Dashboard `example.com` 区里手工加两条 CNAME（见下） |
 | 2 | **老 3 域名升级为 strict Bearer** | 仍是 optional auth（兼容期）| 切之前要先确保所有客户端都带 token | echo-demo 一侧加 `Authorization` header 注入后再切 |
 | 3 | **cloudflared 切 systemd 守护 named tunnel** | 当前 user-systemd 已守护 | 跑得起来，但 unit 文件还没归档到仓库 | （已在原 §5 TODO，本次不动） |
 
 **DNS 配置**（用户在 Cloudflare Dashboard 加一次性）：
 
 ```
-llm.yoliyoli.uk    CNAME  bfd33448-3605-47c5-813d-70924ae5cd09.cfargotunnel.com   (proxied)
-tts2.yoliyoli.uk   CNAME  bfd33448-3605-47c5-813d-70924ae5cd09.cfargotunnel.com   (proxied)
+llm.example.com    CNAME  your-tunnel-id.cfargotunnel.com   (proxied)
+tts2.example.com   CNAME  your-tunnel-id.cfargotunnel.com   (proxied)
 ```
 
 加完 DNS 后立即可用（cloudflared ingress 已经准备好了）。

@@ -82,6 +82,25 @@ export async function getCaptureStats(): Promise<CaptureStats> {
   return asJson<CaptureStats>(r);
 }
 
+export interface DailyRecapResult {
+  date: string;
+  recap_markdown: string;
+  n_ambient_segments: number;
+  n_meetings: number;
+  empty: boolean;
+  /** 从回顾「待办与跟进」段结构化抽取的条目（主动催办用）。 */
+  todos?: string[];
+  /** true 表示服务端短 TTL 缓存命中（避免重复跑 LLM）。 */
+  cached?: boolean;
+}
+
+/** 今日回顾：把今天被动记录的对话/会议汇成一份回顾（主动陪伴）。 */
+export async function getDailyRecap(): Promise<DailyRecapResult> {
+  const u = await apiUrl("/recap/today");
+  const r = await fetch(u);
+  return asJson<DailyRecapResult>(r);
+}
+
 export async function endMeeting(meetingId: string): Promise<void> {
   const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/end`);
   const r = await fetch(u, { method: "POST" });

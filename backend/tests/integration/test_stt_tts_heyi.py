@@ -41,7 +41,7 @@ def settings() -> Settings:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _can_connect("100.87.251.9", 8090), reason="heyi-bj 8090 (firered) 不可达")
+@pytest.mark.skipif(not _can_connect("localhost", 8090), reason="heyi-bj 8090 (firered) 不可达")
 async def test_real_stt_handshake(settings: Settings) -> None:
     """STT 接口可达且能接受合法 WAV（不强求识别质量，只验证 HTTP 协议握手）。"""
     stt = FireRedSTT(settings, timeout_s=15.0)
@@ -53,7 +53,7 @@ async def test_real_stt_handshake(settings: Settings) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not _can_connect("100.87.251.9", 8094), reason="heyi-bj 8094 (qwen3_tts) 不可达"
+    not _can_connect("localhost", 8094), reason="heyi-bj 8094 (qwen3_tts) 不可达"
 )
 async def test_real_tts_synthesize(settings: Settings) -> None:
     """TTS 真实合成 → 返回非空 PCM 字节（≥ 0.1s 音频）。"""
@@ -67,7 +67,7 @@ async def test_real_tts_synthesize(settings: Settings) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not _can_connect("100.87.251.9", 7860), reason="heyi-bj 7860 (Qwen3-1.7B) 不可达"
+    not _can_connect("localhost", 7860), reason="heyi-bj 7860 (Qwen3-1.7B) 不可达"
 )
 async def test_real_fast_llm_qwen3() -> None:
     """Fast 通道 Qwen3-1.7B vLLM 完整流式。"""

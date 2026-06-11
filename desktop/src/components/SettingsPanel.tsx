@@ -77,6 +77,16 @@ interface RemoteFieldMeta {
 
 // 字段顺序 + 文案，跟后端 _REMOTE_FIELDS 对齐
 const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
+  echo_gateway_url: {
+    label: "服务网关地址",
+    hint: "EchoDesk 服务网关 URL；填了即走网关模式（下面直连项可留空）",
+    placeholder: "https://your-gateway.example.com",
+  },
+  echo_gateway_token: {
+    label: "访问 Key",
+    hint: "你拿到的访问 key（填进来即可使用服务）；脱敏显示，留空不修改",
+    placeholder: "粘贴你的访问 key",
+  },
   llm_main_base_url: {
     label: "主 LLM Base URL",
     hint: "Yunwu / OpenAI 兼容端点；默认 https://yunwu.ai/v1",
@@ -89,18 +99,18 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
   },
   llm_fast_base_url: {
     label: "快速 LLM Base URL",
-    hint: "Qwen3-1.7B (heyi-bj :7860)；用于 intent 分类等低延时任务",
-    placeholder: "http://100.87.251.9:7860/v1",
+    hint: "OpenAI 兼容的快速/小模型端点；用于 intent 分类等低延时任务（直连模式才需填）",
+    placeholder: "http://localhost:7860/v1",
   },
   stt_firered_url: {
     label: "STT URL",
-    hint: "FireRedASR2-AED (heyi-bj :8090)",
-    placeholder: "http://100.87.251.9:8090",
+    hint: "语音转写服务端点（直连模式才需填）",
+    placeholder: "http://localhost:8090",
   },
   tts_qwen3_url: {
     label: "TTS URL",
-    hint: "faster-qwen3-tts (heyi-bj :8094)",
-    placeholder: "http://100.87.251.9:8094",
+    hint: "语音合成服务端点（直连模式才需填）",
+    placeholder: "http://localhost:8094",
   },
   tts_qwen3_voice: {
     label: "TTS 音色",

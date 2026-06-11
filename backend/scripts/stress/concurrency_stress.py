@@ -172,10 +172,10 @@ async def main() -> None:
     llm_levels = [int(x) for x in args.llm_levels.split(",") if x.strip()]
 
     if args.service in ("tts", "all"):
-        await stress_service("TTS (tts.yoliyoli.uk qwen3_tts)", _tts_caller(settings), levels, args.reps)
+        await stress_service("TTS (qwen3_tts)", _tts_caller(settings), levels, args.reps)
     if args.service in ("stt", "all"):
         await stress_service(
-            "STT (stt.yoliyoli.uk firered)", _stt_caller(settings, args.wav), levels, args.reps
+            "STT (firered)", _stt_caller(settings, args.wav), levels, args.reps
         )
     if args.service in ("llm", "all"):
         await stress_service(
@@ -183,7 +183,7 @@ async def main() -> None:
         )
     if args.service in ("llm_fast", "all"):
         await stress_service(
-            "LLM-fast (Qwen3-1.7B @ llm-fast.yoliyoli.uk)",
+            "LLM-fast (Qwen3-1.7B)",
             _llm_fast_caller(settings),
             levels,
             args.reps,
