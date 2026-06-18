@@ -20,26 +20,74 @@ EchoDesk = Mac 桌面 app（Electron + React UI）+ Python FastAPI backend。
 
 ---
 
-## 第 1 步：拿源码
+## 第 1 步：下载安装包
 
-EchoDesk 还没 publish 到 GitHub release，暂时通过 git 拿：
+优先从 GitHub Releases 下载当前 demo 包：
+
+- macOS: `EchoDesk-0.2.1-arm64.dmg`
+- Windows: `EchoDesk Setup 0.2.1.exe`
+- Android: `EchoDesk-0.2.1-android-debug.apk`（内部演示 debug 包）
+
+源码构建仅用于开发：
 
 ```bash
 git clone <repo_url> ~/echo-demo
-# 或者把已有仓库放到任意你喜欢的位置
+cd ~/echo-demo/desktop
+npm install
 ```
 
 ## 第 2 步：装 .app
 
+macOS 打开 dmg，把 `EchoDesk.app` 拖到 `/Applications/`。如果从源码构建，可用：
+
+### 安装包产物
+
+macOS 当前可直接构建：
+
 ```bash
 cd ~/echo-demo/desktop
-npm install
-npm run electron-build      # 产物在 desktop/release/
-# 把 release 里的 .app 拖到 /Applications/
-cp -R release/mac-arm64/EchoDesk.app /Applications/
+npm run app:dist:mac
 ```
 
-> 如果你只用 dev 模式（直接 `npm run electron-dev`），可以跳过这一步。
+产物：
+
+```text
+desktop/release/EchoDesk-0.2.1-arm64.dmg
+desktop/release/EchoDesk-0.2.1-arm64-mac.zip
+desktop/release/mac-arm64/EchoDesk.app
+```
+
+Windows exe 有脚本入口，但建议在 Windows 机器或带 Wine/NSIS 的构建环境跑：
+
+```bash
+cd ~/echo-demo/desktop
+npm run app:dist:win
+```
+
+Android 当前用 Capacitor 打 debug APK：
+
+```bash
+cd ~/echo-demo/desktop
+npm run app:dist:android
+```
+
+产物：
+
+```text
+desktop/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+APK 只是前端壳，不会在手机里启动 Electron 的本机 Python backend。模拟器默认连
+`http://10.0.2.2:8769`；真机演示时需要让 Mac backend 监听局域网地址：
+
+```bash
+cd ~/echo-demo/backend
+source .venv/bin/activate
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8769
+```
+
+然后在 APK 里打开设置 → 移动端连接，把后端地址设成 Mac 的局域网 IP，例如
+`http://10.10.12.32:8769`。生产分发建议改成 HTTPS 后端地址。
 
 ## 第 3 步：跑 install-backend.sh
 
@@ -146,7 +194,7 @@ ECHO_INSTALL_PYTHON=/Users/me/.pyenv/versions/3.11.10/bin/python \
 ### "想跑 dev 模式但不要 .app 自动 spawn backend"
 
 ```bash
-ECHO_SPAWN_BACKEND=0 npm run electron-dev
+ECHO_SPAWN_BACKEND=0 npm run electron:dev
 # 然后你自己开 uvicorn
 cd backend && source .venv/bin/activate
 python -m uvicorn app.main:app --port 8769
@@ -154,19 +202,32 @@ python -m uvicorn app.main:app --port 8769
 
 Supervisor 看到端口已占会走 external 模式，监控存活但不重启。
 
-### "远程依赖（heyi-bj / Yunwu）连不上"
+### "远程依赖（eight / Yunwu）连不上"
 
 `curl http://127.0.0.1:8769/healthz/full` 里 `remote.*.ok` 显示状态：
 
 | 字段 | 含义 | 看哪个 |
 |---|---|---|
-| `heyi_stt_firered` | STT @ :8090 | heyi-bj 服务 + 你的 VPN |
+| `heyi_stt_firered` | STT @ :8090 | eight 服务 + 你的 VPN |
 | `heyi_tts_qwen3` | TTS @ :8094 | 同上 |
-| `heyi_llm_fast` | Qwen3-1.7B @ :7860 | 同上 |
+| `heyi_llm_fast` | qwen3.5-9b-local @ :7860 | 同上 |
 | `yunwu_llm_main` | Yunwu MiniMax-M2.7 | API key + 公网 |
 | `tavily` | Tavily 搜索 | API key + 公网 |
 
+`heyi_*` 是历史字段名，当前实际机器是 eight (`100.76.3.59`)。
+
 `ok: null` + `reason: "no_api_key"` 说明 key 没填，相关功能灰；`ok: false` 才是真断了。
+
+### "离远了声音记录不清楚 / 怀疑 STT"
+
+先不要只看最终文字，按这几层定位：
+
+1. 看顶部“持续监听”状态的 tooltip：新增的最近 RMS、活跃帧率、最近门控原因能区分“麦克风输入太小 / 被静音底噪门过滤 / 已进 STT 但识别差”。
+2. 导出诊断包：设置 → 诊断 → 导出诊断包，里面会带 `backend.log` 当前和最近 rotated 日志，以及 `/capture/stats` 等运行状态。
+3. 直接看日志：`~/.echodesk/logs/backend.log`，重点搜 `echodesk.stt`、`echodesk.workspace`、`capture`、`diagnostics`。
+4. 如需核对原始数据：本地数据库在 `~/.echodesk/echodesk.db`，录音/转写相关文件在 `~/.echodesk/storage/`。
+
+经验判断：如果最近 RMS 长期接近 0、活跃帧率很低或最近门控是 `rms_too_low`，优先排查麦克风距离、系统输入音量、设备选择，而不是 STT 服务本身；如果 RMS/活跃帧率正常但文字质量差，再查 STT endpoint、网络和上游服务日志。
 
 ---
 

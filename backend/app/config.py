@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     public_ws_url: str = "ws://localhost:8769/ws/echo"
     public_http_url: str = "http://localhost:8769"
-    app_version: str = "0.2.0"
+    app_version: str = "0.2.1"
 
     # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
     llm_main_provider: str = "yunwu"
@@ -78,21 +78,21 @@ class Settings(BaseSettings):
     llm_fallback_2: str = "Kimi-K2.6"
     llm_main_max_tokens: int = 80_000
 
-    # ── LLM 快速通道（Qwen3-1.7B on heyi-bj） ────────────────────
+    # ── LLM 快速通道（qwen3.5-9b-local on eight） ─────────────────
     llm_fast_provider: str = "heyi-local"
-    llm_fast_model: str = "Qwen3-1.7B"
-    llm_fast_base_url: str = "https://llm-fast.yoliyoli.uk/v1"
+    llm_fast_model: str = "qwen3.5-9b-local"
+    llm_fast_base_url: str = "http://100.76.3.59:7860/v1"
     llm_local_api_key: str = "EMPTY"
     llm_fast_max_tokens: int = 512
 
     # ── STT ───────────────────────────────────────────────────────
-    # 当前**唯一** = firered（@ heyi :8090，判别式无幻觉、中文强）；
+    # 当前**唯一** = firered（@ eight :8090，判别式无幻觉、中文强）；
     # echo 实战路径 Deepgram → FireRed → faster-whisper → SenseVoice → 回 FireRed。
     # SenseVoice GPU 在 PR `echodesk-remove-sensevoice` 删除（理由：多 backend
     # 选项老让人误判"换 backend 能修 X"）。详见 docs/ARCH-AUDIT.md §2。
     # 保留 stt_backend 字段供未来扩展（如本地化离线 STT）。
     stt_backend: str = "firered"
-    stt_firered_url: str = "https://stt.yoliyoli.uk"
+    stt_firered_url: str = "http://100.76.3.59:8090"
     stt_language: str = "zh"
     stt_llm_correct: bool = False
 
@@ -100,16 +100,16 @@ class Settings(BaseSettings):
     # 用户痛点（2026-05-28）：FireRedASR2 :8090 OpenAPI 只接受
     # file/model/language/response_format/timestamp_granularities，**没有 punc 开关**；
     # 6s ambient chunk 出来是一气呵成 30+ 字无标点的整行（截图 m-bdd1da4e7e21），
-    # 用户读不下去。STT 服务端无法直出标点 → ambient 主链路加 Qwen3-1.7B (LLM_FAST)
+    # 用户读不下去。STT 服务端无法直出标点 → ambient 主链路加 qwen3.5-9b-local (LLM_FAST)
     # 后处理批量加标点 + 自然分段。
     # 详见 `app/adapters/stt/llm_punctuator.py` 文件头。
     ambient_llm_punctuate: bool = True
     # 单次 batch（一个 chunk 1-3 段）超时上限；超时 → 退回原文本不阻塞主链路。
-    # Qwen3-1.7B local p50 < 700ms，2s 是宽松上限。
+    # qwen3.5-9b-local p50 < 700ms，2s 是宽松上限。
     ambient_punctuator_timeout_s: float = 2.0
 
     # ── TTS ───────────────────────────────────────────────────────
-    # 实际跑的是 faster-qwen3-tts 1.7B CustomVoice @ heyi-bj :8094
+    # 实际跑的是 faster-qwen3-tts 1.7B CustomVoice @ eight :8094
     # （echo commit b065547 切换；echo-demo `cosyvoice` 是历史命名遗留）
     # 详见 docs/ARCH-AUDIT.md §3
     tts_enabled: bool = True
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     )
     # 兼容旧 env：TTS_COSYVOICE_URL / TTS_COSYVOICE_VOICE 仍能正确加载
     tts_qwen3_url: str = Field(
-        default="https://tts.yoliyoli.uk",
+        default="http://100.76.3.59:8094",
         validation_alias=AliasChoices(
             "tts_qwen3_url",
             "TTS_QWEN3_URL",
@@ -288,7 +288,7 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     web_search_top_n: int = 5
     tavily_api_key: str = ""
-    web_arbitration_model: str = "Qwen3-1.7B"
+    web_arbitration_model: str = "qwen3.5-9b-local"
 
     # ── Skill 执行器 ──────────────────────────────────────────────
     skill_ppt_tool: str = "pptxgenjs"
@@ -314,7 +314,10 @@ class Settings(BaseSettings):
     storage_dir: Path = Field(default=Path("~/.echodesk/storage").expanduser())
 
     # ── Security ──────────────────────────────────────────────────
-    allowed_origins: str = "app://.,http://localhost:5173,http://localhost:8769"
+    allowed_origins: str = (
+        "app://.,capacitor://localhost,https://localhost,http://localhost,"
+        "http://localhost:5173,http://localhost:8769"
+    )
     debug_token: str = ""
 
     @property

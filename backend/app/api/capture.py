@@ -53,7 +53,7 @@ def get_ambient_pipeline(
 ) -> AmbientCapturePipeline:
     global _ambient  # noqa: PLW0603
     if _ambient is None:
-        # text-clarity PR：把 LLM_FAST (Qwen3-1.7B) 包成 punctuator 注入。
+        # text-clarity PR：把 LLM_FAST (qwen3.5-9b-local) 包成 punctuator 注入。
         # 关闭开关只需要 AMBIENT_LLM_PUNCTUATE=false（settings）。
         punctuator = LLMPunctuator(llm, settings) if settings.ambient_llm_punctuate else None
         _ambient = AmbientCapturePipeline(

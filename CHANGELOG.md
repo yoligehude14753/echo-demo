@@ -51,6 +51,38 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.1] – 2026-06-18
+
+Demo hotfix：补齐用户反馈的知识库可见性、远场转写诊断、移动端演示包和远端模型迁移。
+
+### 新增
+
+- 工作区 / 知识库面板展示已索引文档、chunk 数、文档来源，并支持单条删除与打开设置。
+- 设置面板新增移动端连接配置，Android debug APK 默认连接模拟器宿主机 `10.0.2.2:8769`。
+- 捕获状态面板展示最近 RMS、语音帧比例和门控原因，便于定位“离远了声音记录不清楚”是麦克风输入、门控还是 STT 识别问题。
+
+### 修复
+
+- 移动端窄屏布局不再因为 Ant Design sider 样式压成 `width: 0`。
+- `WORKSPACE_MAX_FILE_MB` 默认提高到 100MB，避免常见 PDF 被知识库扫描静默跳过。
+- “授权工作区”相关文案收敛为“知识库 / 工作区”，避免被误解为激活码；当前 demo 不设激活码门槛。
+
+### 配置变更
+
+- STT / TTS / Fast LLM 默认迁到 eight (`100.76.3.59`)：
+  - STT: `http://100.76.3.59:8090`
+  - TTS: `http://100.76.3.59:8094`
+  - Fast LLM: `http://100.76.3.59:7860/v1`, model `qwen3.5-9b-local`
+- `.env.example` 去掉真实 API key 示例，发布源码包只保留空占位。
+- 版本号统一到 `0.2.1`，Android debug APK 使用 `versionName=0.2.1`。
+
+### 已知问题
+
+- Android 包是 debug APK，仅用于内部 demo；正式上架需 release 签名 APK/AAB。
+- macOS / Windows 包仍未做正式代码签名；首次打开可能需要系统安全确认。
+
+---
+
 ## [0.2.0] – 2026-05-28
 
 P2 / P3 阶段集中迭代：可视化诊断、远端服务可配置、首次启动引导。
@@ -82,7 +114,7 @@ P2 / P3 阶段集中迭代：可视化诊断、远端服务可配置、首次启
   LLM / Skill 失败时前端弹错误 toast，textarea 不再卡死；后端推送
   `artifact.failed` 事件，含 `reason` + `intent`。
 - **远端降级链路**（P2.3）
-  Yunwu / heyi-bj 任一不可用时 backend 自动切到本地 Qwen3-1.7B；
+  Yunwu / 远端 fast LLM 任一不可用时 backend 自动降级；
   顶栏 remote pill 显示「降级中」并附理由。
 - **DB migration 框架**（P2.4）
   SQLite schema 改动统一走 `backend/app/adapters/repo/migrations/`，
@@ -137,8 +169,8 @@ EchoDesk Phase 1 最小可用版（M1–M4 合并）。
 - **多文档 + 会议 RAG**：jieba 分词 + BM25Okapi，9 query 并发 1.28s，
   `doc_cite=100%`。
 - **声纹识别**：SpeechBrain ECAPA-TDNN 默认参数，本地 CPU 推理。
-- **STT / TTS / LLM**：FireRedASR2-AED + Qwen3 TTS（heyi-bj 100.87.251.9）+
-  Yunwu MiniMax-M2.7（主）+ 本地 Qwen3-1.7B（fast）。
+- **STT / TTS / LLM**：FireRedASR2-AED + Qwen3 TTS +
+  Yunwu MiniMax-M2.7（主）+ fast Qwen 通道。
 - **Web Search 仲裁**：Inspiro 主 + Tavily 备 + DDG 兜底。
 - **Electron + React 18 UI**：Ant Design 5 + Tailwind，WebSocket 推送会议状态
   + 笔记；BackendSupervisor 自动 spawn / 监控 / 重启 Python backend。

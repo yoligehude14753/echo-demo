@@ -182,6 +182,9 @@ export async function installEchoMock(
             stored: 0,
             last_chunk_at: null,
             last_stored_at: null,
+            last_rms: 0,
+            last_speech_ratio: 0,
+            last_gate_reason: null,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );

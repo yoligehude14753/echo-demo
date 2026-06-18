@@ -68,6 +68,12 @@ export interface CaptureStatsSnapshot {
   stored: number;
   last_chunk_at: string | null;
   last_stored_at: string | null;
+  /** 最近 chunk 的整段 int16 RMS；远场声音过小时通常偏低。 */
+  last_rms: number;
+  /** 最近 chunk 的 20ms 活跃帧比例；低说明大部分时间是静音/底噪。 */
+  last_speech_ratio: number;
+  /** 最近 chunk 的前置门控结果：ok / rms_too_low / speech_ratio_too_low。 */
+  last_gate_reason: string | null;
 }
 
 /** 会议叠加层是否应激活（capture 仍始终上传，只是多带 meeting_id） */

@@ -71,7 +71,7 @@ async def test_artifacts_emits_failed_on_llm_error() -> None:
 async def test_classify_falls_back_on_llm_error() -> None:
     """_classify 在 fast LLM 失败时返回 'either' 而非 raise。"""
     fake_llm = AsyncMock()
-    fake_llm.chat.side_effect = LLMError("heyi-bj :7860 connect refused")
+    fake_llm.chat.side_effect = LLMError("eight :7860 connect refused")
     result = await _classify(fake_llm, "qwen3-1.7b", "什么是 SDXL？")
     assert result == "either", "fallback 必须是 either（让 RAG 与 web 都跑）"
 

@@ -32,7 +32,7 @@ bash scripts/collect-scenario-videos.sh   # 整理成 webm + mp4
 | S04 | @生成 HTML 命令链路 | Phase 1 intent / artifact | `s04-生成HTML命令链路.mp4` | 4 | ✅ |
 | S05a | @生成 后端 500 错误处理 | P2.2 | `s05a-生成失败错误处理.mp4` | 4 | ✅ |
 | S05b | WebSocket 断线 → 自动重连 | Phase 1 WS | `s05b-WebSocket断线重连.mp4` | 3 | ✅ |
-| S06a | heyi-bj 全挂 → heyi pill 红色 | P2.3 / P2.1 | `s06a-heyi降级红pill.mp4` | 2 | ✅ |
+| S06a | eight 全挂 → eight pill 红色 | P2.3 / P2.1 | `s06a-heyi降级红pill.mp4` | 2 | ✅ |
 | S06b | Yunwu / Tavily 缺 key → 橙色 pill | P2.3 / P2.1 | `s06b-Yunwu缺key橙pill.mp4` | 2 | ✅ |
 
 ---
@@ -57,7 +57,7 @@ bash scripts/collect-scenario-videos.sh   # 整理成 webm + mp4
 |---|---|---|---|
 | 1 | 主界面渲染 | `pill-backend` / `pill-heyi` / `pill-yunwu` / `pill-mic` 4 个都可见 | ✅ |
 | 2 | 点 backend pill | popover 显示 `version` / `0.2.0` / `8769`（来自 `/healthz/full`） | ✅ |
-| 3 | 点 heyi-bj pill | popover 显示 STT FireRed / TTS Qwen3 / Fast LLM 3 行探针 | ✅ |
+| 3 | 点 eight pill | popover 显示 STT FireRed / TTS Qwen3 / Fast LLM 3 行探针 | ✅ |
 | 4 | 点云 pill | popover 显示 Yunwu MiniMax + Tavily 状态 | ✅ |
 | 5 | 点 mic pill | popover 显示「权限状态 granted」绿色 | ✅ |
 
@@ -75,7 +75,7 @@ bash scripts/collect-scenario-videos.sh   # 整理成 webm + mp4
 |---|---|---|---|
 | 1 | 点齿轮 → Drawer 打开 | `remote-settings-form` 可见 | ✅ |
 | 2 | 数据目录 section | 显示 `/Users/test/.echodesk` | ✅ |
-| 3 | 远端服务表单 | `llm_main_base_url=https://yunwu.ai/v1`、`stt_firered_url=http://100.87.251.9:8090` 预填，`user.json` 标签出现在 `yunwu_open_key` 行 | ✅ |
+| 3 | 远端服务表单 | `llm_main_base_url=https://yunwu.ai/v1`、`stt_firered_url=http://100.76.3.59:8090` 预填，`user.json` 标签出现在 `yunwu_open_key` 行 | ✅ |
 | 4 | 改 `llm_main_base_url` → 保存 | toast「已写入 1 项」出现 | ✅ |
 | 5 | `restart-backend-after-config` 按钮浮现 | ✅ |
 | 6 | 点重启 → Electron IPC `manualRestartBackend` 被调用 + 「已发送重启请求」toast | ✅ |
@@ -107,7 +107,7 @@ bash scripts/collect-scenario-videos.sh   # 整理成 webm + mp4
 | 2 | mock.closeWs(1006) | 顶栏切到「断线」 | ✅ |
 | 3 | mock.reopenWs() | 10s 内自动恢复「已连接」 | ✅ |
 
-### S06a · heyi-bj 全挂（P2.3）
+### S06a · eight 全挂（P2.3）
 
 | 步骤 | 操作 | 期望 | 实际 |
 |---|---|---|---|

@@ -1,7 +1,7 @@
-"""OpenAI 兼容 LLM adapter（Yunwu / heyi-local Qwen 双路由 + 流式 + 重试）。
+"""OpenAI 兼容 LLM adapter（Yunwu / eight fast Qwen 双路由 + 流式 + 重试）。
 
 设计参考 echo backend/app/llm.py 的双通道架构（FAST/MAIN）：
-- FAST 通道：Qwen3-1.7B on heyi-bj :7860 → 用于路由、短问答、纯结构化抽取
+- FAST 通道：qwen3.5-9b-local on eight :7860 → 用于路由、短问答、纯结构化抽取
 - MAIN 通道：Yunwu MiniMax-M2.7 → 复杂任务、长生成；max_tokens=80000
 
 约定（用户决策 2026-05-26）：

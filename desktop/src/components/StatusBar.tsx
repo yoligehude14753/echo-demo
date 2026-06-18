@@ -1,7 +1,7 @@
 /**
  * StatusBar · Phase 2 P2.1
  *
- * 顶部 4 个 status pill：backend / heyi-bj / Yunwu / mic
+ * 顶部 4 个 status pill：backend / eight / Yunwu / mic
  * 每个 pill：
  *   - 颜色：绿(ok) / 橙(warn 含部分降级 / 缺 key / 重启中) / 红(fail) / 灰(unknown)
  *   - 点开 popover：详细诊断信息（version / latency / 错误）
@@ -334,7 +334,7 @@ function HeyiPopover({
     <div className="min-w-[300px] max-w-[420px] text-[12px] py-1">
       <div className="font-semibold mb-1.5 flex items-center gap-1.5">
         <Cpu className="w-3.5 h-3.5" />
-        heyi-bj 远端服务
+        eight 远端服务
       </div>
       <ProbeRow name="STT FireRed :8090" probe={stt} />
       <ProbeRow name="TTS Qwen3 :8094 (TCP)" probe={tts} />
@@ -503,7 +503,7 @@ export default function StatusBar({
         testId="pill-backend"
       />
       <Pill
-        label="heyi-bj"
+        label="eight"
         level={heyiLevel}
         icon={<Cpu className="w-3 h-3" />}
         popover={

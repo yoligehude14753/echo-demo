@@ -88,6 +88,9 @@ async def test_stats_initial_state_is_zero(tmp_path: Path) -> None:
     }
     assert s.last_chunk_at is None
     assert s.last_stored_at is None
+    assert s.last_rms == 0
+    assert s.last_speech_ratio == 0
+    assert s.last_gate_reason is None
 
 
 @pytest.mark.asyncio
@@ -103,6 +106,9 @@ async def test_gated_rms_increment(tmp_path: Path) -> None:
     assert s.gated_rms == 1
     assert s.gated_low_speech == 0
     assert s.stored == 0
+    assert s.last_rms == 0
+    assert s.last_speech_ratio == 0
+    assert s.last_gate_reason == "rms_too_low"
     stt.transcribe.assert_not_called()  # type: ignore[attr-defined]
 
 

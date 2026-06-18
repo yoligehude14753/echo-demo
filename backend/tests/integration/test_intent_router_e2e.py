@@ -1,6 +1,6 @@
-"""Integration：意图路由真 LLM 端到端（Qwen3-1.7B / heyi-bj）。
+"""Integration：意图路由真 LLM 端到端（qwen3.5-9b-local / eight）。
 
-跳过条件：heyi-bj LLM 不可达 → 自动 skip。
+跳过条件：eight LLM 不可达 → 自动 skip。
 覆盖：
 1. 关键字命中场景（零 LLM）：@生成 PPT / @财务模型 / @查
 2. LLM 兜底场景（无关键字）：模糊指令 → LLM 分类
@@ -31,7 +31,7 @@ def _heyi_reachable() -> bool:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _heyi_reachable(), reason="heyi-bj fast LLM unreachable")
+@pytest.mark.skipif(not _heyi_reachable(), reason="eight fast LLM unreachable")
 async def test_intent_keyword_hits_skip_llm() -> None:
     """关键字命中应当不调 LLM 即返回（带 0.85 置信度）。"""
     s = Settings()
@@ -54,7 +54,7 @@ async def test_intent_keyword_hits_skip_llm() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _heyi_reachable(), reason="heyi-bj fast LLM unreachable")
+@pytest.mark.skipif(not _heyi_reachable(), reason="eight fast LLM unreachable")
 async def test_intent_llm_fallback_classifies() -> None:
     """无关键字 + @前缀 → 走 LLM 分类，返回合法 kind。"""
     s = Settings()

@@ -16,7 +16,7 @@ from app.config import Settings
 def settings() -> Settings:
     return Settings(
         tts_provider="qwen3_tts",
-        tts_qwen3_url="http://100.87.251.9:8094",
+        tts_qwen3_url="http://100.76.3.59:8094",
         tts_qwen3_voice="aiden",
     )
 

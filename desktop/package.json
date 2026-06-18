@@ -1,6 +1,6 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -16,6 +16,11 @@
     "postinstall": "node electron/scripts/brand-dev-electron.cjs || true",
     "app:build": "npm run build && electron-builder --mac --dir",
     "app:dist": "npm run build && electron-builder --mac",
+    "app:dist:mac": "npm run build && electron-builder --mac",
+    "app:dist:win": "npm run build && electron-builder --win nsis --x64",
+    "app:dist:android": "node scripts/build-android-debug.cjs",
+    "android:sync": "npm run build && cap sync android",
+    "android:open": "cap open android",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
     "e2e:real": "playwright test --config=playwright.real.config.ts",
@@ -23,6 +28,8 @@
     "scenarios": "playwright test --config=playwright.scenarios.config.ts"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/core": "^8.4.0",
     "antd": "^5.19.4",
     "lucide-react": "^0.395.0",
     "mammoth": "^1.12.0",
@@ -34,6 +41,7 @@
     "zustand": "^4.5.4"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.0",
     "@playwright/test": "^1.60.0",
     "@types/node": "^20.14.10",
     "@types/react": "^18.3.3",
@@ -73,6 +81,23 @@
         "dmg",
         "zip"
       ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   }
 }

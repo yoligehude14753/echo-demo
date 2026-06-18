@@ -98,6 +98,24 @@ function DoorBreakdown({
       <div className="font-medium text-slate-700">
         7 道门处理结果（进程级 in-memory）
       </div>
+      <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+        <div className="rounded bg-slate-50 border border-slate-200 px-2 py-1">
+          <div className="text-slate-500">最近 RMS</div>
+          <div className="font-mono text-slate-800">{Math.round(stats.last_rms)}</div>
+        </div>
+        <div className="rounded bg-slate-50 border border-slate-200 px-2 py-1">
+          <div className="text-slate-500">活跃帧率</div>
+          <div className="font-mono text-slate-800">
+            {Math.round(stats.last_speech_ratio * 100)}%
+          </div>
+        </div>
+        <div className="rounded bg-slate-50 border border-slate-200 px-2 py-1">
+          <div className="text-slate-500">最近门控</div>
+          <div className="font-mono text-slate-800 truncate">
+            {stats.last_gate_reason ?? "—"}
+          </div>
+        </div>
+      </div>
       <table className="w-full">
         <tbody>
           {DOORS.map((d) => {

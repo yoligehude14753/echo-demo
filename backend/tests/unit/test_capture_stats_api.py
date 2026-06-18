@@ -28,6 +28,9 @@ _EXPECTED_FIELDS = {
     "stored",
     "last_chunk_at",
     "last_stored_at",
+    "last_rms",
+    "last_speech_ratio",
+    "last_gate_reason",
 }
 
 
@@ -57,11 +60,16 @@ def test_get_stats_returns_expected_fields_on_fresh_pipeline(client: TestClient)
     assert r.status_code == 200
     body = r.json()
     assert set(body.keys()) == _EXPECTED_FIELDS
-    int_fields = _EXPECTED_FIELDS - {"last_chunk_at", "last_stored_at"}
+    int_fields = _EXPECTED_FIELDS - {
+        "last_chunk_at",
+        "last_stored_at",
+        "last_gate_reason",
+    }
     for f in int_fields:
         assert body[f] == 0, f"expect {f}=0 on fresh pipeline, got {body[f]}"
     assert body["last_chunk_at"] is None
     assert body["last_stored_at"] is None
+    assert body["last_gate_reason"] is None
 
 
 def test_get_stats_reflects_recent_ingests(client: TestClient) -> None:
@@ -85,6 +93,7 @@ def test_get_stats_reflects_recent_ingests(client: TestClient) -> None:
     assert body["stored"] == 0
     assert body["last_chunk_at"] is not None
     assert body["last_stored_at"] is None  # 没 stored 过
+    assert body["last_gate_reason"] == "rms_too_low"
 
 
 def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:

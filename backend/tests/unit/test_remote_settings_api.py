@@ -113,8 +113,8 @@ def test_get_remote_settings_returns_masked_keys(
     # 未被 user 覆盖的字段 source=default
     stt = fields_by_key["stt_firered_url"]
     assert stt["source"] == "default"
-    # default 切到 Cloudflare HTTPS（2026-05-28 fix/llm-fast-cloudflare-default）
-    assert stt["value"].startswith("https://")
+    # default 切到 eight Tailscale endpoint（2026-06-18）
+    assert stt["value"] == "http://100.76.3.59:8090"
 
 
 @pytest.mark.unit

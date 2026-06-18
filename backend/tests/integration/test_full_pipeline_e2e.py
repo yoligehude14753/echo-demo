@@ -1,6 +1,6 @@
 """端到端集成：HTTP + WS + 真 Yunwu LLM 全链路。
 
-使用 FakeSTT/FakeDiarizer 替代 STT/Diarizer（heyi-bj 不稳定/不要求在 demo 环境），其它真实：
+使用 FakeSTT/FakeDiarizer 替代 STT/Diarizer（远端 STT 不要求在 demo 环境可达），其它真实：
 - LLM：真 Yunwu MiniMax-M2.7
 - RAG：真 BM25 + jieba（内存索引）
 - 事件总线：真 InMemoryEventBus

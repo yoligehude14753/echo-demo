@@ -34,7 +34,12 @@ import {
   workspaceScan,
   workspaceStatus,
 } from "@/api";
-import { apiUrl } from "@/runtime";
+import {
+  DEFAULT_ANDROID_BACKEND_BASE,
+  apiUrl,
+  configuredBackendBase,
+  setStoredBackendBase,
+} from "@/runtime";
 
 interface DataDirBreakdown {
   db: number;
@@ -89,18 +94,18 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
   },
   llm_fast_base_url: {
     label: "快速 LLM Base URL",
-    hint: "Qwen3-1.7B (heyi-bj :7860)；用于 intent 分类等低延时任务",
-    placeholder: "http://100.87.251.9:7860/v1",
+    hint: "qwen3.5-9b-local (eight :7860)；用于 intent 分类等低延时任务",
+    placeholder: "http://100.76.3.59:7860/v1",
   },
   stt_firered_url: {
     label: "STT URL",
-    hint: "FireRedASR2-AED (heyi-bj :8090)",
-    placeholder: "http://100.87.251.9:8090",
+    hint: "FireRedASR2-AED (eight :8090)",
+    placeholder: "http://100.76.3.59:8090",
   },
   tts_qwen3_url: {
     label: "TTS URL",
-    hint: "faster-qwen3-tts (heyi-bj :8094)",
-    placeholder: "http://100.87.251.9:8094",
+    hint: "faster-qwen3-tts (eight :8094)",
+    placeholder: "http://100.76.3.59:8094",
   },
   tts_qwen3_voice: {
     label: "TTS 音色",
@@ -161,6 +166,7 @@ export default function SettingsPanel({
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [form] = Form.useForm<Record<string, string>>();
+  const [backendBaseDraft, setBackendBaseDraft] = useState("");
   // P4-fix-rag-chat：工作区目录配置
   const [ws, setWs] = useState<WorkspaceStatusDTO | null>(null);
   const [wsBusy, setWsBusy] = useState(false);
@@ -217,6 +223,7 @@ export default function SettingsPanel({
       void refreshDataDir();
       void refreshRemote();
       void refreshWorkspace();
+      setBackendBaseDraft(configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE);
     }
   }, [open, refreshDataDir, refreshRemote, refreshWorkspace]);
 
@@ -391,6 +398,12 @@ export default function SettingsPanel({
     } catch (e) {
       message.error(`重启失败：${(e as Error).message}`);
     }
+  };
+
+  const onSaveBackendBase = () => {
+    const saved = setStoredBackendBase(backendBaseDraft);
+    setBackendBaseDraft(saved ?? DEFAULT_ANDROID_BACKEND_BASE);
+    message.success(saved ? `后端地址已保存：${saved}` : "已恢复默认后端地址");
   };
 
   const remoteFieldOrder = useMemo(
@@ -588,6 +601,47 @@ export default function SettingsPanel({
               </div>
             </Form>
           )}
+        </section>
+
+        <section>
+          <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
+            <Server className="w-4 h-4" />
+            <span>移动端连接</span>
+          </div>
+          <div className="bg-paper-150 rounded-md p-3 space-y-2">
+            <Input
+              size="small"
+              value={backendBaseDraft}
+              onChange={(e) => setBackendBaseDraft(e.target.value)}
+              placeholder={DEFAULT_ANDROID_BACKEND_BASE}
+              data-testid="mobile-backend-base"
+            />
+            <div className="flex gap-2">
+              <Button
+                size="small"
+                type="primary"
+                onClick={onSaveBackendBase}
+                data-testid="save-mobile-backend-base"
+              >
+                保存地址
+              </Button>
+              <Button
+                size="small"
+                onClick={() => {
+                  setBackendBaseDraft("");
+                  setStoredBackendBase("");
+                  message.success("已恢复默认后端地址");
+                }}
+              >
+                恢复默认
+              </Button>
+            </div>
+            <div className="text-[11px] text-ink-500 leading-relaxed">
+              APK 不会自动启动桌面 backend。真机演示时，把这里设为电脑局域网地址，
+              例如 <span className="font-mono">http://10.10.12.32:8769</span>；
+              模拟器默认使用 <span className="font-mono">{DEFAULT_ANDROID_BACKEND_BASE}</span>。
+            </div>
+          </div>
         </section>
 
         <section>

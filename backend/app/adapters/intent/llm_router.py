@@ -6,7 +6,7 @@
 3. 现有关键字命中（``@生成 PPT`` / ``@查...``）→ 对应意图（confidence=0.85）
 4. 问句信号（含问号 / 含"什么/介绍" 等）→ search_rag（confidence=0.7，默认走 RAG）
 5. 仅当以上全部未命中且非 ``@`` 前缀 → chat 兜底（前端会再走一层 RAG 兜底）
-6. ``@`` 前缀但关键字未命中 → 走 Fast LLM (Qwen3-1.7B) 分类
+6. ``@`` 前缀但关键字未命中 → 走 Fast LLM (qwen3.5-9b-local) 分类
 7. LLM 解析失败 / 服务不可达 → chat 兜底
 
 P4-fix-rag-chat（2026-05-28）：旧策略硬把"非 @ 前缀"全归 chat，导致用户
@@ -68,7 +68,7 @@ class LLMIntentRouter:
     """实现 ports.intent.IntentRouterPort。
 
     - 关键字命中 → 0.85 置信度直接返回
-    - 否则用 Fast LLM (Qwen3-1.7B) 出 JSON 标签
+    - 否则用 Fast LLM (qwen3.5-9b-local) 出 JSON 标签
     """
 
     def __init__(self, settings: Settings, llm: LLMPort) -> None:

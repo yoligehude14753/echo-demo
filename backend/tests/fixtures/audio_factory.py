@@ -2,7 +2,7 @@
 
 测试流程：
 1. fixture 已 cached → 直接读取
-2. TTS 可达（heyi-bj :8094 = faster-qwen3-tts）→ 合成 + 写文件
+2. TTS 可达（eight :8094 = faster-qwen3-tts）→ 合成 + 写文件
 3. 都不行 → return None → 测试 skip
 
 为什么不入 git：
@@ -104,7 +104,7 @@ async def get_audio_fixture(kind: str = "short") -> bytes | None:
     if cache.exists() and cache.stat().st_size > 30_000:
         return cache.read_bytes()
 
-    if not _can_connect("100.87.251.9", 8094):
+    if not _can_connect("100.76.3.59", 8094):
         return None
 
     script = SCRIPT_SHORT if kind == "short" else SCRIPT_LONG

@@ -5,7 +5,13 @@ import type {
   MeetingStateSnapshot,
   TranscriptSegment,
 } from "@/types";
-import { apiUrl, backendBase } from "@/runtime";
+import {
+  DEFAULT_ANDROID_BACKEND_BASE,
+  apiUrl,
+  backendBase,
+  configuredBackendBase,
+  isNativeMobile,
+} from "@/runtime";
 
 async function asJson<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
@@ -74,6 +80,9 @@ export interface CaptureStats {
   stored: number;
   last_chunk_at: string | null;
   last_stored_at: string | null;
+  last_rms: number;
+  last_speech_ratio: number;
+  last_gate_reason: string | null;
 }
 
 export async function getCaptureStats(): Promise<CaptureStats> {
@@ -271,6 +280,11 @@ export async function generateArtifact(req: {
 export function artifactDownloadUrl(artifactId: string): string {
   // 同步版本：浏览器 / vite dev 用相对路径；Electron file:// 下用 sync sentinel
   // 由于 backendBase() 是异步的，但下载/预览只在前端运行时拼接，简单起见在 file:// 下回退默认 host。
+  const configured = configuredBackendBase();
+  if (configured || isNativeMobile()) {
+    const host = configured ?? DEFAULT_ANDROID_BACKEND_BASE;
+    return `${host}/artifacts/${encodeURIComponent(artifactId)}/download`;
+  }
   if (
     typeof window !== "undefined" &&
     window.location.protocol === "file:"

@@ -36,6 +36,7 @@ interface ElectronEchoBridge {
 declare global {
   interface Window {
     echo?: ElectronEchoBridge;
+    Capacitor?: { isNativePlatform?: () => boolean };
   }
   // 由 vite.config.ts define 注入；编译时替换为 "0.2.0" 字面量
   const __APP_VERSION__: string;
@@ -43,8 +44,70 @@ declare global {
 
 let cachedBase: string | null = null;
 
+export const MOBILE_BACKEND_BASE_KEY = "echodesk.mobileBackendBase";
+export const DEFAULT_ANDROID_BACKEND_BASE = "http://10.0.2.2:8769";
+
+function normalizeBackendBase(raw: string | null | undefined): string | null {
+  const v = raw?.trim().replace(/\/+$/, "");
+  if (!v) return null;
+  if (!/^https?:\/\//.test(v)) return `http://${v}`;
+  return v;
+}
+
+function envBackendBase(): string | null {
+  const env = (import.meta as { env?: Record<string, string | undefined> }).env;
+  return normalizeBackendBase(
+    env?.VITE_ECHODESK_API_BASE ?? env?.VITE_API_BASE_URL,
+  );
+}
+
+export function storedBackendBase(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return normalizeBackendBase(window.localStorage.getItem(MOBILE_BACKEND_BASE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredBackendBase(value: string): string | null {
+  if (typeof window === "undefined") return null;
+  const normalized = normalizeBackendBase(value);
+  try {
+    if (normalized) {
+      window.localStorage.setItem(MOBILE_BACKEND_BASE_KEY, normalized);
+    } else {
+      window.localStorage.removeItem(MOBILE_BACKEND_BASE_KEY);
+    }
+  } catch {
+    return normalized;
+  }
+  cachedBase = null;
+  return normalized;
+}
+
+export function isNativeMobile(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.Capacitor?.isNativePlatform?.() === true;
+}
+
+export function configuredBackendBase(): string | null {
+  return storedBackendBase() ?? envBackendBase();
+}
+
 export async function backendBase(): Promise<string> {
   if (cachedBase !== null) return cachedBase;
+
+  const configured = configuredBackendBase();
+  if (configured) {
+    cachedBase = configured;
+    return cachedBase;
+  }
+
+  if (isNativeMobile()) {
+    cachedBase = DEFAULT_ANDROID_BACKEND_BASE;
+    return cachedBase;
+  }
 
   // file:// 协议（Electron prod）→ 必须走绝对地址
   if (typeof window !== "undefined" && window.location.protocol === "file:") {

@@ -135,6 +135,7 @@ class AudioCapture {
           sampleRate: CAPTURE_SAMPLE_RATE,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
         video: false,
       });

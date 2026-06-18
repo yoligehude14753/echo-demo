@@ -109,7 +109,7 @@ async def tts_speak(
     if not result.pcm:
         raise HTTPException(status_code=400, detail="empty text")
     if is_silent(result):
-        # cold-start / heyi 偶发：上游返回了字节但 RMS=0；如果默默把这串"假
+        # cold-start / remote TTS 偶发：上游返回了字节但 RMS=0；如果默默把这串"假
         # 装合成成功"的静音 PCM 传回前端，UI 不会报错，只是没声音 —— 这正是
         # 用户口中的"TTS 完全失效"。这里诚实告诉前端：合成了，但是无声。
         logger.warning(
@@ -125,7 +125,7 @@ async def tts_speak(
             detail=(
                 f"tts_silent_output: upstream returned {len(result.pcm)} bytes "
                 f"PCM but rms={result.rms:.1f} (< {SILENCE_RMS_FLOOR}); "
-                "可能 heyi qwen3-tts 冷启动或被限流，请稍后重试"
+                "可能 eight qwen3-tts 冷启动或被限流，请稍后重试"
             ),
         )
     logger.info(

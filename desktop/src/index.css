@@ -72,3 +72,90 @@ body {
 .brand {
   letter-spacing: -0.01em;
 }
+
+@media (max-width: 767px) {
+  .echodesk-shell {
+    min-width: 0;
+  }
+
+  .app-header {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+    gap: 10px;
+  }
+
+  .app-header-status {
+    min-width: 0;
+    overflow-x: auto;
+    justify-content: flex-end;
+    gap: 8px;
+    scrollbar-width: none;
+  }
+
+  .app-header-status::-webkit-scrollbar {
+    display: none;
+  }
+
+  [data-testid="workspace-bar"] {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+
+  [data-testid="workspace-bar"]::-webkit-scrollbar {
+    display: none;
+  }
+
+  .echodesk-main-layout {
+    flex-direction: column !important;
+  }
+
+  .echodesk-meeting-sider {
+    display: none !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    flex: 0 0 0 !important;
+    border-right: 0 !important;
+  }
+
+  .echodesk-content {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 0;
+    flex-direction: column !important;
+  }
+
+  .echodesk-transcript-pane {
+    flex: 1 1 auto !important;
+    min-height: 0;
+    border-right: 0 !important;
+  }
+
+  .echodesk-transcript-pane > div:first-child {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .echodesk-output-pane {
+    width: 100% !important;
+    flex: 0 0 26vh !important;
+    border-top: 1px solid #e5e5e5;
+  }
+
+  [data-testid="command-bar"] {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+
+  [data-testid="command-bar"] textarea {
+    font-size: 13px !important;
+  }
+
+  .ant-modal {
+    max-width: calc(100vw - 24px) !important;
+  }
+}
