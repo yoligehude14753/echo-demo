@@ -216,7 +216,7 @@ function MicStep({
       </div>
       <div className="text-ink-600">
         EchoDesk 需要麦克风权限才能转写会议。所有音频只发送给你配置的
-        STT 服务（默认是 heyi-bj 内网，不出公网）。
+        STT 服务（默认是 eight 内网，不出公网）。
       </div>
 
       <div className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]">

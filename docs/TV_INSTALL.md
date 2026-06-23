@@ -1,0 +1,86 @@
+# EchoDesk 智能电视安装
+
+当前 TV 版本面向 Android TV、Google TV、以及常见国产 Android / AOSP 智能电视。
+这类电视通常有「我的应用」入口，允许安装 APK，或可以打开 ADB 网络调试。
+
+## 下载
+
+从 GitHub Release 下载：
+
+- `EchoDesk-0.2.5-smart-tv.apk`：电视直接安装用 APK。
+- `EchoDesk-0.2.5-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
+- `https://yoligehude14753.github.io/echo-demo/tv-install.html`：电视浏览器安装页，可用遥控器直接选择下载按钮。
+
+## 方法 A：电视浏览器安装
+
+1. 让电视连接网络。
+2. 用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/tv-install.html`。
+3. 选择「下载电视 APK」。
+4. 下载完成后按系统提示允许安装未知来源应用。
+5. 安装完成后，从电视「我的应用」打开 EchoDesk。
+
+## 方法 B：电脑一键安装
+
+适合会议室电视已经打开开发者模式 / ADB 调试的情况。
+
+1. 让电脑和电视连接同一个局域网。
+2. 在电视设置中打开开发者模式和网络调试 / ADB 调试。
+3. 查到电视 IP。
+4. 解压 `EchoDesk-0.2.5-smart-tv-oneclick.zip`。
+5. macOS：
+
+```bash
+./install-tv-macos.sh 192.168.1.23
+```
+
+6. Windows PowerShell：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.1.23
+```
+
+如果电视弹出 RSA 调试授权，先选择允许，再重新运行脚本。
+
+## 方法 C：U 盘安装
+
+1. 把 `EchoDesk-0.2.5-smart-tv.apk` 拷到 U 盘。
+2. 在电视文件管理器里打开 APK。
+3. 按提示允许安装未知来源应用。
+
+## 后端连接
+
+TV APK 是 EchoDesk 前端客户端，不包含 Python backend，也不包含真实 API key。
+默认连接 EchoDesk 公网 demo backend：
+
+```text
+https://echodesk.yoliyoli.uk
+```
+
+模型服务（STT / TTS / Fast LLM）在 eight 上，客户端只连 EchoDesk backend；
+真实 key 只在服务端配置，不会打进 APK。
+
+如需内网调试，也可以临时改成局域网 backend。先在电脑上启动：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8769
+```
+
+然后在电视端 EchoDesk 设置里填电脑局域网地址，例如：
+
+```text
+http://192.168.1.20:8769
+```
+
+## 兼容边界
+
+- 可安装：Android TV / Google TV / 国产 Android 或 AOSP 智能电视 / Android 电视盒子。
+- 不可直接安装 APK：Samsung Tizen、LG webOS、Apple TV。
+- 非 Android 电视要使用 EchoDesk，建议接一个 Android TV 盒子，或走后续 PWA / 浏览器版本。
+
+## 安全说明
+
+- APK 与一键安装包不包含真实 API key。
+- STT / TTS / Fast LLM 访问通过 EchoDesk backend 的配置走 eight endpoint。
+- 公网 demo backend 已走 HTTPS；后续正式客户分发还需要 release 签名 APK / AAB、设备注册和限流。

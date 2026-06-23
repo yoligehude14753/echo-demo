@@ -51,6 +51,141 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.5] – 2026-06-23
+
+Public demo backend hotfix：让 Android / TV 版本默认连公网 EchoDesk demo backend，
+外部用户安装后可直接使用，同时不把模型 key 打进客户端包。
+
+### 新增
+
+- Android / TV 默认后端地址改为 `https://echodesk.yoliyoli.uk`，不再要求用户先在同局域网启动 Mac backend。
+- 后端新增 `PUBLIC_DEMO_MODE`：公网 demo 模式下 `/admin/*` 默认禁止访问，避免暴露本机路径、日志和远端 key 配置入口。
+- `/admin/*` 在 public demo 模式下仅接受服务端配置的 `DEBUG_TOKEN`，支持 `Authorization: Bearer ...` 或 `X-Echo-Admin-Token`。
+
+### 配置变更
+
+- Android 版本升到 `versionCode=205`、`versionName=0.2.5`。
+- 桌面包版本升到 `0.2.5`。
+
+### 已知问题
+
+- 客户端仍不内置任何模型 key；公网 backend 可以保护 key，但不能完全阻止抓包复用接口，后续需要设备注册、限流和签名校验增强。
+- Mac DMG / Windows EXE / Android APK 仍是 demo 分发形态；正式商店分发还需要签名、notarization 和发布渠道账号。
+
+---
+
+## [0.2.4] – 2026-06-23
+
+TV meeting-room hotfix：补齐智能电视安装后的值守能力，以及会后扫码保存/清理会议资料。
+
+### 新增
+
+- Android TV APK 增加开机自启 receiver：设备重启后自动尝试拉起 EchoDesk，适合会议室常驻大屏。
+- 会议结束后右侧纪要区新增「扫码保存」入口：大屏生成 QR，手机扫码打开轻量分享页，可保存会议纪要并下载产物。
+- 分享页支持合并会议纪要 todo 中关联的产物，以及当前前端会话已知的本会议产物。
+- 扫码弹窗提供复制链接、打开分享页、下载 Markdown 纪要、删除本会议输出。
+
+### 修复
+
+- 修复会议待办「执行」生成产物时丢失 `meeting_id` / `todo_id` 的问题；产物现在能正确归属本会议并回写 todo。
+- 普通会议中 `@生成 PDF/PPT/Excel/...` 也会携带当前 `meeting_id`，避免产物只进入全局 outputs。
+
+### 配置变更
+
+- Android 版本升到 `versionCode=204`、`versionName=0.2.4`。
+- 新增前端依赖 `qrcode` / `@types/qrcode`，仅在打开扫码弹窗时动态加载 QR 生成逻辑。
+
+### 已知问题
+
+- 开机自启受 Android TV 厂商限制：部分电视需要在系统设置中允许自启动/后台启动，或不能在 boot broadcast 后自动拉起 Activity。
+- APK 仍是会议室内测 debug 包；正式外部分发需要 release 签名与 HTTPS backend。
+- 非 Android TV（Samsung Tizen、LG webOS、Apple TV）仍不能直接安装 APK。
+
+---
+
+## [0.2.3] – 2026-06-23
+
+Smart TV install hotfix：把 v0.2.2 的 Android TV 兼容继续补成面向会议室电视的一键安装交付。
+
+### 新增
+
+- 新增 `EchoDesk-0.2.3-smart-tv.apk`，作为面向 Android / AOSP 智能电视的直接安装包名。
+- 新增 `EchoDesk-0.2.3-smart-tv-oneclick.zip`，内含 APK、macOS ADB 安装脚本和 Windows PowerShell 安装脚本。
+- 新增 `docs/tv-install.html`，电视浏览器可用遥控器打开大按钮下载 APK 或一键安装包。
+- 新增 `docs/TV_INSTALL.md`，明确 Android TV / 国产 Android TV / AOSP TV / 非 Android TV 的兼容边界。
+- 新增 TV 安装页 e2e，覆盖 1920x1080 电视视口、下载链接、遥控器焦点和复制安装命令交互。
+
+### 修复
+
+- 安装文档统一到 `0.2.3` TV 资产命名，避免 debug APK、smart TV APK 和 Release 名称不一致。
+
+### 已知问题
+
+- 一键安装依赖电视开启 ADB 网络调试；不支持 ADB 的电视仍需浏览器下载或 U 盘安装。
+- Samsung Tizen、LG webOS、Apple TV 不能安装 APK，需要外接 Android 盒子或后续浏览器/PWA 版本。
+
+---
+
+## [0.2.2] – 2026-06-22
+
+TV compatibility hotfix：让 Android 包能在会议室智能电视 / Android TV 上直接安装、出现在电视桌面并用遥控器完成核心操作。
+
+### 新增
+
+- Android manifest 增加 `LEANBACK_LAUNCHER`，电视桌面可直接显示 EchoDesk。
+- Android 包增加 TV banner，避免电视应用列表里只出现默认手机图标。
+- 声明触摸屏 / 麦克风为非必需硬件，兼容没有触摸屏或没有内置麦克风的会议室电视。
+- 新增 1920x1080 TV 视口模拟点击测试，覆盖电视横屏三栏布局、知识库入口、设置入口和遥控器确认键路径。
+
+### 修复
+
+- 大横屏下放大顶部状态、工作区栏、命令输入区和右侧产物/纪要区域，避免电视远距离观看时过密。
+- 增加全局 focus-visible 焦点环；电视遥控器移动焦点时能看清当前选中控件。
+- 知识库目录 tag 支持键盘 / 遥控器 Enter 打开，不再只支持鼠标点击。
+
+### 配置变更
+
+- 版本号统一到 `0.2.2`，Android APK 使用 `versionCode=202`、`versionName=0.2.2`。
+
+### 已知问题
+
+- TV 包仍是 debug APK，适合会议室内测 / 侧载；正式分发需要 release 签名 APK/AAB。
+- 电视端需要能访问 EchoDesk backend。若 backend 在电脑上运行，需在设置里填写电视可访问的局域网地址。
+
+---
+
+## [0.2.1] – 2026-06-18
+
+Demo hotfix：补齐用户反馈的知识库可见性、远场转写诊断、移动端演示包和远端模型迁移。
+
+### 新增
+
+- 工作区 / 知识库面板展示已索引文档、chunk 数、文档来源，并支持单条删除与打开设置。
+- 设置面板新增移动端连接配置，Android debug APK 默认连接模拟器宿主机 `10.0.2.2:8769`。
+- 捕获状态面板展示最近 RMS、语音帧比例和门控原因，便于定位“离远了声音记录不清楚”是麦克风输入、门控还是 STT 识别问题。
+
+### 修复
+
+- 移动端窄屏布局不再因为 Ant Design sider 样式压成 `width: 0`。
+- `WORKSPACE_MAX_FILE_MB` 默认提高到 100MB，避免常见 PDF 被知识库扫描静默跳过。
+- “授权工作区”相关文案收敛为“知识库 / 工作区”，避免被误解为激活码；当前 demo 不设激活码门槛。
+
+### 配置变更
+
+- STT / TTS / Fast LLM 默认迁到 eight (`100.76.3.59`)：
+  - STT: `http://100.76.3.59:8090`
+  - TTS: `http://100.76.3.59:8094`
+  - Fast LLM: `http://100.76.3.59:7860/v1`, model `qwen3.5-9b-local`
+- `.env.example` 去掉真实 API key 示例，发布源码包只保留空占位。
+- 版本号统一到 `0.2.1`，Android debug APK 使用 `versionName=0.2.1`。
+
+### 已知问题
+
+- Android 包是 debug APK，仅用于内部 demo；正式上架需 release 签名 APK/AAB。
+- macOS / Windows 包仍未做正式代码签名；首次打开可能需要系统安全确认。
+
+---
+
 ## [0.2.0] – 2026-05-28
 
 P2 / P3 阶段集中迭代：可视化诊断、远端服务可配置、首次启动引导。
@@ -82,7 +217,7 @@ P2 / P3 阶段集中迭代：可视化诊断、远端服务可配置、首次启
   LLM / Skill 失败时前端弹错误 toast，textarea 不再卡死；后端推送
   `artifact.failed` 事件，含 `reason` + `intent`。
 - **远端降级链路**（P2.3）
-  Yunwu / heyi-bj 任一不可用时 backend 自动切到本地 Qwen3-1.7B；
+  Yunwu / 远端 fast LLM 任一不可用时 backend 自动降级；
   顶栏 remote pill 显示「降级中」并附理由。
 - **DB migration 框架**（P2.4）
   SQLite schema 改动统一走 `backend/app/adapters/repo/migrations/`，
@@ -137,8 +272,8 @@ EchoDesk Phase 1 最小可用版（M1–M4 合并）。
 - **多文档 + 会议 RAG**：jieba 分词 + BM25Okapi，9 query 并发 1.28s，
   `doc_cite=100%`。
 - **声纹识别**：SpeechBrain ECAPA-TDNN 默认参数，本地 CPU 推理。
-- **STT / TTS / LLM**：FireRedASR2-AED + Qwen3 TTS（heyi-bj 100.87.251.9）+
-  Yunwu MiniMax-M2.7（主）+ 本地 Qwen3-1.7B（fast）。
+- **STT / TTS / LLM**：FireRedASR2-AED + Qwen3 TTS +
+  Yunwu MiniMax-M2.7（主）+ fast Qwen 通道。
 - **Web Search 仲裁**：Inspiro 主 + Tavily 备 + DDG 兜底。
 - **Electron + React 18 UI**：Ant Design 5 + Tailwind，WebSocket 推送会议状态
   + 笔记；BackendSupervisor 自动 spawn / 监控 / 重启 Python backend。

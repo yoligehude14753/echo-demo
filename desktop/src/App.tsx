@@ -42,8 +42,8 @@ export default function App(): JSX.Element {
   const onboarding = useOnboarding();
 
   return (
-    <Layout className="!h-screen !bg-paper-50 !overflow-hidden">
-      <Header className="app-drag flex items-center justify-between !bg-paper-50 !px-5 !h-12 border-b border-paper-300 shrink-0">
+    <Layout className="echodesk-shell !h-screen !bg-paper-50 !overflow-hidden">
+      <Header className="app-header app-drag flex items-center justify-between !bg-paper-50 !px-5 !h-12 border-b border-paper-300 shrink-0">
         <div className="flex items-center gap-2.5">
           <span className="w-2 h-2 rounded-full bg-accent shadow-[0_0_0_3px_rgba(16,163,127,0.18)]" />
           <span className="brand font-semibold text-[15px] text-ink-900">
@@ -61,7 +61,7 @@ export default function App(): JSX.Element {
             </button>
           </Tooltip>
         </div>
-        <div className="app-no-drag flex items-center gap-3 text-[11px] text-ink-500">
+        <div className="app-header-status app-no-drag flex items-center gap-3 text-[11px] text-ink-500">
           <StatusBar
             ttsHealth={tts.synthHealth}
             ttsEnabled={tts.enabled}
@@ -107,12 +107,12 @@ export default function App(): JSX.Element {
 
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
-      <WorkspaceBar />
+      <WorkspaceBar onOpenSettings={() => setSettingsOpen(true)} />
 
-      <Layout className="!bg-paper-50 !flex-1 !min-h-0 !overflow-hidden">
+      <Layout className="echodesk-main-layout !bg-paper-50 !flex-1 !min-h-0 !overflow-hidden">
         <Sider
           width={260}
-          className="!bg-paper-150 border-r border-paper-300 !px-2 !py-3 !overflow-y-auto"
+          className="echodesk-meeting-sider !bg-paper-150 border-r border-paper-300 !px-2 !py-3 !overflow-y-auto"
         >
           <div className="flex items-center gap-1.5 px-2 mb-2 text-ink-500 text-[11px] uppercase tracking-wider">
             <MessageSquare className="w-3 h-3" />
@@ -121,8 +121,8 @@ export default function App(): JSX.Element {
           <MeetingList />
         </Sider>
 
-        <Content className="flex !bg-paper-50 !min-h-0 !overflow-hidden">
-          <div className="flex-1 min-w-0 min-h-0 border-r border-paper-300 flex flex-col">
+        <Content className="echodesk-content flex !bg-paper-50 !min-h-0 !overflow-hidden">
+          <div className="echodesk-transcript-pane flex-1 min-w-0 min-h-0 border-r border-paper-300 flex flex-col">
             <div className="flex items-center gap-2 px-6 h-11 border-b border-paper-300 shrink-0">
               <Mic className="w-3.5 h-3.5 text-ink-500" />
               <span className="text-[13px] text-ink-700 font-medium">
@@ -145,7 +145,7 @@ export default function App(): JSX.Element {
             </div>
           </div>
 
-          <div className="w-[440px] shrink-0 min-h-0 flex flex-col bg-paper-50 overflow-hidden">
+          <div className="echodesk-output-pane w-[440px] shrink-0 min-h-0 flex flex-col bg-paper-50 overflow-hidden">
             <MinutesView />
             <ArtifactPanel />
           </div>

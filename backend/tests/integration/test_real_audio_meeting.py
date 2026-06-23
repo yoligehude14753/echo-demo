@@ -1,8 +1,8 @@
 """PR-13: 真音频 → STT → diarize → minutes E2E。
 
 依赖：
-- heyi-bj :8090 STT (FireRed) 在线（不可达 → skip）
-- heyi-bj :8094 TTS 在线（生成 audio fixture，不可达 + 无 cache → skip）
+- eight :8090 STT (FireRed) 在线（不可达 → skip）
+- eight :8094 TTS 在线（生成 audio fixture，不可达 + 无 cache → skip）
 - yunwu LLM 可达（生成 minutes）
 """
 
@@ -44,8 +44,8 @@ def _yunwu_alive() -> bool:
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not _can_connect("100.87.251.9", 8090),
-        reason="heyi-bj :8090 STT (FireRed) 不可达",
+        not _can_connect("100.76.3.59", 8090),
+        reason="eight :8090 STT (FireRed) 不可达",
     ),
     pytest.mark.skipif(not _yunwu_alive(), reason="Yunwu LLM 不可达"),
 ]

@@ -67,6 +67,9 @@ class AmbientStats:
     stored: int = 0  # 末态: 真正写入 ambient_segments 表
     last_chunk_at: str | None = None  # ISO timestamp 最近 chunk 进入时间
     last_stored_at: str | None = None  # ISO timestamp 最近一次成功入库时间
+    last_rms: float = 0.0  # 最近 chunk 的整段 int16 RMS
+    last_speech_ratio: float = 0.0  # 最近 chunk 的 20ms 活跃帧比例
+    last_gate_reason: str | None = None  # 最近 chunk 的前置门控结果（ok/rms_too_low/...）
 
 
 class _STTCircuitOpenError(RuntimeError):
@@ -152,6 +155,9 @@ class AmbientCapturePipeline:
             frame_rms_threshold=self._settings.ambient_frame_rms_threshold,
             min_speech_frame_ratio=self._settings.ambient_min_speech_frame_ratio,
         )
+        self._stats.last_rms = round(gate.rms, 2)
+        self._stats.last_speech_ratio = round(gate.speech_ratio, 4)
+        self._stats.last_gate_reason = gate.reason
 
         stt_segs: list[TranscriptSegment] = []
         speaker_id: str | None = None

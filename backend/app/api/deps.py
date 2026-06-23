@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import Depends
+from typing import Annotated
+
+from fastapi import Depends, Header, HTTPException, status
 
 from app.adapters.diarizer import make_diarizer
 from app.adapters.event_bus.inmemory import InMemoryEventBus
@@ -22,6 +24,29 @@ _diarizer_singleton: DiarizerPort | None = None
 _speaker_registry_singleton: SpeakerRegistry | None = None
 _auto_detector_singleton: AutoMeetingDetector | None = None
 _meeting_state_singleton: MeetingState | None = None
+
+
+def require_admin_access(
+    settings: Settings = Depends(get_settings),
+    authorization: Annotated[str | None, Header()] = None,
+    x_echo_admin_token: Annotated[str | None, Header(alias="X-Echo-Admin-Token")] = None,
+) -> None:
+    """Protect local-admin endpoints when the backend is exposed as a public demo."""
+    if not settings.public_demo_mode:
+        return
+
+    expected = settings.debug_token.strip()
+    if expected:
+        if x_echo_admin_token == expected:
+            return
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme.lower() == "bearer" and token == expected:
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="admin endpoints are disabled in public demo mode",
+    )
 
 
 def get_llm_singleton(

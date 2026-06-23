@@ -1,4 +1,4 @@
-"""LLM Port：屏蔽 Yunwu / heyi-local 等供应商差异。"""
+"""LLM Port：屏蔽 Yunwu / eight-local 等供应商差异。"""
 
 from __future__ import annotations
 

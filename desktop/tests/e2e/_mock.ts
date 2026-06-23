@@ -182,6 +182,9 @@ export async function installEchoMock(
             stored: 0,
             last_chunk_at: null,
             last_stored_at: null,
+            last_rms: 0,
+            last_speech_ratio: 0,
+            last_gate_reason: null,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -214,8 +217,38 @@ export async function installEchoMock(
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      if ((path.startsWith("/meetings?") || path.startsWith("/api/meetings?")) && method === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if ((path.startsWith("/capture/recent") || path.startsWith("/api/capture/recent")) && method === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (path.match(/^\/(api\/)?meetings\/[^/]+\/transcript$/) && method === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (path.match(/^\/(api\/)?meetings\/[^/]+\/minutes$/) && method === "GET") {
+        return new Response(JSON.stringify({ detail: "minutes not generated yet" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (path.match(/^\/(api\/)?meetings\/[^/]+\/artifacts$/) && method === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       // 生成产物：先 ack 200，UI 显示生成中；2 步：测试触发 ws artifact.ready
-      if (path === "/artifacts/generate" && method === "POST") {
+      if ((path === "/artifacts/generate" || path === "/api/artifacts/generate") && method === "POST") {
         ctrl._seq += 1;
         const body = JSON.parse(bodyText ?? "{}");
         const artifactId = `mock-${body.artifact_type}-${Date.now()}`;
@@ -233,8 +266,20 @@ export async function installEchoMock(
         };
         return new Response(JSON.stringify(fake), { status: 200, headers: { "Content-Type": "application/json" } });
       }
+      if (path.match(/^\/(api\/)?meetings\/[^/]+\/outputs$/) && method === "DELETE") {
+        return new Response(
+          JSON.stringify({
+            meeting_id: "mock-meeting",
+            minutes_cleared: true,
+            artifact_ids: [],
+            artifacts_deleted: 0,
+            missing_artifact_ids: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       // meetings 类操作
-      if (path.startsWith("/meetings/") && method === "POST") {
+      if ((path.startsWith("/meetings/") || path.startsWith("/api/meetings/")) && method === "POST") {
         return new Response(JSON.stringify({ status: "started", meeting_id: "x" }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       // 其它走真实 fetch
@@ -339,12 +384,14 @@ export async function publishArtifactReady(
   artifactId?: string,
   title?: string,
   filePath?: string,
+  meetingId?: string,
 ): Promise<string> {
   const id = artifactId ?? `mock-${artifactType}-${Date.now()}`;
   await mock.publish({
     type: "artifact.ready",
     seq,
     ts: new Date().toISOString(),
+    meeting_id: meetingId,
     payload: {
       artifact_id: id,
       artifact_type: artifactType,

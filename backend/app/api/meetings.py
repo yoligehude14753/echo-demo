@@ -18,10 +18,17 @@ artifacts 的产品决策（PR body 详述）：现 schema ``artifacts`` 无 mee
 
 from __future__ import annotations
 
+import html
 import json
+import re
+import shutil
+from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
@@ -45,6 +52,20 @@ from app.use_cases.meeting_state import MeetingState
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 _pipeline: MeetingPipeline | None = None
+_ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
+
+
+class ClearMeetingOutputsRequest(BaseModel):
+    artifact_ids: list[str] = Field(default_factory=list)
+    clear_minutes: bool = True
+
+
+class ClearMeetingOutputsResponse(BaseModel):
+    meeting_id: str
+    minutes_cleared: bool
+    artifact_ids: list[str]
+    artifacts_deleted: int
+    missing_artifact_ids: list[str]
 
 
 def get_meeting_pipeline(
@@ -104,6 +125,181 @@ def reset_meeting_pipeline() -> None:
     """测试用：清掉缓存的单例。"""
     global _pipeline  # noqa: PLW0603
     _pipeline = None
+
+
+def _split_artifact_ids(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    out: list[str] = []
+    for item in raw.replace("\n", ",").split(","):
+        v = item.strip()
+        if v and _ARTIFACT_ID_RE.fullmatch(v) and v not in out:
+            out.append(v)
+    return out
+
+
+def _artifact_ids_from_minutes(minutes_json: str | None) -> list[str]:
+    if not minutes_json:
+        return []
+    try:
+        data = json.loads(minutes_json)
+    except json.JSONDecodeError:
+        return []
+    ids: list[str] = []
+    for todo in data.get("todos", []) or []:
+        if not isinstance(todo, dict):
+            continue
+        artifact_id = todo.get("artifact_id")
+        if (
+            isinstance(artifact_id, str)
+            and _ARTIFACT_ID_RE.fullmatch(artifact_id)
+            and artifact_id not in ids
+        ):
+            ids.append(artifact_id)
+    return ids
+
+
+def _artifact_build_dir(settings: Settings, artifact_id: str) -> Path | None:
+    if not _ARTIFACT_ID_RE.fullmatch(artifact_id):
+        return None
+    base = Path(settings.skill_executor_build_dir).expanduser().resolve()
+    candidate = (base / artifact_id).resolve()
+    if candidate == base or base not in candidate.parents:
+        return None
+    return candidate
+
+
+def _artifact_download_info(settings: Settings, artifact_id: str) -> dict[str, object] | None:
+    build_dir = _artifact_build_dir(settings, artifact_id)
+    if build_dir is None or not build_dir.exists():
+        return None
+    candidates = sorted(build_dir.glob("output.*"))
+    if not candidates:
+        return None
+    output = candidates[0]
+    title = artifact_id
+    artifact_type = output.suffix.lstrip(".") or "file"
+    size_bytes = output.stat().st_size
+    meta_path = build_dir / "meta.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            title = str(meta.get("title") or title)
+            artifact_type = str(meta.get("artifact_type") or meta.get("ext") or artifact_type)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {
+        "artifact_id": artifact_id,
+        "title": title,
+        "artifact_type": artifact_type,
+        "size_bytes": size_bytes,
+        "download_url": f"/artifacts/{quote(artifact_id)}/download",
+    }
+
+
+def _format_bytes(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / 1024 / 1024:.1f} MB"
+
+
+def _share_html(
+    *,
+    meeting_id: str,
+    title: str,
+    summary: str | None,
+    sections: list[dict[str, object]],
+    decisions: list[str],
+    artifacts: list[dict[str, object]],
+) -> str:
+    safe_title = html.escape(title)
+    safe_meeting = html.escape(meeting_id)
+    summary_html = (
+        f'<p class="summary">{html.escape(summary)}</p>'
+        if summary
+        else '<p class="empty">会议纪要尚未生成或已被删除。</p>'
+    )
+    section_html = ""
+    for sec in sections:
+        heading = html.escape(str(sec.get("heading") or "议题"))
+        raw_bullets = sec.get("bullets")
+        bullets: list[object] = raw_bullets if isinstance(raw_bullets, list) else []
+        bullet_html = "".join(f"<li>{html.escape(str(b))}</li>" for b in bullets)
+        section_html += f"<section><h2>{heading}</h2><ul>{bullet_html}</ul></section>"
+    decisions_html = ""
+    if decisions:
+        decisions_html = (
+            "<section><h2>决议</h2><ul>"
+            + "".join(f"<li>{html.escape(str(d))}</li>" for d in decisions)
+            + "</ul></section>"
+        )
+    artifact_html = ""
+    if artifacts:
+        rows = []
+        for item in artifacts:
+            size_bytes = item.get("size_bytes")
+            size = int(size_bytes) if isinstance(size_bytes, int | str) else 0
+            rows.append(
+                '<a class="artifact" href="{url}">'
+                "<span><strong>{title}</strong><em>{kind} · {size}</em></span>"
+                "<b>下载</b>"
+                "</a>".format(
+                    url=html.escape(str(item["download_url"])),
+                    title=html.escape(str(item["title"])),
+                    kind=html.escape(str(item["artifact_type"])),
+                    size=html.escape(_format_bytes(size)),
+                )
+            )
+        artifact_html = (
+            '<section><h2>会议产物</h2><div class="artifacts">' + "".join(rows) + "</div></section>"
+        )
+    else:
+        artifact_html = '<section><h2>会议产物</h2><p class="empty">暂无可下载产物。</p></section>'
+
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>{safe_title} · EchoDesk</title>
+  <style>
+    :root {{ color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    body {{ margin: 0; background: #f7f5f2; color: #26211d; }}
+    main {{ max-width: 760px; margin: 0 auto; padding: 28px 18px 44px; }}
+    header {{ margin-bottom: 24px; }}
+    .brand {{ color: #10a37f; font-size: 13px; font-weight: 700; letter-spacing: .02em; }}
+    h1 {{ margin: 8px 0 6px; font-size: clamp(24px, 7vw, 38px); line-height: 1.12; }}
+    .mid {{ color: #8b8178; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }}
+    .summary {{ font-size: 16px; line-height: 1.8; background: white; border: 1px solid #e4ded7; border-radius: 14px; padding: 16px; }}
+    section {{ margin-top: 22px; }}
+    h2 {{ font-size: 16px; margin: 0 0 10px; }}
+    ul {{ margin: 0; padding-left: 20px; line-height: 1.8; }}
+    .empty {{ color: #8b8178; background: #fff; border: 1px dashed #ded7cf; border-radius: 12px; padding: 14px; }}
+    .artifacts {{ display: grid; gap: 10px; }}
+    .artifact {{ display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 14px; border: 1px solid #e4ded7; border-radius: 14px; background: white; color: inherit; text-decoration: none; }}
+    .artifact strong {{ display: block; font-size: 15px; line-height: 1.3; }}
+    .artifact em {{ display: block; margin-top: 4px; color: #8b8178; font-size: 12px; font-style: normal; }}
+    .artifact b {{ flex: 0 0 auto; color: #0b7f64; font-size: 13px; }}
+    footer {{ margin-top: 32px; color: #9a9188; font-size: 12px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="brand">EchoDesk 会议资料</div>
+      <h1>{safe_title}</h1>
+      <div class="mid">{safe_meeting}</div>
+    </header>
+    {summary_html}
+    {section_html}
+    {decisions_html}
+    {artifact_html}
+    <footer>扫码页面仅用于保存会议纪要与下载产物；删除请回到会议室大屏 EchoDesk 操作。</footer>
+  </main>
+</body>
+</html>"""
 
 
 @router.get("/current")
@@ -264,6 +460,112 @@ async def get_meeting_artifacts(
     if meeting is None:
         raise HTTPException(status_code=404, detail="meeting not found")
     return []
+
+
+@router.get("/{meeting_id}/share", response_class=HTMLResponse)
+async def share_meeting(
+    meeting_id: str,
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    artifact_ids: str | None = Query(None),
+) -> HTMLResponse:
+    """手机扫码保存会议资料页。
+
+    产物来源有两类：
+    - 已落入 minutes_json.todos[*].artifact_id 的产物；
+    - 前端当前会话内知道、但后端尚未持久化 meeting_id 关联的产物 id（artifact_ids query）。
+
+    页面只提供保存/下载，不提供删除；删除必须回到大屏 UI 上确认执行。
+    """
+    meeting = await repository.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+
+    title = meeting.display_title or meeting.title or meeting_id
+    summary: str | None = None
+    sections: list[dict[str, object]] = []
+    decisions: list[str] = []
+    if meeting.minutes_json:
+        try:
+            data = json.loads(meeting.minutes_json)
+            title = str(data.get("title") or title)
+            summary = str(data.get("summary") or "") or None
+            raw_sections = data.get("sections") if isinstance(data.get("sections"), list) else []
+            sections = [s for s in raw_sections if isinstance(s, dict)]
+            raw_decisions = data.get("decisions") if isinstance(data.get("decisions"), list) else []
+            decisions = [str(d) for d in raw_decisions]
+        except json.JSONDecodeError:
+            summary = "会议纪要数据损坏，请回到 EchoDesk 重新生成。"
+
+    ids: list[str] = []
+    for artifact_id in [
+        *_artifact_ids_from_minutes(meeting.minutes_json),
+        *_split_artifact_ids(artifact_ids),
+    ]:
+        if artifact_id not in ids:
+            ids.append(artifact_id)
+    artifacts = [
+        info
+        for artifact_id in ids
+        if (info := _artifact_download_info(settings, artifact_id)) is not None
+    ]
+    return HTMLResponse(
+        _share_html(
+            meeting_id=meeting_id,
+            title=title,
+            summary=summary,
+            sections=sections,
+            decisions=decisions,
+            artifacts=artifacts,
+        )
+    )
+
+
+@router.delete("/{meeting_id}/outputs", response_model=ClearMeetingOutputsResponse)
+async def clear_meeting_outputs(
+    meeting_id: str,
+    body: ClearMeetingOutputsRequest,
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ClearMeetingOutputsResponse:
+    """清理会议纪要与产物文件。
+
+    当前 artifacts 还没有 meeting_id 持久关联，因此前端会把本会议内存里的
+    artifact_ids 一并传进来；后端再合并 minutes todo 里已关联的 artifact_id。
+    """
+    meeting = await repository.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+
+    artifact_ids: list[str] = []
+    for artifact_id in [*_artifact_ids_from_minutes(meeting.minutes_json), *body.artifact_ids]:
+        if (
+            isinstance(artifact_id, str)
+            and _ARTIFACT_ID_RE.fullmatch(artifact_id)
+            and artifact_id not in artifact_ids
+        ):
+            artifact_ids.append(artifact_id)
+
+    deleted = 0
+    missing: list[str] = []
+    for artifact_id in artifact_ids:
+        build_dir = _artifact_build_dir(settings, artifact_id)
+        if build_dir is None or not build_dir.exists():
+            missing.append(artifact_id)
+            continue
+        shutil.rmtree(build_dir)
+        deleted += 1
+
+    if body.clear_minutes:
+        await repository.clear_meeting_outputs(meeting_id, clear_minutes=True)
+
+    return ClearMeetingOutputsResponse(
+        meeting_id=meeting_id,
+        minutes_cleared=body.clear_minutes,
+        artifact_ids=artifact_ids,
+        artifacts_deleted=deleted,
+        missing_artifact_ids=missing,
+    )
 
 
 @router.post("/{meeting_id}/start")

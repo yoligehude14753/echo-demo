@@ -1,7 +1,7 @@
 /**
  * StatusBar · Phase 2 P2.1
  *
- * 顶部 4 个 status pill：backend / heyi-bj / Yunwu / mic
+ * 顶部 4 个 status pill：backend / eight / Yunwu / mic
  * 每个 pill：
  *   - 颜色：绿(ok) / 橙(warn 含部分降级 / 缺 key / 重启中) / 红(fail) / 灰(unknown)
  *   - 点开 popover：详细诊断信息（version / latency / 错误）
@@ -87,7 +87,7 @@ function levelFromProbes(probes: ProbeResultDTO[]): Level {
 }
 
 // 多个 level 合并取最差（unknown < ok 仅在两者都不为 fail/warn 时退到 unknown）。
-// 用于 heyi pill 同时反映 TCP probe 与 /tts/diag 合成回环两条线索。
+// 用于 eight pill 同时反映 TCP probe 与 /tts/diag 合成回环两条线索。
 const LEVEL_ORDER: Record<Level, number> = { ok: 0, warn: 1, fail: 2, unknown: 3 };
 function mergeLevels(a: Level, b: Level): Level {
   // fail 永远胜出（有任何明确失败 → 整体 fail）；其次 warn；ok 与 unknown 取 ok。
@@ -334,7 +334,7 @@ function HeyiPopover({
     <div className="min-w-[300px] max-w-[420px] text-[12px] py-1">
       <div className="font-semibold mb-1.5 flex items-center gap-1.5">
         <Cpu className="w-3.5 h-3.5" />
-        heyi-bj 远端服务
+        eight 远端服务
       </div>
       <ProbeRow name="STT FireRed :8090" probe={stt} />
       <ProbeRow name="TTS Qwen3 :8094 (TCP)" probe={tts} />
@@ -468,7 +468,7 @@ export default function StatusBar({
   const { supervisor, healthz, healthzOk, mic } = health;
 
   const backendLevel = levelFromSupervisor(supervisor, healthzOk);
-  // heyi pill 级别：取「TCP 各探针」与「TTS 合成回环」二者的最差。
+  // eight pill 级别：取「TCP 各探针」与「TTS 合成回环」二者的最差。
   // 这样即便 STT/Fast LLM TCP 都通了，只要 /tts/diag 报 silent_output，
   // pill 也会立刻变红/橙——消除"绿灯但用户没声音"的欺骗。
   const ttsHealthLevel = levelFromTtsHealth(ttsEnabled, ttsHealth, ttsLastError);
@@ -503,7 +503,7 @@ export default function StatusBar({
         testId="pill-backend"
       />
       <Pill
-        label="heyi-bj"
+        label="eight"
         level={heyiLevel}
         icon={<Cpu className="w-3 h-3" />}
         popover={

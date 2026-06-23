@@ -1,8 +1,23 @@
 # EchoDesk 安装指南
 
-EchoDesk = Mac 桌面 app（Electron + React UI）+ Python FastAPI backend。
-当前面向单机 / 小范围使用，**不**经 App Store 分发、**不**把 Python 打进 .app。
-装机分两步：把 .app 拖到 `/Applications/`，跑一次 install 脚本。
+当前版本：`v0.2.5`  
+下载页：<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.5>
+
+| 平台 | 直接下载 | 说明 |
+|---|---|---|
+| macOS Apple Silicon | `EchoDesk-0.2.5-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.2.5-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows | `EchoDesk.Setup.0.2.5.exe` | Windows 安装包 |
+| Android 手机 / 平板 | `EchoDesk-0.2.5-android.apk` | 默认连接公网 demo backend |
+| Android TV / 智能电视 | `EchoDesk-0.2.5-smart-tv.apk` | 适配遥控器和电视桌面入口 |
+| 智能电视一键安装 | `EchoDesk-0.2.5-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
+| 校验文件 | `SHA256SUMS-0.2.5.txt` | 校验下载完整性 |
+
+EchoDesk demo 现在是多端客户端 + 公网 demo backend。macOS / Windows 是桌面端；
+Android / TV 是客户端壳，默认连接 `https://echodesk.yoliyoli.uk`，模型服务和密钥都留在服务端。
+
+macOS 本地私有部署仍支持 Electron + React UI + Python FastAPI backend。
+本地装机分两步：把 `.app` 拖到 `/Applications/`，跑一次 install 脚本。
 
 ---
 
@@ -20,26 +35,100 @@ EchoDesk = Mac 桌面 app（Electron + React UI）+ Python FastAPI backend。
 
 ---
 
-## 第 1 步：拿源码
+## 第 1 步：下载安装包
 
-EchoDesk 还没 publish 到 GitHub release，暂时通过 git 拿：
+优先从 GitHub Releases 下载当前 demo 包：
+
+- macOS: `EchoDesk-0.2.5-arm64.dmg`
+- Windows: `EchoDesk.Setup.0.2.5.exe`
+- Android / Android TV: `EchoDesk-0.2.5-smart-tv.apk`（demo 包）
+- 智能电视一键安装包：`EchoDesk-0.2.5-smart-tv-oneclick.zip`
+- 电视浏览器安装页：`https://yoligehude14753.github.io/echo-demo/tv-install.html`
+
+源码构建仅用于开发：
 
 ```bash
 git clone <repo_url> ~/echo-demo
-# 或者把已有仓库放到任意你喜欢的位置
+cd ~/echo-demo/desktop
+npm install
 ```
 
 ## 第 2 步：装 .app
 
+macOS 打开 dmg，把 `EchoDesk.app` 拖到 `/Applications/`。如果从源码构建，可用：
+
+### 安装包产物
+
+macOS 当前可直接构建：
+
 ```bash
 cd ~/echo-demo/desktop
-npm install
-npm run electron-build      # 产物在 desktop/release/
-# 把 release 里的 .app 拖到 /Applications/
-cp -R release/mac-arm64/EchoDesk.app /Applications/
+npm run app:dist:mac
 ```
 
-> 如果你只用 dev 模式（直接 `npm run electron-dev`），可以跳过这一步。
+产物：
+
+```text
+desktop/release/EchoDesk-0.2.5-arm64.dmg
+desktop/release/EchoDesk-0.2.5-arm64-mac.zip
+desktop/release/mac-arm64/EchoDesk.app
+```
+
+Windows exe 有脚本入口，但建议在 Windows 机器或带 Wine/NSIS 的构建环境跑：
+
+```bash
+cd ~/echo-demo/desktop
+npm run app:dist:win
+```
+
+Android 当前用 Capacitor 打 debug APK：
+
+```bash
+cd ~/echo-demo/desktop
+npm run app:dist:android
+npm run app:package:tv
+```
+
+产物：
+
+```text
+desktop/android/app/build/outputs/apk/debug/app-debug.apk
+desktop/release/EchoDesk-0.2.5-android-tv-debug.apk
+desktop/release/EchoDesk-0.2.5-smart-tv.apk
+desktop/release/EchoDesk-0.2.5-smart-tv-oneclick.zip
+```
+
+APK 是前端客户端，不会在手机里启动 Electron 的本机 Python backend。默认连
+`https://echodesk.yoliyoli.uk` 公网 demo backend；模型 key 留在服务端，不打进 APK。
+
+内网调试时，可以让 Mac backend 监听局域网地址：
+
+```bash
+cd ~/echo-demo/backend
+source .venv/bin/activate
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8769
+```
+
+然后在 APK 里打开设置 → 移动端连接，把后端地址设成 Mac 的局域网 IP，例如
+`http://10.10.12.32:8769`。
+
+### 智能电视安装
+
+图里这种有「我的应用」入口的会议室电视，如果底层是 Android TV / Google TV /
+国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.5-smart-tv.apk`。
+
+推荐路径：
+
+1. 下载 `EchoDesk-0.2.5-smart-tv-oneclick.zip`。
+2. 电视打开开发者模式和 ADB 网络调试。
+3. 电脑和电视在同一个局域网。
+4. macOS 执行 `./install-tv-macos.sh 电视IP`；Windows 执行
+   `install-tv-windows.ps1 -TvIp 电视IP`。
+5. 安装完成后从电视「我的应用」打开 EchoDesk。
+
+也可以用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/tv-install.html`，
+遥控器选择「下载电视 APK」。
+Samsung Tizen、LG webOS、Apple TV 不能安装 APK；这类设备需要外接 Android 盒子或后续浏览器/PWA 版本。
 
 ## 第 3 步：跑 install-backend.sh
 
@@ -146,7 +235,7 @@ ECHO_INSTALL_PYTHON=/Users/me/.pyenv/versions/3.11.10/bin/python \
 ### "想跑 dev 模式但不要 .app 自动 spawn backend"
 
 ```bash
-ECHO_SPAWN_BACKEND=0 npm run electron-dev
+ECHO_SPAWN_BACKEND=0 npm run electron:dev
 # 然后你自己开 uvicorn
 cd backend && source .venv/bin/activate
 python -m uvicorn app.main:app --port 8769
@@ -154,19 +243,32 @@ python -m uvicorn app.main:app --port 8769
 
 Supervisor 看到端口已占会走 external 模式，监控存活但不重启。
 
-### "远程依赖（heyi-bj / Yunwu）连不上"
+### "远程依赖（eight / Yunwu）连不上"
 
 `curl http://127.0.0.1:8769/healthz/full` 里 `remote.*.ok` 显示状态：
 
 | 字段 | 含义 | 看哪个 |
 |---|---|---|
-| `heyi_stt_firered` | STT @ :8090 | heyi-bj 服务 + 你的 VPN |
+| `heyi_stt_firered` | STT @ :8090 | eight 服务 + 你的 VPN |
 | `heyi_tts_qwen3` | TTS @ :8094 | 同上 |
-| `heyi_llm_fast` | Qwen3-1.7B @ :7860 | 同上 |
+| `heyi_llm_fast` | qwen3.5-9b-local @ :7860 | 同上 |
 | `yunwu_llm_main` | Yunwu MiniMax-M2.7 | API key + 公网 |
 | `tavily` | Tavily 搜索 | API key + 公网 |
 
+`heyi_*` 是历史字段名，当前实际机器是 eight (`100.76.3.59`)。
+
 `ok: null` + `reason: "no_api_key"` 说明 key 没填，相关功能灰；`ok: false` 才是真断了。
+
+### "离远了声音记录不清楚 / 怀疑 STT"
+
+先不要只看最终文字，按这几层定位：
+
+1. 看顶部“持续监听”状态的 tooltip：新增的最近 RMS、活跃帧率、最近门控原因能区分“麦克风输入太小 / 被静音底噪门过滤 / 已进 STT 但识别差”。
+2. 导出诊断包：设置 → 诊断 → 导出诊断包，里面会带 `backend.log` 当前和最近 rotated 日志，以及 `/capture/stats` 等运行状态。
+3. 直接看日志：`~/.echodesk/logs/backend.log`，重点搜 `echodesk.stt`、`echodesk.workspace`、`capture`、`diagnostics`。
+4. 如需核对原始数据：本地数据库在 `~/.echodesk/echodesk.db`，录音/转写相关文件在 `~/.echodesk/storage/`。
+
+经验判断：如果最近 RMS 长期接近 0、活跃帧率很低或最近门控是 `rms_too_low`，优先排查麦克风距离、系统输入音量、设备选择，而不是 STT 服务本身；如果 RMS/活跃帧率正常但文字质量差，再查 STT endpoint、网络和上游服务日志。
 
 ---
 

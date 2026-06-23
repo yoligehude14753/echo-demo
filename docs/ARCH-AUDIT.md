@@ -12,11 +12,11 @@
   echo-demo 是从它**简化 + Ports & Adapters 重构**而来，但很多决策来自 echo 实战
 - 任何对架构的怀疑，先去 echo 源头核对，**不要看 echo-demo 的变量名做判断**
 
-## 1. 模型 / 远程服务事实表（heyi-bj on Tailscale 100.87.251.9）
+## 1. 模型 / 远程服务事实表（eight on Tailscale 100.76.3.59）
 
 | 端口 | echo-demo `config.py` 命名 | swagger 实际服务 | 用途 | 状态 |
 |---|---|---|---|---|
-| `:7860` | `llm_fast_*` | `Qwen3-1.7B` (FastAPI) | 快速通道意图分类 + 短任务 | ✓ 活，名实相符 |
+| `:7860` | `llm_fast_*` | `qwen3.5-9b-local` (vLLM) | 快速通道意图分类 + 短任务 | ✓ 活，名实相符 |
 | `:8090` | `stt_firered_url` | `FireRedASR2-AED` | **唯一 STT**（PR `echodesk-remove-sensevoice` 起） | ✓ 活，名实相符 |
 | ~~`:8093`~~ | — | ~~SenseVoice GPU ASR~~ | 已删除（PR `echodesk-remove-sensevoice`：多 backend 选项干扰架构判断） | ✗ 不再使用 |
 | `:8094` | `tts_qwen3_url`（alias `tts_cosyvoice_url`） | `faster-qwen3-tts CustomVoice` | 主 TTS | ✓ 活，命名已修正（arch-1） |
@@ -31,7 +31,7 @@
 
 ```python
 tts_provider: str = "cosyvoice"
-tts_cosyvoice_url: str = "http://100.87.251.9:8094"   # 实际是 faster-qwen3-tts
+tts_cosyvoice_url: str = "http://100.76.3.59:8094"   # 实际是 faster-qwen3-tts
 tts_cosyvoice_voice: str = "aiden"                     # qwen3-tts 唯一 speaker
 ```
 
@@ -114,7 +114,7 @@ ambient_segments 表：337 条
 | 8 | `diarizer_min_audio_bytes=16000`(0.5s) 死 gate | 高 | echo 内部 `duration < 1.0s 跳过`（diarizer.py:276），不靠 config | echo-demo 删 config 项，改硬编码 | P0 |
 | 9 | 跨进程 `_counter` 漂移撞 ID | 高 | echo 的 ID 是从 DB hydrate 回来的，不靠运行时 counter | 同 #1 解决 | P0 |
 | 10 | STT 语言乱跳（日英混入） | 已验证 language=zh 实际传了 | echo 也传 `language=zh`，但 echo 默认用 deepgram（中文路径不同） | 切 STT 模型解决（FireRed） | **本 PR** |
-| 11 | **SenseVoice 在 6s 含静音/底噪 chunk 上 73% < 30 字 + 日英混入** | 高 | echo 实测 FireRed RTF=0.18，**中英混合 FRA2 保留英文**（不音译）；无 SenseVoice vs FireRed 数字 A/B | 切 STT 到 FireRed（heyi-bj :8090） | **本 PR** |
+| 11 | **SenseVoice 在 6s 含静音/底噪 chunk 上 73% < 30 字 + 日英混入** | 高 | echo 实测 FireRed RTF=0.18，**中英混合 FRA2 保留英文**（不音译）；无 SenseVoice vs FireRed 数字 A/B | 切 STT 到 FireRed（当前 eight :8090） | **本 PR** |
 
 ## 5. 链路图（当前真实，截至 2026-05-27）
 

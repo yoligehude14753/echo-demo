@@ -115,6 +115,13 @@ class RepositoryPort(Protocol):
         limit: int = 50,
     ) -> list[MeetingRecord]: ...
 
+    async def clear_meeting_outputs(
+        self,
+        meeting_id: str,
+        *,
+        clear_minutes: bool = True,
+    ) -> None: ...
+
     # ── Meeting segments ────────────────────────────────────────
     async def append_meeting_segment(
         self,

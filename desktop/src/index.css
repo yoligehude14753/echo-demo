@@ -72,3 +72,176 @@ body {
 .brand {
   letter-spacing: -0.01em;
 }
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+.ant-btn:focus-visible,
+.ant-tag[role="button"]:focus-visible {
+  outline: 3px solid rgba(16, 163, 127, 0.92) !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 6px rgba(16, 163, 127, 0.16) !important;
+}
+
+@media (min-width: 1180px) and (min-height: 650px) and (orientation: landscape) {
+  .app-header {
+    height: 56px !important;
+    padding-left: 28px !important;
+    padding-right: 28px !important;
+  }
+
+  .app-header .brand {
+    font-size: 18px !important;
+  }
+
+  .app-header-status {
+    gap: 14px;
+    font-size: 13px !important;
+  }
+
+  [data-testid="workspace-bar"] {
+    height: 40px !important;
+    padding-left: 28px !important;
+    padding-right: 28px !important;
+    font-size: 13px !important;
+  }
+
+  .echodesk-meeting-sider {
+    width: 320px !important;
+    min-width: 320px !important;
+    max-width: 320px !important;
+    flex: 0 0 320px !important;
+    padding: 18px !important;
+  }
+
+  .echodesk-output-pane {
+    width: 520px !important;
+  }
+
+  .echodesk-transcript-pane > div:first-child {
+    height: 52px !important;
+    padding-left: 28px !important;
+    padding-right: 28px !important;
+  }
+
+  [data-testid="transcript-scroller"] {
+    padding-left: 18px !important;
+    padding-right: 18px !important;
+  }
+
+  [data-testid="command-bar"] {
+    padding: 14px 28px !important;
+  }
+
+  [data-testid="command-bar"] textarea {
+    min-height: 48px !important;
+    font-size: 18px !important;
+    line-height: 1.55 !important;
+  }
+
+  [data-testid="command-attach-btn"],
+  [data-testid="command-send-btn"],
+  [data-testid="open-settings"],
+  [data-testid="tts-toggle"] {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .ant-modal {
+    top: 48px !important;
+    max-width: calc(100vw - 96px) !important;
+  }
+
+  .ant-drawer-content-wrapper {
+    max-width: min(720px, 46vw) !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .echodesk-shell {
+    min-width: 0;
+  }
+
+  .app-header {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+    gap: 10px;
+  }
+
+  .app-header-status {
+    min-width: 0;
+    overflow-x: auto;
+    justify-content: flex-end;
+    gap: 8px;
+    scrollbar-width: none;
+  }
+
+  .app-header-status::-webkit-scrollbar {
+    display: none;
+  }
+
+  [data-testid="workspace-bar"] {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+
+  [data-testid="workspace-bar"]::-webkit-scrollbar {
+    display: none;
+  }
+
+  .echodesk-main-layout {
+    flex-direction: column !important;
+  }
+
+  .echodesk-meeting-sider {
+    display: none !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    flex: 0 0 0 !important;
+    border-right: 0 !important;
+  }
+
+  .echodesk-content {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 0;
+    flex-direction: column !important;
+  }
+
+  .echodesk-transcript-pane {
+    flex: 1 1 auto !important;
+    min-height: 0;
+    border-right: 0 !important;
+  }
+
+  .echodesk-transcript-pane > div:first-child {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .echodesk-output-pane {
+    width: 100% !important;
+    flex: 0 0 26vh !important;
+    border-top: 1px solid #e5e5e5;
+  }
+
+  [data-testid="command-bar"] {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+
+  [data-testid="command-bar"] textarea {
+    font-size: 13px !important;
+  }
+
+  .ant-modal {
+    max-width: calc(100vw - 24px) !important;
+  }
+}

@@ -46,7 +46,8 @@ test("S07 · LLM 失败 → 「生成失败 · 重试」→ 重试成功 → 渲
     await expect(page.getByTestId("minutes-retry-btn")).toBeVisible({
       timeout: 5_000,
     });
-    await expect(page.getByTestId("minutes-error-msg")).toContainText(
+    await page.getByTestId("minutes-error-toggle").click();
+    await expect(page.getByTestId("minutes-error-detail")).toContainText(
       "502 bad gateway",
     );
   });
@@ -75,7 +76,9 @@ test("S07 · LLM 失败 → 「生成失败 · 重试」→ 重试成功 → 渲
       timeout: 5_000,
     });
     // 纪要 summary 出现
-    await expect(page.locator("text=测试纪要")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("minutes-title")).toHaveText("测试纪要", {
+      timeout: 5_000,
+    });
     await expect(page.locator("text=Q3 销售目标拆解")).toBeVisible();
   });
 });

@@ -6,9 +6,9 @@
 
 | 远程 | 端口 | 依赖它的功能 | 不依赖它的功能 |
 |---|---|---|---|
-| heyi-bj FireRedASR2-AED | `:8090` | 转写（ambient + meeting） | 录音 / TTS / @生成 / RAG |
-| heyi-bj qwen3-tts | `:8094` | TTS 播报 | 录音 / 转写 / @生成 / RAG |
-| heyi-bj Qwen3-1.7B | `:7860` | intent 分类、RAG/web 仲裁 | 录音 / 转写 / TTS |
+| eight FireRedASR2-AED | `:8090` | 转写（ambient + meeting） | 录音 / TTS / @生成 / RAG |
+| eight qwen3-tts | `:8094` | TTS 播报 | 录音 / 转写 / @生成 / RAG |
+| eight qwen3.5-9b-local | `:7860` | intent 分类、RAG/web 仲裁 | 录音 / 转写 / TTS |
 | Yunwu MiniMax-M2.7 | api | @生成、纪要、@查 RAG 答 | 录音 / 转写 / 分类 |
 | Tavily 搜索 | api | @查 web fallback | 全部其它 |
 
@@ -50,14 +50,14 @@
 ### TTS
 
 - **远程 TTS 失败** → 静默不播报（不影响其它）
-- **前端**：StatusBar 的 heyi pill 会反映 TTS 子探针失败
+- **前端**：StatusBar 的 eight pill 会反映 TTS 子探针失败
 
 ## UI surface（P2.1 StatusBar）
 
 用户**不需要**翻 log 就能看到降级：
 
 - `backend` pill 绿 = supervisor + /healthz/full 通
-- `heyi-bj` pill 绿 = STT/TTS/Fast-LLM 三子探针都通；橙 = 部分通；红 = 全断
+- `eight` pill 绿 = STT/TTS/Fast-LLM 三子探针都通；橙 = 部分通；红 = 全断
 - `云` pill 绿 = Yunwu + Tavily 都通；橙 = 缺 API key（功能不可用但不是"挂了"）；红 = key 配了但断
 - `麦克风` pill 绿 = 系统权限 granted
 

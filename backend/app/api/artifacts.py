@@ -90,7 +90,7 @@ async def generate(
         )
         raise HTTPException(status_code=400, detail=str(e)) from e
     except LLMError as e:
-        # P2.3：LLM 远程不可达（Yunwu/heyi-bj 断）也算 graceful failure，
+        # P2.3：LLM 远程不可达（Yunwu/eight 断）也算 graceful failure，
         # 否则前端只能看到 500 静默挂。带 reason="remote_llm" 让前端区分这
         # 类失败（可引导查 StatusBar 云 pill）。
         await event_bus.publish(

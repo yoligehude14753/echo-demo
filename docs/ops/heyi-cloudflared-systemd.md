@@ -1,5 +1,8 @@
 # heyi-bj · cloudflared named tunnel · systemd-user 守护 SOP
 
+> Obsolete (2026-06-18): EchoDesk demo 当前默认 STT/TTS/Fast LLM 已迁到 eight (`100.76.3.59`)。
+> 本文仅保留为 heyi-bj / `*.yoliyoli.uk` 历史归档，不是当前安装或排障入口。
+
 > Phase 4 · M_heyi_systemd · 2026-05-28
 > 目标：heyi-bj 重启后 4 个 `*.yoliyoli.uk` 对外 HTTPS endpoint 自动恢复，无需人工 `nohup`。
 

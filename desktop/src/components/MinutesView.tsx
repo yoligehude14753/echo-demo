@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Empty, Tag, Tooltip, message } from "antd";
 import {
   AlertCircle,
@@ -10,10 +10,12 @@ import {
   FileText,
   Loader2,
   Play,
+  QrCode,
   RefreshCw,
 } from "lucide-react";
 import { artifactDownloadUrl, getMeetingMinutes, retryMinutesGeneration } from "@/api";
 import { buildSpeakerDisplayMap } from "@/lib/speakerDisplay";
+import MeetingShareModal from "@/components/MeetingShareModal";
 
 // 把 LLM 返回的 assignee（"说话人 18" / "说话人18" / 已被用户改名的 "李雷"）
 // remap 成 transcript 视图里同一个 displayIdx，避免 minutes 写"说话人 21"但
@@ -103,7 +105,9 @@ export default function MinutesView(): JSX.Element {
     currentId ? s.meetings[currentId] : undefined,
   );
   const upsertMeeting = useStore((s) => s.upsertMeeting);
+  const removeArtifact = useStore((s) => s.removeArtifact);
   const [retrying, setRetrying] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   // 切换 meeting 时若 store 没缓存 minutes 但后端已 finalized → 主动 fetch
   // 修 bug：sqlite 里 m-7ffe56cc4ad8 state="finalized" minutes_json=YES，
@@ -147,25 +151,74 @@ export default function MinutesView(): JSX.Element {
     }
   };
 
+  const shareAction =
+    currentId && meeting && meeting.state !== "in_meeting" ? (
+      <Button
+        size="small"
+        type="default"
+        icon={<QrCode className="w-3 h-3" />}
+        onClick={() => setShareOpen(true)}
+        data-testid="open-meeting-share"
+        className="!text-accent"
+      >
+        扫码保存
+      </Button>
+    ) : null;
+
+  const shareModal = (
+    <MeetingShareModal
+      open={shareOpen}
+      meeting={meeting}
+      onClose={() => setShareOpen(false)}
+      onOutputsCleared={(artifactIds) => {
+        artifactIds.forEach((id) => removeArtifact(id));
+        if (currentId) {
+          upsertMeeting(currentId, {
+            minutes: undefined,
+            minutes_status: null,
+            minutes_error: null,
+            display_title: null,
+            state: "idle",
+            artifacts: [],
+          });
+        }
+      }}
+    />
+  );
+
   // 1) 已生成：渲染纪要主体
   if (meeting?.minutes) {
-    return <MinutesBody m={meeting.minutes} />;
+    return (
+      <>
+        <MinutesBody m={meeting.minutes} shareAction={shareAction} />
+        {shareModal}
+      </>
+    );
   }
 
   // 2) 失败：给重试按钮 + 错误消息
   if (meeting?.minutes_status === "generation_failed") {
     return (
-      <MinutesErrorCard
-        rawError={meeting.minutes_error}
-        retrying={retrying}
-        onRetry={onRetry}
-      />
+      <>
+        <MinutesErrorCard
+          rawError={meeting.minutes_error}
+          retrying={retrying}
+          onRetry={onRetry}
+          shareAction={shareAction}
+        />
+        {shareModal}
+      </>
     );
   }
 
   // 3) 生成中 / 已 finalized 但 minutes 还没拿到：大转圈 + elapsed
   if (isFinalizedLike(meeting?.state)) {
-    return <MinutesGeneratingCard endedAt={meeting?.ended_at} />;
+    return (
+      <>
+        <MinutesGeneratingCard endedAt={meeting?.ended_at} shareAction={shareAction} />
+        {shareModal}
+      </>
+    );
   }
 
   // 4) 会议中（in_meeting）或没有任何 meeting
@@ -202,8 +255,10 @@ export default function MinutesView(): JSX.Element {
 
 function MinutesGeneratingCard({
   endedAt,
+  shareAction,
 }: {
   endedAt?: string | null;
+  shareAction?: ReactNode;
 }): JSX.Element {
   // elapsed 秒数计时（从会议结束时间开始；没 endedAt 就从挂载时间）
   const start = endedAt ? Date.parse(endedAt) : Date.now();
@@ -229,6 +284,7 @@ function MinutesGeneratingCard({
       <div className="flex items-center gap-2 mb-6 text-[13px] text-ink-700 font-medium">
         <FileText className="w-3.5 h-3.5 text-ink-500" />
         <span>会议纪要</span>
+        {shareAction && <span className="ml-auto">{shareAction}</span>}
       </div>
       <div
         className="flex flex-col items-center justify-center py-8"
@@ -258,10 +314,12 @@ function MinutesErrorCard({
   rawError,
   retrying,
   onRetry,
+  shareAction,
 }: {
   rawError: string | null | undefined;
   retrying: boolean;
   onRetry: () => void;
+  shareAction?: ReactNode;
 }): JSX.Element {
   const [showDetail, setShowDetail] = useState(false);
   const { headline, hint } = friendlyMinutesError(rawError);
@@ -271,6 +329,7 @@ function MinutesErrorCard({
       <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
         <FileText className="w-3.5 h-3.5 text-ink-500" />
         <span>会议纪要</span>
+        {shareAction && <span className="ml-auto">{shareAction}</span>}
       </div>
       <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-3">
         <div className="flex items-start gap-2 mb-3">
@@ -331,10 +390,12 @@ function MinutesErrorCard({
 
 function MinutesBody({
   m,
+  shareAction,
 }: {
   m: NonNullable<
     ReturnType<typeof useStore.getState>["meetings"][string]
   >["minutes"];
+  shareAction?: ReactNode;
 }): JSX.Element {
   if (!m) return <></>;
   // M_minutes_refactor：
@@ -359,6 +420,7 @@ function MinutesBody({
       <div className="flex items-center gap-2 mb-3 text-[13px] text-ink-700 font-medium">
         <FileText className="w-3.5 h-3.5 text-ink-500" />
         <span>会议纪要</span>
+        {shareAction && <span className="ml-auto">{shareAction}</span>}
       </div>
       <h2
         className="brand text-[17px] font-semibold text-ink-900 leading-snug mb-1"

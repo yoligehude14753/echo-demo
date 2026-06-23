@@ -52,7 +52,10 @@ def client(tmp_path: Path, repo: SQLiteRepository) -> TestClient:
     reset_deps_for_test()
     reset_meeting_pipeline()
     app = create_app()
-    settings = Settings(storage_dir=tmp_path / "storage")
+    settings = Settings(
+        storage_dir=tmp_path / "storage",
+        skill_executor_build_dir=tmp_path / "skill_build",
+    )
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_repository] = lambda: repo
     return TestClient(app)
@@ -277,6 +280,94 @@ async def test_get_artifacts_returns_empty_list(client: TestClient, repo: SQLite
 def test_get_artifacts_404_on_missing(client: TestClient) -> None:
     r = client.get("/meetings/no-such-id/artifacts")
     assert r.status_code == 404
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_share_page_includes_minutes_and_artifacts(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+) -> None:
+    artifact_id = "artifact-share-001"
+    build_dir = tmp_path / "skill_build" / artifact_id
+    build_dir.mkdir(parents=True)
+    (build_dir / "output.pdf").write_bytes(b"%PDF-1.4\nmock")
+    (build_dir / "meta.json").write_text(
+        json.dumps({"title": "扫码会议输出", "artifact_type": "pdf"}),
+        encoding="utf-8",
+    )
+    await _seed_meeting(
+        repo,
+        "mtg-share",
+        title="扫码会议",
+        started_at=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": "mtg-share",
+            "title": "扫码会议纪要",
+            "duration_sec": 60,
+            "summary": "这是一段可以扫码保存的纪要。",
+            "sections": [{"heading": "重点", "bullets": ["扫码保存", "下载产物"]}],
+            "decisions": ["保留分享链接"],
+            "todos": [{"id": "todo-1", "text": "生成 PDF", "artifact_id": artifact_id}],
+            "action_items": [],
+        },
+    )
+
+    r = client.get("/meetings/mtg-share/share")
+
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "扫码会议纪要" in r.text
+    assert "这是一段可以扫码保存的纪要" in r.text
+    assert "扫码会议输出" in r.text
+    assert f"/artifacts/{artifact_id}/download" in r.text
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_clear_meeting_outputs_clears_minutes_and_deletes_artifacts(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+) -> None:
+    artifact_id = "artifact-delete-001"
+    build_dir = tmp_path / "skill_build" / artifact_id
+    build_dir.mkdir(parents=True)
+    (build_dir / "output.txt").write_text("delete me", encoding="utf-8")
+    await _seed_meeting(
+        repo,
+        "mtg-clear",
+        title="清理会议",
+        started_at=datetime(2026, 5, 28, 11, 0, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": "mtg-clear",
+            "title": "清理会议纪要",
+            "duration_sec": 60,
+            "summary": "待删除",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+
+    r = client.request(
+        "DELETE",
+        "/meetings/mtg-clear/outputs",
+        json={"artifact_ids": [artifact_id], "clear_minutes": True},
+    )
+
+    assert r.status_code == 200
+    assert r.json()["artifacts_deleted"] == 1
+    assert not build_dir.exists()
+    rec = await repo.get_meeting("mtg-clear")
+    assert rec is not None
+    assert rec.state == "ended"
+    assert rec.minutes_json is None
+    assert rec.minutes_status is None
 
 
 @pytest.mark.unit

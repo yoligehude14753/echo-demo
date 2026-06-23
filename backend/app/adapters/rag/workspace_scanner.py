@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import logging
@@ -86,41 +85,67 @@ class WorkspaceScanner:
         try:
             with path.open("rb") as f:
                 h.update(f.read(max_bytes))
-        except Exception:
+        except OSError as e:
+            # 读不出 sha1 不算致命（fall back 走 mtime/size 增量），但要记一行
+            log.warning("workspace sha1_head read failed: %s → %s", path, e)
             return ""
         return h.hexdigest()
 
     def list_authorized_dirs(self) -> list[Path]:
         return [d for d in self._settings.workspace_dirs_list if d.exists() and d.is_dir()]
 
-    def _iter_files(self) -> list[Path]:
+    def _iter_files(self) -> tuple[list[Path], list[tuple[Path, str]]]:
+        """返回 ``(valid_files, iter_errors)``。
+
+        历史问题：原来逐文件 ``p.stat()`` / ``p.relative_to(root)`` 任一抛错（macOS
+        权限文件夹、stale symlink、特殊文件名等）整个 rglob 循环挂掉，但 scanner
+        没有任何日志 —— 表现为"目录里部分文件被静默吞"。现在按文件粒度 try/except，
+        失败的文件作为 ``iter_errors`` 返回，``_scan_impl`` 累计到 ``result.n_failed``
+        并写 errors 列表，确保 UI 看到 ``failed=K``。
+        """
         out: list[Path] = []
+        errors: list[tuple[Path, str]] = []
         for root in self.list_authorized_dirs():
-            for p in root.rglob("*"):
-                if not p.is_file():
+            try:
+                walker = root.rglob("*")
+            except OSError as e:
+                log.warning("workspace rglob failed on %s: %s", root, e)
+                errors.append((root, f"rglob: {e}"))
+                continue
+            for p in walker:
+                try:
+                    if not p.is_file():
+                        continue
+                    if p.suffix.lower() not in SUPPORTED_EXTS:
+                        continue
+                    # 排除点开头的隐藏目录/系统文件（.git, .DS_Store, .venv 等）
+                    if any(part.startswith(".") for part in p.relative_to(root).parts):
+                        continue
+                    if p.stat().st_size > self._max_bytes:
+                        continue
+                    out.append(p.resolve())
+                except (OSError, ValueError) as e:
+                    log.warning("workspace iter skip file %s: %s", p, e)
+                    errors.append((p, f"iter: {e}"))
                     continue
-                if p.suffix.lower() not in SUPPORTED_EXTS:
-                    continue
-                # 排除点开头的隐藏目录/系统文件（.git, .DS_Store, .venv 等）
-                if any(part.startswith(".") for part in p.relative_to(root).parts):
-                    continue
-                if p.stat().st_size > self._max_bytes:
-                    continue
-                out.append(p.resolve())
-        return out
+        return out, errors
 
     async def scan(self) -> WorkspaceScanResult:
         """全量扫描 + 增量同步。返回统计。"""
         async with self._lock:
             return await self._scan_impl()
 
-    async def _scan_impl(self) -> WorkspaceScanResult:
+    async def _scan_impl(self) -> WorkspaceScanResult:  # noqa: PLR0912, PLR0915
         t0 = time.monotonic()
         result = WorkspaceScanResult()
         state = self._load_state()
-        current_files = self._iter_files()
+        current_files, iter_errors = self._iter_files()
         current_paths = {str(p) for p in current_files}
         result.n_total = len(current_files)
+        # 遍历期就失败的文件（权限 / 坏 symlink 等）单独计入 failed，避免"被静默丢"
+        for bad_path, err in iter_errors:
+            result.errors.append(f"iter {bad_path}: {err}")
+            result.n_failed += 1
 
         # 1. 移除已消失的文件
         gone = [k for k in state if k not in current_paths]
@@ -131,12 +156,19 @@ class WorkspaceScanner:
             except Exception as e:
                 result.errors.append(f"delete {k}: {e}")
                 result.n_failed += 1
+                log.warning("workspace delete failed: %s → %s", k, e)
             state.pop(k, None)
 
         # 2. 新增 / 更新
         for path in current_files:
             key = str(path)
-            stat = path.stat()
+            try:
+                stat = path.stat()
+            except OSError as e:
+                result.errors.append(f"stat {path}: {e}")
+                result.n_failed += 1
+                log.warning("workspace stat failed: %s → %s", path, e)
+                continue
             mtime = stat.st_mtime
             size = stat.st_size
             prev = state.get(key)
@@ -161,8 +193,16 @@ class WorkspaceScanner:
             try:
                 # 若存在旧 doc，先删除再入库（覆盖更新）
                 if prev:
-                    with contextlib.suppress(Exception):
+                    try:
                         await self._rag.delete(prev.doc_id)
+                    except Exception as e:
+                        # 老 doc 删除失败不阻塞新 ingest，但要让用户看到
+                        log.warning(
+                            "workspace delete old doc %s before re-ingest %s failed: %s",
+                            prev.doc_id,
+                            path.name,
+                            e,
+                        )
                 doc_id = await self._rag.ingest_file(
                     str(path),
                     doc_title=path.stem,
@@ -186,7 +226,13 @@ class WorkspaceScanner:
                 result.n_failed += 1
                 log.warning("workspace ingest failed: %s → %s", path, e)
 
-        self._save_state(state)
+        try:
+            self._save_state(state)
+        except OSError as e:
+            # 状态文件写不进去意味着下一轮全量重新 ingest，必须可见
+            result.errors.append(f"save_state: {e}")
+            result.n_failed += 1
+            log.warning("workspace save_state failed: %s → %s", self._state_file, e)
         result.duration_s = round(time.monotonic() - t0, 3)
         log.info(
             "workspace scan: total=%d added=%d updated=%d removed=%d skipped=%d failed=%d in %.2fs",
@@ -198,6 +244,12 @@ class WorkspaceScanner:
             result.n_failed,
             result.duration_s,
         )
+        if result.errors:
+            log.warning(
+                "workspace scan errors (showing up to 10 of %d): %s",
+                len(result.errors),
+                result.errors[:10],
+            )
         return result
 
     async def status(self) -> dict[str, Any]:
@@ -220,7 +272,11 @@ class WorkspaceScanner:
                 try:
                     await self._rag.delete(fs.doc_id)
                     n += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning(
+                        "workspace clear: delete doc %s failed: %s",
+                        fs.doc_id,
+                        e,
+                    )
             self._save_state({})
             return n

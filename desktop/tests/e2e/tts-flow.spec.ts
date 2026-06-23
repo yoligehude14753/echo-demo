@@ -37,7 +37,7 @@ async function mockTtsDiag(
         rms: payload.rms ?? 2500,
         peak: payload.peak ?? 18_000,
         voice: "aiden",
-        base_url: "http://100.87.251.9:8094",
+        base_url: "http://100.76.3.59:8094",
         checked_at: Date.now() / 1000,
       }),
     }),
@@ -47,8 +47,7 @@ async function mockTtsDiag(
 test("健康场景：/tts/diag=ok → 顶栏显示『TTS』绿色态", async ({ page }) => {
   await mockTtsDiag(page, { ok: true, state: "ok" });
   await installEchoMock(page);
-  await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const toggle = page.getByTestId("tts-toggle");
   await expect(toggle).toBeVisible();
@@ -66,8 +65,7 @@ test("异常场景：/tts/diag=silent_output → 顶栏切『TTS 异常』+ Popo
     rms: 3.2,
   });
   await installEchoMock(page);
-  await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const toggle = page.getByTestId("tts-toggle");
   await expect(toggle).toHaveAttribute("data-tts-state", "unhealthy", { timeout: 10_000 });
@@ -99,8 +97,7 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
   );
 
   const mock = await installEchoMock(page);
-  await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   // 启动时 toggle 是绿色 ok
   const toggle = page.getByTestId("tts-toggle");
@@ -135,8 +132,7 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
 test("用户关 TTS：顶栏切『静音』+ 不再轮询 diag", async ({ page }) => {
   await mockTtsDiag(page, { ok: true, state: "ok" });
   await installEchoMock(page);
-  await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const toggle = page.getByTestId("tts-toggle");
   await expect(toggle).toHaveAttribute("data-tts-state", "ok");

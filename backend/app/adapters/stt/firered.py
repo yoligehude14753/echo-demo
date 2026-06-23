@@ -1,4 +1,4 @@
-"""STT adapter: FireRedASR2-AED HTTP（heyi-bj :8090）。
+"""STT adapter: FireRedASR2-AED HTTP（eight :8090）。
 
 接口：POST {base}/v1/audio/transcriptions（OpenAI 兼容，与 SenseVoice GPU 同构）
 - 上传 multipart：file=WAV(16k/16bit/mono)

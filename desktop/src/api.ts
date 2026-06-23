@@ -5,7 +5,14 @@ import type {
   MeetingStateSnapshot,
   TranscriptSegment,
 } from "@/types";
-import { apiUrl, backendBase } from "@/runtime";
+import {
+  DEFAULT_ANDROID_BACKEND_BASE,
+  apiPath,
+  apiUrl,
+  backendBase,
+  configuredBackendBase,
+  isNativeMobile,
+} from "@/runtime";
 
 async function asJson<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
@@ -74,6 +81,9 @@ export interface CaptureStats {
   stored: number;
   last_chunk_at: string | null;
   last_stored_at: string | null;
+  last_rms: number;
+  last_speech_ratio: number;
+  last_gate_reason: string | null;
 }
 
 export async function getCaptureStats(): Promise<CaptureStats> {
@@ -217,6 +227,45 @@ export async function getMeetingArtifacts(
   return asJson<GeneratedArtifact[]>(r);
 }
 
+export interface ClearMeetingOutputsResult {
+  meeting_id: string;
+  minutes_cleared: boolean;
+  artifact_ids: string[];
+  artifacts_deleted: number;
+  missing_artifact_ids: string[];
+}
+
+export async function meetingShareUrl(
+  meetingId: string,
+  artifactIds: string[] = [],
+): Promise<string> {
+  const params = new URLSearchParams();
+  const ids = artifactIds.filter(Boolean);
+  if (ids.length > 0) params.set("artifact_ids", ids.join(","));
+  const path = `/meetings/${encodeURIComponent(meetingId)}/share${
+    params.toString() ? `?${params.toString()}` : ""
+  }`;
+  const base = await backendBase();
+  if (base) return `${base}${path}`;
+  if (typeof window !== "undefined" && window.location.origin) {
+    return `${window.location.origin}${apiPath(path)}`;
+  }
+  return apiPath(path);
+}
+
+export async function clearMeetingOutputs(
+  meetingId: string,
+  artifactIds: string[],
+): Promise<ClearMeetingOutputsResult> {
+  const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/outputs`);
+  const r = await fetch(u, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ artifact_ids: artifactIds, clear_minutes: true }),
+  });
+  return asJson<ClearMeetingOutputsResult>(r);
+}
+
 // ── 待机时持续显示 ambient 转写片段 ──────────────────────────
 
 export interface AmbientSegment {
@@ -271,6 +320,11 @@ export async function generateArtifact(req: {
 export function artifactDownloadUrl(artifactId: string): string {
   // 同步版本：浏览器 / vite dev 用相对路径；Electron file:// 下用 sync sentinel
   // 由于 backendBase() 是异步的，但下载/预览只在前端运行时拼接，简单起见在 file:// 下回退默认 host。
+  const configured = configuredBackendBase();
+  if (configured || isNativeMobile()) {
+    const host = configured ?? DEFAULT_ANDROID_BACKEND_BASE;
+    return `${host}/artifacts/${encodeURIComponent(artifactId)}/download`;
+  }
   if (
     typeof window !== "undefined" &&
     window.location.protocol === "file:"

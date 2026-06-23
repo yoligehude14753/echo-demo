@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">EchoDesk</string>
+    <string name="title_activity_main">EchoDesk</string>
+    <string name="package_name">com.echodesk.app</string>
+    <string name="custom_url_scheme">com.echodesk.app</string>
+</resources>

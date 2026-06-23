@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
@@ -33,6 +33,7 @@ from app.api.deps import (
     get_diarizer_singleton,
     get_repository,
     get_speaker_registry,
+    require_admin_access,
 )
 from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
@@ -318,9 +319,19 @@ def create_app() -> FastAPI:
     app.include_router(tts_router)
     app.include_router(ws_router)
     # P2.5：数据管理 endpoints（data-dir / meeting export / speaker reset）
-    app.include_router(admin_router, prefix="/admin", tags=["admin"])
+    app.include_router(
+        admin_router,
+        prefix="/admin",
+        tags=["admin"],
+        dependencies=[Depends(require_admin_access)],
+    )
     # P2.6：诊断包导出，挂同一 /admin 前缀
-    app.include_router(diagnostics_router, prefix="/admin", tags=["admin"])
+    app.include_router(
+        diagnostics_router,
+        prefix="/admin",
+        tags=["admin"],
+        dependencies=[Depends(require_admin_access)],
+    )
     return app
 
 
