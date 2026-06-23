@@ -84,9 +84,8 @@ test("工作区弹窗展示知识库文档列表并可删除单条文档", async
   await expect(docList.getByText("找人联络及测试数据沟通", { exact: true })).toBeVisible();
 
   await page.getByTestId("knowledge-doc-delete-doc-ws-1").click();
-  await page
-    .getByRole("dialog", { name: "删除这条知识库文档？" })
-    .getByRole("button", { name: /删\s*除/ })
-    .click();
+  const confirm = page.locator(".ant-modal-confirm").filter({ hasText: "删除这条知识库文档？" });
+  await expect(confirm).toBeVisible();
+  await confirm.locator(".ant-modal-confirm-btns .ant-btn-primary").click();
   await expect.poll(() => deletedDocId).toBe("doc-ws-1");
 });
