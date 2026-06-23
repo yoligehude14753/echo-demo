@@ -196,6 +196,26 @@ class SQLiteRepository(RepositoryPort):
             await cur.close()
         return [_meeting_from_row(r) for r in rows]
 
+    async def clear_meeting_outputs(
+        self,
+        meeting_id: str,
+        *,
+        clear_minutes: bool = True,
+    ) -> None:
+        if not clear_minutes:
+            return
+        async with self._lock:
+            conn = self._require_conn()
+            await conn.execute(
+                "UPDATE meetings SET "
+                "state = CASE WHEN state = 'finalized' THEN 'ended' ELSE state END, "
+                "minutes_json = NULL, minutes_status = NULL, minutes_error = NULL, "
+                "display_title = NULL, finalized_at = NULL "
+                "WHERE id = ?",
+                (meeting_id,),
+            )
+            await conn.commit()
+
     # ── Meeting segments ────────────────────────────────────────
     async def append_meeting_segment(
         self,

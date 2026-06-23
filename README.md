@@ -1,7 +1,7 @@
 # EchoDesk · 数字分身 (Another Me)
 
 > **目标**：会议 + 办公场景的"数字分身"桌面应用，**本地优先，数据不出机**。
-> **当前版本**：v0.2.3（详见 [`CHANGELOG.md`](CHANGELOG.md)）
+> **当前版本**：v0.2.4（详见 [`CHANGELOG.md`](CHANGELOG.md)）
 > **快速安装**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
 > **远程后端 eight endpoint（STT/TTS/Fast LLM）**：见 [`docs/REMOTE_API.md`](docs/REMOTE_API.md)
@@ -12,7 +12,7 @@
 |---|---|---|
 | Phase 1 (0.1.0) | 持续监听 + 会议 + 9 类 intent + 一键产物 + 一键 install | ✅ released |
 | Phase 2 (0.2.0) | 状态可视化 + artifact.failed + 远端降级 + DB migration + 管理 API + 诊断打包 | ✅ released |
-| Phase 3 (0.2.3) | 首次启动引导 + 远端 endpoint 配置 + mac mic 权限补救 + 知识库面板 + 智能电视一键安装包 | ✅ demo hotfix |
+| Phase 3 (0.2.4) | 首次启动引导 + 远端 endpoint 配置 + 知识库面板 + 智能电视一键安装/自启 + 会后扫码保存 | ✅ demo hotfix |
 | Phase 4 | Keychain 集成 + 自动更新 + Universal Binary | 计划中 |
 
 测试：290+ unit + 9 e2e + 4 真服务 integration 全过，ruff/mypy 0 错误。

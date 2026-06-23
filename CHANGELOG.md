@@ -51,6 +51,35 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.4] – 2026-06-23
+
+TV meeting-room hotfix：补齐智能电视安装后的值守能力，以及会后扫码保存/清理会议资料。
+
+### 新增
+
+- Android TV APK 增加开机自启 receiver：设备重启后自动尝试拉起 EchoDesk，适合会议室常驻大屏。
+- 会议结束后右侧纪要区新增「扫码保存」入口：大屏生成 QR，手机扫码打开轻量分享页，可保存会议纪要并下载产物。
+- 分享页支持合并会议纪要 todo 中关联的产物，以及当前前端会话已知的本会议产物。
+- 扫码弹窗提供复制链接、打开分享页、下载 Markdown 纪要、删除本会议输出。
+
+### 修复
+
+- 修复会议待办「执行」生成产物时丢失 `meeting_id` / `todo_id` 的问题；产物现在能正确归属本会议并回写 todo。
+- 普通会议中 `@生成 PDF/PPT/Excel/...` 也会携带当前 `meeting_id`，避免产物只进入全局 outputs。
+
+### 配置变更
+
+- Android 版本升到 `versionCode=204`、`versionName=0.2.4`。
+- 新增前端依赖 `qrcode` / `@types/qrcode`，仅在打开扫码弹窗时动态加载 QR 生成逻辑。
+
+### 已知问题
+
+- 开机自启受 Android TV 厂商限制：部分电视需要在系统设置中允许自启动/后台启动，或不能在 boot broadcast 后自动拉起 Activity。
+- APK 仍是会议室内测 debug 包；正式外部分发需要 release 签名与 HTTPS backend。
+- 非 Android TV（Samsung Tizen、LG webOS、Apple TV）仍不能直接安装 APK。
+
+---
+
 ## [0.2.3] – 2026-06-23
 
 Smart TV install hotfix：把 v0.2.2 的 Android TV 兼容继续补成面向会议室电视的一键安装交付。

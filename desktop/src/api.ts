@@ -7,6 +7,7 @@ import type {
 } from "@/types";
 import {
   DEFAULT_ANDROID_BACKEND_BASE,
+  apiPath,
   apiUrl,
   backendBase,
   configuredBackendBase,
@@ -224,6 +225,45 @@ export async function getMeetingArtifacts(
   // 后续接入 DB join 时只换实现，前端不动。会议不存在仍返回 404。
   if (r.status === 404) return [];
   return asJson<GeneratedArtifact[]>(r);
+}
+
+export interface ClearMeetingOutputsResult {
+  meeting_id: string;
+  minutes_cleared: boolean;
+  artifact_ids: string[];
+  artifacts_deleted: number;
+  missing_artifact_ids: string[];
+}
+
+export async function meetingShareUrl(
+  meetingId: string,
+  artifactIds: string[] = [],
+): Promise<string> {
+  const params = new URLSearchParams();
+  const ids = artifactIds.filter(Boolean);
+  if (ids.length > 0) params.set("artifact_ids", ids.join(","));
+  const path = `/meetings/${encodeURIComponent(meetingId)}/share${
+    params.toString() ? `?${params.toString()}` : ""
+  }`;
+  const base = await backendBase();
+  if (base) return `${base}${path}`;
+  if (typeof window !== "undefined" && window.location.origin) {
+    return `${window.location.origin}${apiPath(path)}`;
+  }
+  return apiPath(path);
+}
+
+export async function clearMeetingOutputs(
+  meetingId: string,
+  artifactIds: string[],
+): Promise<ClearMeetingOutputsResult> {
+  const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/outputs`);
+  const r = await fetch(u, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ artifact_ids: artifactIds, clear_minutes: true }),
+  });
+  return asJson<ClearMeetingOutputsResult>(r);
 }
 
 // ── 待机时持续显示 ambient 转写片段 ──────────────────────────

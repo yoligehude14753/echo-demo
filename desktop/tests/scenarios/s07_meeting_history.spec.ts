@@ -280,8 +280,8 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     // A 的转写文本不应残留
     await expect(page.getByText("A-第一段：开场")).toHaveCount(0);
 
-    // B 没纪要 → 显示空态
-    await expect(page.getByText(/纪要尚未生成/)).toBeVisible();
+    // B 已结束但还没拿到纪要 → 显示生成/可重试状态，不再退回空态
+    await expect(page.getByTestId("minutes-generating")).toBeVisible();
     // A 的纪要标题不应再出现
     await expect(page.getByText(/Q3 达成 95%/)).toHaveCount(0);
 

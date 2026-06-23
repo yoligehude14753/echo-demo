@@ -30,7 +30,7 @@ import {
   routeIntent,
   workspaceStatus,
 } from "@/api";
-import { useStore } from "@/store";
+import { useStore, type CommandBarPrefillMeta } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 
@@ -92,6 +92,7 @@ export default function CommandBar(): JSX.Element {
   const [dropActive, setDropActive] = useState(false);
   const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
   const [lastIntent, setLastIntent] = useState<IntentResult | null>(null);
+  const [prefillMeta, setPrefillMeta] = useState<CommandBarPrefillMeta | null>(null);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
@@ -103,8 +104,9 @@ export default function CommandBar(): JSX.Element {
   // M_minutes_refactor：MinutesView「执行待办」按钮通过 store.prefillCommandBar
   // 把 suggested_command 一键填入；只 setText + focus，不自动 onSubmit 防误触。
   useEffect(() => {
-    const unregister = registerCommandBarPrefill((nextText) => {
+    const unregister = registerCommandBarPrefill((nextText, meta) => {
       setText(nextText);
+      setPrefillMeta(meta ?? null);
       textareaRef.current?.focus({ cursor: "end" });
     });
     return unregister;
@@ -235,11 +237,13 @@ export default function CommandBar(): JSX.Element {
           : "";
     if (!value) return;
     setBusy(true);
+    const activePrefillMeta = prefillMeta;
     try {
       const r = await routeIntent(value, currentMeetingId);
       setLastIntent(r);
-      await dispatch(r, value);
+      await dispatch(r, value, activePrefillMeta);
       setText("");
+      setPrefillMeta(null);
       // 附件已被发出，清空 pendingDocs（后端 RAG 检索复用 doc_id）
       if (trimmed.length === 0 && pendingDocs.length > 0) {
         setPendingDocs([]);
@@ -252,7 +256,11 @@ export default function CommandBar(): JSX.Element {
     }
   }
 
-  async function dispatch(r: IntentResult, originalText: string): Promise<void> {
+  async function dispatch(
+    r: IntentResult,
+    originalText: string,
+    meta: CommandBarPrefillMeta | null,
+  ): Promise<void> {
     switch (r.kind) {
       case "generate_html":
       case "generate_pptx":
@@ -280,6 +288,8 @@ export default function CommandBar(): JSX.Element {
             | "pdf"
             | "txt",
           brief,
+          meeting_id: meta?.meeting_id ?? currentMeetingId ?? undefined,
+          todo_id: meta?.todo_id,
         })
           .then((art) => {
             addArtifact(art);
@@ -476,7 +486,10 @@ export default function CommandBar(): JSX.Element {
         <Input.TextArea
           ref={textareaRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            if (!e.target.value.trim()) setPrefillMeta(null);
+          }}
           onPressEnter={(e) => {
             if (!e.shiftKey) {
               e.preventDefault();
