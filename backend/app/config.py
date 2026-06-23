@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     public_ws_url: str = "ws://localhost:8769/ws/echo"
     public_http_url: str = "http://localhost:8769"
-    app_version: str = "0.2.4"
+    app_version: str = "0.2.5"
 
     # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
     llm_main_provider: str = "yunwu"
@@ -318,6 +318,7 @@ class Settings(BaseSettings):
         "app://.,capacitor://localhost,https://localhost,http://localhost,"
         "http://localhost:5173,http://localhost:8769"
     )
+    public_demo_mode: bool = False
     debug_token: str = ""
 
     @property

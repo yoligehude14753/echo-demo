@@ -51,6 +51,29 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.5] – 2026-06-23
+
+Public demo backend hotfix：让 Android / TV 版本默认连公网 EchoDesk demo backend，
+外部用户安装后可直接使用，同时不把模型 key 打进客户端包。
+
+### 新增
+
+- Android / TV 默认后端地址改为 `https://echodesk.yoliyoli.uk`，不再要求用户先在同局域网启动 Mac backend。
+- 后端新增 `PUBLIC_DEMO_MODE`：公网 demo 模式下 `/admin/*` 默认禁止访问，避免暴露本机路径、日志和远端 key 配置入口。
+- `/admin/*` 在 public demo 模式下仅接受服务端配置的 `DEBUG_TOKEN`，支持 `Authorization: Bearer ...` 或 `X-Echo-Admin-Token`。
+
+### 配置变更
+
+- Android 版本升到 `versionCode=205`、`versionName=0.2.5`。
+- 桌面包版本升到 `0.2.5`。
+
+### 已知问题
+
+- 客户端仍不内置任何模型 key；公网 backend 可以保护 key，但不能完全阻止抓包复用接口，后续需要设备注册、限流和签名校验增强。
+- Mac DMG / Windows EXE / Android APK 仍是 demo 分发形态；正式商店分发还需要签名、notarization 和发布渠道账号。
+
+---
+
 ## [0.2.4] – 2026-06-23
 
 TV meeting-room hotfix：补齐智能电视安装后的值守能力，以及会后扫码保存/清理会议资料。

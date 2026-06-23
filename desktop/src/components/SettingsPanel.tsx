@@ -165,6 +165,7 @@ export default function SettingsPanel({
   const [remote, setRemote] = useState<RemoteSettingsResponse | null>(null);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
+  const [adminUnavailable, setAdminUnavailable] = useState(false);
   const [form] = Form.useForm<Record<string, string>>();
   const [backendBaseDraft, setBackendBaseDraft] = useState("");
   // P4-fix-rag-chat：工作区目录配置
@@ -177,8 +178,14 @@ export default function SettingsPanel({
     try {
       const url = await apiUrl("/admin/data-dir");
       const res = await fetch(url);
+      if (res.status === 403) {
+        setAdminUnavailable(true);
+        setDataDir(null);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as DataDirResponse;
+      setAdminUnavailable(false);
       setDataDir(json);
     } catch (e) {
       message.error(`读取数据目录失败：${(e as Error).message}`);
@@ -192,8 +199,14 @@ export default function SettingsPanel({
     try {
       const url = await apiUrl("/admin/settings/remote");
       const res = await fetch(url);
+      if (res.status === 403) {
+        setAdminUnavailable(true);
+        setRemote(null);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as RemoteSettingsResponse;
+      setAdminUnavailable(false);
       setRemote(json);
       // 重置表单：sensitive 字段不显示原值（脱敏值仅作 placeholder），
       // 用户留空就不修改；非 sensitive 字段直接拿明文当初值
@@ -473,7 +486,12 @@ export default function SettingsPanel({
             </Tooltip>
           </div>
           <div className="bg-paper-150 rounded-md p-3 space-y-2">
-            {loading && !dataDir ? (
+            {adminUnavailable ? (
+              <div className="text-[12px] text-ink-500 leading-relaxed">
+                公网 demo backend 不开放本机数据目录、日志和诊断导出。Mac / Windows
+                桌面端本机 backend 可继续使用这些管理功能。
+              </div>
+            ) : loading && !dataDir ? (
               <Spin size="small" />
             ) : !dataDir ? (
               <div className="text-ink-400 text-[12px]">读取失败</div>
@@ -516,7 +534,8 @@ export default function SettingsPanel({
           </div>
         </section>
 
-        <section>
+        {!adminUnavailable && (
+          <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Server className="w-4 h-4" />
             <span>远端服务</span>
@@ -601,7 +620,8 @@ export default function SettingsPanel({
               </div>
             </Form>
           )}
-        </section>
+          </section>
+        )}
 
         <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
@@ -637,9 +657,10 @@ export default function SettingsPanel({
               </Button>
             </div>
             <div className="text-[11px] text-ink-500 leading-relaxed">
-              APK 不会自动启动桌面 backend。真机演示时，把这里设为电脑局域网地址，
-              例如 <span className="font-mono">http://10.10.12.32:8769</span>；
-              模拟器默认使用 <span className="font-mono">{DEFAULT_ANDROID_BACKEND_BASE}</span>。
+              Android / TV 默认连接 EchoDesk 公网 demo backend：
+              <span className="font-mono ml-1">{DEFAULT_ANDROID_BACKEND_BASE}</span>。
+              内网演示或开发调试时，可临时改成电脑局域网地址，例如
+              <span className="font-mono ml-1">http://10.10.12.32:8769</span>。
             </div>
           </div>
         </section>
@@ -741,7 +762,8 @@ export default function SettingsPanel({
           </div>
         </section>
 
-        <section>
+        {!adminUnavailable && (
+          <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Download className="w-4 h-4" />
             <span>诊断</span>
@@ -759,9 +781,11 @@ export default function SettingsPanel({
             包含：最近 7 天 backend log（≤5MB/文件）· 配置（API key
             已脱敏）· DB schema · 远程探针历史。报 bug 时把这个 zip 发给我们。
           </div>
-        </section>
+          </section>
+        )}
 
-        <section>
+        {!adminUnavailable && (
+          <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Users className="w-4 h-4" />
             <span>说话人管理</span>
@@ -780,7 +804,8 @@ export default function SettingsPanel({
             清空 speakers 表和 diarizer 内存，<b>转写文字保留</b>。下次录音
             重新学习。常用于 speaker 数量被噪音污染时。
           </div>
-        </section>
+          </section>
+        )}
 
         {onReplayOnboarding && (
           <section>

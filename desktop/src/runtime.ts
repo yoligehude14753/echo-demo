@@ -45,7 +45,7 @@ declare global {
 let cachedBase: string | null = null;
 
 export const MOBILE_BACKEND_BASE_KEY = "echodesk.mobileBackendBase";
-export const DEFAULT_ANDROID_BACKEND_BASE = "http://10.0.2.2:8769";
+export const DEFAULT_ANDROID_BACKEND_BASE = "https://echodesk.yoliyoli.uk";
 
 function normalizeBackendBase(raw: string | null | undefined): string | null {
   const v = raw?.trim().replace(/\/+$/, "");

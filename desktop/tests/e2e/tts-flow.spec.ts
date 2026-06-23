@@ -37,7 +37,7 @@ async function mockTtsDiag(
         rms: payload.rms ?? 2500,
         peak: payload.peak ?? 18_000,
         voice: "aiden",
-        base_url: "http://100.87.251.9:8094",
+        base_url: "http://100.76.3.59:8094",
         checked_at: Date.now() / 1000,
       }),
     }),

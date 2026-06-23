@@ -191,19 +191,19 @@ export async function installScenarioMock(
             },
             {
               key: "llm_fast_base_url",
-              value: "http://100.87.251.9:7860/v1",
+              value: "http://100.76.3.59:7860/v1",
               sensitive: false,
               source: "default",
             },
             {
               key: "stt_firered_url",
-              value: "http://100.87.251.9:8090",
+              value: "http://100.76.3.59:8090",
               sensitive: false,
               source: "default",
             },
             {
               key: "tts_qwen3_url",
-              value: "http://100.87.251.9:8094",
+              value: "http://100.76.3.59:8094",
               sensitive: false,
               source: "default",
             },

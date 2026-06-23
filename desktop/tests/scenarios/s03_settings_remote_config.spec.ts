@@ -53,7 +53,7 @@ test("S03 · 设置面板：远端配置 + 数据目录 + 回放引导（P2.5 + 
       "https://yunwu.ai/v1",
     );
     await expect(form.locator("input[id='stt_firered_url']")).toHaveValue(
-      "http://100.87.251.9:8090",
+      "http://100.76.3.59:8090",
     );
     // sensitive 字段 placeholder 显示脱敏值
     await expect(form.locator("input[id='yunwu_open_key']")).toBeVisible();

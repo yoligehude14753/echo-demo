@@ -7,8 +7,8 @@
 
 从 GitHub Release 下载：
 
-- `EchoDesk-0.2.4-smart-tv.apk`：电视直接安装用 APK。
-- `EchoDesk-0.2.4-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
+- `EchoDesk-0.2.5-smart-tv.apk`：电视直接安装用 APK。
+- `EchoDesk-0.2.5-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
 - `https://yoligehude14753.github.io/echo-demo/tv-install.html`：电视浏览器安装页，可用遥控器直接选择下载按钮。
 
 ## 方法 A：电视浏览器安装
@@ -26,7 +26,7 @@
 1. 让电脑和电视连接同一个局域网。
 2. 在电视设置中打开开发者模式和网络调试 / ADB 调试。
 3. 查到电视 IP。
-4. 解压 `EchoDesk-0.2.4-smart-tv-oneclick.zip`。
+4. 解压 `EchoDesk-0.2.5-smart-tv-oneclick.zip`。
 5. macOS：
 
 ```bash
@@ -43,16 +43,23 @@ powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.
 
 ## 方法 C：U 盘安装
 
-1. 把 `EchoDesk-0.2.4-smart-tv.apk` 拷到 U 盘。
+1. 把 `EchoDesk-0.2.5-smart-tv.apk` 拷到 U 盘。
 2. 在电视文件管理器里打开 APK。
 3. 按提示允许安装未知来源应用。
 
 ## 后端连接
 
-TV APK 只是 EchoDesk 前端壳，不包含 Python backend，也不包含真实 API key。
-电视端需要访问运行中的 EchoDesk backend。
+TV APK 是 EchoDesk 前端客户端，不包含 Python backend，也不包含真实 API key。
+默认连接 EchoDesk 公网 demo backend：
 
-会议室内测建议：
+```text
+https://echodesk.yoliyoli.uk
+```
+
+模型服务（STT / TTS / Fast LLM）在 eight 上，客户端只连 EchoDesk backend；
+真实 key 只在服务端配置，不会打进 APK。
+
+如需内网调试，也可以临时改成局域网 backend。先在电脑上启动：
 
 ```bash
 cd backend
@@ -75,5 +82,5 @@ http://192.168.1.20:8769
 ## 安全说明
 
 - APK 与一键安装包不包含真实 API key。
-- STT / TTS / Fast LLM 访问仍通过 EchoDesk backend 的配置走 eight endpoint。
-- 如果后续要给外部客户长期使用，应改为 release 签名 APK / AAB，并配置 HTTPS backend。
+- STT / TTS / Fast LLM 访问通过 EchoDesk backend 的配置走 eight endpoint。
+- 公网 demo backend 已走 HTTPS；后续正式客户分发还需要 release 签名 APK / AAB、设备注册和限流。
