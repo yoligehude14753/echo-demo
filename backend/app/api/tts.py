@@ -5,7 +5,7 @@
 - 后端不主动推 WS 音频，避免 base64 大 payload；只推 ``tts.suggested`` 文字事件
 
 phase4-tts 2026-05-28 加固（M_tts_check）：
-- 上游 heyi cold-start 会偶尔返回"全 0 PCM"——adapter 现在算 RMS，
+- 上游 eight cold-start 会偶尔返回"全 0 PCM"——adapter 现在算 RMS，
   本路由识别为静音→ 502 ``tts_silent_output`` 让前端能 message.error
   而不是让用户"看到绿灯按了播放却没声音"。
 - 新增 GET /tts/diag：跑一次固定文本的真实合成回环，30 秒 cache。
@@ -41,7 +41,7 @@ router = APIRouter(prefix="/tts", tags=["tts"])
 
 _tts_singleton: Qwen3TTS | None = None
 
-# /tts/diag 结果缓存：30s TTL。StatusBar 大约 10s 拉一次，cache 让 heyi
+# /tts/diag 结果缓存：30s TTL。StatusBar 大约 10s 拉一次，cache 让 eight
 # 不会被 N 个客户端的轮询打爆；但 cache 也不能太长，否则状态显示滞后于现实。
 _DIAG_CACHE_TTL_S = 30.0
 # 真实合成的 probe 文本——短（< 6 字）、合法中文，避免触发任何拒答策略。
@@ -158,7 +158,7 @@ async def tts_suggest(
 
 # ── /tts/diag ────────────────────────────────────────────────────────
 #
-# 顶栏「TTS」健康指示从此读这个——只看 TCP 通不通是欺骗（heyi 服务"在线
+# 顶栏「TTS」健康指示从此读这个——只看 TCP 通不通是欺骗（eight 服务"在线
 # 但合成失败/静音"过去全部显示绿）。/tts/diag 跑一次真实合成回环再判定。
 
 

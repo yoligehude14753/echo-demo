@@ -1,4 +1,4 @@
-"""STT Port：firered (FireRedASR2-AED @ heyi :8090) 唯一 backend。"""
+"""STT Port：firered (FireRedASR2-AED @ eight :8090) 唯一 backend。"""
 
 from __future__ import annotations
 

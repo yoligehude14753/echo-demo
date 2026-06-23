@@ -45,7 +45,7 @@ class SynthesisResult:
     """合成一次的完整产物 + 质量指标。
 
     - ``pcm``：返回给客户端的 raw 16kHz 16-bit mono bytes
-    - ``raw_bytes`` / ``raw_content_type``：上游 heyi 原始响应（wav 或 pcm）
+    - ``raw_bytes`` / ``raw_content_type``：上游 eight 原始响应（wav 或 pcm）
     - ``rms``：PCM 的 RMS（int16 量纲，0–32767），用于 silence 检测
     - ``max_abs``：PCM 绝对值峰值
     - ``latency_s``：从发请求到拿到 bytes 的总耗时
@@ -101,7 +101,7 @@ class Qwen3TTS:
         text: str,
         *,
         voice: str | None = None,
-        sample_rate: int = 16_000,  # heyi 强制 16k；保留参数仅为 Port 兼容
+        sample_rate: int = 16_000,  # eight 强制 16k；保留参数仅为 Port 兼容
     ) -> SynthesisResult:
         _ = sample_rate  # 显式标记未用，避免 ARG002 误报
         """详细版：返回 PCM 与原始字节、质量指标。供 /tts/diag 与 /tts/speak 共用。"""
@@ -150,7 +150,7 @@ class Qwen3TTS:
 
 
 def _decode_to_pcm16k(audio: bytes, content_type: str) -> bytes:
-    """把 heyi 上游响应（wav 或 raw pcm）统一成 16kHz 16-bit mono PCM。"""
+    """把 eight 上游响应（wav 或 raw pcm）统一成 16kHz 16-bit mono PCM。"""
     is_wav = "wav" in content_type or (len(audio) >= 4 and audio[:4] == b"RIFF")
     if not is_wav:
         return audio
@@ -185,7 +185,7 @@ def _pcm16_quality(pcm: bytes) -> tuple[float, int]:
 
 
 def is_silent(result: SynthesisResult, floor: float = SILENCE_RMS_FLOOR) -> bool:
-    """根据 RMS 判断是否静音（heyi cold-start 偶尔会返回全 0 PCM）。"""
+    """根据 RMS 判断是否静音（eight cold-start 偶尔会返回全 0 PCM）。"""
     return bool(result.pcm) and result.rms < floor
 
 

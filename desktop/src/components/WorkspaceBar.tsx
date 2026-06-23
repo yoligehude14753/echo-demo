@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { Button, Modal, Tag, Tooltip, message } from "antd";
 import { FileText, FolderOpen, RefreshCw, Settings, Trash2 } from "lucide-react";
 
@@ -116,6 +117,15 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
     });
   }, [refresh]);
 
+  const openKnowledgeModalFromKeyboard = useCallback(
+    (e: KeyboardEvent<HTMLSpanElement>) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      setModalOpen(true);
+    },
+    [],
+  );
+
   const nDirs = status?.authorized_dirs.length ?? 0;
   const nIndexed = status?.n_indexed ?? 0;
   const nDocsTotal = docs?.total ?? 0;
@@ -144,7 +154,11 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
             color={nDirs > 0 ? "blue" : "default"}
             className="!m-0 cursor-pointer"
             onClick={() => setModalOpen(true)}
+            onKeyDown={openKnowledgeModalFromKeyboard}
+            role="button"
+            tabIndex={0}
             data-testid="workspace-dirs-tag"
+            aria-label="打开知识库和工作区文件"
           >
             {nDirs} 目录
           </Tag>

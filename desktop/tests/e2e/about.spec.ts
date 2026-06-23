@@ -12,8 +12,7 @@ import { installEchoMock } from "./_mock";
 
 test("点 v 徽章 → 弹出关于对话框，前后端版本可见", async ({ page }) => {
   await installEchoMock(page);
-  await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const badge = page.getByTestId("open-about");
   await expect(badge).toBeVisible();
@@ -45,7 +44,9 @@ test("点 v 徽章 → 弹出关于对话框，前后端版本可见", async ({ 
     "https://github.com/yoligehude14753/echo-demo/blob/main/docs/INSTALL.md",
   );
 
-  // 关闭：点 antd Modal 的关闭按钮（X）
-  await page.locator(".ant-modal-close").click();
-  await expect(body).toBeHidden();
+  // 关闭：用键盘路径验证关闭按钮，兼容 TV/遥控器 Enter 操作。
+  const closeButton = page.locator(".ant-modal-close").first();
+  await closeButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".ant-modal-wrap")).toBeHidden({ timeout: 10_000 });
 });

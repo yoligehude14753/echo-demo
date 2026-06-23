@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { existsSync } = require("node:fs");
+const { copyFileSync, existsSync, mkdirSync } = require("node:fs");
 const { homedir } = require("node:os");
 const { join } = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -16,6 +16,9 @@ const APK_PATH = join(
   "debug",
   "app-debug.apk",
 );
+const { version } = require(join(ROOT, "package.json"));
+const RELEASE_DIR = join(ROOT, "release");
+const TV_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android-tv-debug.apk`);
 
 function firstExisting(paths) {
   return paths.find((p) => p && existsSync(p)) || null;
@@ -87,3 +90,6 @@ run("npx", ["cap", "sync", "android"], { env });
 run("./gradlew", ["assembleDebug"], { cwd: ANDROID_DIR, env });
 
 console.log(`[android] APK ready: ${APK_PATH}`);
+mkdirSync(RELEASE_DIR, { recursive: true });
+copyFileSync(APK_PATH, TV_APK_PATH);
+console.log(`[android] TV-compatible APK copied: ${TV_APK_PATH}`);

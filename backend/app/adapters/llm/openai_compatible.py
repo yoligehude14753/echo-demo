@@ -96,7 +96,7 @@ class LLMError(RuntimeError):
 class OpenAICompatibleLLM:
     """实现 ports.llm.LLMPort 的 OpenAI 兼容客户端。
 
-    路由：根据 ``model`` 参数决定走 MAIN(Yunwu) 还是 FAST(heyi-local)。
+    路由：根据 ``model`` 参数决定走 MAIN(Yunwu) 还是 FAST(eight-local)。
     无 model 时按对应通道默认模型。
     """
 

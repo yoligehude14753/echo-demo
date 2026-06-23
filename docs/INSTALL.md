@@ -24,9 +24,9 @@ EchoDesk = Mac 桌面 app（Electron + React UI）+ Python FastAPI backend。
 
 优先从 GitHub Releases 下载当前 demo 包：
 
-- macOS: `EchoDesk-0.2.1-arm64.dmg`
-- Windows: `EchoDesk Setup 0.2.1.exe`
-- Android: `EchoDesk-0.2.1-android-debug.apk`（内部演示 debug 包）
+- macOS: `EchoDesk-0.2.2-arm64.dmg`
+- Windows: `EchoDesk.Setup.0.2.2.exe`
+- Android / Android TV: `EchoDesk-0.2.2-android-tv-debug.apk`（内部演示 debug 包）
 
 源码构建仅用于开发：
 
@@ -52,8 +52,8 @@ npm run app:dist:mac
 产物：
 
 ```text
-desktop/release/EchoDesk-0.2.1-arm64.dmg
-desktop/release/EchoDesk-0.2.1-arm64-mac.zip
+desktop/release/EchoDesk-0.2.2-arm64.dmg
+desktop/release/EchoDesk-0.2.2-arm64-mac.zip
 desktop/release/mac-arm64/EchoDesk.app
 ```
 

@@ -87,7 +87,7 @@ function levelFromProbes(probes: ProbeResultDTO[]): Level {
 }
 
 // 多个 level 合并取最差（unknown < ok 仅在两者都不为 fail/warn 时退到 unknown）。
-// 用于 heyi pill 同时反映 TCP probe 与 /tts/diag 合成回环两条线索。
+// 用于 eight pill 同时反映 TCP probe 与 /tts/diag 合成回环两条线索。
 const LEVEL_ORDER: Record<Level, number> = { ok: 0, warn: 1, fail: 2, unknown: 3 };
 function mergeLevels(a: Level, b: Level): Level {
   // fail 永远胜出（有任何明确失败 → 整体 fail）；其次 warn；ok 与 unknown 取 ok。
@@ -468,7 +468,7 @@ export default function StatusBar({
   const { supervisor, healthz, healthzOk, mic } = health;
 
   const backendLevel = levelFromSupervisor(supervisor, healthzOk);
-  // heyi pill 级别：取「TCP 各探针」与「TTS 合成回环」二者的最差。
+  // eight pill 级别：取「TCP 各探针」与「TTS 合成回环」二者的最差。
   // 这样即便 STT/Fast LLM TCP 都通了，只要 /tts/diag 报 silent_output，
   // pill 也会立刻变红/橙——消除"绿灯但用户没声音"的欺骗。
   const ttsHealthLevel = levelFromTtsHealth(ttsEnabled, ttsHealth, ttsLastError);

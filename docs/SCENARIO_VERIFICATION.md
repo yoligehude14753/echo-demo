@@ -112,7 +112,7 @@ bash scripts/collect-scenario-videos.sh   # 整理成 webm + mp4
 | 步骤 | 操作 | 期望 | 实际 |
 |---|---|---|---|
 | 1 | `/healthz/full` mock `heyi-down` | `pill-heyi` 内圆点红色 | ✅ |
-| 2 | 点 heyi pill | popover 显示「Connection refused」错误 | ✅ |
+| 2 | 点 eight pill | popover 显示「Connection refused」错误 | ✅ |
 
 ### S06b · Yunwu / Tavily 缺 key（P2.3）
 

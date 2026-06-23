@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     public_ws_url: str = "ws://localhost:8769/ws/echo"
     public_http_url: str = "http://localhost:8769"
-    app_version: str = "0.2.1"
+    app_version: str = "0.2.2"
 
     # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
     llm_main_provider: str = "yunwu"
@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     llm_main_max_tokens: int = 80_000
 
     # ── LLM 快速通道（qwen3.5-9b-local on eight） ─────────────────
-    llm_fast_provider: str = "heyi-local"
+    llm_fast_provider: str = "eight-local"
     llm_fast_model: str = "qwen3.5-9b-local"
     llm_fast_base_url: str = "http://100.76.3.59:7860/v1"
     llm_local_api_key: str = "EMPTY"
