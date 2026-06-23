@@ -52,9 +52,7 @@ async def test_real_stt_handshake(settings: Settings) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not _can_connect("100.76.3.59", 8094), reason="eight 8094 (qwen3_tts) 不可达"
-)
+@pytest.mark.skipif(not _can_connect("100.76.3.59", 8094), reason="eight 8094 (qwen3_tts) 不可达")
 async def test_real_tts_synthesize(settings: Settings) -> None:
     """TTS 真实合成 → 返回非空 PCM 字节（≥ 0.1s 音频）。"""
     tts = Qwen3TTS(settings, timeout_s=30.0)

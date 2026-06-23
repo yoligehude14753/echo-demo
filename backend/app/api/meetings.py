@@ -217,42 +217,46 @@ def _share_html(
     safe_title = html.escape(title)
     safe_meeting = html.escape(meeting_id)
     summary_html = (
-        f"<p class=\"summary\">{html.escape(summary)}</p>"
+        f'<p class="summary">{html.escape(summary)}</p>'
         if summary
-        else "<p class=\"empty\">会议纪要尚未生成或已被删除。</p>"
+        else '<p class="empty">会议纪要尚未生成或已被删除。</p>'
     )
     section_html = ""
     for sec in sections:
         heading = html.escape(str(sec.get("heading") or "议题"))
-        bullets = sec.get("bullets") if isinstance(sec.get("bullets"), list) else []
-        bullet_html = "".join(
-            f"<li>{html.escape(str(b))}</li>"
-            for b in bullets
-        )
+        raw_bullets = sec.get("bullets")
+        bullets: list[object] = raw_bullets if isinstance(raw_bullets, list) else []
+        bullet_html = "".join(f"<li>{html.escape(str(b))}</li>" for b in bullets)
         section_html += f"<section><h2>{heading}</h2><ul>{bullet_html}</ul></section>"
     decisions_html = ""
     if decisions:
-        decisions_html = "<section><h2>决议</h2><ul>" + "".join(
-            f"<li>{html.escape(str(d))}</li>" for d in decisions
-        ) + "</ul></section>"
+        decisions_html = (
+            "<section><h2>决议</h2><ul>"
+            + "".join(f"<li>{html.escape(str(d))}</li>" for d in decisions)
+            + "</ul></section>"
+        )
     artifact_html = ""
     if artifacts:
         rows = []
         for item in artifacts:
+            size_bytes = item.get("size_bytes")
+            size = int(size_bytes) if isinstance(size_bytes, int | str) else 0
             rows.append(
-                "<a class=\"artifact\" href=\"{url}\">"
+                '<a class="artifact" href="{url}">'
                 "<span><strong>{title}</strong><em>{kind} · {size}</em></span>"
                 "<b>下载</b>"
                 "</a>".format(
                     url=html.escape(str(item["download_url"])),
                     title=html.escape(str(item["title"])),
                     kind=html.escape(str(item["artifact_type"])),
-                    size=html.escape(_format_bytes(int(item["size_bytes"]))),
+                    size=html.escape(_format_bytes(size)),
                 )
             )
-        artifact_html = "<section><h2>会议产物</h2><div class=\"artifacts\">" + "".join(rows) + "</div></section>"
+        artifact_html = (
+            '<section><h2>会议产物</h2><div class="artifacts">' + "".join(rows) + "</div></section>"
+        )
     else:
-        artifact_html = "<section><h2>会议产物</h2><p class=\"empty\">暂无可下载产物。</p></section>"
+        artifact_html = '<section><h2>会议产物</h2><p class="empty">暂无可下载产物。</p></section>'
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -494,7 +498,10 @@ async def share_meeting(
             summary = "会议纪要数据损坏，请回到 EchoDesk 重新生成。"
 
     ids: list[str] = []
-    for artifact_id in [*_artifact_ids_from_minutes(meeting.minutes_json), *_split_artifact_ids(artifact_ids)]:
+    for artifact_id in [
+        *_artifact_ids_from_minutes(meeting.minutes_json),
+        *_split_artifact_ids(artifact_ids),
+    ]:
         if artifact_id not in ids:
             ids.append(artifact_id)
     artifacts = [

@@ -96,7 +96,11 @@ class BM25Rag:
                         e,
                     )
             if loaded == 0 and data.get("chunks"):
-                log.warning("rag doc %s loaded 0 / %d chunks (全部 schema 失败)", doc_id, len(data["chunks"]))
+                log.warning(
+                    "rag doc %s loaded 0 / %d chunks (全部 schema 失败)",
+                    doc_id,
+                    len(data["chunks"]),
+                )
         self._rebuild_bm25()
 
     def _rebuild_bm25(self) -> None:

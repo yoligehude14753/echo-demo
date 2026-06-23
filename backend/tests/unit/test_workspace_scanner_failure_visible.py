@@ -114,7 +114,8 @@ async def test_ingest_failures_increment_n_failed_with_visible_logs(
         assert bad in error_blob, f"errors 必须含坏文件名 {bad}: {r.errors}"
 
     workspace_warnings = [
-        rec for rec in caplog.records
+        rec
+        for rec in caplog.records
         if rec.name == "echodesk.workspace" and rec.levelno == logging.WARNING
     ]
     assert workspace_warnings, "至少要 emit 一条 echodesk.workspace warning"
@@ -205,7 +206,8 @@ def test_bm25_load_index_corrupt_json_logs_warning(
     rag = BM25Rag(s)
 
     warnings = [
-        rec for rec in caplog.records
+        rec
+        for rec in caplog.records
         if rec.name == "echodesk.rag" and rec.levelno == logging.WARNING
     ]
     assert warnings, "corrupt json 必须 emit echodesk.rag warning"
