@@ -1,6 +1,6 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -19,6 +19,7 @@
     "app:dist:mac": "npm run build && electron-builder --mac",
     "app:dist:win": "npm run build && electron-builder --win nsis --x64",
     "app:dist:android": "node scripts/build-android-debug.cjs",
+    "app:package:tv": "node scripts/package-tv-installer.cjs",
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
     "e2e": "playwright test",

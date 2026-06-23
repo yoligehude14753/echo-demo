@@ -24,9 +24,11 @@ EchoDesk = Mac 桌面 app（Electron + React UI）+ Python FastAPI backend。
 
 优先从 GitHub Releases 下载当前 demo 包：
 
-- macOS: `EchoDesk-0.2.2-arm64.dmg`
-- Windows: `EchoDesk.Setup.0.2.2.exe`
-- Android / Android TV: `EchoDesk-0.2.2-android-tv-debug.apk`（内部演示 debug 包）
+- macOS: `EchoDesk-0.2.3-arm64.dmg`
+- Windows: `EchoDesk.Setup.0.2.3.exe`
+- Android / Android TV: `EchoDesk-0.2.3-smart-tv.apk`（内部演示 debug 包）
+- 智能电视一键安装包：`EchoDesk-0.2.3-smart-tv-oneclick.zip`
+- 电视浏览器安装页：`https://yoligehude14753.github.io/echo-demo/tv-install.html`
 
 源码构建仅用于开发：
 
@@ -52,8 +54,8 @@ npm run app:dist:mac
 产物：
 
 ```text
-desktop/release/EchoDesk-0.2.2-arm64.dmg
-desktop/release/EchoDesk-0.2.2-arm64-mac.zip
+desktop/release/EchoDesk-0.2.3-arm64.dmg
+desktop/release/EchoDesk-0.2.3-arm64-mac.zip
 desktop/release/mac-arm64/EchoDesk.app
 ```
 
@@ -69,12 +71,16 @@ Android 当前用 Capacitor 打 debug APK：
 ```bash
 cd ~/echo-demo/desktop
 npm run app:dist:android
+npm run app:package:tv
 ```
 
 产物：
 
 ```text
 desktop/android/app/build/outputs/apk/debug/app-debug.apk
+desktop/release/EchoDesk-0.2.3-android-tv-debug.apk
+desktop/release/EchoDesk-0.2.3-smart-tv.apk
+desktop/release/EchoDesk-0.2.3-smart-tv-oneclick.zip
 ```
 
 APK 只是前端壳，不会在手机里启动 Electron 的本机 Python backend。模拟器默认连
@@ -88,6 +94,24 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8769
 
 然后在 APK 里打开设置 → 移动端连接，把后端地址设成 Mac 的局域网 IP，例如
 `http://10.10.12.32:8769`。生产分发建议改成 HTTPS 后端地址。
+
+### 智能电视安装
+
+图里这种有「我的应用」入口的会议室电视，如果底层是 Android TV / Google TV /
+国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.3-smart-tv.apk`。
+
+推荐路径：
+
+1. 下载 `EchoDesk-0.2.3-smart-tv-oneclick.zip`。
+2. 电视打开开发者模式和 ADB 网络调试。
+3. 电脑和电视在同一个局域网。
+4. macOS 执行 `./install-tv-macos.sh 电视IP`；Windows 执行
+   `install-tv-windows.ps1 -TvIp 电视IP`。
+5. 安装完成后从电视「我的应用」打开 EchoDesk。
+
+也可以用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/tv-install.html`，
+遥控器选择「下载电视 APK」。
+Samsung Tizen、LG webOS、Apple TV 不能安装 APK；这类设备需要外接 Android 盒子或后续浏览器/PWA 版本。
 
 ## 第 3 步：跑 install-backend.sh
 

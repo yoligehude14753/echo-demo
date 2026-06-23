@@ -51,6 +51,29 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.3] – 2026-06-23
+
+Smart TV install hotfix：把 v0.2.2 的 Android TV 兼容继续补成面向会议室电视的一键安装交付。
+
+### 新增
+
+- 新增 `EchoDesk-0.2.3-smart-tv.apk`，作为面向 Android / AOSP 智能电视的直接安装包名。
+- 新增 `EchoDesk-0.2.3-smart-tv-oneclick.zip`，内含 APK、macOS ADB 安装脚本和 Windows PowerShell 安装脚本。
+- 新增 `docs/tv-install.html`，电视浏览器可用遥控器打开大按钮下载 APK 或一键安装包。
+- 新增 `docs/TV_INSTALL.md`，明确 Android TV / 国产 Android TV / AOSP TV / 非 Android TV 的兼容边界。
+- 新增 TV 安装页 e2e，覆盖 1920x1080 电视视口、下载链接、遥控器焦点和复制安装命令交互。
+
+### 修复
+
+- 安装文档统一到 `0.2.3` TV 资产命名，避免 debug APK、smart TV APK 和 Release 名称不一致。
+
+### 已知问题
+
+- 一键安装依赖电视开启 ADB 网络调试；不支持 ADB 的电视仍需浏览器下载或 U 盘安装。
+- Samsung Tizen、LG webOS、Apple TV 不能安装 APK，需要外接 Android 盒子或后续浏览器/PWA 版本。
+
+---
+
 ## [0.2.2] – 2026-06-22
 
 TV compatibility hotfix：让 Android 包能在会议室智能电视 / Android TV 上直接安装、出现在电视桌面并用遥控器完成核心操作。

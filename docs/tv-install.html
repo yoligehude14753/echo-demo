@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EchoDesk 智能电视安装</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        background: #07110f;
+        color: #f4fbf8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 70% 18%, rgba(16, 163, 127, 0.28), transparent 34rem),
+          linear-gradient(135deg, #07110f 0%, #10211d 48%, #07110f 100%);
+      }
+
+      main {
+        width: min(1180px, calc(100vw - 96px));
+        margin: 0 auto;
+        padding: 72px 0 56px;
+      }
+
+      h1 {
+        margin: 0 0 18px;
+        font-size: 58px;
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        width: min(920px, 100%);
+        margin: 0 0 42px;
+        color: #c8d8d2;
+        font-size: 24px;
+        line-height: 1.6;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 22px;
+      }
+
+      .panel {
+        min-height: 260px;
+        padding: 30px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      h2 {
+        margin: 0 0 12px;
+        font-size: 30px;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0 0 24px;
+        color: #c8d8d2;
+        font-size: 19px;
+        line-height: 1.55;
+      }
+
+      a.button,
+      button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 62px;
+        padding: 0 30px;
+        border: 0;
+        border-radius: 8px;
+        background: #10a37f;
+        color: #ffffff;
+        font-size: 22px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      a.secondary {
+        background: #f2f7f5;
+        color: #0c211b;
+      }
+
+      a:focus-visible,
+      button:focus-visible {
+        outline: 4px solid #ffffff;
+        outline-offset: 5px;
+        box-shadow: 0 0 0 10px rgba(16, 163, 127, 0.36);
+      }
+
+      code {
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.12);
+        padding: 3px 7px;
+        color: #eaf9f4;
+        font-size: 0.92em;
+      }
+
+      .steps {
+        margin-top: 24px;
+        padding-left: 24px;
+        color: #dfece8;
+        font-size: 19px;
+        line-height: 1.65;
+      }
+
+      .status {
+        margin-top: 14px;
+        min-height: 28px;
+        color: #94f0d6;
+        font-size: 18px;
+      }
+
+      @media (max-width: 900px) {
+        main {
+          width: min(100% - 32px, 720px);
+          padding-top: 42px;
+        }
+
+        h1 {
+          font-size: 38px;
+        }
+
+        .lead {
+          font-size: 19px;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>EchoDesk 智能电视安装</h1>
+      <p class="lead">
+        适配 Android TV、Google TV 和常见国产 Android/AOSP 智能电视。电视上点
+        APK 会进入系统安装器；电脑端可以下载一键安装包，通过 ADB 推送到电视。
+      </p>
+
+      <section class="grid" aria-label="安装方式">
+        <article class="panel">
+          <h2>电视浏览器安装</h2>
+          <p>
+            用电视浏览器打开本页，遥控器选中下面按钮并按确认。下载后按系统提示安装，
+            安装完成后到电视的「我的应用」打开 EchoDesk。
+          </p>
+          <a
+            class="button"
+            data-testid="tv-apk-link"
+            href="https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.3/EchoDesk-0.2.3-smart-tv.apk"
+          >
+            下载电视 APK
+          </a>
+        </article>
+
+        <article class="panel">
+          <h2>电脑一键安装</h2>
+          <p>
+            下载 zip 后解压，打开电视的网络调试/ADB 调试，在电脑上运行安装脚本并输入电视 IP。
+          </p>
+          <a
+            class="button secondary"
+            data-testid="tv-bundle-link"
+            href="https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.3/EchoDesk-0.2.3-smart-tv-oneclick.zip"
+          >
+            下载一键安装包
+          </a>
+          <ol class="steps">
+            <li>电视和电脑连接同一个网络。</li>
+            <li>电视开启开发者模式与 ADB 调试。</li>
+            <li>macOS 运行 <code>./install-tv-macos.sh 电视IP</code>。</li>
+            <li>Windows 运行 <code>install-tv-windows.ps1 -TvIp 电视IP</code>。</li>
+          </ol>
+        </article>
+      </section>
+
+      <section class="panel" style="margin-top: 22px">
+        <h2>复制 ADB 安装命令</h2>
+        <p>
+          已经下载并解压一键安装包后，可以在同目录运行下面的命令。电视弹出授权时先点允许。
+        </p>
+        <button type="button" data-testid="copy-adb-command">
+          复制 macOS 安装命令
+        </button>
+        <div class="status" data-testid="copy-status" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script>
+      const button = document.querySelector("[data-testid='copy-adb-command']");
+      const status = document.querySelector("[data-testid='copy-status']");
+      const command = "./install-tv-macos.sh 192.168.1.23";
+
+      button.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(command);
+          status.textContent = "已复制：" + command;
+        } catch {
+          status.textContent = "命令：" + command;
+        }
+      });
+    </script>
+  </body>
+</html>
