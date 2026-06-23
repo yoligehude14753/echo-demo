@@ -1,8 +1,23 @@
 # EchoDesk 安装指南
 
-EchoDesk = Mac 桌面 app（Electron + React UI）+ Python FastAPI backend。
-当前面向单机 / 小范围使用，**不**经 App Store 分发、**不**把 Python 打进 .app。
-装机分两步：把 .app 拖到 `/Applications/`，跑一次 install 脚本。
+当前版本：`v0.2.5`  
+下载页：<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.5>
+
+| 平台 | 直接下载 | 说明 |
+|---|---|---|
+| macOS Apple Silicon | `EchoDesk-0.2.5-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.2.5-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows | `EchoDesk.Setup.0.2.5.exe` | Windows 安装包 |
+| Android 手机 / 平板 | `EchoDesk-0.2.5-android.apk` | 默认连接公网 demo backend |
+| Android TV / 智能电视 | `EchoDesk-0.2.5-smart-tv.apk` | 适配遥控器和电视桌面入口 |
+| 智能电视一键安装 | `EchoDesk-0.2.5-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
+| 校验文件 | `SHA256SUMS-0.2.5.txt` | 校验下载完整性 |
+
+EchoDesk demo 现在是多端客户端 + 公网 demo backend。macOS / Windows 是桌面端；
+Android / TV 是客户端壳，默认连接 `https://echodesk.yoliyoli.uk`，模型服务和密钥都留在服务端。
+
+macOS 本地私有部署仍支持 Electron + React UI + Python FastAPI backend。
+本地装机分两步：把 `.app` 拖到 `/Applications/`，跑一次 install 脚本。
 
 ---
 
