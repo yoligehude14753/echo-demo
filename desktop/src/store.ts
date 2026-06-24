@@ -14,6 +14,14 @@ import {
   type FailedArtifact,
 } from "@/lib/failedArtifact";
 
+export interface LocalAmbientSegment {
+  text: string;
+  captured_at: string;
+  speaker_id: string | null;
+  speaker_label: string | null;
+  duration_ms: number;
+}
+
 /**
  * M_minutes_refactor：MinutesView 的「执行待办」按钮通过 store.prefillCommandBar
  * 把 todo.suggested_command 推送给 CommandBar。CommandBar 启动时注册一个
@@ -43,6 +51,7 @@ interface Store {
    */
   meetingDetailLoaded: Record<string, boolean>;
   artifacts: GeneratedArtifact[];
+  ambientSegments: LocalAmbientSegment[];
   failedArtifacts: FailedArtifact[];
   /**
    * 暂存最近一次 artifact.generating 的 brief，按 artifact_type 索引（最新覆盖旧的）。
@@ -67,6 +76,7 @@ interface Store {
   /** 标记某 meeting detail 已加载完毕，避免重复 fetch。 */
   markMeetingDetailLoaded(id: string): void;
   addArtifact(a: GeneratedArtifact): void;
+  addAmbientSegment(seg: LocalAmbientSegment): void;
   /**
    * 清空全局 outputs 列表（顶栏「清空」按钮）。
    * 不清 failedArtifacts —— 它们有独立 dismiss，避免一键覆盖失败上下文。
@@ -102,6 +112,7 @@ export const useStore = create<Store>((set, get) => ({
   currentMeetingId: null,
   meetingDetailLoaded: {},
   artifacts: [],
+  ambientSegments: [],
   failedArtifacts: [],
   pendingArtifactBriefs: {},
   connected: false,
@@ -132,6 +143,7 @@ export const useStore = create<Store>((set, get) => ({
       currentMeetingId: null,
       meetingDetailLoaded: {},
       artifacts: [],
+      ambientSegments: [],
       failedArtifacts: [],
       pendingArtifactBriefs: {},
       events: [],
@@ -182,6 +194,11 @@ export const useStore = create<Store>((set, get) => ({
       const dedup = s.artifacts.filter((x) => x.artifact_id !== a.artifact_id);
       return { artifacts: [a, ...dedup].slice(0, 50) };
     }),
+
+  addAmbientSegment: (seg) =>
+    set((s) => ({
+      ambientSegments: [...s.ambientSegments, seg].slice(-120),
+    })),
 
   clearArtifacts: () => set({ artifacts: [] }),
 

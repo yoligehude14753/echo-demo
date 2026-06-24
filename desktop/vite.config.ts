@@ -10,6 +10,11 @@ const pkg = JSON.parse(
 export default defineConfig({
   plugins: [react()],
   base: "./", // 让 Electron file:// 加载 dist/index.html 时能找到资源
+  build: {
+    // 会议室 Android TV WebView 可能停在 Chrome 60~70，不能解析 optional
+    // chaining / nullish coalescing。桌面 Electron 也能运行这份更保守的 bundle。
+    target: "chrome61",
+  },
   resolve: {
     alias: { "@": path.resolve(__dirname, "src") },
   },

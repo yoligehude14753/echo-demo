@@ -2,7 +2,11 @@ import ReactDOM from "react-dom/client";
 import { ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import App from "@/App";
+import { installRuntimeBodyClasses, installTvRemoteClickBridge } from "@/runtime";
 import "@/index.css";
+
+installRuntimeBodyClasses();
+installTvRemoteClickBridge();
 
 // 不用 StrictMode：dev 下 double-mount 会让 WS 连两次、replay 翻倍
 ReactDOM.createRoot(document.getElementById("root")!).render(

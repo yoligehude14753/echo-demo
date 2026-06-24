@@ -47,6 +47,7 @@ let cachedBase: string | null = null;
 
 export const MOBILE_BACKEND_BASE_KEY = "echodesk.mobileBackendBase";
 export const DEFAULT_ANDROID_BACKEND_BASE = "https://echodesk.yoliyoli.uk";
+export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
 
 function normalizeBackendBase(raw: string | null | undefined): string | null {
   const v = raw?.trim().replace(/\/+$/, "");
@@ -94,6 +95,76 @@ export function isNativeMobile(): boolean {
 
 export function configuredBackendBase(): string | null {
   return storedBackendBase() ?? envBackendBase();
+}
+
+export function isDefaultPublicBackend(base: string | null | undefined): boolean {
+  const normalized = normalizeBackendBase(base);
+  return normalized === DEFAULT_ANDROID_BACKEND_BASE;
+}
+
+/**
+ * Android / TV demo 包默认连接公共 backend。公共 backend 不能把其它设备的
+ * historical meetings / ambient feed 直接 hydrate 到新装设备，否则会议室电视
+ * 看起来像“继承了别人数据”。本函数只影响客户端启动期展示策略；桌面和自建
+ * backend 仍保留完整历史。
+ */
+export function shouldHideSharedPublicHistory(): boolean {
+  if (typeof window === "undefined") return false;
+  const configured = configuredBackendBase();
+  return isNativeMobile() && isDefaultPublicBackend(configured ?? DEFAULT_ANDROID_BACKEND_BASE);
+}
+
+export function isTvLikeViewport(): boolean {
+  if (typeof window === "undefined") return false;
+  let force = false;
+  try {
+    force = window.localStorage.getItem(FORCE_TV_UI_KEY) === "1";
+  } catch {
+    force = false;
+  }
+  if (force) return true;
+  const ua = window.navigator.userAgent;
+  const isAndroid = /Android/i.test(ua);
+  const width = Math.max(window.screen.width || 0, window.innerWidth || 0);
+  const height = Math.max(window.screen.height || 0, window.innerHeight || 0);
+  const shortSide = Math.min(width, height);
+  const longSide = Math.max(width, height);
+  // 多数 Android TV WebView 使用 density-scaled CSS viewport（例如 1920x1080
+  // 物理屏常报告 1280x720 CSS px），不能按物理像素阈值判断。
+  return isAndroid && longSide >= 900 && shortSide >= 500;
+}
+
+export function installRuntimeBodyClasses(): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.classList.toggle("echodesk-tv", isTvLikeViewport());
+  document.documentElement.classList.toggle(
+    "echodesk-public-native",
+    shouldHideSharedPublicHistory(),
+  );
+}
+
+export function installTvRemoteClickBridge(): void {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (!document.documentElement.classList.contains("echodesk-tv")) return;
+      if (event.defaultPrevented) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return;
+      const tag = active.tagName.toLowerCase();
+      const role = active.getAttribute("role");
+      const clickable =
+        tag === "button" ||
+        role === "button" ||
+        active.hasAttribute("data-tv-clickable");
+      if (!clickable) return;
+      event.preventDefault();
+      active.click();
+    },
+    true,
+  );
 }
 
 export async function shareBackendBase(): Promise<string> {

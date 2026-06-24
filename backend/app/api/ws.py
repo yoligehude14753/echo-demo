@@ -77,6 +77,12 @@ async def ws_echo(
     except WebSocketDisconnect:
         return
 
+    # Android / TV 公共 demo 客户端不应收到共享 backend 的历史 replay，否则新安装
+    # 后会出现别人的会议和转写。client_version 带 no-replay 时，从当前 max_seq
+    # 之后开始订阅，只接连接之后的新事件。
+    if client_version and "no-replay" in client_version:
+        last_seq = bus.max_seq
+
     # 客户端 last_seq 比 history 还早，提示重订阅
     if last_seq > 0 and last_seq < bus.oldest_history_seq:
         await websocket.send_text(

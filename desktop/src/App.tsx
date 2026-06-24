@@ -68,11 +68,11 @@ export default function App(): JSX.Element {
             ttsLastError={tts.lastError}
             onRefreshTtsHealth={tts.refreshHealth}
           />
-          <span className="w-px h-3 bg-paper-300" aria-hidden />
+          <span className="app-header-separator w-px h-3 bg-paper-300" aria-hidden />
           <MeetingStatusBar />
           <TtsTopBarButton tts={tts} />
-          <span>事件 {events.length}</span>
-          <span className="flex items-center gap-1.5">
+          <span className="app-event-count">事件 {events.length}</span>
+          <span className="app-connection-status flex items-center gap-1.5">
             <span
               className={`w-1.5 h-1.5 rounded-full ${
                 connected ? "bg-accent" : "bg-err"
@@ -114,7 +114,7 @@ export default function App(): JSX.Element {
           width={260}
           className="echodesk-meeting-sider !bg-paper-150 border-r border-paper-300 !px-2 !py-3 !overflow-y-auto"
         >
-          <div className="flex items-center gap-1.5 px-2 mb-2 text-ink-500 text-[11px] uppercase tracking-wider">
+          <div className="echodesk-meeting-title flex items-center gap-1.5 px-2 mb-2 text-ink-500 text-[11px] uppercase tracking-wider">
             <MessageSquare className="w-3 h-3" />
             <span>会议</span>
           </div>
@@ -123,7 +123,7 @@ export default function App(): JSX.Element {
 
         <Content className="echodesk-content flex !bg-paper-50 !min-h-0 !overflow-hidden">
           <div className="echodesk-transcript-pane flex-1 min-w-0 min-h-0 border-r border-paper-300 flex flex-col">
-            <div className="flex items-center gap-2 px-6 h-11 border-b border-paper-300 shrink-0">
+            <div className="echodesk-transcript-header flex items-center gap-2 px-6 h-11 border-b border-paper-300 shrink-0">
               <Mic className="w-3.5 h-3.5 text-ink-500" />
               <span className="text-[13px] text-ink-700 font-medium">
                 转写流

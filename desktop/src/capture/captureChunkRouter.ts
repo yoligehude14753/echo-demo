@@ -133,7 +133,18 @@ export function attachCaptureChunkRouter(
       }
       failStreak = 0;
       handlers?.onChunkPosted?.();
-      if (result.ambient_stored) handlers?.onAmbientUploaded?.();
+      if (result.ambient_stored) {
+        if (result.ambient_text) {
+          useStore.getState().addAmbientSegment({
+            text: result.ambient_text,
+            captured_at: new Date().toISOString(),
+            speaker_id: result.speaker_id ?? null,
+            speaker_label: result.speaker_label ?? null,
+            duration_ms: 0,
+          });
+        }
+        handlers?.onAmbientUploaded?.();
+      }
       if (result.meeting_segments.length > 0) handlers?.onMeetingUploaded?.();
     } catch (e) {
       failStreak += 1;

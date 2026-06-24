@@ -26,6 +26,7 @@ import {
   getMeetingTranscript,
   listMeetings,
 } from "@/api";
+import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 
 export function useMeetingHistory(): void {
@@ -55,6 +56,7 @@ export function useMeetingHistory(): void {
   // 退避序列 300ms / 800ms / 2s / 5s / 10s，总 ~18s 覆盖 cold start。
   // 任一次 200 OK 立即停；alive 守护 unmount 时早退。
   useEffect(() => {
+    if (shouldHideSharedPublicHistory()) return;
     let alive = true;
     const delays = [0, 300, 800, 2000, 5000, 10_000];
     void (async (): Promise<void> => {

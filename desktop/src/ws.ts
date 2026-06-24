@@ -19,7 +19,7 @@ import {
   type EchoEvent,
   WS_INACTIVE_RECONNECT_MS,
 } from "@/types";
-import { backendWsUrl } from "@/runtime";
+import { backendWsUrl, shouldHideSharedPublicHistory } from "@/runtime";
 
 type ConnState = "connecting" | "open" | "closed";
 
@@ -30,6 +30,8 @@ export function useEchoWS(): void {
   const retryRef = useRef(0);
   const stopRef = useRef(false);
   const lastSeqRef = useRef(0);
+  const replayFenceSeqRef = useRef(0);
+  const appStartedAtRef = useRef(Date.now());
   const lastActivityRef = useRef(Date.now());
   const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stateRef = useRef<ConnState>("closed");
@@ -65,6 +67,23 @@ export function useEchoWS(): void {
       }, 5_000);
     };
 
+    const noSharedReplay = shouldHideSharedPublicHistory();
+
+    const isSharedPublicBusinessEvent = (e: EchoEvent): boolean => {
+      if (!noSharedReplay) return false;
+      if (typeof e.seq === "number" && e.seq <= replayFenceSeqRef.current) {
+        return true;
+      }
+      const ts = Date.parse(e.ts);
+      if (Number.isFinite(ts) && ts < appStartedAtRef.current - 10_000) {
+        return true;
+      }
+      // 当前公共 backend 还没有 per-device/client_id 事件隔离。Android/TV
+      // 公共演示包只能相信本机 capture/chunk 返回的文本，不能消费共享 WS 业务事件，
+      // 否则新安装设备会立刻显示其它设备的会议、纪要和产物。
+      return !e.type.startsWith("server_") && e.type !== "error";
+    };
+
     const handleProtocol = (e: EchoEvent): void => {
       if (e.type === "server_resync") {
         console.warn("[ws] server_resync, drop client cache", e.payload);
@@ -72,6 +91,9 @@ export function useEchoWS(): void {
         useStore.getState().reset();
       } else if (e.type === "server_hello") {
         const max = (e.payload as { max_seq?: number })?.max_seq ?? 0;
+        if (noSharedReplay) {
+          replayFenceSeqRef.current = Math.max(replayFenceSeqRef.current, max);
+        }
         if (max < lastSeqRef.current) lastSeqRef.current = max;
       }
       // server_ping: 啥也不做，watchdog 已在 onmessage 刷新 lastActivity
@@ -94,7 +116,9 @@ export function useEchoWS(): void {
             JSON.stringify({
               type: "client_hello",
               last_seq: lastSeqRef.current,
-              client_version: "desktop-1.0",
+              client_version: noSharedReplay
+                ? "echodesk-native-public-no-replay"
+                : "desktop-1.0",
             })
           );
         } catch (err) {
@@ -118,6 +142,9 @@ export function useEchoWS(): void {
         }
         if (protocolHandled.has(data.type)) {
           handleProtocol(data);
+          return;
+        }
+        if (isSharedPublicBusinessEvent(data)) {
           return;
         }
         applyEvent(data);

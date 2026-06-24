@@ -51,6 +51,42 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.9] – 2026-06-24
+
+智能电视 / public demo hotfix：修复小米 Android 9 TV 上 WebView 白屏、比例错位、
+新安装继承公共历史、遥控确认键和设置抽屉不可见的问题。
+
+### 修复
+
+- Vite 生产构建目标下调到 `chrome61`，把 optional chaining / nullish coalescing 等
+  现代语法转译掉，兼容会议室电视内置较旧 WebView。
+- TV 视口按 MiTV 实测 `960x540` CSS viewport 重新适配，避免把 1920x1080 物理屏
+  当桌面大屏导致三栏比例和字体失控。
+- 为旧 Android WebView 增加 Ant Drawer fixed fallback，设置/工作区配置抽屉不再渲染到屏幕下方。
+- 为 TV 遥控器增加 Enter/Space → click bridge，焦点到按钮后按确认键能打开设置等面板。
+- Android / TV public demo 默认隐藏共享 `/meetings` 和 `/capture/recent`，并丢弃公共 backend
+  的共享 WebSocket 业务事件；新装设备只显示本机本次 capture 返回的实时转写。
+- TV 一键安装脚本默认执行 `pm clear`，清理旧 WebView/localStorage/cache；保留配置升级可设
+  `ECHODESK_TV_KEEP_DATA=1`。
+- Android manifest 关闭 backup，避免系统备份恢复旧 WebView 数据。
+- 已在 `MiTV-ASTP0`（Android 9，IP `10.10.12.25`）通过 ADB 覆盖安装验证：
+  v0.2.8 旧包 logcat 报 `Unexpected token ?` 并白屏；新包不再报语法错误，主界面正常显示，
+  18 秒 WS replay 窗口后不再出现公共历史会议。
+- 实机音频检查确认 `com.echodesk.app` 以 `VOICE_COMMUNICATION` 打开麦克风，
+  `1ch 48000Hz PCM_16BIT`；Mac 扬声器测试音没有穿过后端 RMS 门控，stats 仍显示
+  `last_gate_reason=rms_too_low`，说明远场输入强度/麦克风位置仍需现场校准。
+
+### 验证
+
+- `npm run build`
+- `npm run typecheck`
+- `npm run lint`
+- `npm run app:dist:android`
+- `npm run app:package:tv`
+- `npx playwright test tests/e2e/tv-layout.spec.ts tests/e2e/tv-share.spec.ts tests/e2e/public-demo-settings.spec.ts tests/e2e/workspace-knowledge.spec.ts tests/e2e/acceptance-clickthrough.spec.ts`
+- `backend/.venv/bin/python -m pytest backend/tests/unit/test_ws_endpoint.py`
+- ADB 真机清数据安装并启动，截图确认 EchoDesk v0.2.9 主界面、设置抽屉和无共享历史。
+
 ## [0.2.8] – 2026-06-24
 
 自动会议识别 / 顶栏点击区域 hotfix：修复远场或声纹不稳定时，STT 已经持续输出文本但

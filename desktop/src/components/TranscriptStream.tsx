@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listRecentAmbient, type AmbientSegment } from "@/api";
+import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { TranscriptSegment } from "@/types";
 import {
@@ -69,6 +70,7 @@ function meetingSegmentToDisplay(
 export default function TranscriptStream(): JSX.Element {
   const [ambient, setAmbient] = useState<AmbientSegment[]>([]);
   const events = useStore((s) => s.events);
+  const localAmbient = useStore((s) => s.ambientSegments);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const meeting = useStore((s) =>
     currentMeetingId ? s.meetings[currentMeetingId] : undefined,
@@ -83,6 +85,7 @@ export default function TranscriptStream(): JSX.Element {
     meeting !== undefined &&
     meeting.state === "ended" &&
     meeting.segments.length > 0;
+  const localOnlyAmbient = shouldHideSharedPublicHistory();
 
   const segs: DisplaySegment[] = useMemo(() => {
     if (showMeetingHistory && meeting) {
@@ -90,8 +93,9 @@ export default function TranscriptStream(): JSX.Element {
         meetingSegmentToDisplay(s, meeting.started_at),
       );
     }
+    if (localOnlyAmbient) return localAmbient.map(ambientToDisplay);
     return ambient.map(ambientToDisplay);
-  }, [showMeetingHistory, meeting, ambient]);
+  }, [showMeetingHistory, meeting, localOnlyAmbient, localAmbient, ambient]);
 
   const speakerDisplayMap = useMemo(
     () => buildSpeakerDisplayMap(segs),
@@ -109,6 +113,9 @@ export default function TranscriptStream(): JSX.Element {
 
   // 仅当走 ambient 分支时才轮询；查看历史会议时省网络
   useEffect(() => {
+    if (localOnlyAmbient) {
+      return undefined;
+    }
     if (showMeetingHistory) {
       return undefined;
     }
@@ -127,9 +134,10 @@ export default function TranscriptStream(): JSX.Element {
       alive = false;
       clearInterval(t);
     };
-  }, [showMeetingHistory]);
+  }, [showMeetingHistory, localOnlyAmbient]);
 
   useEffect(() => {
+    if (localOnlyAmbient) return;
     if (showMeetingHistory) return;
     if (!events.length) return;
     const last = events[events.length - 1];
@@ -142,7 +150,7 @@ export default function TranscriptStream(): JSX.Element {
         .then((r) => setAmbient(r))
         .catch(() => undefined);
     }
-  }, [events, showMeetingHistory]);
+  }, [events, showMeetingHistory, localOnlyAmbient]);
 
   // 提取布尔到变量：eslint react-hooks/exhaustive-deps 不支持复合表达式作为 dep
   const hasNoSegments = segs.length === 0;
@@ -168,7 +176,7 @@ export default function TranscriptStream(): JSX.Element {
     if (showMeetingHistory) {
       // 历史会议但 segments 为空：理论上不会走到（hook 触发了 fetch 才标 loaded）
       return (
-        <div className="flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
+        <div className="echodesk-transcript-empty flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
           <div>该会议未保存逐字稿</div>
           <div className="text-[10px] text-ink-300">
             可能 STT 服务在该会议期间不可用
@@ -177,10 +185,12 @@ export default function TranscriptStream(): JSX.Element {
       );
     }
     return (
-      <div className="flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
+      <div className="echodesk-transcript-empty flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
         <div>等待环境音转写…</div>
         <div className="text-[10px] text-ink-300">
-          开口说话即可触发；环境静音/底噪会被自动过滤
+          {localOnlyAmbient
+            ? "TV / Android 公共演示模式只显示本机本次采集，不读取共享历史"
+            : "开口说话即可触发；环境静音/底噪会被自动过滤"}
         </div>
       </div>
     );
@@ -188,7 +198,9 @@ export default function TranscriptStream(): JSX.Element {
 
   const headerLine = showMeetingHistory
     ? `历史会议 · ${meeting?.title || currentMeetingId} · ${segs.length} 段`
-    : `ambient 持续转写 · ${segs.length} 条 · 每 3s 刷新`;
+    : localOnlyAmbient
+      ? `本机实时转写 · ${segs.length} 条 · 不读取共享历史`
+      : `ambient 持续转写 · ${segs.length} 条 · 每 3s 刷新`;
   const headerDot = showMeetingHistory
     ? "bg-ink-400"
     : "bg-emerald-500 animate-pulse";

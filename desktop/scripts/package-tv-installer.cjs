@@ -60,6 +60,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APK="$SCRIPT_DIR/${SMART_TV_APK_NAME}"
+PKG="com.echodesk.app"
 
 if command -v adb >/dev/null 2>&1; then
   ADB="$(command -v adb)"
@@ -76,12 +77,23 @@ echo "[EchoDesk TV] adb=$ADB"
 echo "[EchoDesk TV] connecting to $TV_IP:5555 ..."
 "$ADB" connect "$TV_IP:5555" || true
 
+if [ "\${ECHODESK_TV_KEEP_DATA:-0}" != "1" ]; then
+  echo "[EchoDesk TV] clearing old local WebView / app data ..."
+  "$ADB" shell am force-stop "$PKG" >/dev/null 2>&1 || true
+  "$ADB" shell pm clear "$PKG" >/dev/null 2>&1 || true
+fi
+
 echo "[EchoDesk TV] installing $APK ..."
 "$ADB" install -r -d "$APK"
 
+"$ADB" shell pm grant "$PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
+"$ADB" shell appops set "$PKG" RECORD_AUDIO allow >/dev/null 2>&1 || true
+"$ADB" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
+
 echo
-echo "安装完成。请在电视的「我的应用」里打开 EchoDesk。"
+echo "安装完成，已尝试自动打开 EchoDesk。"
 echo "如果电视弹出调试授权，请先在电视上点允许，再重新运行本脚本。"
+echo "如需保留旧配置更新，请用：ECHODESK_TV_KEEP_DATA=1 ./install-tv-macos.sh $TV_IP"
 `;
 
 const winInstaller = `param(
@@ -94,6 +106,7 @@ if (-not $TvIp) {
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Apk = Join-Path $ScriptDir "${SMART_TV_APK_NAME}"
+$Pkg = "com.echodesk.app"
 
 $Candidates = @(
   "adb.exe",
@@ -119,12 +132,23 @@ Write-Host "[EchoDesk TV] adb=$Adb"
 Write-Host "[EchoDesk TV] connecting to $($TvIp):5555 ..."
 & $Adb connect "$($TvIp):5555"
 
+if ($env:ECHODESK_TV_KEEP_DATA -ne "1") {
+  Write-Host "[EchoDesk TV] clearing old local WebView / app data ..."
+  & $Adb shell am force-stop $Pkg | Out-Null
+  & $Adb shell pm clear $Pkg | Out-Null
+}
+
 Write-Host "[EchoDesk TV] installing $Apk ..."
 & $Adb install -r -d "$Apk"
 
+$null = & $Adb shell pm grant $Pkg android.permission.RECORD_AUDIO
+$null = & $Adb shell appops set $Pkg RECORD_AUDIO allow
+$null = & $Adb shell am start -n "$Pkg/.MainActivity"
+
 Write-Host ""
-Write-Host "安装完成。请在电视的「我的应用」里打开 EchoDesk。"
+Write-Host "安装完成，已尝试自动打开 EchoDesk。"
 Write-Host "如果电视弹出调试授权，请先在电视上点允许，再重新运行本脚本。"
+Write-Host "如需保留旧配置更新，请先设置 ECHODESK_TV_KEEP_DATA=1。"
 `;
 
 const readme = `EchoDesk 智能电视一键安装包 ${version}
@@ -142,7 +166,9 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
    ./install-tv-macos.sh 电视IP
 5. Windows PowerShell 运行：
    powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP
-6. 如果电视弹出 RSA 调试授权，选择允许，再重新运行脚本。
+6. 脚本默认清理旧的本地 WebView / app data，授权麦克风并自动打开 EchoDesk。
+   如需保留旧配置更新，设置 ECHODESK_TV_KEEP_DATA=1 后再运行。
+7. 如果电视弹出 RSA 调试授权，选择允许，再重新运行脚本。
 
 手动安装
 - 把 ${SMART_TV_APK_NAME} 拷到 U 盘，在电视文件管理器中打开安装。

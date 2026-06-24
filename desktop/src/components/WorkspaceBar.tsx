@@ -140,8 +140,8 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
         className="flex items-center gap-2 px-4 h-8 text-[11px] text-ink-600 border-b border-paper-300 bg-paper-100"
         data-testid="workspace-bar"
       >
-        <FolderOpen className="w-3 h-3" />
-        <span className="font-medium">工作区</span>
+        <FolderOpen className="workspace-icon w-3 h-3" />
+        <span className="workspace-title font-medium">工作区</span>
 
         <Tooltip
           title={
@@ -186,7 +186,7 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
           </span>
         </Tooltip>
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="workspace-actions ml-auto flex items-center gap-1">
           <Button
             size="small"
             type="default"
