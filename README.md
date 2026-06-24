@@ -1,26 +1,26 @@
 # EchoDesk · 数字分身 (Another Me)
 
 > **目标**：会议 + 办公场景的"数字分身"桌面应用，**本地优先，数据不出机**。
-> **当前版本**：v0.2.7（详见 [`CHANGELOG.md`](CHANGELOG.md)）
-> **立即下载**：见 [GitHub Releases v0.2.7](https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.7)
+> **当前版本**：v0.2.8（详见 [`CHANGELOG.md`](CHANGELOG.md)）
+> **立即下载**：见 [GitHub Releases v0.2.8](https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.8)
 > **安装指南**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
 > **远程后端 eight endpoint（STT/TTS/Fast LLM）**：见 [`docs/REMOTE_API.md`](docs/REMOTE_API.md)
 
 ## 立即下载
 
-当前 public demo 版本是 `v0.2.7`，安装包统一放在：
-<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.7>
+当前 public demo 版本是 `v0.2.8`，安装包统一放在：
+<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.8>
 
 | 平台 | Release 资产 | 说明 |
 |---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.2.7-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.2.7-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows | `EchoDesk.Setup.0.2.7.exe` | Windows 安装包 |
-| Android 手机 / 平板 | `EchoDesk-0.2.7-android.apk` | 默认连接公网 demo backend |
-| Android TV / 智能电视 | `EchoDesk-0.2.7-smart-tv.apk` | 适配遥控器、电视桌面入口和开机自启 |
-| 智能电视一键安装 | `EchoDesk-0.2.7-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
-| 校验文件 | `SHA256SUMS-0.2.7.txt` | 校验下载完整性 |
+| macOS Apple Silicon | `EchoDesk-0.2.8-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.2.8-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows | `EchoDesk.Setup.0.2.8.exe` | Windows 安装包 |
+| Android 手机 / 平板 | `EchoDesk-0.2.8-android.apk` | 默认连接公网 demo backend |
+| Android TV / 智能电视 | `EchoDesk-0.2.8-smart-tv.apk` | 适配遥控器、电视桌面入口和开机自启 |
+| 智能电视一键安装 | `EchoDesk-0.2.8-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
+| 校验文件 | `SHA256SUMS-0.2.8.txt` | 校验下载完整性 |
 
 Android / TV 客户端默认连接 `https://echodesk.yoliyoli.uk`，模型服务和密钥都在服务端。
 更详细的安装、电视侧载和本地后端说明见 [`docs/INSTALL.md`](docs/INSTALL.md)。
@@ -31,10 +31,10 @@ Android / TV 客户端默认连接 `https://echodesk.yoliyoli.uk`，模型服务
 |---|---|---|
 | Phase 1 (0.1.0) | 持续监听 + 会议 + 9 类 intent + 一键产物 + 一键 install | ✅ released |
 | Phase 2 (0.2.0) | 状态可视化 + artifact.failed + 远端降级 + DB migration + 管理 API + 诊断打包 | ✅ released |
-| Phase 3 (0.2.7) | 首次启动引导 + 远端 endpoint 配置 + 知识库面板 + 智能电视一键安装/自启 + 会后扫码保存 + public demo backend | ✅ demo hotfix |
+| Phase 3 (0.2.8) | 首次启动引导 + 远端 endpoint 配置 + 知识库面板 + 智能电视一键安装/自启 + 会后扫码保存 + public demo backend | ✅ demo hotfix |
 | Phase 4 | Keychain 集成 + 自动更新 + Universal Binary | 计划中 |
 
-测试：本地 backend 相关 unit 通过；desktop typecheck/lint/build 通过；28 个 e2e 模拟点击全绿；macOS / Windows / Android / TV release 产物已构建。
+测试：本地 backend 相关 unit 通过；desktop typecheck/lint/build 通过；30 个 e2e 模拟点击全绿；macOS / Windows / Android / TV release 产物已构建。
 
 ## 架构
 

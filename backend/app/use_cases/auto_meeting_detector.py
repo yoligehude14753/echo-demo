@@ -3,6 +3,8 @@
 触发规则（保守为先，避免误开会）：
 - 滑动窗口（默认 30s）内 distinct speakers ≥ 2
 - 窗口内总语音 duration ≥ ``min_active_seconds``（默认 6s）
+- 如果声纹暂时识别不出 speaker_id，但 STT 已连续给出有效语音，走更保守的
+  ``unknown_speaker_min_active_seconds`` fallback 自动开始记录
 - 当前没在 meeting 中（手动 @开始 优先；用户手动开会时 detector 自动让步）
 - 触发后进入 ``auto_meeting`` 状态，meeting_id = ``auto-<unix_ts>``
 
@@ -55,6 +57,7 @@ class AutoMeetingDetector:
         window_s: float = 30.0,
         min_distinct_speakers: int = 2,
         min_active_seconds: float = 6.0,
+        unknown_speaker_min_active_seconds: float | None = None,
         silence_timeout_s: float = 30.0,
         cooldown_s: float = 60.0,
         max_meeting_duration_s: float = 1800.0,
@@ -62,11 +65,17 @@ class AutoMeetingDetector:
         self._window_s = window_s
         self._min_distinct = min_distinct_speakers
         self._min_active = min_active_seconds
+        self._unknown_min_active = (
+            unknown_speaker_min_active_seconds
+            if unknown_speaker_min_active_seconds is not None
+            else max(min_active_seconds * 1.5, 10.0)
+        )
         self._silence = silence_timeout_s
         self._cooldown = cooldown_s
         self._max_meeting_duration_s = max_meeting_duration_s
 
         self._window: list[tuple[datetime, str, int]] = []  # (t, speaker_id, dur_ms)
+        self._unknown_voice_window: list[tuple[datetime, int]] = []  # (t, dur_ms)
         self._active_meeting_id: str | None = None
         self._last_voice_at: datetime | None = None
         self._last_end_at: datetime | None = None
@@ -114,9 +123,12 @@ class AutoMeetingDetector:
 
         # 2. 维护窗口
         self._prune_window(now)
-        if speaker_id and duration_ms > 0:
-            self._window.append((now, speaker_id, duration_ms))
+        if duration_ms > 0:
             self._last_voice_at = now
+            if speaker_id:
+                self._window.append((now, speaker_id, duration_ms))
+            else:
+                self._unknown_voice_window.append((now, duration_ms))
 
         # 窗口内 distinct ≥ min_distinct → 刷新"多人活跃时刻"（用于 monolog 退化判定）
         distinct_now = {s for (_, s, _) in self._window}
@@ -135,6 +147,7 @@ class AutoMeetingDetector:
             return out
 
         active_ms = sum(d for (_, _, d) in self._window)
+        unknown_active_ms = sum(d for (_, d) in self._unknown_voice_window)
         if len(distinct_now) >= self._min_distinct and active_ms >= self._min_active * 1000:
             new_id = f"auto-{int(now.timestamp())}"
             self._active_meeting_id = new_id
@@ -145,6 +158,17 @@ class AutoMeetingDetector:
                     kind="start",
                     meeting_id=new_id,
                     reason=f"distinct_speakers={len(distinct_now)} active_ms={active_ms}",
+                )
+            )
+        elif unknown_active_ms >= self._unknown_min_active * 1000:
+            new_id = f"auto-{int(now.timestamp())}"
+            self._active_meeting_id = new_id
+            self._meeting_started_at = now
+            out.append(
+                DetectorEvent(
+                    kind="start",
+                    meeting_id=new_id,
+                    reason=f"unknown_speaker_active_ms={unknown_active_ms}",
                 )
             )
         return out
@@ -159,6 +183,7 @@ class AutoMeetingDetector:
 
     def reset(self) -> None:
         self._window.clear()
+        self._unknown_voice_window.clear()
         self._active_meeting_id = None
         self._last_voice_at = None
         self._last_end_at = None
@@ -232,6 +257,9 @@ class AutoMeetingDetector:
     def _prune_window(self, now: datetime) -> None:
         cutoff = now - timedelta(seconds=self._window_s)
         self._window = [(t, s, d) for (t, s, d) in self._window if t >= cutoff]
+        self._unknown_voice_window = [
+            (t, d) for (t, d) in self._unknown_voice_window if t >= cutoff
+        ]
 
     def _in_cooldown(self, now: datetime) -> bool:
         if self._last_end_at is None:

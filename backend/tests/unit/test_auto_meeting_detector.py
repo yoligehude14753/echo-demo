@@ -50,6 +50,38 @@ def test_two_speakers_below_threshold_does_not_trigger() -> None:
 
 
 @pytest.mark.unit
+def test_unknown_speaker_continuous_voice_triggers_fallback_start() -> None:
+    det = AutoMeetingDetector(
+        min_distinct_speakers=2,
+        min_active_seconds=6.0,
+        unknown_speaker_min_active_seconds=10.0,
+    )
+
+    evs1 = det.observe(speaker_id=None, duration_ms=6_000, now=_at(0))
+    assert evs1 == []
+
+    evs2 = det.observe(speaker_id=None, duration_ms=6_000, now=_at(6))
+    assert len(evs2) == 1
+    assert evs2[0].kind == "start"
+    assert evs2[0].reason == "unknown_speaker_active_ms=12000"
+    assert det.active_meeting_id == evs2[0].meeting_id
+
+
+@pytest.mark.unit
+def test_unknown_speaker_short_voice_does_not_trigger_fallback() -> None:
+    det = AutoMeetingDetector(
+        min_distinct_speakers=2,
+        min_active_seconds=6.0,
+        unknown_speaker_min_active_seconds=10.0,
+    )
+
+    det.observe(speaker_id=None, duration_ms=3_000, now=_at(0))
+    evs = det.observe(speaker_id=None, duration_ms=3_000, now=_at(4))
+    assert evs == []
+    assert det.active_meeting_id is None
+
+
+@pytest.mark.unit
 def test_window_prunes_old_speakers() -> None:
     det = AutoMeetingDetector(window_s=30.0, min_active_seconds=6.0)
     # 第一次 A 在 t=0，过了 31s 已淘汰

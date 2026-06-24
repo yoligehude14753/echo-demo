@@ -32,7 +32,7 @@ interface DoorRow {
 const DOORS: DoorRow[] = [
   { key: "gated_rms", label: "整段 RMS 过低", tone: "neutral" },
   { key: "gated_low_speech", label: "活跃帧率不足", tone: "neutral" },
-  { key: "stt_circuit_open", label: "STT 熔断（未发起）", tone: "danger" },
+  { key: "stt_circuit_open", label: "历史熔断拒绝", tone: "danger" },
   { key: "stt_failed", label: "STT 调用失败", tone: "danger" },
   { key: "stt_empty", label: "STT 返回空", tone: "warn" },
   { key: "hallu_dropped", label: "幻觉门丢弃", tone: "warn" },
@@ -208,7 +208,8 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
     );
   }
 
-  const circuitOpen = sttCircuitOpenUntil !== null;
+  const circuitOpen =
+    sttCircuitOpenUntil !== null && sttCircuitOpenUntil > Date.now();
   const ariaLabel = circuitOpen
     ? `云端 STT 熔断，已采集 ${ambientChunks} 段，入库 ${ambientStored} 段，丢弃 ${chunksDroppedCircuit} 段`
     : meetingOverlayId
@@ -222,7 +223,7 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
         <DoorBreakdown
           stats={stats}
           chunksDroppedCircuit={chunksDroppedCircuit}
-          circuitOpenUntil={sttCircuitOpenUntil}
+          circuitOpenUntil={circuitOpen ? sttCircuitOpenUntil : null}
         />
       }
       mouseEnterDelay={0.2}

@@ -48,6 +48,19 @@ export function useEchoCapture(): CaptureStatus {
   const [stats, setStats] = useState<CaptureStatsSnapshot | null>(null);
 
   useEffect(() => {
+    if (sttCircuitOpenUntil === null) return;
+    const delayMs = Math.max(0, sttCircuitOpenUntil - Date.now());
+    const timer = window.setTimeout(() => {
+      setSttCircuitOpenUntil((current) => {
+        if (current !== sttCircuitOpenUntil) return current;
+        message.destroy(CIRCUIT_TOAST_KEY);
+        return null;
+      });
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [sttCircuitOpenUntil]);
+
+  useEffect(() => {
     audioCapture.start();
 
     const offStatus = audioCapture.onStatus((state, err) => {

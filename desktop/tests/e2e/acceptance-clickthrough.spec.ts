@@ -1,5 +1,13 @@
 import { expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { installEchoMock } from "./_mock";
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const packageVersion = JSON.parse(
+  readFileSync(resolve(currentDir, "../../package.json"), "utf8"),
+).version as string;
 
 test("验收点击流：知识库、设置、eight 状态、移动连接和输入框均可操作", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 820 });
@@ -130,7 +138,7 @@ test("验收点击流：知识库、设置、eight 状态、移动连接和输�
   });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
-  await expect(page.getByTestId("open-about")).toContainText("v0.2.7");
+  await expect(page.getByTestId("open-about")).toContainText(`v${packageVersion}`);
   await page.getByTestId("pill-heyi").click();
   await expect(page.getByText("eight 远端服务")).toBeVisible();
   await page.keyboard.press("Escape");

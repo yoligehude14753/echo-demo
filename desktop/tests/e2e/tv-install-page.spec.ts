@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
+const packageVersion = JSON.parse(
+  readFileSync(resolve(currentDir, "../../package.json"), "utf8"),
+).version as string;
+const releaseBase = `https://github.com/yoligehude14753/echo-demo/releases/download/v${packageVersion}`;
 
 test("电视安装页：大屏链接和遥控器确认键路径可用", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
@@ -19,7 +24,7 @@ test("电视安装页：大屏链接和遥控器确认键路径可用", async ({
   await expect(apkLink).toBeVisible();
   await expect(apkLink).toHaveAttribute(
     "href",
-    "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.7/EchoDesk-0.2.7-smart-tv.apk",
+    `${releaseBase}/EchoDesk-${packageVersion}-smart-tv.apk`,
   );
   await apkLink.focus();
   await expect(apkLink).toBeFocused();
@@ -27,7 +32,7 @@ test("电视安装页：大屏链接和遥控器确认键路径可用", async ({
   const bundleLink = page.getByTestId("tv-bundle-link");
   await expect(bundleLink).toHaveAttribute(
     "href",
-    "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.7/EchoDesk-0.2.7-smart-tv-oneclick.zip",
+    `${releaseBase}/EchoDesk-${packageVersion}-smart-tv-oneclick.zip`,
   );
   await bundleLink.focus();
   await expect(bundleLink).toBeFocused();

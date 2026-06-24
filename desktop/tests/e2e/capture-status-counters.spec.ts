@@ -219,3 +219,39 @@ test("偶发 STT circuit_open 不进入长时间熔断暂停", async ({ page }) 
   await expect(page.getByText(/云端 STT 熔断/)).toHaveCount(0);
   await expect(cap).not.toContainText("STT 熔断");
 });
+
+test("STT 熔断退避到期后 UI 自动清除红条", async ({ page }) => {
+  test.setTimeout(25_000);
+
+  await stubMicPermission(page);
+  await installEchoMock(page);
+
+  let postedCount = 0;
+  await page.route(/\/(api\/)?capture\/chunk$/, async (route) => {
+    postedCount += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ambient_stored: false,
+        ambient_text: null,
+        audio_ref: `circuit-expire-${postedCount}`,
+        meeting_segments: [],
+        stt_status: "circuit_open",
+      }),
+    });
+  });
+
+  await page.goto("/");
+
+  const cap = page.getByTestId("capture-status");
+  await expect(cap).toBeVisible({ timeout: 15_000 });
+  await expect(cap).not.toContainText("初始化麦克风", { timeout: 10_000 });
+
+  await emitChunks(page, 3);
+  await expect(cap).toContainText("STT 熔断", { timeout: 8_000 });
+  await expect(page.getByText(/云端 STT 熔断/)).toBeVisible();
+
+  await expect(cap).not.toContainText("STT 熔断", { timeout: 8_000 });
+  await expect(page.getByText(/云端 STT 熔断/)).toHaveCount(0);
+});

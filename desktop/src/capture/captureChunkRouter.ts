@@ -68,6 +68,8 @@ export function attachCaptureChunkRouter(
   let circuitOpenUntil = 0; // epoch ms；0 = 未熔断
   let backoffLevel = -1; // -1 = 未熔断；0..N = 第几级退避（用 ladder[level]）
   let circuitStreak = 0;
+  let requestSeq = 0;
+  let lastHealthySeq = 0;
   const ladder = backoffLadder();
 
   return audioCapture.onChunk(async (wav) => {
@@ -92,14 +94,18 @@ export function attachCaptureChunkRouter(
       ? currentMeetingId
       : undefined;
 
+    const seq = ++requestSeq;
     try {
       const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId);
 
       // M_diag_brake：熔断检测优先于成功路径
       if (result.stt_status === "circuit_open") {
+        handlers?.onChunkPosted?.();
+        if (seq < lastHealthySeq) {
+          return;
+        }
         circuitStreak += 1;
         failStreak = 0;
-        handlers?.onChunkPosted?.();
         if (circuitStreak < CIRCUIT_STREAK_THRESHOLD) {
           return;
         }
@@ -113,6 +119,7 @@ export function attachCaptureChunkRouter(
         });
         return;
       }
+      lastHealthySeq = Math.max(lastHealthySeq, seq);
       circuitStreak = 0;
       // 探测 chunk 拿到非 circuit_open 响应 → 熔断恢复
       if (backoffLevel >= 0) {

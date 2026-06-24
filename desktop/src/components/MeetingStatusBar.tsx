@@ -16,13 +16,13 @@ import type { EchoEvent, MeetingStateSnapshot } from "@/types";
  * - 一个时刻只能有 0 或 1 个会议；状态由后端 MeetingState 单例机决定
  * - 自动检测开/结：后端 detector 触发，通过 WS `meeting.state_changed` 推送
  * - 手动覆盖：用户点击本组件 → manual_start / manual_end
- * - 不展示 meeting_id（用户不关心），只显示「待机 / 会议中（manual）/ 持续监听（auto）」
+ * - 不展示 meeting_id（用户不关心），只显示「待机 / 会议中（manual）/ 自动记录中（auto）」
  *
  * Auto vs Manual 区分（2026-05 phase4-meeting-deadlock 修复）：
  * - manual：用户主动开始，会议中明确性强 → rose 红 + mm:ss 计时 + Square 图标
  * - auto：环境音被识别为持续对话；计时容易让用户误以为是"正常会议"，
  *   导致顶栏出现"会议中 562:53"这类 9h+ 假象。改为：
- *   amber 暖色 + 文案"持续监听" + Mic 图标 + 不显示计时
+ *   amber 暖色 + 文案"自动记录中" + Mic 图标 + 不显示计时
  *   （计时由 hover tooltip 提供"已持续 X 分钟"参考用，不挂主视觉）
  */
 function fmtElapsed(startedAt?: string | null): string {
@@ -119,18 +119,21 @@ export default function MeetingStatusBar(): JSX.Element {
   void tick; // 强制 elapsed / minutes 重渲染
 
   const tooltipTitle = !isMeeting
-    ? "点击手动开始会议（环境音同时持续采集到 RAG）"
+    ? "点击手动开始会议；未点击时环境音也会持续采集并自动识别会议"
     : isAuto
-      ? `已自动识别为持续对话，环境音正在归档；点击可主动结束并生成纪要（已持续 ${elapsedMinutes(snap.started_at)} 分钟）`
+      ? `已自动识别为会议并开始记录；点击可主动结束并生成纪要（已持续 ${elapsedMinutes(snap.started_at)} 分钟）`
       : "点击结束会议（手动开始，将生成纪要）";
 
   let buttonClass: string;
   if (isManual) {
-    buttonClass = "bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200";
+    buttonClass =
+      "bg-rose-50 text-rose-700 hover:bg-rose-100 border-x border-rose-200";
   } else if (isAuto) {
-    buttonClass = "bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200";
+    buttonClass =
+      "bg-amber-50 text-amber-700 hover:bg-amber-100 border-x border-amber-200";
   } else {
-    buttonClass = "bg-paper-200 text-ink-700 hover:bg-paper-300 border border-paper-300";
+    buttonClass =
+      "bg-paper-100 text-ink-700 hover:bg-paper-200 border-x border-paper-300";
   }
 
   return (
@@ -139,8 +142,10 @@ export default function MeetingStatusBar(): JSX.Element {
         type="button"
         onClick={onClick}
         disabled={busy}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium transition ${buttonClass} disabled:opacity-50`}
+        className={`app-no-drag inline-flex h-12 min-w-[112px] items-center justify-center gap-2 px-4 text-[13px] font-semibold transition ${buttonClass} disabled:opacity-50`}
         data-testid="meeting-status-bar"
+        aria-label={tooltipTitle}
+        aria-pressed={isMeeting}
       >
         {isManual ? (
           <>
@@ -153,7 +158,7 @@ export default function MeetingStatusBar(): JSX.Element {
         ) : isAuto ? (
           <>
             <Mic className="w-3 h-3" />
-            <span>持续监听</span>
+            <span>自动记录中</span>
           </>
         ) : (
           <>
