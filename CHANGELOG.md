@@ -51,6 +51,24 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.6] – 2026-06-24
+
+STT stability hotfix：修复 eight STT 偶发慢响应时，桌面端误进入分钟级“云端 STT 熔断 · 暂停上传”的问题。
+
+### 修复
+
+- FireRed STT adapter 不再做本地熔断；远端偶发超时按单次失败处理，避免正常有文本输出时仍显示熔断。
+- Ambient capture pipeline 增加 STT single-flight 闸：上一条 STT 请求未结束时，新分片快速记为 `failed`，不继续并发打 eight。
+- 前端 capture router 对 `circuit_open` 做连续 3 次去抖，且最长退避从 5 分钟缩短到 30 秒，避免短抖动被放大成用户可见长暂停。
+- Playwright 增加模拟分片测试：连续 2 次偶发 `circuit_open` 不展示“云端 STT 熔断”红条。
+
+### 配置变更
+
+- 桌面 / 后端版本升到 `0.2.6`。
+- Android 版本升到 `versionCode=206`、`versionName=0.2.6`。
+
+---
+
 ## [0.2.5] – 2026-06-23
 
 Public demo backend hotfix：让 Android / TV 版本默认连公网 EchoDesk demo backend，

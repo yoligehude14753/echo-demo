@@ -73,7 +73,7 @@ class AmbientStats:
 
 
 class _STTCircuitOpenError(RuntimeError):
-    """`_safe_stt` 内部信号：STTPort 抛出 `STTError("...circuit open...")`。
+    """`_safe_stt` 内部信号：STTPort 抛出 legacy `"...circuit open..."`。
 
     与普通 STT 失败区分开，让 `ingest_chunk` 能把对应 chunk 标记成
     `stt_status="circuit_open"`，触发前端优雅止血。
@@ -116,6 +116,7 @@ class AmbientCapturePipeline:
         self._ambient_dir = Path(settings.storage_dir).expanduser() / "ambient"
         self._ambient_dir.mkdir(parents=True, exist_ok=True)
         self._stats = AmbientStats()
+        self._stt_lock = asyncio.Lock()
 
     def get_stats(self) -> AmbientStats:
         """返回当前进程级 7 道门处理结果计数（供 GET /capture/stats 用）。"""
@@ -343,24 +344,31 @@ class AmbientCapturePipeline:
     async def _safe_stt(self, audio_bytes: bytes, sample_rate: int) -> list:  # type: ignore[type-arg]
         """STT 调用 + typed exception 分流（M_diag_brake）。
 
-        调用方需要区分"熔断（前端必须停止上传）"和"单次失败（前端可继续）"，
-        所以这里把底层 Exception 翻译成两类自定义异常。之前的实现把所有错误
-        都吞成 `return []`，调用方完全没法区分。
+        调用方需要区分"熔断（前端必须停止上传）"和"单次失败（前端可继续）"。
+        public demo 里 eight STT 偶发 20~60s 慢响应时，最危险的是前端 6s
+        一片持续并发上传，最终把慢请求堆成超时风暴；所以这里采用 non-blocking
+        single-flight：上一条 STT 还没结束时，本 chunk 快速标记为 failed，
+        不再额外打 eight，也不触发前端长时间熔断倒计时。
 
-        熔断识别：firered adapter 在熔断时抛 `STTError("...circuit open...")`
-        （见 backend/app/adapters/stt/firered.py:61）。本函数只看 message
-        是否含 "circuit open" 子串，避免 import 具体 adapter 类（保持 Port
-        独立性，未来换 adapter 也能继续 work，只要 message 约定不变）。
+        熔断识别只保留 legacy 兼容：如果某个 STT port 明确抛出含
+        "circuit open" 的异常，就继续暴露为 circuit_open；FireRed adapter
+        本身不再主动打开本地熔断器。
         """
-        try:
-            return await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
-        except Exception as e:
-            msg = str(e)
-            if "circuit open" in msg.lower():
-                logger.warning("ambient STT circuit open (audio saved): %s", e)
-                raise _STTCircuitOpenError(msg) from e
-            logger.warning("ambient STT failed (audio saved): %s", e)
-            raise _STTCallFailedError(msg) from e
+        if self._stt_lock.locked():
+            msg = "stt busy: previous request still running"
+            logger.warning("ambient STT busy (audio saved): %s", msg)
+            raise _STTCallFailedError(msg)
+
+        async with self._stt_lock:
+            try:
+                return await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
+            except Exception as e:
+                msg = str(e)
+                if "circuit open" in msg.lower():
+                    logger.warning("ambient STT circuit open (audio saved): %s", e)
+                    raise _STTCircuitOpenError(msg) from e
+                logger.warning("ambient STT failed (audio saved): %s", e)
+                raise _STTCallFailedError(msg) from e
 
     async def _safe_diarize(
         self,

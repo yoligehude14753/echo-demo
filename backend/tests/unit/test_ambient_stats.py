@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -143,6 +144,41 @@ async def test_stt_failed_increment(tmp_path: Path) -> None:
     assert s.chunks_total == 1
     assert s.stt_failed == 1
     assert s.stt_circuit_open == 0
+
+
+@pytest.mark.asyncio
+async def test_stt_busy_is_failed_not_circuit_open(tmp_path: Path) -> None:
+    """上一条 STT 未结束时，新 chunk 快速失败，不打 eight，也不触发前端熔断。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _slow_transcribe(*_args: Any, **_kwargs: Any) -> list[TranscriptSegment]:
+        started.set()
+        await release.wait()
+        return [TranscriptSegment(text="这是一段有效转写", start_ms=0, end_ms=1000)]
+
+    stt = AsyncMock()
+    stt.transcribe = AsyncMock(side_effect=_slow_transcribe)
+    pipe = _make_pipeline(tmp_path=tmp_path, stt=stt)
+
+    first_task = asyncio.create_task(pipe.ingest_chunk(QUIET_NOISE_1KB))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    second = await pipe.ingest_chunk(QUIET_NOISE_1KB)
+    assert second.stt_status == "failed"
+    assert second.ambient_stored is False
+    assert stt.transcribe.await_count == 1
+
+    release.set()
+    first = await first_task
+    assert first.stt_status == "ok"
+    assert first.ambient_stored is True
+
+    s = pipe.get_stats()
+    assert s.chunks_total == 2
+    assert s.stt_failed == 1
+    assert s.stt_circuit_open == 0
+    assert s.stored == 1
 
 
 @pytest.mark.asyncio

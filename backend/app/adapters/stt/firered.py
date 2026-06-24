@@ -11,8 +11,8 @@
 - 用户决策：切回 FireRed —— FireRed 判别式无幻觉，中文强（echo §6.30.8 RTF 0.18）
 - 中英混合差是 FireRed 已知短板，但 EchoDesk 主用 中文，可接受
 
-熔断：连续 6 次失败冷却 20s。eight STT 偶发慢/空/断连时，避免 3 个短抖动
-就让桌面端进入长时间暂停上传。
+稳定性策略：不在 adapter 层做本地熔断。eight STT 偶发慢/空/断连时，调用方
+按单次失败处理；ambient pipeline 负责并发闸，避免慢请求堆积打爆 eight。
 """
 
 from __future__ import annotations
@@ -46,17 +46,6 @@ class FireRedSTT:
         self._default_language = settings.stt_language
         self._timeout = timeout_s
         self._fail_count = 0
-        self._last_fail: float = 0.0
-        self._max_failures = 6
-        self._cooldown_s = 20.0
-
-    def _circuit_open(self) -> bool:
-        if self._fail_count < self._max_failures:
-            return False
-        if time.monotonic() - self._last_fail < self._cooldown_s:
-            return True
-        self._fail_count = 0
-        return False
 
     async def transcribe(
         self,
@@ -65,10 +54,6 @@ class FireRedSTT:
         sample_rate: int = 16_000,
         language: str | None = None,
     ) -> list[TranscriptSegment]:
-        if self._circuit_open():
-            raise STTError(
-                f"firered circuit open ({self._max_failures} consecutive failures)"
-            )
         if not audio_bytes:
             return []
 
@@ -93,7 +78,6 @@ class FireRedSTT:
                 data = resp.json()
         except Exception as e:
             self._fail_count += 1
-            self._last_fail = time.monotonic()
             raise STTError(f"firered transcribe failed: {_error_detail(e)}") from e
 
         self._fail_count = 0

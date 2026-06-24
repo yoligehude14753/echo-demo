@@ -8,8 +8,8 @@
  * M_diag_brake · 优雅止血（reactive backoff）
  * ─────────────────────────────────────────────────────────────────────
  * 用户事故复盘：firered STT 熔断后，前端不知情，继续 8 小时 4495 次徒劳
- * POST。本路由检测响应 `stt_status==="circuit_open"` 进入熔断态，按
- * BACKOFF_LADDER_MS 指数退避，期间 onChunk 直接丢弃（不上传也不缓冲；
+ * POST。本路由检测连续 `stt_status==="circuit_open"` 才进入熔断态，按
+ * BACKOFF_LADDER_MS 短退避，期间 onChunk 直接丢弃（不上传也不缓冲；
  * 缓冲 / 重传留给 v2，因为涉及 disk 队列大小管理）。
  *
  * 退避到期后**下一个真实 chunk 自然成为探测**：如果 stt_status 不再是
@@ -41,12 +41,13 @@ export interface CaptureRouterHandlers {
 }
 
 const FAIL_STREAK_THRESHOLD = 2; // 连续 2 次才报错，避免一次抖动也弹 toast
+const CIRCUIT_STREAK_THRESHOLD = 3; // 连续 3 次 circuit_open 才认为 STT 真的不可用
 
 /**
- * 指数退避梯子（毫秒）。每次拿到 circuit_open 升一级，最长 5min。
+ * 指数退避梯子（毫秒）。每次拿到稳定 circuit_open 升一级，最长 30s。
  * 测试模式（VITE_DIAG_BRAKE_BASE_MS env）会按比例缩短，让 e2e 不用等真 30s。
  */
-const DEFAULT_BACKOFF_LADDER_MS = [30_000, 60_000, 120_000, 300_000];
+const DEFAULT_BACKOFF_LADDER_MS = [5_000, 10_000, 20_000, 30_000];
 
 function backoffLadder(): number[] {
   // 仅 Vite test/dev 环境读 env override；prod 始终走默认梯子
@@ -66,6 +67,7 @@ export function attachCaptureChunkRouter(
   // M_diag_brake 熔断状态机
   let circuitOpenUntil = 0; // epoch ms；0 = 未熔断
   let backoffLevel = -1; // -1 = 未熔断；0..N = 第几级退避（用 ladder[level]）
+  let circuitStreak = 0;
   const ladder = backoffLadder();
 
   return audioCapture.onChunk(async (wav) => {
@@ -95,6 +97,12 @@ export function attachCaptureChunkRouter(
 
       // M_diag_brake：熔断检测优先于成功路径
       if (result.stt_status === "circuit_open") {
+        circuitStreak += 1;
+        failStreak = 0;
+        handlers?.onChunkPosted?.();
+        if (circuitStreak < CIRCUIT_STREAK_THRESHOLD) {
+          return;
+        }
         // 升一级退避（封顶在 ladder 最大值）
         backoffLevel = Math.min(backoffLevel + 1, ladder.length - 1);
         const retryAfterMs = ladder[backoffLevel];
@@ -103,9 +111,9 @@ export function attachCaptureChunkRouter(
           retryAtMs: circuitOpenUntil,
           level: backoffLevel,
         });
-        // 本 chunk 不计为 lost / posted（语义上属于探测结果）
         return;
       }
+      circuitStreak = 0;
       // 探测 chunk 拿到非 circuit_open 响应 → 熔断恢复
       if (backoffLevel >= 0) {
         backoffLevel = -1;

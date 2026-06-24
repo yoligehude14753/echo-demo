@@ -1,4 +1,4 @@
-"""STT adapter 单测：mock httpx，验证请求体 + 熔断 + 错误包装。
+"""STT adapter 单测：mock httpx，验证请求体 + 错误包装。
 
 PR `echodesk-remove-sensevoice` 之前测的是 SenseVoiceGPUSTT。SenseVoice 删
 掉后，唯一 STT backend 是 FireRedSTT，本文件改测 FireRed。两个 adapter API
@@ -85,19 +85,18 @@ async def test_transcribe_http_error_raises_stterror(settings: Settings) -> None
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_circuit_breaker_opens_after_6_failures(settings: Settings) -> None:
+async def test_repeated_failures_do_not_open_local_circuit(settings: Settings) -> None:
     stt = FireRedSTT(settings)
     fake = MagicMock()
     fake.post = AsyncMock(side_effect=RuntimeError("boom"))
     fake.__aenter__ = AsyncMock(return_value=fake)
     fake.__aexit__ = AsyncMock(return_value=None)
     with patch("app.adapters.stt.firered.httpx.AsyncClient", return_value=fake):
-        for _ in range(6):
-            with pytest.raises(STTError):
+        for _ in range(7):
+            with pytest.raises(STTError, match="firered transcribe failed"):
                 await stt.transcribe(b"\x00\x01" * 8000)
-        # 第 7 次直接被熔断拒绝（不再发请求）
-        with pytest.raises(STTError, match="circuit open"):
-            await stt.transcribe(b"\x00\x01" * 8000)
+        # public demo 里不在 adapter 层熔断；慢/失败请求由 ambient single-flight 闸限流。
+        assert fake.post.await_count == 7
 
 
 @pytest.mark.asyncio
