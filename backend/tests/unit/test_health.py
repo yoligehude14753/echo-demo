@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from app.api.health import (
     ProbeResult,
+    _apply_probe_results,
     _db_status,
     _host_port_from_url,
     _probe_to_dict,
@@ -107,6 +108,7 @@ class TestHealthzFull:
         from app.api import health as health_mod
 
         health_mod._cache.clear()
+        health_mod._failure_counts.clear()
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         out = await healthz_full(s)
         assert out["backend"]["ok"] is True
@@ -122,6 +124,7 @@ class TestHealthzFull:
         from app.api import health as health_mod
 
         health_mod._cache.clear()
+        health_mod._failure_counts.clear()
         health_mod._cache["heyi_stt_firered"] = ProbeResult(
             ok=True, latency_ms=10.0, checked_at=1700000000.0
         )
@@ -133,6 +136,38 @@ class TestHealthzFull:
         assert out["remote"]["heyi_stt_firered"]["ok"] is True
         assert out["remote"]["yunwu_llm_main"]["ok"] is None
         assert out["remote"]["yunwu_llm_main"]["reason"] == "no_api_key"
+
+
+@pytest.mark.unit
+class TestProbeResultApplication:
+    def test_transient_timeout_keeps_last_ok_until_grace(self) -> None:
+        from app.api import health as health_mod
+
+        health_mod._cache.clear()
+        health_mod._failure_counts.clear()
+
+        _apply_probe_results(
+            {"heyi_stt_firered": ProbeResult(ok=True, latency_ms=12.0, checked_at=1.0)}
+        )
+        assert health_mod._cache["heyi_stt_firered"].ok is True
+
+        _apply_probe_results(
+            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=2.0)}
+        )
+        assert health_mod._cache["heyi_stt_firered"].ok is True
+        assert health_mod._cache["heyi_stt_firered"].reason == (
+            "last_ok_retained_after_timeout"
+        )
+
+        _apply_probe_results(
+            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=3.0)}
+        )
+        assert health_mod._cache["heyi_stt_firered"].ok is True
+
+        _apply_probe_results(
+            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=4.0)}
+        )
+        assert health_mod._cache["heyi_stt_firered"].ok is False
 
 
 @pytest.mark.unit

@@ -38,7 +38,8 @@ router = APIRouter(tags=["meta"])
 
 _BOOT_TIME = time.monotonic()
 _PROBE_INTERVAL_S = 30.0
-_PROBE_TIMEOUT_S = 2.0
+_PROBE_TIMEOUT_S = 8.0
+_PROBE_FAILURE_GRACE_COUNT = 3
 
 
 @dataclass
@@ -53,6 +54,7 @@ class ProbeResult:
 
 
 _cache: dict[str, ProbeResult] = {}
+_failure_counts: dict[str, int] = {}
 _prober_task: asyncio.Task[None] | None = None
 
 
@@ -92,32 +94,80 @@ async def _probe_tcp(host: str, port: int) -> ProbeResult:
 
 
 async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
-    out: dict[str, ProbeResult] = {}
-
+    probes: list[tuple[str, asyncio.Future[ProbeResult] | asyncio.Task[ProbeResult]]] = []
     host, port = _host_port_from_url(settings.stt_firered_url)
-    out["heyi_stt_firered"] = await _probe_tcp(host, port)
+    probes.append(("heyi_stt_firered", asyncio.ensure_future(_probe_tcp(host, port))))
 
     if settings.tts_enabled:
         host, port = _host_port_from_url(settings.tts_qwen3_url)
-        out["heyi_tts_qwen3"] = await _probe_tcp(host, port)
+        probes.append(("heyi_tts_qwen3", asyncio.ensure_future(_probe_tcp(host, port))))
     else:
-        out["heyi_tts_qwen3"] = ProbeResult(ok=None, reason="tts_disabled")
+        probes.append(
+            (
+                "heyi_tts_qwen3",
+                asyncio.ensure_future(
+                    asyncio.sleep(0, ProbeResult(ok=None, reason="tts_disabled"))
+                ),
+            )
+        )
 
     host, port = _host_port_from_url(settings.llm_fast_base_url)
-    out["heyi_llm_fast"] = await _probe_tcp(host, port)
+    probes.append(("heyi_llm_fast", asyncio.ensure_future(_probe_tcp(host, port))))
 
     if not settings.yunwu_open_key:
-        out["yunwu_llm_main"] = ProbeResult(ok=None, reason="no_api_key")
+        probes.append(
+            (
+                "yunwu_llm_main",
+                asyncio.ensure_future(asyncio.sleep(0, ProbeResult(ok=None, reason="no_api_key"))),
+            )
+        )
     else:
         host, port = _host_port_from_url(settings.llm_main_base_url, 443)
-        out["yunwu_llm_main"] = await _probe_tcp(host, port)
+        probes.append(("yunwu_llm_main", asyncio.ensure_future(_probe_tcp(host, port))))
 
     if not settings.tavily_api_key:
-        out["tavily"] = ProbeResult(ok=None, reason="no_api_key")
+        probes.append(
+            (
+                "tavily",
+                asyncio.ensure_future(asyncio.sleep(0, ProbeResult(ok=None, reason="no_api_key"))),
+            )
+        )
     else:
-        out["tavily"] = await _probe_tcp("api.tavily.com", 443)
+        probes.append(("tavily", asyncio.ensure_future(_probe_tcp("api.tavily.com", 443))))
 
-    return out
+    values = await asyncio.gather(*(probe for _, probe in probes))
+    return {name: value for (name, _), value in zip(probes, values, strict=True)}
+
+
+def _apply_probe_results(results: dict[str, ProbeResult]) -> None:
+    """Update probe cache with a small grace window for flaky tailnet probes.
+
+    eight occasionally accepts real STT/TTS requests while a lightweight TCP probe
+    times out. Flipping the status pill red on the first missed probe makes the UI
+    look broken even when capture is still working, so keep the last known-good
+    status until the same dependency fails several rounds in a row.
+    """
+    stale_names = set(_cache) - set(results)
+    for name in stale_names:
+        _cache.pop(name, None)
+        _failure_counts.pop(name, None)
+
+    for name, result in results.items():
+        previous = _cache.get(name)
+        if result.ok is False:
+            failures = _failure_counts.get(name, 0) + 1
+            _failure_counts[name] = failures
+            if previous and previous.ok is True and failures < _PROBE_FAILURE_GRACE_COUNT:
+                _cache[name] = ProbeResult(
+                    ok=True,
+                    latency_ms=previous.latency_ms,
+                    reason=f"last_ok_retained_after_{result.error or 'probe_failure'}",
+                    checked_at=result.checked_at,
+                )
+                continue
+        else:
+            _failure_counts[name] = 0
+        _cache[name] = result
 
 
 async def _prober_loop(settings: Settings) -> None:
@@ -125,8 +175,7 @@ async def _prober_loop(settings: Settings) -> None:
     while True:
         try:
             results = await _probe_all(settings)
-            _cache.clear()
-            _cache.update(results)
+            _apply_probe_results(results)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -145,10 +194,10 @@ async def start_prober() -> None:
     settings = get_settings()
     try:
         first = await _probe_all(settings)
-        _cache.update(first)
-        n_ok = sum(1 for r in first.values() if r.ok is True)
-        n_fail = sum(1 for r in first.values() if r.ok is False)
-        n_na = sum(1 for r in first.values() if r.ok is None)
+        _apply_probe_results(first)
+        n_ok = sum(1 for r in _cache.values() if r.ok is True)
+        n_fail = sum(1 for r in _cache.values() if r.ok is False)
+        n_na = sum(1 for r in _cache.values() if r.ok is None)
         logger.info(
             "prober first round: %d ok, %d fail, %d n/a (interval=%ds)",
             n_ok,
