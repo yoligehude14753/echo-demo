@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const chromiumExecutablePath = process.env.ECHODESK_CHROMIUM_PATH || undefined;
+
 /**
  * 场景验证 + 录像（P3 收官产物）
  *
@@ -37,6 +39,7 @@ export default defineConfig({
     actionTimeout: 10_000,
     navigationTimeout: 20_000,
     launchOptions: {
+      ...(chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {}),
       slowMo: 120, // 每个操作之间留 120ms，让视频可读
     },
   },

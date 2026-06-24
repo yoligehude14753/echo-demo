@@ -17,6 +17,7 @@ export type ElectronMicStatus =
 
 interface ElectronEchoBridge {
   isElectron?: boolean;
+  isPublicDemo?: boolean;
   getBackendHost?: () => Promise<string>;
   getShareBackendHost?: () => Promise<string>;
   // Phase 1 P1.5/P1.6 BackendSupervisor IPC
@@ -102,6 +103,16 @@ export function isDefaultPublicBackend(base: string | null | undefined): boolean
   return normalized === DEFAULT_ANDROID_BACKEND_BASE;
 }
 
+function isPublicDesktopDemo(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.echo?.isPublicDemo === true) return true;
+  return (
+    window.echo?.isElectron === true &&
+    window.location.protocol === "file:" &&
+    !storedBackendBase()
+  );
+}
+
 /**
  * Android / TV demo 包默认连接公共 backend。公共 backend 不能把其它设备的
  * historical meetings / ambient feed 直接 hydrate 到新装设备，否则会议室电视
@@ -111,7 +122,10 @@ export function isDefaultPublicBackend(base: string | null | undefined): boolean
 export function shouldHideSharedPublicHistory(): boolean {
   if (typeof window === "undefined") return false;
   const configured = configuredBackendBase();
-  return isNativeMobile() && isDefaultPublicBackend(configured ?? DEFAULT_ANDROID_BACKEND_BASE);
+  return (
+    isPublicDesktopDemo() ||
+    (isNativeMobile() && isDefaultPublicBackend(configured ?? DEFAULT_ANDROID_BACKEND_BASE))
+  );
 }
 
 export function isTvLikeViewport(): boolean {

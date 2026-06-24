@@ -84,7 +84,7 @@ export default function App(): JSX.Element {
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
-              className="flex items-center rounded px-1.5 py-0.5 text-ink-500 hover:text-ink-700 hover:bg-paper-200 transition"
+              className="flex min-w-8 min-h-8 items-center justify-center rounded px-1.5 py-1.5 text-ink-500 hover:text-ink-700 hover:bg-paper-200 transition"
               data-testid="open-settings"
               aria-label="打开设置"
             >
@@ -125,7 +125,10 @@ export default function App(): JSX.Element {
           <div className="echodesk-transcript-pane flex-1 min-w-0 min-h-0 border-r border-paper-300 flex flex-col">
             <div className="echodesk-transcript-header flex items-center gap-2 px-6 h-11 border-b border-paper-300 shrink-0">
               <Mic className="w-3.5 h-3.5 text-ink-500" />
-              <span className="text-[13px] text-ink-700 font-medium">
+              <span
+                className="shrink-0 whitespace-nowrap text-[13px] text-ink-700 font-medium"
+                data-testid="transcript-title"
+              >
                 转写流
               </span>
               {currentMeetingId && (
@@ -133,7 +136,7 @@ export default function App(): JSX.Element {
                   {currentMeetingId}
                 </span>
               )}
-              <div className="ml-auto">
+              <div className="ml-auto min-w-0 flex justify-end">
                 <CaptureStatus status={captureStatus} />
               </div>
             </div>
@@ -203,7 +206,7 @@ function TtsTopBarButton({
       <button
         type="button"
         onClick={() => tts.setEnabled(!tts.enabled)}
-        className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${color}`}
+        className={`flex min-h-8 items-center gap-1 rounded px-2 py-1.5 transition ${color}`}
         data-testid="tts-toggle"
         data-tts-state={
           !tts.enabled

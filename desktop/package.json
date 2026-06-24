@@ -1,6 +1,9 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.2.9",
+  "version": "0.2.10",
+  "description": "EchoDesk public demo desktop client",
+  "author": "EchoDesk <support@yoliyoli.uk>",
+  "homepage": "https://github.com/yoligehude14753/echo-demo",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -18,6 +21,7 @@
     "app:dist": "npm run build && electron-builder --mac",
     "app:dist:mac": "npm run build && electron-builder --mac",
     "app:dist:win": "npm run build && electron-builder --win nsis --x64",
+    "app:dist:linux": "npm run build && electron-builder --linux AppImage deb --x64",
     "app:dist:android": "node scripts/build-android-debug.cjs",
     "app:package:tv": "node scripts/package-tv-installer.cjs",
     "android:sync": "npm run build && cap sync android",
@@ -89,6 +93,25 @@
       "target": [
         {
           "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "category": "Utility",
+      "icon": "electron/icons/echodesk.png",
+      "maintainer": "EchoDesk <support@yoliyoli.uk>",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
           "arch": [
             "x64"
           ]

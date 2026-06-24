@@ -51,6 +51,36 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.10] – 2026-06-24
+
+跨平台 public demo hotfix：macOS / Windows / Linux 桌面公开安装包默认连接公网
+EchoDesk backend，不再要求新用户本机安装 Python backend；补齐 Linux 发行包与跨平台
+packaged-app 点击验证入口。
+
+### 新增
+
+- Linux x64 发行包：`EchoDesk-0.2.10.AppImage` 与 `echodesk-desktop_0.2.10_amd64.deb`。
+- `npm run app:dist:linux`，与现有 macOS / Windows / Android / TV 打包脚本并列。
+- 打包后 Electron 真 App E2E 支持 `ECHODESK_APP_BIN`，同一套 smoke 可以在 macOS、
+  Windows 和 Linux 上验证启动、public backend、设置、知识库入口和输入框点击路径。
+
+### 修复
+
+- 公开桌面包默认进入 public demo 模式，`getBackendHost()` 返回
+  `https://echodesk.yoliyoli.uk`，模型 key 与 STT/TTS/LLM 调用保留在服务端。
+- public demo 桌面包不再启动本机 Python backend；私有部署可显式设置
+  `ECHO_FORCE_LOCAL_BACKEND=1` 恢复原来的本地 backend。
+- public demo 桌面包与 Android/TV 一样隐藏共享历史 hydrate 与共享 WS 业务事件，
+  避免新安装用户看到其它设备的会议历史。
+- public backend 短暂异常时 Electron 主进程不会误判为本地外部 backend 退出并尝试
+  接管启动 Python。
+
+### 验证
+
+- macOS 本机 typecheck / lint / build / browser e2e 通过。
+- Windows 在 `win-sunny-friend` 上做真实安装包与 packaged-app smoke。
+- Linux 在 `heyi-daheng` 上做 AppImage/deb 构建与 packaged-app smoke。
+
 ## [0.2.9] – 2026-06-24
 
 智能电视 / public demo hotfix：修复小米 Android 9 TV 上 WebView 白屏、比例错位、
@@ -70,7 +100,7 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
   `ECHODESK_TV_KEEP_DATA=1`。
 - Android manifest 关闭 backup，避免系统备份恢复旧 WebView 数据。
 - 已在 `MiTV-ASTP0`（Android 9，IP `10.10.12.25`）通过 ADB 覆盖安装验证：
-  v0.2.8 旧包 logcat 报 `Unexpected token ?` 并白屏；新包不再报语法错误，主界面正常显示，
+  v0.2.8 旧包 logcat 报 `Unexpected token ?` 并白屏；v0.2.9 新包不再报语法错误，主界面正常显示，
   18 秒 WS replay 窗口后不再出现公共历史会议。
 - 实机音频检查确认 `com.echodesk.app` 以 `VOICE_COMMUNICATION` 打开麦克风，
   `1ch 48000Hz PCM_16BIT`；Mac 扬声器测试音没有穿过后端 RMS 门控，stats 仍显示

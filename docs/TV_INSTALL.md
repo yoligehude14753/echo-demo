@@ -7,8 +7,8 @@
 
 从 GitHub Release 下载：
 
-- `EchoDesk-0.2.9-smart-tv.apk`：电视直接安装用 APK。
-- `EchoDesk-0.2.9-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
+- `EchoDesk-0.2.10-smart-tv.apk`：电视直接安装用 APK。
+- `EchoDesk-0.2.10-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
 - `https://yoligehude14753.github.io/echo-demo/tv-install.html`：电视浏览器安装页，可用遥控器直接选择下载按钮。
 
 ## 方法 A：电视浏览器安装
@@ -26,7 +26,7 @@
 1. 让电脑和电视连接同一个局域网。
 2. 在电视设置中打开开发者模式和网络调试 / ADB 调试。
 3. 查到电视 IP。
-4. 解压 `EchoDesk-0.2.9-smart-tv-oneclick.zip`。
+4. 解压 `EchoDesk-0.2.10-smart-tv-oneclick.zip`。
 5. macOS：
 
 ```bash
@@ -51,7 +51,7 @@ ECHODESK_TV_KEEP_DATA=1 ./install-tv-macos.sh 192.168.1.23
 
 ## 方法 C：U 盘安装
 
-1. 把 `EchoDesk-0.2.9-smart-tv.apk` 拷到 U 盘。
+1. 把 `EchoDesk-0.2.10-smart-tv.apk` 拷到 U 盘。
 2. 在电视文件管理器里打开 APK。
 3. 按提示允许安装未知来源应用。
 

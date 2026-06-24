@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const chromiumExecutablePath = process.env.ECHODESK_CHROMIUM_PATH || undefined;
+
 /**
  * Echo desktop E2E（PR-15 / m5-t4）。
  *
@@ -21,6 +23,9 @@ export default defineConfig({
     screenshot: "only-on-failure",
     actionTimeout: 8_000,
     navigationTimeout: 15_000,
+    launchOptions: chromiumExecutablePath
+      ? { executablePath: chromiumExecutablePath }
+      : undefined,
   },
   projects: [
     {

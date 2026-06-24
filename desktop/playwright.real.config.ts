@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const chromiumExecutablePath = process.env.ECHODESK_CHROMIUM_PATH || undefined;
+
 /**
  * 真后端 E2E：连真 backend (:8769) + 真 LLM (Yunwu M2.7) + 真 RAG。
  *
@@ -22,6 +24,9 @@ export default defineConfig({
     screenshot: "only-on-failure",
     actionTimeout: 60_000,
     navigationTimeout: 30_000,
+    launchOptions: chromiumExecutablePath
+      ? { executablePath: chromiumExecutablePath }
+      : undefined,
   },
   timeout: 240_000,
   projects: [

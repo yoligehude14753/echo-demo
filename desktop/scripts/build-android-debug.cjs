@@ -19,6 +19,7 @@ const APK_PATH = join(
 const { version } = require(join(ROOT, "package.json"));
 const RELEASE_DIR = join(ROOT, "release");
 const TV_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android-tv-debug.apk`);
+const ANDROID_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android.apk`);
 
 function firstExisting(paths) {
   return paths.find((p) => p && existsSync(p)) || null;
@@ -92,4 +93,6 @@ run("./gradlew", ["assembleDebug"], { cwd: ANDROID_DIR, env });
 console.log(`[android] APK ready: ${APK_PATH}`);
 mkdirSync(RELEASE_DIR, { recursive: true });
 copyFileSync(APK_PATH, TV_APK_PATH);
+copyFileSync(APK_PATH, ANDROID_APK_PATH);
 console.log(`[android] TV-compatible APK copied: ${TV_APK_PATH}`);
+console.log(`[android] Android APK copied: ${ANDROID_APK_PATH}`);

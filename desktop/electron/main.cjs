@@ -16,12 +16,20 @@ const os = require("node:os");
 const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
 const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8769", 10);
-const BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
+const LOCAL_BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
+const PUBLIC_BACKEND_HOST =
+  normalizeHttpBase(process.env.ECHO_PUBLIC_BACKEND_BASE) ||
+  "https://echodesk.yoliyoli.uk";
+const FORCE_LOCAL_BACKEND = process.env.ECHO_FORCE_LOCAL_BACKEND === "1";
+const PUBLIC_DEMO_MODE =
+  process.env.ECHO_PUBLIC_DEMO === "1" || (!IS_DEV && !FORCE_LOCAL_BACKEND);
+const BACKEND_HOST = PUBLIC_DEMO_MODE ? PUBLIC_BACKEND_HOST : LOCAL_BACKEND_HOST;
 const BACKEND_BIND_HOST = process.env.ECHO_BACKEND_BIND_HOST || "0.0.0.0";
 
-// 产品独立性硬约束：双击 .app 必须自己起 backend。
-// dev 期想自己 uvicorn 调试的开发者，通过 ECHO_SPAWN_BACKEND=0 显式禁用。
-const SPAWN_BACKEND = process.env.ECHO_SPAWN_BACKEND !== "0";
+// 公开发布包默认走 public backend：key 与模型服务留在服务端，新用户不需要本机 Python。
+// 私有/离线部署可以显式 ECHO_FORCE_LOCAL_BACKEND=1 恢复本地 backend spawn。
+const SPAWN_BACKEND =
+  !PUBLIC_DEMO_MODE && process.env.ECHO_SPAWN_BACKEND !== "0";
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
 // node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
@@ -98,6 +106,7 @@ function firstLanAddress() {
 function shareBackendHost() {
   const configured = normalizeHttpBase(process.env.ECHO_SHARE_BASE_URL);
   if (configured) return configured;
+  if (PUBLIC_DEMO_MODE) return PUBLIC_BACKEND_HOST;
   return `http://${firstLanAddress()}:${BACKEND_PORT}`;
 }
 
@@ -278,6 +287,15 @@ function startExternalHealthWatcher() {
     if (shuttingDown) return;
     const ok = await healthcheckOnce();
     if (ok) return;
+    if (PUBLIC_DEMO_MODE) {
+      emitStatus({
+        state: "degraded",
+        reason: "public backend unhealthy",
+        attempts: 0,
+        last_error: "healthz failed",
+      });
+      return;
+    }
     if (!isPortListening(BACKEND_PORT)) {
       // 外部 backend 进程退出 → 端口已空 → 我们接管
       log("[backend] external backend exited, taking over");
@@ -463,9 +481,15 @@ function spawnBackendAndWatch() {
 
 function startBackend() {
   if (!SPAWN_BACKEND) {
-    log(`[backend] spawn disabled (ECHO_SPAWN_BACKEND=0), assuming external ${BACKEND_HOST}`);
+    log(
+      `[backend] spawn disabled (${PUBLIC_DEMO_MODE ? "public demo" : "ECHO_SPAWN_BACKEND=0"}), using ${BACKEND_HOST}`,
+    );
     externalMode = true;
-    emitStatus({ state: "external", port: BACKEND_PORT });
+    emitStatus({
+      state: "external",
+      port: PUBLIC_DEMO_MODE ? undefined : BACKEND_PORT,
+      mode: PUBLIC_DEMO_MODE ? "public-demo" : "external",
+    });
     startExternalHealthWatcher();
     return;
   }
@@ -636,6 +660,20 @@ ipcMain.handle("mic:open-system-prefs", async () => {
 // 让 renderer 在 degraded UI 上按钮触发一次干净重启：清 backoff 计数 + 重新 spawn
 ipcMain.handle("backend:manual-restart", async () => {
   log("[backend] manual restart requested");
+  if (PUBLIC_DEMO_MODE) {
+    const ok = await healthcheckOnce();
+    emitStatus(
+      ok
+        ? { state: "ready", mode: "public-demo" }
+        : {
+            state: "degraded",
+            reason: "public backend unhealthy",
+            attempts: 0,
+            last_error: "healthz failed",
+          },
+    );
+    return { ok };
+  }
   restartAttempts = 0;
   externalMode = false;
   stopHealthWatcher();
