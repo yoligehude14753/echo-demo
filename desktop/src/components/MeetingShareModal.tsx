@@ -82,6 +82,15 @@ function safeDownloadName(raw: string): string {
     .trim();
 }
 
+function isLoopbackUrl(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname;
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
 export default function MeetingShareModal({
   open,
   meeting,
@@ -95,6 +104,7 @@ export default function MeetingShareModal({
   const artifactIds = useMemo(() => uniqueArtifactIds(meeting), [meeting]);
   const artifactCount = meeting?.artifacts.length ?? 0;
   const title = meeting?.minutes?.title || meeting?.display_title || meeting?.title || meeting?.meeting_id || "会议资料";
+  const loopbackShareUrl = shareUrl ? isLoopbackUrl(shareUrl) : false;
 
   useEffect(() => {
     let cancelled = false;
@@ -215,6 +225,19 @@ export default function MeetingShareModal({
           data-testid="meeting-share-url"
         >
           {shareUrl || "等待生成分享链接"}
+        </div>
+
+        <div
+          className={`rounded-md px-3 py-2 text-[12px] leading-relaxed ${
+            loopbackShareUrl
+              ? "bg-red-50 text-red-700 border border-red-100"
+              : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+          }`}
+          data-testid="meeting-share-network-hint"
+        >
+          {loopbackShareUrl
+            ? "当前链接只能在本机打开；请用打包版 EchoDesk 或设置 ECHO_SHARE_BASE_URL 后再让手机/电视扫码。"
+            : "手机或电视和这台电脑在同一网络时，可扫码打开并保存纪要、下载产物。"}
         </div>
 
         <div className="grid grid-cols-2 gap-2 text-[12px] text-ink-500">

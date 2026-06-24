@@ -18,6 +18,7 @@ export type ElectronMicStatus =
 interface ElectronEchoBridge {
   isElectron?: boolean;
   getBackendHost?: () => Promise<string>;
+  getShareBackendHost?: () => Promise<string>;
   // Phase 1 P1.5/P1.6 BackendSupervisor IPC
   onBackendStatus?: (cb: (status: unknown) => void) => () => void;
   manualRestartBackend?: () => Promise<{ ok: boolean }>;
@@ -93,6 +94,29 @@ export function isNativeMobile(): boolean {
 
 export function configuredBackendBase(): string | null {
   return storedBackendBase() ?? envBackendBase();
+}
+
+export async function shareBackendBase(): Promise<string> {
+  const configured = configuredBackendBase();
+  if (configured) return configured;
+
+  const fromElectron =
+    typeof window !== "undefined"
+      ? await window.echo?.getShareBackendHost?.()
+      : null;
+  if (fromElectron) return normalizeBackendBase(fromElectron) ?? fromElectron;
+
+  const base = await backendBase();
+  if (base) return base;
+
+  if (
+    typeof window !== "undefined" &&
+    window.location.protocol.startsWith("http") &&
+    window.location.host
+  ) {
+    return window.location.origin;
+  }
+  return DEFAULT_ANDROID_BACKEND_BASE;
 }
 
 export async function backendBase(): Promise<string> {

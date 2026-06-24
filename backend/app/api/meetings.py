@@ -27,7 +27,7 @@ from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
@@ -205,6 +205,70 @@ def _format_bytes(size: int) -> str:
     return f"{size / 1024 / 1024:.1f} MB"
 
 
+def _safe_download_name(raw: str) -> str:
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", raw).strip()
+    return name or "echodesk-minutes"
+
+
+def _minutes_markdown(
+    *,
+    meeting_id: str,
+    title: str,
+    data: dict[str, object],
+) -> str:
+    lines = [
+        f"# {title}",
+        "",
+        f"- 会议 ID：{meeting_id}",
+    ]
+    duration = data.get("duration_sec")
+    if isinstance(duration, int | float):
+        lines.append(f"- 时长：{round(duration)} 秒")
+    created_at = data.get("created_at")
+    if created_at:
+        lines.append(f"- 生成时间：{created_at}")
+    summary = str(data.get("summary") or "").strip()
+    lines.extend(["", "## 摘要", "", summary or "会议纪要尚未生成或已被删除。", ""])
+
+    raw_sections = data.get("sections")
+    sections = raw_sections if isinstance(raw_sections, list) else []
+    for sec in sections:
+        if not isinstance(sec, dict):
+            continue
+        heading = str(sec.get("heading") or "议题")
+        lines.extend([f"## {heading}", ""])
+        raw_bullets = sec.get("bullets")
+        bullets = raw_bullets if isinstance(raw_bullets, list) else []
+        for bullet in bullets:
+            lines.append(f"- {bullet}")
+        lines.append("")
+
+    raw_decisions = data.get("decisions")
+    decisions = raw_decisions if isinstance(raw_decisions, list) else []
+    if decisions:
+        lines.extend(["## 决议", ""])
+        for decision in decisions:
+            lines.append(f"- {decision}")
+        lines.append("")
+
+    raw_todos = data.get("todos")
+    todos = raw_todos if isinstance(raw_todos, list) else []
+    if todos:
+        lines.extend(["## 待办", ""])
+        for item in todos:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+                assignee = str(item.get("assignee") or "").strip()
+                status = "已完成" if item.get("status") == "done" else "待处理"
+                suffix = f"（{assignee}）" if assignee else ""
+                if text:
+                    lines.append(f"- [{status}] {text}{suffix}")
+        lines.append("")
+
+    body = "\n".join(lines).strip()
+    return f"{body}\n"
+
+
 def _share_html(
     *,
     meeting_id: str,
@@ -213,6 +277,7 @@ def _share_html(
     sections: list[dict[str, object]],
     decisions: list[str],
     artifacts: list[dict[str, object]],
+    minutes_download_url: str | None,
 ) -> str:
     safe_title = html.escape(title)
     safe_meeting = html.escape(meeting_id)
@@ -257,6 +322,14 @@ def _share_html(
         )
     else:
         artifact_html = '<section><h2>会议产物</h2><p class="empty">暂无可下载产物。</p></section>'
+    action_html = (
+        '<div class="actions">'
+        f'<a class="primary" href="{html.escape(minutes_download_url)}">保存纪要.md</a>'
+        '<a href="#artifacts">查看产物</a>'
+        "</div>"
+        if minutes_download_url
+        else ""
+    )
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -282,6 +355,9 @@ def _share_html(
     .artifact strong {{ display: block; font-size: 15px; line-height: 1.3; }}
     .artifact em {{ display: block; margin-top: 4px; color: #8b8178; font-size: 12px; font-style: normal; }}
     .artifact b {{ flex: 0 0 auto; color: #0b7f64; font-size: 13px; }}
+    .actions {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }}
+    .actions a {{ display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid #d8d0c8; background: white; color: #26211d; text-decoration: none; font-size: 14px; font-weight: 650; }}
+    .actions a.primary {{ background: #10a37f; border-color: #10a37f; color: white; }}
     footer {{ margin-top: 32px; color: #9a9188; font-size: 12px; }}
   </style>
 </head>
@@ -291,11 +367,12 @@ def _share_html(
       <div class="brand">EchoDesk 会议资料</div>
       <h1>{safe_title}</h1>
       <div class="mid">{safe_meeting}</div>
+      {action_html}
     </header>
     {summary_html}
     {section_html}
     {decisions_html}
-    {artifact_html}
+    <div id="artifacts">{artifact_html}</div>
     <footer>扫码页面仅用于保存会议纪要与下载产物；删除请回到会议室大屏 EchoDesk 操作。</footer>
   </main>
 </body>
@@ -436,6 +513,33 @@ async def get_minutes(
     return MeetingMinutes(**data)
 
 
+@router.get("/{meeting_id}/minutes.md")
+async def download_minutes_markdown(
+    meeting_id: str,
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+) -> Response:
+    meeting = await repository.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    if not meeting.minutes_json:
+        raise HTTPException(status_code=404, detail="minutes not generated")
+    try:
+        data = json.loads(meeting.minutes_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail="minutes json corrupted") from e
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="minutes json corrupted")
+
+    title = str(data.get("title") or meeting.display_title or meeting.title or meeting_id)
+    markdown = _minutes_markdown(meeting_id=meeting_id, title=title, data=data)
+    filename = quote(f"{_safe_download_name(title)}.md")
+    return Response(
+        markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
+
+
 @router.get("/{meeting_id}/artifacts", response_model=list[GeneratedArtifact])
 async def get_meeting_artifacts(
     meeting_id: str,
@@ -517,6 +621,7 @@ async def share_meeting(
             sections=sections,
             decisions=decisions,
             artifacts=artifacts,
+            minutes_download_url=f"/meetings/{quote(meeting_id)}/minutes.md" if meeting.minutes_json else None,
         )
     )
 

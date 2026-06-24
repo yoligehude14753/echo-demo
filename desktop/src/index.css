@@ -73,6 +73,23 @@ body {
   letter-spacing: -0.01em;
 }
 
+.echodesk-command-textarea,
+.echodesk-command-textarea textarea,
+[data-testid="command-bar"] textarea {
+  font-family:
+    "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif !important;
+  font-size: 15px !important;
+  line-height: 1.45 !important;
+}
+
+.echodesk-command-textarea textarea::placeholder,
+[data-testid="command-bar"] textarea::placeholder {
+  color: #b8b8b8 !important;
+  font-size: 15px !important;
+  line-height: 1.45 !important;
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -136,9 +153,9 @@ textarea:focus-visible,
   }
 
   [data-testid="command-bar"] textarea {
-    min-height: 48px !important;
-    font-size: 18px !important;
-    line-height: 1.55 !important;
+    min-height: 46px !important;
+    font-size: 15px !important;
+    line-height: 1.45 !important;
   }
 
   [data-testid="command-attach-btn"],
@@ -238,7 +255,8 @@ textarea:focus-visible,
   }
 
   [data-testid="command-bar"] textarea {
-    font-size: 13px !important;
+    font-size: 14px !important;
+    line-height: 1.45 !important;
   }
 
   .ant-modal {

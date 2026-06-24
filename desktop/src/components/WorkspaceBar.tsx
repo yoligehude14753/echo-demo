@@ -189,6 +189,21 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
         <div className="ml-auto flex items-center gap-1">
           <Button
             size="small"
+            type="default"
+            icon={<Settings className="w-3 h-3" />}
+            onClick={() => {
+              if (onOpenSettings) {
+                onOpenSettings();
+              } else {
+                setModalOpen(true);
+              }
+            }}
+            data-testid="workspace-config-btn"
+          >
+            配置工作区
+          </Button>
+          <Button
+            size="small"
             type="text"
             icon={
               <RefreshCw

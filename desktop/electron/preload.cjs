@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("echo", {
   isElectron: true,
   getBackendHost: () => ipcRenderer.invoke("echo:backend-host"),
+  getShareBackendHost: () => ipcRenderer.invoke("echo:share-backend-host"),
 
   // BackendSupervisor 状态推送（P1.5）
   // payload = {state, ...} 详见 main.cjs emitStatus

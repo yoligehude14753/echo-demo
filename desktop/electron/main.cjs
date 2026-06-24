@@ -17,6 +17,7 @@ const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
 const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8769", 10);
 const BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
+const BACKEND_BIND_HOST = process.env.ECHO_BACKEND_BIND_HOST || "0.0.0.0";
 
 // 产品独立性硬约束：双击 .app 必须自己起 backend。
 // dev 期想自己 uvicorn 调试的开发者，通过 ECHO_SPAWN_BACKEND=0 显式禁用。
@@ -65,6 +66,39 @@ process.on("unhandledRejection", (reason) => {
 
 function log(msg) {
   console.log(msg);
+}
+
+function normalizeHttpBase(raw) {
+  const value = String(raw || "").trim().replace(/\/+$/, "");
+  if (!value) return null;
+  return /^https?:\/\//i.test(value) ? value : `http://${value}`;
+}
+
+function firstLanAddress() {
+  const interfaces = os.networkInterfaces();
+  const candidates = [];
+  for (const [name, entries] of Object.entries(interfaces)) {
+    for (const entry of entries || []) {
+      if (!entry || entry.family !== "IPv4" || entry.internal) continue;
+      const address = entry.address;
+      if (!address || address.startsWith("169.254.")) continue;
+      const score =
+        name === "en0" || name === "en1"
+          ? 0
+          : address.startsWith("192.168.") || address.startsWith("10.") || address.startsWith("172.")
+            ? 1
+            : 2;
+      candidates.push({ address, score, name });
+    }
+  }
+  candidates.sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
+  return candidates[0]?.address || "127.0.0.1";
+}
+
+function shareBackendHost() {
+  const configured = normalizeHttpBase(process.env.ECHO_SHARE_BASE_URL);
+  if (configured) return configured;
+  return `http://${firstLanAddress()}:${BACKEND_PORT}`;
 }
 
 function projectRoot() {
@@ -373,7 +407,7 @@ function spawnBackendAndWatch() {
         "uvicorn",
         "app.main:app",
         "--host",
-        "127.0.0.1",
+        BACKEND_BIND_HOST,
         "--port",
         String(BACKEND_PORT),
         "--log-level",
@@ -504,6 +538,7 @@ function createWindow() {
 // ---------- IPC handlers ----------
 
 ipcMain.handle("echo:backend-host", () => BACKEND_HOST);
+ipcMain.handle("echo:share-backend-host", () => shareBackendHost());
 
 // ---------- 麦克风权限 IPC（P3.5） ----------
 //

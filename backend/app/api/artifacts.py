@@ -168,6 +168,7 @@ async def _attach_artifact_to_todo_safe(*, meeting_id: str, todo_id: str, artifa
 
 # 跨平台不允许的文件名字符 + 控制字符
 _UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+_ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 # 文件名总长度上限（含扩展名）；macOS HFS+ 是 255 字节，留余量给 _<id>.<ext>
 _MAX_FILENAME_LEN = 120
 # meta.json 缺失或 title 被全部清掉时的兜底
@@ -191,7 +192,12 @@ async def download(
     artifact_id: str,
     settings: Settings = Depends(get_settings),
 ) -> FileResponse:
-    build_dir = Path(settings.skill_executor_build_dir).expanduser() / artifact_id
+    if not _ARTIFACT_ID_RE.fullmatch(artifact_id):
+        raise HTTPException(status_code=404, detail="artifact not found")
+    base = Path(settings.skill_executor_build_dir).expanduser().resolve()
+    build_dir = (base / artifact_id).resolve()
+    if build_dir == base or base not in build_dir.parents:
+        raise HTTPException(status_code=404, detail="artifact not found")
     if not build_dir.exists():
         raise HTTPException(status_code=404, detail="artifact not found")
     candidates = list(build_dir.glob("output.*"))

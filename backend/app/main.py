@@ -13,12 +13,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import logging.handlers
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
 from app import __version__
 from app.adapters.repo.migrator import run_migrations
@@ -51,6 +53,14 @@ from app.config import get_settings
 from app.config_io import user_config_dir
 
 logger = logging.getLogger("echodesk")
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+_LAN_SAFE_GET_PATTERNS = (
+    re.compile(r"^/healthz$"),
+    re.compile(r"^/meetings/[^/]+/share$"),
+    re.compile(r"^/meetings/[^/]+/minutes\.md$"),
+    re.compile(r"^/artifacts/[^/]+/download$"),
+)
 
 
 def _setup_logging(level: str) -> None:
@@ -290,6 +300,21 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def restrict_lan_api_access(request: Request, call_next):
+        client_host = request.client.host if request.client else "testclient"
+        if (
+            settings.lan_full_api_enabled
+            or client_host in _LOOPBACK_HOSTS
+            or request.method == "OPTIONS"
+            or (
+                request.method == "GET"
+                and any(p.fullmatch(request.url.path) for p in _LAN_SAFE_GET_PATTERNS)
+            )
+        ):
+            return await call_next(request)
+        return PlainTextResponse("EchoDesk LAN share only", status_code=403)
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:

@@ -500,7 +500,7 @@ export default function CommandBar(): JSX.Element {
           placeholder="拖入 / 粘贴文件入库 RAG · 输入 @生成 PPT … / @查 … · Shift+Enter 换行"
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={busy}
-          className="!rounded-md"
+          className="echodesk-command-textarea !rounded-md"
           data-testid="command-textarea"
         />
         <Tooltip title="选择文件入库 RAG（多选可批量）">

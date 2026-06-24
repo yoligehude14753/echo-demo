@@ -12,6 +12,7 @@ import {
   backendBase,
   configuredBackendBase,
   isNativeMobile,
+  shareBackendBase,
 } from "@/runtime";
 
 async function asJson<T>(resp: Response): Promise<T> {
@@ -245,8 +246,14 @@ export async function meetingShareUrl(
   const path = `/meetings/${encodeURIComponent(meetingId)}/share${
     params.toString() ? `?${params.toString()}` : ""
   }`;
-  const base = await backendBase();
-  if (base) return `${base}${path}`;
+  const base = await shareBackendBase();
+  if (base) {
+    const useApiPrefix =
+      typeof window !== "undefined" &&
+      base === window.location.origin &&
+      !window.echo?.isElectron;
+    return `${base}${useApiPrefix ? apiPath(path) : path}`;
+  }
   if (typeof window !== "undefined" && window.location.origin) {
     return `${window.location.origin}${apiPath(path)}`;
   }

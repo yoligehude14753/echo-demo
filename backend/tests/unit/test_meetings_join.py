@@ -321,8 +321,45 @@ async def test_share_page_includes_minutes_and_artifacts(
     assert "text/html" in r.headers["content-type"]
     assert "扫码会议纪要" in r.text
     assert "这是一段可以扫码保存的纪要" in r.text
+    assert "保存纪要.md" in r.text
+    assert "/meetings/mtg-share/minutes.md" in r.text
     assert "扫码会议输出" in r.text
     assert f"/artifacts/{artifact_id}/download" in r.text
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_download_minutes_markdown(
+    client: TestClient,
+    repo: SQLiteRepository,
+) -> None:
+    await _seed_meeting(
+        repo,
+        "mtg-minutes-md",
+        title="扫码会议",
+        started_at=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": "mtg-minutes-md",
+            "title": "扫码会议纪要",
+            "duration_sec": 60,
+            "summary": "这是一段可以保存为 Markdown 的纪要。",
+            "sections": [{"heading": "重点", "bullets": ["扫码保存", "下载纪要"]}],
+            "decisions": ["保留分享链接"],
+            "todos": [{"id": "todo-1", "text": "生成 PDF", "status": "pending"}],
+            "action_items": [],
+            "created_at": "2026-05-28T10:01:00+00:00",
+        },
+    )
+
+    r = client.get("/meetings/mtg-minutes-md/minutes.md")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert "attachment;" in r.headers["content-disposition"]
+    assert "# 扫码会议纪要" in r.text
+    assert "这是一段可以保存为 Markdown 的纪要" in r.text
+    assert "- [待处理] 生成 PDF" in r.text
 
 
 @pytest.mark.unit

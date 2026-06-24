@@ -185,6 +185,13 @@ def test_download_artifact_not_found(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_download_rejects_path_traversal_artifact_id(tmp_path: Path) -> None:
+    client = _client_with_settings(tmp_path)
+    r = client.get("/artifacts/..%2Fsecret/download")
+    assert r.status_code == 404
+
+
+@pytest.mark.unit
 def test_download_output_missing(tmp_path: Path) -> None:
     """artifact 目录存在但没有 output.* 文件 → 404 'output file missing'。"""
     client = _client_with_settings(tmp_path)

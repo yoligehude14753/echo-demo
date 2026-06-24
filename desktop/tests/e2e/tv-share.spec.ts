@@ -31,8 +31,10 @@ test("TV 会后扫码保存：二维码、分享链接和删除输出路径可�
   await expect(page.getByTestId("meeting-share-modal")).toBeVisible();
   await expect(page.getByTestId("meeting-share-qr")).toBeVisible({ timeout: 8_000 });
   await expect(page.getByTestId("meeting-share-url")).toContainText(
-    `/api/meetings/${meetingId}/share`,
+    `/meetings/${meetingId}/share`,
   );
+  await expect(page.getByTestId("meeting-share-url")).not.toContainText("127.0.0.1");
+  await expect(page.getByTestId("meeting-share-network-hint")).toContainText("同一网络");
   await expect(page.getByTestId("meeting-share-url")).toContainText(artifactId);
 
   await page.getByTestId("clear-meeting-outputs-btn").click();

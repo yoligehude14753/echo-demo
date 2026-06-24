@@ -76,6 +76,12 @@ export async function installEchoMock(
       _seq: 0,
     };
     (window as unknown as { __echoMock__: typeof ctrl }).__echoMock__ = ctrl;
+    const existingEcho = (window as unknown as { echo?: Record<string, unknown> }).echo ?? {};
+    (window as unknown as { echo: Record<string, unknown> }).echo = {
+      ...existingEcho,
+      isElectron: true,
+      getShareBackendHost: async () => "http://192.168.50.10:8769",
+    };
 
     // ── 覆写 WebSocket ─────────────────────────────────
     class MockWebSocket implements MockWs {

@@ -7,8 +7,8 @@
 
 从 GitHub Release 下载：
 
-- `EchoDesk-0.2.6-smart-tv.apk`：电视直接安装用 APK。
-- `EchoDesk-0.2.6-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
+- `EchoDesk-0.2.7-smart-tv.apk`：电视直接安装用 APK。
+- `EchoDesk-0.2.7-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
 - `https://yoligehude14753.github.io/echo-demo/tv-install.html`：电视浏览器安装页，可用遥控器直接选择下载按钮。
 
 ## 方法 A：电视浏览器安装
@@ -26,7 +26,7 @@
 1. 让电脑和电视连接同一个局域网。
 2. 在电视设置中打开开发者模式和网络调试 / ADB 调试。
 3. 查到电视 IP。
-4. 解压 `EchoDesk-0.2.6-smart-tv-oneclick.zip`。
+4. 解压 `EchoDesk-0.2.7-smart-tv-oneclick.zip`。
 5. macOS：
 
 ```bash
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.
 
 ## 方法 C：U 盘安装
 
-1. 把 `EchoDesk-0.2.6-smart-tv.apk` 拷到 U 盘。
+1. 把 `EchoDesk-0.2.7-smart-tv.apk` 拷到 U 盘。
 2. 在电视文件管理器里打开 APK。
 3. 按提示允许安装未知来源应用。
 
@@ -64,7 +64,7 @@ https://echodesk.yoliyoli.uk
 ```bash
 cd backend
 source .venv/bin/activate
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8769
+ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --port 8769
 ```
 
 然后在电视端 EchoDesk 设置里填电脑局域网地址，例如：
@@ -83,4 +83,6 @@ http://192.168.1.20:8769
 
 - APK 与一键安装包不包含真实 API key。
 - STT / TTS / Fast LLM 访问通过 EchoDesk backend 的配置走 eight endpoint。
+- 桌面端扫码保存默认只向局域网开放分享页、纪要下载和产物下载；完整 API 需显式打开
+  `ECHO_LAN_FULL_API_ENABLED=true`。
 - 公网 demo backend 已走 HTTPS；后续正式客户分发还需要 release 签名 APK / AAB、设备注册和限流。

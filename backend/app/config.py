@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     public_ws_url: str = "ws://localhost:8769/ws/echo"
     public_http_url: str = "http://localhost:8769"
-    app_version: str = "0.2.6"
+    app_version: str = "0.2.7"
 
     # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
     llm_main_provider: str = "yunwu"
@@ -320,6 +320,10 @@ class Settings(BaseSettings):
     )
     public_demo_mode: bool = False
     debug_token: str = ""
+    # Electron 会把 backend 绑定到 0.0.0.0 以支持手机/电视扫码保存。
+    # 默认只允许局域网访问 share/minutes/download 等只读保存端点；如需让
+    # Android/TV 调试完整本机后端，显式设置 ECHO_LAN_FULL_API_ENABLED=true。
+    lan_full_api_enabled: bool = False
 
     @property
     def allowed_origins_list(self) -> list[str]:
