@@ -14,11 +14,11 @@ import asyncio
 import logging
 import logging.handlers
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
@@ -302,7 +302,10 @@ def create_app() -> FastAPI:
     )
 
     @app.middleware("http")
-    async def restrict_lan_api_access(request: Request, call_next):
+    async def restrict_lan_api_access(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         client_host = request.client.host if request.client else "testclient"
         if (
             settings.lan_full_api_enabled

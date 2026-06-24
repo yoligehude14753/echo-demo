@@ -167,9 +167,7 @@ class TestProbeResultApplication:
             {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=2.0)}
         )
         assert health_mod._cache["heyi_stt_firered"].ok is True
-        assert health_mod._cache["heyi_stt_firered"].reason == (
-            "last_ok_retained_after_timeout"
-        )
+        assert health_mod._cache["heyi_stt_firered"].reason == ("last_ok_retained_after_timeout")
 
         for i in range(3, 11):
             _apply_probe_results(

@@ -621,7 +621,9 @@ async def share_meeting(
             sections=sections,
             decisions=decisions,
             artifacts=artifacts,
-            minutes_download_url=f"/meetings/{quote(meeting_id)}/minutes.md" if meeting.minutes_json else None,
+            minutes_download_url=f"/meetings/{quote(meeting_id)}/minutes.md"
+            if meeting.minutes_json
+            else None,
         )
     )
 
