@@ -78,24 +78,24 @@ async def test_transcribe_http_error_raises_stterror(settings: Settings) -> None
     fake.__aexit__ = AsyncMock(return_value=None)
     with (
         patch("app.adapters.stt.firered.httpx.AsyncClient", return_value=fake),
-        pytest.raises(STTError, match=r"firered transcribe failed"),
+        pytest.raises(STTError, match=r"firered transcribe failed: RuntimeError: boom"),
     ):
         await stt.transcribe(b"\x00\x01" * 8000)
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_circuit_breaker_opens_after_3_failures(settings: Settings) -> None:
+async def test_circuit_breaker_opens_after_6_failures(settings: Settings) -> None:
     stt = FireRedSTT(settings)
     fake = MagicMock()
     fake.post = AsyncMock(side_effect=RuntimeError("boom"))
     fake.__aenter__ = AsyncMock(return_value=fake)
     fake.__aexit__ = AsyncMock(return_value=None)
     with patch("app.adapters.stt.firered.httpx.AsyncClient", return_value=fake):
-        for _ in range(3):
+        for _ in range(6):
             with pytest.raises(STTError):
                 await stt.transcribe(b"\x00\x01" * 8000)
-        # 第 4 次直接被熔断拒绝（不再发请求）
+        # 第 7 次直接被熔断拒绝（不再发请求）
         with pytest.raises(STTError, match="circuit open"):
             await stt.transcribe(b"\x00\x01" * 8000)
 

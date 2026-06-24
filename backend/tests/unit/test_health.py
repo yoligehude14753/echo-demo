@@ -140,6 +140,18 @@ class TestHealthzFull:
 
 @pytest.mark.unit
 class TestProbeResultApplication:
+    def test_cold_start_timeout_stays_checking_until_grace(self) -> None:
+        from app.api import health as health_mod
+
+        health_mod._cache.clear()
+        health_mod._failure_counts.clear()
+
+        _apply_probe_results(
+            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=1.0)}
+        )
+        assert health_mod._cache["heyi_stt_firered"].ok is None
+        assert health_mod._cache["heyi_stt_firered"].reason == "checking_after_timeout_1/10"
+
     def test_transient_timeout_keeps_last_ok_until_grace(self) -> None:
         from app.api import health as health_mod
 
@@ -159,13 +171,20 @@ class TestProbeResultApplication:
             "last_ok_retained_after_timeout"
         )
 
-        _apply_probe_results(
-            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=3.0)}
-        )
-        assert health_mod._cache["heyi_stt_firered"].ok is True
+        for i in range(3, 11):
+            _apply_probe_results(
+                {
+                    "heyi_stt_firered": ProbeResult(
+                        ok=False,
+                        error="timeout",
+                        checked_at=float(i),
+                    )
+                }
+            )
+            assert health_mod._cache["heyi_stt_firered"].ok is True
 
         _apply_probe_results(
-            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=4.0)}
+            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=11.0)}
         )
         assert health_mod._cache["heyi_stt_firered"].ok is False
 
