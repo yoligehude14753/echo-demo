@@ -1,6 +1,6 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "EchoDesk public demo desktop client",
   "author": "EchoDesk <support@yoliyoli.uk>",
   "homepage": "https://github.com/yoligehude14753/echo-demo",
@@ -90,6 +90,7 @@
       "electron/**",
       "package.json"
     ],
+    "afterPack": "scripts/after-pack-mac.cjs",
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "electron/icons/echodesk.icns",

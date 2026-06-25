@@ -5,11 +5,11 @@ android {
     compileSdk = rootProject.ext.compileSdkVersion
     buildToolsVersion = "36.1.0"
     defaultConfig {
-        applicationId "com.echodesk.app"
+        applicationId project.findProperty("echoApplicationId") ?: "com.echodesk.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 216
-        versionName "0.2.16"
+        versionCode 217
+        versionName "0.2.17"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

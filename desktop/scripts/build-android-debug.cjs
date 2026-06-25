@@ -20,6 +20,8 @@ const { version } = require(join(ROOT, "package.json"));
 const RELEASE_DIR = join(ROOT, "release");
 const TV_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android-tv-debug.apk`);
 const ANDROID_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android.apk`);
+const ANDROID_APP_ID = "com.echodesk.app";
+const TV_APP_ID = "com.echodesk.tv";
 
 function firstExisting(paths) {
   return paths.find((p) => p && existsSync(p)) || null;
@@ -88,11 +90,20 @@ console.log(
 
 run("npm", ["run", "build"], { env });
 run("npx", ["cap", "sync", "android"], { env });
-run("./gradlew", ["assembleDebug"], { cwd: ANDROID_DIR, env });
-
-console.log(`[android] APK ready: ${APK_PATH}`);
 mkdirSync(RELEASE_DIR, { recursive: true });
-copyFileSync(APK_PATH, TV_APK_PATH);
+
+run("./gradlew", ["clean", "assembleDebug", `-PechoApplicationId=${ANDROID_APP_ID}`], {
+  cwd: ANDROID_DIR,
+  env,
+});
+console.log(`[android] Android APK ready: ${APK_PATH}`);
 copyFileSync(APK_PATH, ANDROID_APK_PATH);
-console.log(`[android] TV-compatible APK copied: ${TV_APK_PATH}`);
 console.log(`[android] Android APK copied: ${ANDROID_APK_PATH}`);
+
+run("./gradlew", ["clean", "assembleDebug", `-PechoApplicationId=${TV_APP_ID}`], {
+  cwd: ANDROID_DIR,
+  env,
+});
+console.log(`[android] TV APK ready: ${APK_PATH}`);
+copyFileSync(APK_PATH, TV_APK_PATH);
+console.log(`[android] TV-compatible APK copied: ${TV_APK_PATH}`);

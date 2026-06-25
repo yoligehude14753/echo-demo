@@ -60,7 +60,8 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APK="$SCRIPT_DIR/${SMART_TV_APK_NAME}"
-PKG="com.echodesk.app"
+PKG="com.echodesk.tv"
+LEGACY_PKG="com.echodesk.app"
 
 if command -v adb >/dev/null 2>&1; then
   ADB="$(command -v adb)"
@@ -81,6 +82,11 @@ if [ "\${ECHODESK_TV_KEEP_DATA:-0}" != "1" ]; then
   echo "[EchoDesk TV] clearing old local WebView / app data ..."
   "$ADB" shell am force-stop "$PKG" >/dev/null 2>&1 || true
   "$ADB" shell pm clear "$PKG" >/dev/null 2>&1 || true
+  if [ "\${ECHODESK_TV_KEEP_LEGACY:-0}" != "1" ]; then
+    "$ADB" shell am force-stop "$LEGACY_PKG" >/dev/null 2>&1 || true
+    "$ADB" shell pm clear "$LEGACY_PKG" >/dev/null 2>&1 || true
+    "$ADB" shell pm uninstall "$LEGACY_PKG" >/dev/null 2>&1 || true
+  fi
 fi
 
 echo "[EchoDesk TV] installing $APK ..."
@@ -88,12 +94,13 @@ echo "[EchoDesk TV] installing $APK ..."
 
 "$ADB" shell pm grant "$PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
 "$ADB" shell appops set "$PKG" RECORD_AUDIO allow >/dev/null 2>&1 || true
-"$ADB" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
+"$ADB" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
 
 echo
 echo "安装完成，已尝试自动打开 EchoDesk。"
 echo "如果电视弹出调试授权，请先在电视上点允许，再重新运行本脚本。"
 echo "如需保留旧配置更新，请用：ECHODESK_TV_KEEP_DATA=1 ./install-tv-macos.sh $TV_IP"
+echo "如需保留旧 com.echodesk.app 包，请同时设置：ECHODESK_TV_KEEP_LEGACY=1"
 `;
 
 const winInstaller = `param(
@@ -106,7 +113,8 @@ if (-not $TvIp) {
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Apk = Join-Path $ScriptDir "${SMART_TV_APK_NAME}"
-$Pkg = "com.echodesk.app"
+$Pkg = "com.echodesk.tv"
+$LegacyPkg = "com.echodesk.app"
 
 $Candidates = @(
   "adb.exe",
@@ -136,6 +144,11 @@ if ($env:ECHODESK_TV_KEEP_DATA -ne "1") {
   Write-Host "[EchoDesk TV] clearing old local WebView / app data ..."
   & $Adb shell am force-stop $Pkg | Out-Null
   & $Adb shell pm clear $Pkg | Out-Null
+  if ($env:ECHODESK_TV_KEEP_LEGACY -ne "1") {
+    & $Adb shell am force-stop $LegacyPkg | Out-Null
+    & $Adb shell pm clear $LegacyPkg | Out-Null
+    & $Adb shell pm uninstall $LegacyPkg | Out-Null
+  }
 }
 
 Write-Host "[EchoDesk TV] installing $Apk ..."
@@ -143,12 +156,13 @@ Write-Host "[EchoDesk TV] installing $Apk ..."
 
 $null = & $Adb shell pm grant $Pkg android.permission.RECORD_AUDIO
 $null = & $Adb shell appops set $Pkg RECORD_AUDIO allow
-$null = & $Adb shell am start -n "$Pkg/.MainActivity"
+$null = & $Adb shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1
 
 Write-Host ""
 Write-Host "安装完成，已尝试自动打开 EchoDesk。"
 Write-Host "如果电视弹出调试授权，请先在电视上点允许，再重新运行本脚本。"
 Write-Host "如需保留旧配置更新，请先设置 ECHODESK_TV_KEEP_DATA=1。"
+Write-Host "如需保留旧 com.echodesk.app 包，请同时设置 ECHODESK_TV_KEEP_LEGACY=1。"
 `;
 
 const readme = `EchoDesk 智能电视一键安装包 ${version}
@@ -168,6 +182,8 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
    powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP
 6. 脚本默认清理旧的本地 WebView / app data，授权麦克风并自动打开 EchoDesk。
    如需保留旧配置更新，设置 ECHODESK_TV_KEEP_DATA=1 后再运行。
+   新 TV 版包名是 com.echodesk.tv，默认会卸载旧 com.echodesk.app 电视遗留包，避免历史数据串包。
+   如需保留旧包，额外设置 ECHODESK_TV_KEEP_LEGACY=1。
 7. 如果电视弹出 RSA 调试授权，选择允许，再重新运行脚本。
 
 手动安装

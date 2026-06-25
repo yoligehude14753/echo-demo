@@ -50,6 +50,26 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.17] – 2026-06-26
+
+安装与数据隔离热修复：把本机 macOS 打不开 / 开错旧版、TV 与 Android 包共享数据的问题收口。
+
+### 修复
+
+- macOS release 打包阶段增加 ad-hoc codesign hook，打包后立即 `codesign --verify --deep --strict`，避免安装到 `/Applications` 后出现签名损坏导致无法打开。
+- TV APK 改用独立 Android 包名 `com.echodesk.tv`；Android 手机 / 平板包继续使用 `com.echodesk.app`，同一台 Android 设备上不再互相覆盖或共享 WebView 数据。
+- TV 一键安装脚本默认清理 `com.echodesk.tv` 并卸载旧 TV 遗留包 `com.echodesk.app`；需要保留旧包时可显式设置 `ECHODESK_TV_KEEP_LEGACY=1`。
+- TV 安装脚本改用 launcher 启动方式，不再假设 activity 是 `$PKG/.MainActivity`，兼容 `applicationId` 与 Java package 分离。
+- README / INSTALL / TV_INSTALL 明确 public demo 和私有本地后端的数据边界，避免误解为公网 demo 也是 100% 本地数据。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.17`。
+- Android / TV `versionCode=217`、`versionName=0.2.17`。
+- backend 默认 `app_version=0.2.17`。
+
+---
+
 ## [0.2.16] – 2026-06-25
 
 TV 真机修复补丁：把智能电视端从“桌面 UI 缩放版”收敛成会议室可读布局，并补齐录音真实性诊断。
