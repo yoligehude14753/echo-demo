@@ -45,27 +45,27 @@ test("设置页：检查更新会展示当前平台优选 release 资产", async
         contentType: "application/json",
         headers: { "Access-Control-Allow-Origin": "*" },
         body: JSON.stringify({
-          tag_name: "v0.2.12",
-          name: "EchoDesk v0.2.12",
-          html_url: "https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.12",
+          tag_name: "v0.2.14",
+          name: "EchoDesk v0.2.14",
+          html_url: "https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.14",
           assets: [
             {
-              name: "EchoDesk.Setup.0.2.12.exe",
+              name: "EchoDesk.Setup.0.2.14.exe",
               size: 123,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.12/EchoDesk.Setup.0.2.12.exe",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.14/EchoDesk.Setup.0.2.14.exe",
             },
             {
-              name: "EchoDesk-0.2.12-smart-tv.apk",
+              name: "EchoDesk-0.2.14-smart-tv.apk",
               size: 456,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.12/EchoDesk-0.2.12-smart-tv.apk",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.14/EchoDesk-0.2.14-smart-tv.apk",
             },
             {
-              name: "EchoDesk-0.2.12-arm64.dmg",
+              name: "EchoDesk-0.2.14-arm64.dmg",
               size: 789,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.12/EchoDesk-0.2.12-arm64.dmg",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.14/EchoDesk-0.2.14-arm64.dmg",
             },
           ],
         }),
@@ -80,9 +80,9 @@ test("设置页：检查更新会展示当前平台优选 release 资产", async
   await page.getByTestId("check-updates").click();
 
   await expect(page.getByTestId("update-status-tag")).toContainText("发现新版本");
-  await expect(page.getByTestId("updates-section").getByText("v0.2.12")).toBeVisible();
+  await expect(page.getByTestId("updates-section").getByText("v0.2.14")).toBeVisible();
   await expect(page.getByTestId("update-asset-name")).toContainText(
-    "EchoDesk.Setup.0.2.12.exe",
+    "EchoDesk.Setup.0.2.14.exe",
   );
   await expect(page.getByTestId("install-update")).toBeEnabled();
 });

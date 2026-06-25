@@ -268,9 +268,12 @@ function isPublicDesktopDemo(): boolean {
 export function shouldHideSharedPublicHistory(): boolean {
   if (typeof window === "undefined") return false;
   const configured = configuredBackendBase();
+  const usesDefaultPublicBackend = isDefaultPublicBackend(
+    configured ?? DEFAULT_ANDROID_BACKEND_BASE,
+  );
   return (
     isPublicDesktopDemo() ||
-    (isNativeMobile() && isDefaultPublicBackend(configured ?? DEFAULT_ANDROID_BACKEND_BASE))
+    ((isNativeMobile() || isTvLikeViewport()) && usesDefaultPublicBackend)
   );
 }
 

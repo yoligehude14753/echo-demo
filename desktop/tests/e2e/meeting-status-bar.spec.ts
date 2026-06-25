@@ -40,7 +40,7 @@ test("MeetingStatusBar · idle 显示「待机」", async ({ page }) => {
     started_at: null,
     started_by: null,
   });
-  await installEchoMock(page);
+  await installEchoMock(page, { skipPaths: ["/meetings/current"] });
   await page.goto("/");
 
   const bar = page.getByTestId("meeting-status-bar");
@@ -56,7 +56,7 @@ test("MeetingStatusBar · manual 显示「会议中 mm:ss」(含计时 ':')", as
     started_at: startedAt,
     started_by: "manual",
   });
-  await installEchoMock(page);
+  await installEchoMock(page, { skipPaths: ["/meetings/current"] });
   await page.goto("/");
 
   const bar = page.getByTestId("meeting-status-bar");
@@ -79,7 +79,7 @@ test("MeetingStatusBar · auto 显示「自动记录中」(不含计时 ':')", a
     started_at: startedAt,
     started_by: "auto",
   });
-  await installEchoMock(page);
+  await installEchoMock(page, { skipPaths: ["/meetings/current"] });
   await page.goto("/");
 
   const bar = page.getByTestId("meeting-status-bar");
@@ -100,7 +100,7 @@ test("MeetingStatusBar · 点击区域铺满顶栏高度", async ({ page }) => {
     started_at: null,
     started_by: null,
   });
-  await installEchoMock(page);
+  await installEchoMock(page, { skipPaths: ["/meetings/current"] });
   await page.goto("/");
 
   const box = await page.getByTestId("meeting-status-bar").boundingBox();

@@ -550,7 +550,7 @@ class MeetingPipeline:
                 ChatMessage(role="system", content=_MINUTES_SYS_PROMPT),
                 ChatMessage(role="user", content=user_msg),
             ],
-            max_tokens=80_000,
+            max_tokens=self._settings.minutes_max_tokens,
             temperature=0.2,
         )
         raw = resp.content.strip()

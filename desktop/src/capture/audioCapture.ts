@@ -14,6 +14,8 @@ import {
   pcm16ToWav,
 } from "@/capture/pcm";
 import type { CaptureState } from "@/domain/session";
+import { isNativeMobile } from "@/runtime";
+import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
 export type CaptureChunkHandler = (wav: Blob) => void;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
@@ -22,12 +24,84 @@ const RETRY_MS = 5_000;
 const TV_SILENT_INPUT_GRACE_MS = 12_000;
 const TV_SILENT_PEAK_THRESHOLD = 0.000002;
 
+interface EchoAudioChunkEvent {
+  base64: string;
+  sampleRate: number;
+  source?: string;
+  rms?: number;
+  peak?: number;
+}
+
+interface EchoAudioErrorEvent {
+  message?: string;
+  source?: string;
+}
+
+interface EchoAudioPlugin {
+  start(options: { sampleRate: number; chunkMs: number }): Promise<{
+    sampleRate: number;
+    source?: string;
+  }>;
+  stop(): Promise<void>;
+  addListener(
+    eventName: "chunk",
+    listenerFunc: (event: EchoAudioChunkEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "error",
+    listenerFunc: (event: EchoAudioErrorEvent) => void,
+  ): Promise<PluginListenerHandle>;
+}
+
+const EchoAudio = registerPlugin<EchoAudioPlugin>("EchoAudio");
+const NATIVE_SILENT_RMS_THRESHOLD = 16;
+const NATIVE_SILENT_PEAK_THRESHOLD = 96;
+
 function isAndroidTvRuntime(): boolean {
   if (typeof window === "undefined" || typeof document === "undefined") return false;
   return (
     /Android/i.test(window.navigator.userAgent) &&
     document.documentElement.classList.contains("echodesk-tv")
   );
+}
+
+function isNativeAndroidRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  return isNativeMobile() && /Android/i.test(window.navigator.userAgent);
+}
+
+function shouldUseNativeAudioRecord(): boolean {
+  return isNativeAndroidRuntime();
+}
+
+function blobFromBase64Wav(base64: string): Blob {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: "audio/wav" });
+}
+
+function buildAudioConstraints(): MediaStreamConstraints["audio"] {
+  if (isAndroidTvRuntime()) {
+    // Android TV WebView/Audio HAL 的兼容性弱于桌面浏览器：部分机型对
+    // sampleRate/AGC/NS 约束会返回静音或直接失败。TV 端只要求单声道，
+    // 让系统选择可用输入参数，后续仍统一下采样到 16k WAV。
+    return {
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    };
+  }
+  return {
+    channelCount: 1,
+    sampleRate: CAPTURE_SAMPLE_RATE,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
 }
 
 class AudioCapture {
@@ -38,6 +112,9 @@ class AudioCapture {
   private audioCtx: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private proc: ScriptProcessorNode | null = null;
+  private nativeHandles: PluginListenerHandle[] = [];
+  private nativeActive = false;
+  private nativeSilentChunks = 0;
   private buf: Float32Array[] = [];
   private accSamples = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -87,6 +164,7 @@ class AudioCapture {
   }
 
   private teardown(): void {
+    this.teardownNative();
     this.proc?.disconnect();
     this.proc = null;
     this.stream?.getTracks().forEach((t) => t.stop());
@@ -96,6 +174,17 @@ class AudioCapture {
     this.buf = [];
     this.accSamples = 0;
     this.silentInputSinceMs = null;
+  }
+
+  private teardownNative(): void {
+    if (!this.nativeActive && this.nativeHandles.length === 0) return;
+    this.nativeActive = false;
+    this.nativeSilentChunks = 0;
+    for (const h of this.nativeHandles) {
+      void h.remove();
+    }
+    this.nativeHandles = [];
+    void EchoAudio.stop().catch(() => undefined);
   }
 
   private scheduleRetry(): void {
@@ -130,6 +219,33 @@ class AudioCapture {
     );
     this.teardown();
     this.scheduleRetry();
+    return false;
+  }
+
+  private observeNativeInputHealth(event: EchoAudioChunkEvent): boolean {
+    const rms = event.rms ?? 0;
+    const peak = event.peak ?? 0;
+    if (rms > NATIVE_SILENT_RMS_THRESHOLD || peak > NATIVE_SILENT_PEAK_THRESHOLD) {
+      this.silentInputSinceMs = null;
+      this.nativeSilentChunks = 0;
+      return true;
+    }
+
+    const now = Date.now();
+    this.silentInputSinceMs ??= now;
+    this.nativeSilentChunks += 1;
+    if (
+      this.nativeSilentChunks < 2 &&
+      now - this.silentInputSinceMs < TV_SILENT_INPUT_GRACE_MS
+    ) {
+      return false;
+    }
+
+    this.setState(
+      "error",
+      "请接入 USB/蓝牙会议麦克风；当前电视没有提供有效输入",
+    );
+    this.teardownNative();
     return false;
   }
 
@@ -169,20 +285,20 @@ class AudioCapture {
     if (!this.running) return;
     this.setState("initializing");
     this.teardown();
+    if (shouldUseNativeAudioRecord()) {
+      await this.bootNative();
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: CAPTURE_SAMPLE_RATE,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: buildAudioConstraints(),
         video: false,
       });
       this.stream = stream;
 
-      const ctx = new AudioContext();
+      const ctx = isAndroidTvRuntime()
+        ? new AudioContext()
+        : new AudioContext({ sampleRate: CAPTURE_SAMPLE_RATE });
       this.audioCtx = ctx;
       const src = ctx.createMediaStreamSource(stream);
       const proc = ctx.createScriptProcessor(4096, 1, 1);
@@ -205,6 +321,39 @@ class AudioCapture {
       const msg = e instanceof Error ? e.message : String(e);
       this.setState("error", msg);
       this.scheduleRetry();
+    }
+  }
+
+  private async bootNative(): Promise<void> {
+    try {
+      const chunkHandle = await EchoAudio.addListener("chunk", (event) => {
+        if (!this.running || !this.nativeActive) return;
+        if (!event.base64) return;
+        if (!this.observeNativeInputHealth(event)) return;
+        this.emitChunk(blobFromBase64Wav(event.base64));
+      });
+      const errorHandle = await EchoAudio.addListener("error", (event) => {
+        if (!this.running || !this.nativeActive) return;
+        const msg =
+          event.message ||
+          "Android 原生录音失败，请接入 USB/蓝牙会议麦克风";
+        this.setState("error", msg);
+        this.teardownNative();
+      });
+      this.nativeHandles = [chunkHandle, errorHandle];
+      await EchoAudio.start({
+        sampleRate: CAPTURE_SAMPLE_RATE,
+        chunkMs: 6000,
+      });
+      this.nativeActive = true;
+      this.setState("capturing");
+    } catch (e) {
+      this.teardownNative();
+      const msg = e instanceof Error ? e.message : String(e);
+      this.setState(
+        "error",
+        `Android 原生录音不可用：${msg}。请接入 USB/蓝牙会议麦克风`,
+      );
     }
   }
 }

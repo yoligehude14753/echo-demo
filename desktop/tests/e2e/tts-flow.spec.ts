@@ -46,7 +46,7 @@ async function mockTtsDiag(
 
 test("健康场景：/tts/diag=ok → 顶栏显示『TTS』绿色态", async ({ page }) => {
   await mockTtsDiag(page, { ok: true, state: "ok" });
-  await installEchoMock(page);
+  await installEchoMock(page, { skipPaths: ["/tts/diag"] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const toggle = page.getByTestId("tts-toggle");
@@ -64,7 +64,7 @@ test("异常场景：/tts/diag=silent_output → 顶栏切『TTS 异常』+ Popo
     detail: "upstream returned 30720 bytes but rms=3.2 (< 50.0)",
     rms: 3.2,
   });
-  await installEchoMock(page);
+  await installEchoMock(page, { skipPaths: ["/tts/diag"] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const toggle = page.getByTestId("tts-toggle");
@@ -96,7 +96,7 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
     }),
   );
 
-  const mock = await installEchoMock(page);
+  const mock = await installEchoMock(page, { skipPaths: ["/tts/diag"] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   // 启动时 toggle 是绿色 ok
@@ -131,7 +131,7 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
 
 test("用户关 TTS：顶栏切『静音』+ 不再轮询 diag", async ({ page }) => {
   await mockTtsDiag(page, { ok: true, state: "ok" });
-  await installEchoMock(page);
+  await installEchoMock(page, { skipPaths: ["/tts/diag"] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const toggle = page.getByTestId("tts-toggle");

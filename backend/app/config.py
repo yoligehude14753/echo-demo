@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     public_ws_url: str = "ws://localhost:8769/ws/echo"
     public_http_url: str = "http://localhost:8769"
-    app_version: str = "0.2.10"
+    app_version: str = "0.2.13"
 
     # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
     llm_main_provider: str = "yunwu"
@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     llm_fallback_1: str = "GLM-4.6"
     llm_fallback_2: str = "Kimi-K2.6"
     llm_main_max_tokens: int = 80_000
+    # 会议纪要是结构化 JSON，不应复用 MAIN/skill 的 80k 长推理预算。
+    # public demo 可把主模型临时切到 eight 的 qwen3.5-9b-local；该模型
+    # max_model_len=16384，80k 会直接 400。12k 给 JSON 纪要足够，同时
+    # 留出 prompt 余量。
+    minutes_max_tokens: int = 12_000
 
     # ── LLM 快速通道（qwen3.5-9b-local on eight） ─────────────────
     llm_fast_provider: str = "eight-local"

@@ -66,8 +66,10 @@ class FakeRag:
 class FakeLLM:
     def __init__(self, content: str) -> None:
         self.content = content
+        self.calls: list[dict[str, Any]] = []
 
-    async def chat(self, messages: list[ChatMessage], **_: Any) -> LLMResponse:
+    async def chat(self, messages: list[ChatMessage], **kwargs: Any) -> LLMResponse:
+        self.calls.append({"messages": messages, **kwargs})
         return LLMResponse(
             content=self.content,
             model="MiniMax-M2.7",
@@ -175,6 +177,32 @@ async def test_finalize_generates_minutes_and_ingests_rag(tmp_path: Path) -> Non
     assert meeting_id == "m3"
     assert title == "预算评审"
     assert "Q3" in payload and "说话人1" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_finalize_uses_minutes_max_tokens(tmp_path: Path) -> None:
+    minutes_json = json.dumps(
+        {
+            "summary": "讨论 TV 会议录音与纪要生成。",
+            "sections": [{"heading": "修复", "bullets": ["限制 token", "恢复纪要"]}],
+        },
+        ensure_ascii=False,
+    )
+    llm = FakeLLM(minutes_json)
+    pipe = MeetingPipeline(
+        settings=Settings(storage_dir=tmp_path / "storage", minutes_max_tokens=12_000),
+        stt=FakeSTT([[TranscriptSegment(text="修复电视会议", start_ms=0, end_ms=2000)]]),
+        diarizer=FakeDiarizer(["spk-A"]),
+        rag=FakeRag(),
+        llm=llm,
+    )
+    await pipe.add_audio_chunk("m-token", b"\x00" * 16_000)
+
+    await pipe.finalize_meeting("m-token", title="TV 会议修复")
+
+    assert llm.calls
+    assert llm.calls[0]["max_tokens"] == 12_000
 
 
 @pytest.mark.asyncio

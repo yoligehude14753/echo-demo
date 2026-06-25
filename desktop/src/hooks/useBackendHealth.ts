@@ -12,7 +12,12 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { apiUrl } from "@/runtime";
+import {
+  apiUrl,
+  configuredBackendBase,
+  isDefaultPublicBackend,
+  isNativeMobile,
+} from "@/runtime";
 
 // === supervisor 推送 ===
 
@@ -73,14 +78,27 @@ export interface BackendHealth {
 
 const POLL_INTERVAL_MS = 5000;
 const POLL_TIMEOUT_MS = 3000;
+const PUBLIC_BACKEND_POLL_TIMEOUT_MS = 10_000;
 // healthz 失败连续 N 次后才视为"真断"，避免单次抖动导致 pill 闪红
 const HEALTHZ_FAIL_THRESHOLD = 2;
+
+function healthzTimeoutMs(): number {
+  const configured = configuredBackendBase();
+  if (
+    isNativeMobile() ||
+    (configured !== null && isDefaultPublicBackend(configured)) ||
+    (typeof window !== "undefined" && window.echo?.isPublicDemo === true)
+  ) {
+    return PUBLIC_BACKEND_POLL_TIMEOUT_MS;
+  }
+  return POLL_TIMEOUT_MS;
+}
 
 async function fetchHealthz(): Promise<HealthzFull | null> {
   try {
     const url = await apiUrl("/healthz/full");
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), POLL_TIMEOUT_MS);
+    const timer = setTimeout(() => ctl.abort(), healthzTimeoutMs());
     try {
       const res = await fetch(url, { signal: ctl.signal });
       if (!res.ok) return null;
@@ -176,5 +194,14 @@ export function useBackendHealth(): BackendHealth {
     }
   };
 
-  return { supervisor, healthz, healthzOk, mic, manualRestart };
+  const effectiveSupervisor: SupervisorStatus =
+    supervisor.state === "unknown" && healthzOk && healthz?.backend?.ok
+      ? {
+          state: "external",
+          port: healthz.backend.port,
+          reason: "connected through configured backend URL",
+        }
+      : supervisor;
+
+  return { supervisor: effectiveSupervisor, healthz, healthzOk, mic, manualRestart };
 }

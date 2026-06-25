@@ -158,6 +158,39 @@ export async function installEchoMock(
       if (path.startsWith("/healthz")) {
         return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
+      if (path === "/tts/diag" || path === "/api/tts/diag" || path === "/tts/diag?fresh=true" || path === "/api/tts/diag?fresh=true") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            state: "ok",
+            detail: null,
+            latency_ms: 42,
+            pcm_bytes: 20480,
+            rms: 3200,
+            peak: 12000,
+            voice: "aiden",
+            base_url: "http://100.76.3.59:8094",
+            checked_at: Date.now() / 1000,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (path === "/meetings/current" || path === "/api/meetings/current") {
+        return new Response(
+          JSON.stringify({
+            mode: "idle",
+            meeting_id: null,
+            started_at: null,
+            started_by: null,
+            elapsed_sec: 0,
+            recent_active_speakers: 0,
+            recent_active_seconds: 0,
+            minutes_status: null,
+            minutes_error: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (path === "/admin/settings/remote" || path === "/api/admin/settings/remote") {
         return new Response(
           JSON.stringify({

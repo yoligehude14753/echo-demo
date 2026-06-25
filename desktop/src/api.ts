@@ -11,9 +11,13 @@ import {
   apiUrl,
   backendBase,
   configuredBackendBase,
+  isDefaultPublicBackend,
   isNativeMobile,
   shareBackendBase,
 } from "@/runtime";
+
+const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
+const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
 
 async function asJson<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
@@ -21,6 +25,29 @@ async function asJson<T>(resp: Response): Promise<T> {
     throw new Error(`${resp.status} ${resp.statusText}: ${text}`);
   }
   return (await resp.json()) as T;
+}
+
+function probeTimeoutMs(): number {
+  const configured = configuredBackendBase();
+  if (
+    isNativeMobile() ||
+    (configured !== null && isDefaultPublicBackend(configured)) ||
+    (typeof window !== "undefined" && window.echo?.isPublicDemo === true)
+  ) {
+    return PUBLIC_PROBE_TIMEOUT_MS;
+  }
+  return DEFAULT_PROBE_TIMEOUT_MS;
+}
+
+async function fetchProbe(url: string, init: RequestInit = {}): Promise<Response> {
+  if (typeof AbortController === "undefined") return fetch(url, init);
+  const ctl = new AbortController();
+  const timer = window.setTimeout(() => ctl.abort(), probeTimeoutMs());
+  try {
+    return await fetch(url, { ...init, signal: ctl.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 export async function startMeeting(meetingId: string): Promise<void> {
@@ -719,7 +746,7 @@ export interface TtsDiagResult {
 export async function ttsDiag(opts: { fresh?: boolean } = {}): Promise<TtsDiagResult> {
   const path = opts.fresh ? "/tts/diag?fresh=true" : "/tts/diag";
   const u = await apiUrl(path);
-  const r = await fetch(u, { method: "GET" });
+  const r = await fetchProbe(u, { method: "GET" });
   return asJson<TtsDiagResult>(r);
 }
 

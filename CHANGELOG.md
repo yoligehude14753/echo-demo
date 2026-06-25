@@ -50,6 +50,51 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.13] – 2026-06-25
+
+TV 会议可用性 hotfix：修复智能电视端状态误报、录音兼容和公网 backend 纪要
+生成失败的关键路径。
+
+### 修复
+
+- Android / TV 无 Electron supervisor 时，`/healthz/full` 成功会显示
+  `backend 外部`，不再误报 `backend 未知`。
+- TV / public demo 的 backend 与 TTS 健康检查 timeout 加长，避免旧 Android
+  WebView + Cloudflare 慢响应时把可用服务误判成未知。
+- Android / TV 录音优先走原生 `AudioRecord` 插件，不再依赖旧 WebView 的
+  `getUserMedia`；连续检测到全零 / 极低输入时停止上传静音块，并提示接入
+  USB / 蓝牙会议麦克风。
+- TV / public demo 模式不再启动期请求共享 `/meetings` 历史，避免新装电视继承
+  公网 demo backend 上其它设备的会议记录。
+- 会议纪要生成新增 `minutes_max_tokens=12000`，不再硬编码 `max_tokens=80000`；
+  public backend 即使把主模型配置到 eight 的 `qwen3.5-9b-local`，也不会触发
+  `max_tokens > max_model_len=16384` 的 400 错误。
+- E2E mock 补齐 `/meetings/current` 与 `/tts/diag`，TV 模拟点击测试不再泄漏
+  Vite proxy 错误。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.13`。
+- Android / TV `versionCode=213`、`versionName=0.2.13`。
+- backend 默认 `app_version=0.2.13`。
+
+### 验证
+
+- `npm run typecheck`
+- `npm run lint -- --quiet`
+- `cd backend && .venv/bin/python -m pytest tests/unit/test_meeting_pipeline.py tests/unit/test_llm_adapter.py`
+- `npx playwright test tests/e2e/tv-layout.spec.ts tests/e2e/tv-share.spec.ts`
+
+### 已知限制
+
+- `10.10.12.25` 这台 MiTV 的 logcat 仍显示系统音频 HAL 无法打开输入设备；
+  EchoDesk 可以诊断并提示，但若电视系统本身没有可用麦克风输入，仍需要接入
+  遥控器麦克风、USB/蓝牙会议麦克风，或由桌面/手机端负责采音。
+- 公网 `https://echodesk.yoliyoli.uk` backend 当前仍跑旧部署；代码已修复，
+  但需要拿到正确 public backend 部署入口后热更新服务端。
+
+---
+
 ## [0.2.12] – 2026-06-25
 
 TV / 会议室显示 hotfix：基于 `MiTV-ASTP0`（Android 9，IP `10.10.12.25`）

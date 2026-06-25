@@ -57,6 +57,9 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   await expect(page.getByText("转写流")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("会议纪要", { exact: true })).toBeVisible();
   await expect(page.getByTestId("command-bar")).toBeVisible();
+  await expect(page.getByTestId("pill-backend")).toContainText("backend 外部", {
+    timeout: 10_000,
+  });
 
   const boxes = await page.evaluate(() => {
     const pick = (selector: string) => {
