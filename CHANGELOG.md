@@ -50,6 +50,48 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.12] – 2026-06-25
+
+TV / 会议室显示 hotfix：基于 `MiTV-ASTP0`（Android 9，IP `10.10.12.25`）
+真机 ADB 安装、截图和遥控器模拟测试修复。
+
+### 修复
+
+- TV 底部对话栏改用短 placeholder，避免 960x540 CSS viewport 下文字被裁切。
+- TV 设置抽屉的按钮组和更新区域增加 wrap / 间距，避免「检查更新 / 下载最新版本 / Release」
+  挤在一起。
+- TV 遥控器焦点不再落到纯展示的采集状态 tag 上，方向键确认更容易进入设置等可操作区域。
+- Android TV 麦克风采集新增连续零输入诊断：当 WebView 有音频回调但 peak 长时间接近 0 时，
+  显示“电视麦克风没有有效输入”，避免把电视底层音频 HAL 故障误报成 STT 熔断。
+- 继续保留 TV / Android public demo 隔离策略：新装默认清本地缓存，不读取共享历史。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.12`。
+- Android / TV `versionCode=212`、`versionName=0.2.12`。
+
+### 验证
+
+- `npm run typecheck`
+- `npm run lint`
+- `npm run build`
+- `npx playwright test tests/e2e/tv-layout.spec.ts tests/e2e/tv-share.spec.ts`
+- `npm run app:dist:mac`
+- `npm run app:dist:win`
+- `npm run app:dist:linux`
+- `npm run app:dist:android`
+- `npm run app:package:tv`
+- ADB 真机安装 `EchoDesk-0.2.12-smart-tv.apk` 到 `10.10.12.25`，截图确认主界面、
+  输入栏、设置抽屉和麦克风诊断状态。
+
+### 已知限制
+
+- 该电视 logcat 仍持续报 `audio_hw_primary: cannot open pcm_in driver`，说明问题在电视系统
+  音频输入设备/驱动层。EchoDesk 已能显式诊断并提示，但如果要直接远场采音，仍需要电视系统
+  能识别可用麦克风或接入外部会议麦克风。
+
+---
+
 ## [0.2.11] – 2026-06-25
 
 更新机制与分发 hotfix：补齐用户主动检查更新入口，并为后续桌面端自动覆盖安装

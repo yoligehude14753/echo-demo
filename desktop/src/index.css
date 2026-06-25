@@ -1118,3 +1118,105 @@ textarea:focus-visible,
   overflow-y: auto !important;
   font-size: 13px !important;
 }
+
+.echodesk-tv .ant-drawer-body section {
+  margin-bottom: 14px !important;
+}
+
+.echodesk-tv .ant-drawer-body .ant-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px !important;
+  min-height: 28px !important;
+  padding: 0 9px !important;
+  line-height: 1.15 !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-tv [data-testid="updates-section"] > .flex,
+.echodesk-tv [data-testid="mobile-backend-base"] + .flex {
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+}
+
+.echodesk-tv [data-testid="updates-section"] [data-testid="check-updates"],
+.echodesk-tv [data-testid="updates-section"] [data-testid="install-update"],
+.echodesk-tv [data-testid="updates-section"] [data-testid="open-release-page"] {
+  flex: 1 1 118px !important;
+  max-width: 100% !important;
+}
+
+/* v0.2.12 TV polish：真实 MiTV/Android WebView 常以 960x540 CSS viewport
+   映射 1920x1080 物理屏。这里保留三栏，但减少输入栏和状态胶囊的占屏，
+   并让遥控器焦点更清晰。 */
+.echodesk-tv [data-testid="status-bar"] {
+  gap: 4px !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] {
+  min-height: 26px !important;
+  padding: 3px 5px !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] span:last-child {
+  max-width: 104px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.echodesk-tv [data-testid="pill-backend"] span:last-child {
+  max-width: 96px !important;
+}
+
+.echodesk-tv [data-testid="capture-status"] {
+  max-width: 260px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  pointer-events: none !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] {
+  min-height: 56px !important;
+  padding-top: 6px !important;
+  padding-bottom: 8px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  min-height: 40px !important;
+  max-height: 46px !important;
+  font-size: 15px !important;
+  line-height: 1.32 !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea::placeholder,
+.echodesk-tv [data-testid="command-bar"] textarea::placeholder {
+  font-size: 15px !important;
+  line-height: 1.32 !important;
+}
+
+.echodesk-tv [data-testid="command-attach-btn"],
+.echodesk-tv [data-testid="command-send-btn"] {
+  min-width: 40px !important;
+  min-height: 40px !important;
+  padding: 6px !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] svg {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.echodesk-tv button:focus-visible,
+.echodesk-tv a:focus-visible,
+.echodesk-tv input:focus-visible,
+.echodesk-tv textarea:focus-visible,
+.echodesk-tv [role="button"]:focus-visible,
+.echodesk-tv .ant-btn:focus-visible,
+.echodesk-tv .ant-tag[role="button"]:focus-visible {
+  outline: 2px solid rgba(16, 163, 127, 0.95) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 5px rgba(16, 163, 127, 0.14) !important;
+}

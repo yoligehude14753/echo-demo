@@ -33,6 +33,7 @@ import {
 import { useStore, type CommandBarPrefillMeta } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
+import { isTvLikeViewport } from "@/runtime";
 
 interface PendingDoc {
   doc_id: string;
@@ -100,6 +101,9 @@ export default function CommandBar(): JSX.Element {
   const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<TextAreaRef | null>(null);
+  const commandPlaceholder = isTvLikeViewport()
+    ? "输入指令，如 @总结会议"
+    : "拖入 / 粘贴文件入库 RAG · 输入 @生成 PPT … / @查 … · Shift+Enter 换行";
 
   // M_minutes_refactor：MinutesView「执行待办」按钮通过 store.prefillCommandBar
   // 把 suggested_command 一键填入；只 setText + focus，不自动 onSubmit 防误触。
@@ -497,7 +501,7 @@ export default function CommandBar(): JSX.Element {
             }
           }}
           onPaste={onPaste}
-          placeholder="拖入 / 粘贴文件入库 RAG · 输入 @生成 PPT … / @查 … · Shift+Enter 换行"
+          placeholder={commandPlaceholder}
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={busy}
           className="echodesk-command-textarea !rounded-md"

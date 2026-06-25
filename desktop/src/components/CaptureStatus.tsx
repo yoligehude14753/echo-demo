@@ -193,6 +193,7 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
         color="blue"
         icon={<Loader2 className="w-3 h-3 animate-spin" />}
         data-testid="capture-status"
+        tabIndex={-1}
       >
         初始化麦克风…
       </Tag>
@@ -201,7 +202,7 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
 
   if (state === "error") {
     return (
-      <Tag color="red" data-testid="capture-status">
+      <Tag color="red" data-testid="capture-status" tabIndex={-1}>
         麦克风不可用
         {errorMessage ? ` · ${errorMessage}` : ""} · 5s 后重试
       </Tag>
@@ -235,6 +236,7 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
         data-testid="capture-status"
         data-circuit-open={circuitOpen ? "1" : "0"}
         aria-label={ariaLabel}
+        tabIndex={-1}
       >
         <span className="inline-flex items-center gap-1.5">
           {circuitOpen ? (

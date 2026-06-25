@@ -19,6 +19,16 @@ export type CaptureChunkHandler = (wav: Blob) => void;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
 
 const RETRY_MS = 5_000;
+const TV_SILENT_INPUT_GRACE_MS = 12_000;
+const TV_SILENT_PEAK_THRESHOLD = 0.000002;
+
+function isAndroidTvRuntime(): boolean {
+  if (typeof window === "undefined" || typeof document === "undefined") return false;
+  return (
+    /Android/i.test(window.navigator.userAgent) &&
+    document.documentElement.classList.contains("echodesk-tv")
+  );
+}
 
 class AudioCapture {
   private state: CaptureState = "initializing";
@@ -32,6 +42,7 @@ class AudioCapture {
   private accSamples = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private silentInputSinceMs: number | null = null;
 
   getState(): CaptureState {
     return this.state;
@@ -84,12 +95,42 @@ class AudioCapture {
     this.audioCtx = null;
     this.buf = [];
     this.accSamples = 0;
+    this.silentInputSinceMs = null;
   }
 
   private scheduleRetry(): void {
     if (!this.running) return;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => void this.boot(), RETRY_MS);
+  }
+
+  private observeInputHealth(input: Float32Array): boolean {
+    if (!isAndroidTvRuntime()) return true;
+
+    let peak = 0;
+    for (let i = 0; i < input.length; i += 1) {
+      const v = Math.abs(input[i]);
+      if (v > peak) peak = v;
+    }
+
+    if (peak > TV_SILENT_PEAK_THRESHOLD) {
+      this.silentInputSinceMs = null;
+      return true;
+    }
+
+    const now = Date.now();
+    this.silentInputSinceMs ??= now;
+    if (now - this.silentInputSinceMs < TV_SILENT_INPUT_GRACE_MS) {
+      return true;
+    }
+
+    this.setState(
+      "error",
+      "电视麦克风没有有效输入；请确认电视/遥控器麦克风或外接会议麦克风已被系统识别",
+    );
+    this.teardown();
+    this.scheduleRetry();
+    return false;
   }
 
   private flush(force = false): void {
@@ -149,6 +190,7 @@ class AudioCapture {
 
       proc.onaudioprocess = (ev) => {
         const ch = ev.inputBuffer.getChannelData(0);
+        if (!this.observeInputHealth(ch)) return;
         this.buf.push(new Float32Array(ch));
         this.accSamples += Math.round((ch.length * CAPTURE_SAMPLE_RATE) / ctx.sampleRate);
         if (this.accSamples >= CAPTURE_CHUNK_SAMPLES) {
