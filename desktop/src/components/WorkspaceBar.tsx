@@ -147,7 +147,7 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
           title={
             status?.authorized_dirs.length
               ? status.authorized_dirs.join("\n")
-              : "未配置；在 backend .env 设置 WORKSPACE_DIRS=路径1,路径2 后重启 backend"
+              : "未配置；点击「配置工作区」添加目录，EchoDesk 会自动扫描入库"
           }
         >
           <Tag
@@ -275,14 +275,29 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
 
           <div>
             <div className="font-medium mb-1">目录配置</div>
-            <pre className="bg-paper-100 rounded p-2 text-[11px] leading-snug">
-              {`# 在 .env 中设置（多目录用逗号分隔）
-WORKSPACE_DIRS=~/Documents/work,~/Notes
-WORKSPACE_MAX_FILE_MB=100
-WORKSPACE_SCAN_ON_STARTUP=true`}
-            </pre>
-            <div className="text-[11px] text-ink-500">
-              也可以点右上角齿轮进入设置，用系统目录选择器添加目录并立即扫描。
+            <div className="rounded-md border border-paper-300 bg-paper-100 p-3 text-[12px] text-ink-600 leading-relaxed">
+              <div>
+                推荐直接在设置里添加目录，支持系统目录选择器，添加后可立即重扫。
+              </div>
+              {onOpenSettings && (
+                <Button
+                  className="!mt-2"
+                  size="small"
+                  type="primary"
+                  icon={<Settings className="w-3 h-3" />}
+                  onClick={() => {
+                    setModalOpen(false);
+                    onOpenSettings();
+                  }}
+                  data-testid="workspace-modal-add-dir"
+                >
+                  去添加工作区目录
+                </Button>
+              )}
+            </div>
+            <div className="text-[11px] text-ink-500 mt-1.5">
+              开发者/私有部署也可以用环境变量
+              <span className="font-mono ml-1">WORKSPACE_DIRS</span> 批量配置。
             </div>
           </div>
 

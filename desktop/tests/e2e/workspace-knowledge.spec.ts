@@ -82,10 +82,21 @@ test("工作区弹窗展示知识库文档列表并可删除单条文档", async
   await expect(docList.getByText("项目需求.md", { exact: true })).toBeVisible();
   await expect(docList.getByText("测试数据沟通.pdf", { exact: true })).toBeVisible();
   await expect(docList.getByText("找人联络及测试数据沟通", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-modal-add-dir")).toBeVisible();
 
   await page.getByTestId("knowledge-doc-delete-doc-ws-1").click();
   const confirm = page.locator(".ant-modal-confirm").filter({ hasText: "删除这条知识库文档？" });
   await expect(confirm).toBeVisible();
   await confirm.locator(".ant-modal-confirm-btns .ant-btn-primary").click();
   await expect.poll(() => deletedDocId).toBe("doc-ws-1");
+});
+
+test("工作区配置入口直达设置里的添加目录按钮", async ({ page }) => {
+  await installEchoMock(page);
+  await page.goto("/");
+
+  await page.getByTestId("workspace-config-btn").click();
+  await expect(page.getByTestId("workspace-settings-section")).toBeVisible();
+  await expect(page.getByTestId("workspace-add-dir")).toBeVisible();
+  await expect(page.getByTestId("workspace-add-dir")).toBeFocused();
 });

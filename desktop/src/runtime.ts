@@ -75,12 +75,25 @@ declare global {
 let cachedBase: string | null = null;
 
 export const MOBILE_BACKEND_BASE_KEY = "echodesk.mobileBackendBase";
+export const MOBILE_BACKEND_BASE_USER_SET_KEY = "echodesk.mobileBackendBase.userSet";
+export const PUBLIC_DATA_BOUNDARY_KEY = "echodesk.publicDataBoundary.v2";
 export const DEFAULT_ANDROID_BACKEND_BASE = "https://echodesk.yoliyoli.uk";
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
 export const RELEASES_URL =
   "https://github.com/yoligehude14753/echo-demo/releases/latest";
 const RELEASE_API_URL =
   "https://api.github.com/repos/yoligehude14753/echo-demo/releases/latest";
+const PUBLIC_HISTORY_STORAGE_KEYS = [
+  "echodesk.currentMeetingId",
+  "echodesk.lastMeetingId",
+  "echodesk.activeMeetingId",
+  "echodesk.meetingHistory",
+  "echodesk.meetings",
+  "echodesk.capture.recent",
+  "echodesk.ambientSegments",
+  "echodesk.lastAmbientSegments",
+  "echodesk.currentMeeting",
+];
 
 function normalizeBackendBase(raw: string | null | undefined): string | null {
   const v = raw?.trim().replace(/\/+$/, "");
@@ -93,7 +106,7 @@ function normalizeVersion(raw: string | null | undefined): string {
   return String(raw ?? "").trim().replace(/^v/i, "");
 }
 
-function compareVersions(a: string, b: string): number {
+export function compareVersions(a: string, b: string): number {
   const aa = normalizeVersion(a).split(".").map((x) => Number.parseInt(x, 10) || 0);
   const bb = normalizeVersion(b).split(".").map((x) => Number.parseInt(x, 10) || 0);
   for (let i = 0; i < Math.max(aa.length, bb.length); i += 1) {
@@ -151,8 +164,14 @@ export function setStoredBackendBase(value: string): string | null {
   try {
     if (normalized) {
       window.localStorage.setItem(MOBILE_BACKEND_BASE_KEY, normalized);
+      if (isDefaultPublicBackend(normalized)) {
+        window.localStorage.removeItem(MOBILE_BACKEND_BASE_USER_SET_KEY);
+      } else {
+        window.localStorage.setItem(MOBILE_BACKEND_BASE_USER_SET_KEY, "1");
+      }
     } else {
       window.localStorage.removeItem(MOBILE_BACKEND_BASE_KEY);
+      window.localStorage.removeItem(MOBILE_BACKEND_BASE_USER_SET_KEY);
     }
   } catch {
     return normalized;
@@ -259,6 +278,53 @@ function isPublicDesktopDemo(): boolean {
   );
 }
 
+function hasExplicitBackendOverride(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(MOBILE_BACKEND_BASE_USER_SET_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isPublicNativeOrTvContext(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.echo?.isPublicDemo === true || isNativeMobile() || isTvLikeViewport();
+}
+
+/**
+ * Public demo 的数据边界：
+ * - public backend 是共享服务，新装客户端不能继承旧 WebView/localStorage 的会议选择、
+ *   ambient 缓存或旧 backend URL，否则看起来像“数据库串了”。
+ * - 仅当用户在设置中明确保存过自定义 backend（userSet=1）时，保留该地址作为
+ *   私有/内网演示入口。
+ * - 不清 onboarding / TTS 等纯偏好设置，避免升级后用户体验被重置。
+ */
+export function installPublicDemoStorageMigration(): void {
+  if (typeof window === "undefined") return;
+  if (!isPublicNativeOrTvContext()) return;
+  try {
+    const explicitBackend = hasExplicitBackendOverride();
+    if (!explicitBackend) {
+      window.localStorage.removeItem(MOBILE_BACKEND_BASE_KEY);
+      cachedBase = null;
+    }
+    for (const key of PUBLIC_HISTORY_STORAGE_KEYS) {
+      window.localStorage.removeItem(key);
+    }
+    window.localStorage.setItem(
+      PUBLIC_DATA_BOUNDARY_KEY,
+      JSON.stringify({
+        schema: 2,
+        appVersion: typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "unknown",
+        explicitBackend,
+      }),
+    );
+  } catch {
+    // localStorage 在极端 WebView 设置下可能不可用；迁移失败不能阻塞启动。
+  }
+}
+
 /**
  * Android / TV demo 包默认连接公共 backend。公共 backend 不能把其它设备的
  * historical meetings / ambient feed 直接 hydrate 到新装设备，否则会议室电视
@@ -271,6 +337,9 @@ export function shouldHideSharedPublicHistory(): boolean {
   const usesDefaultPublicBackend = isDefaultPublicBackend(
     configured ?? DEFAULT_ANDROID_BACKEND_BASE,
   );
+  const explicitCustomBackend =
+    hasExplicitBackendOverride() && configured !== null && !usesDefaultPublicBackend;
+  if (explicitCustomBackend) return false;
   return (
     isPublicDesktopDemo() ||
     ((isNativeMobile() || isTvLikeViewport()) && usesDefaultPublicBackend)

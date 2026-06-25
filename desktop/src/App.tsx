@@ -38,8 +38,14 @@ export default function App(): JSX.Element {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const events = useStore((s) => s.events);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<"workspace" | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const onboarding = useOnboarding();
+
+  const openSettings = (section: "workspace" | null = null) => {
+    setSettingsInitialSection(section);
+    setSettingsOpen(true);
+  };
 
   return (
     <Layout className="echodesk-shell !h-screen !bg-paper-50 !overflow-hidden">
@@ -83,7 +89,7 @@ export default function App(): JSX.Element {
           <Tooltip title="设置">
             <button
               type="button"
-              onClick={() => setSettingsOpen(true)}
+              onClick={() => openSettings()}
               className="flex min-w-8 min-h-8 items-center justify-center rounded px-1.5 py-1.5 text-ink-500 hover:text-ink-700 hover:bg-paper-200 transition"
               data-testid="open-settings"
               aria-label="打开设置"
@@ -97,6 +103,7 @@ export default function App(): JSX.Element {
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        initialSection={settingsInitialSection}
         onReplayOnboarding={onboarding.resetForDebug}
       />
 
@@ -107,7 +114,7 @@ export default function App(): JSX.Element {
 
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
-      <WorkspaceBar onOpenSettings={() => setSettingsOpen(true)} />
+      <WorkspaceBar onOpenSettings={() => openSettings("workspace")} />
 
       <Layout className="echodesk-main-layout !bg-paper-50 !flex-1 !min-h-0 !overflow-hidden">
         <Sider

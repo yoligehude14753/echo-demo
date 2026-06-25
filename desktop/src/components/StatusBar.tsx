@@ -22,6 +22,7 @@ import {
   type SupervisorStatus,
   type MicPermission,
 } from "@/hooks/useBackendHealth";
+import { compareVersions } from "@/runtime";
 
 export interface StatusBarProps {
   /** TTS 合成回环最新结果（来自 /tts/diag）。null = 尚未拉到 */
@@ -146,7 +147,7 @@ function Pill({ label, level, icon, tooltip, popover, testId }: PillProps): JSX.
     <button
       type="button"
       data-testid={testId}
-      className={`app-no-drag flex items-center gap-1 rounded px-1.5 py-0.5 transition hover:bg-paper-200 ${c.text}`}
+      className={`app-no-drag flex h-8 items-center gap-1 rounded-md px-2 transition hover:bg-paper-200 ${c.text}`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${c.dot} ${level === "ok" ? c.ring : ""}`} />
       <span className="text-[11px] flex items-center gap-0.5">
@@ -210,6 +211,9 @@ function BackendPopover({
   health: BackendHealth;
 }): JSX.Element {
   const { supervisor, healthz, healthzOk, manualRestart } = health;
+  const backendVersionBehind =
+    healthz?.backend?.version &&
+    compareVersions(healthz.backend.version, __APP_VERSION__) < 0;
   const isFailState =
     supervisor.state === "degraded" ||
     supervisor.state === "python-not-found" ||
@@ -239,6 +243,15 @@ function BackendPopover({
             <span className="text-ink-500">uptime</span>
             <span className="font-mono">{Math.floor(healthz.backend.uptime_s)}s</span>
           </div>
+          {backendVersionBehind && (
+            <div
+              className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-relaxed text-amber-700"
+              data-testid="backend-version-warning"
+            >
+              远程 backend 还是 v{healthz.backend.version}，当前客户端是 v
+              {__APP_VERSION__}。请同步更新 public backend，否则 STT/TTS/扫码保存等修复可能不一致。
+            </div>
+          )}
         </>
       )}
       {healthz?.db && (
@@ -467,7 +480,13 @@ export default function StatusBar({
   const health = useBackendHealth();
   const { supervisor, healthz, healthzOk, mic } = health;
 
-  const backendLevel = levelFromSupervisor(supervisor, healthzOk);
+  const backendVersionBehind =
+    healthz?.backend?.version &&
+    compareVersions(healthz.backend.version, __APP_VERSION__) < 0;
+  const backendBaseLevel = levelFromSupervisor(supervisor, healthzOk);
+  const backendLevel = backendVersionBehind
+    ? mergeLevels(backendBaseLevel, "warn")
+    : backendBaseLevel;
   // eight pill 级别：取「TCP 各探针」与「TTS 合成回环」二者的最差。
   // 这样即便 STT/Fast LLM TCP 都通了，只要 /tts/diag 报 silent_output，
   // pill 也会立刻变红/橙——消除"绿灯但用户没声音"的欺骗。

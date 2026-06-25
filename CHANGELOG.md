@@ -50,6 +50,42 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.18] – 2026-06-26
+
+Public demo 数据边界与 UI 一致性修复：解决新装/升级后误继承共享历史、远程 backend
+版本落后不可见、工作区配置难找、桌面输入栏和顶栏对齐不稳的问题。
+
+### 修复
+
+- Public demo / Android / TV 启动前执行本地 storage 数据边界迁移：默认清理旧
+  `echodesk.mobileBackendBase`、会议选择、ambient 缓存等历史状态，避免新装设备
+  看起来继承别人的会议；用户在设置里显式保存过自定义 backend 时会保留该地址。
+- 自定义 backend（内网/私有演示）不再被 public demo 历史隔离逻辑误挡，仍可加载
+  该私有 backend 自己的会议历史。
+- backend 版本低于客户端版本时，顶部 backend 状态弹窗和设置页更新区都会显示黄色
+  警告，避免“客户端已最新但 public backend 仍旧版”的隐性不一致。
+- 工作区配置入口直达设置抽屉的「工作区目录」区块，并自动聚焦「添加目录」按钮；
+  知识库弹窗不再把 `.env` 当成主路径，引导用户直接添加目录。
+- 桌面 1280px 宽度不再过早套用大屏三栏尺寸，转写区保持足够宽度；输入栏 placeholder
+  缩短并固定按钮盒模型，避免对话栏换行撑高。
+- 顶栏 backend/eight/云/麦克风 pill、会议状态、TTS、设置按钮统一 32px 控件高度，
+  减少视觉拼装感。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.18`。
+- Android / TV `versionCode=218`、`versionName=0.2.18`。
+- backend 默认 `app_version=0.2.18`。
+- `desktop/package.json` 的 `private` 改为 `false`，避免 public demo 仓库被误读成私有包。
+
+### 验证
+
+- `cd desktop && npm run typecheck -- --noEmit`
+- `cd desktop && npm run lint -- --quiet`
+- `cd desktop && npx playwright test tests/e2e/public-demo-settings.spec.ts tests/e2e/acceptance-clickthrough.spec.ts tests/e2e/meeting-status-bar.spec.ts tests/e2e/workspace-knowledge.spec.ts tests/e2e/tv-layout.spec.ts`
+
+---
+
 ## [0.2.17] – 2026-06-26
 
 安装与数据隔离热修复：把本机 macOS 打不开 / 开错旧版、TV 与 Android 包共享数据的问题收口。

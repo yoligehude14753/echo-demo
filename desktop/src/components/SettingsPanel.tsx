@@ -41,6 +41,7 @@ import {
   type AppUpdateStatus,
   apiUrl,
   checkAppUpdate,
+  compareVersions,
   configuredBackendBase,
   installAppUpdate,
   openUpdateTarget,
@@ -136,6 +137,7 @@ interface WorkspaceStatusDTO {
 interface Props {
   open: boolean;
   onClose: () => void;
+  initialSection?: "workspace" | null;
   /** P3.1：让用户在设置里"重新看一次引导"。可选，缺省时不显示按钮。 */
   onReplayOnboarding?: () => void;
 }
@@ -174,6 +176,7 @@ function updateStatusLabel(status: AppUpdateStatus | null): string {
 export default function SettingsPanel({
   open,
   onClose,
+  initialSection = null,
   onReplayOnboarding,
 }: Props): JSX.Element {
   const [dataDir, setDataDir] = useState<DataDirResponse | null>(null);
@@ -189,6 +192,7 @@ export default function SettingsPanel({
   const [updateInfo, setUpdateInfo] = useState<AppUpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
+  const [backendVersion, setBackendVersion] = useState<string | null>(null);
   // P4-fix-rag-chat：工作区目录配置
   const [ws, setWs] = useState<WorkspaceStatusDTO | null>(null);
   const [wsBusy, setWsBusy] = useState(false);
@@ -252,19 +256,46 @@ export default function SettingsPanel({
     }
   }, []);
 
+  const refreshBackendVersion = useCallback(async () => {
+    try {
+      const res = await fetch(await apiUrl("/healthz/full"));
+      if (!res.ok) {
+        setBackendVersion(null);
+        return;
+      }
+      const json = (await res.json()) as { backend?: { version?: string } };
+      setBackendVersion(json.backend?.version ?? null);
+    } catch {
+      setBackendVersion(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (open) {
       void refreshDataDir();
       void refreshRemote();
       void refreshWorkspace();
+      void refreshBackendVersion();
       setBackendBaseDraft(configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE);
     }
-  }, [open, refreshDataDir, refreshRemote, refreshWorkspace]);
+  }, [open, refreshDataDir, refreshRemote, refreshWorkspace, refreshBackendVersion]);
 
   useEffect(() => {
     if (!open || !window.echo?.onUpdateStatus) return undefined;
     return window.echo.onUpdateStatus((status) => setUpdateInfo(status));
   }, [open]);
+
+  useEffect(() => {
+    if (!open || initialSection !== "workspace") return undefined;
+    const timer = window.setTimeout(() => {
+      const section = document.querySelector<HTMLElement>(
+        "[data-testid='workspace-settings-section']",
+      );
+      section?.scrollIntoView({ block: "start" });
+      document.querySelector<HTMLElement>("[data-testid='workspace-add-dir']")?.focus();
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [open, initialSection, ws]);
 
   const onAddWorkspaceDir = useCallback(async () => {
     // 优先用 Electron dialog；浏览器/纯 dev 模式回退到 prompt() 让用户手填路径
@@ -449,6 +480,7 @@ export default function SettingsPanel({
     setUpdateBusy(true);
     try {
       const info = await checkAppUpdate();
+      await refreshBackendVersion();
       setUpdateInfo(info);
       if (info.status === "error") {
         message.warning(`检查更新失败：${info.error ?? "未知错误"}`);
@@ -460,7 +492,7 @@ export default function SettingsPanel({
     } finally {
       setUpdateBusy(false);
     }
-  }, []);
+  }, [refreshBackendVersion]);
 
   const onInstallUpdate = useCallback(async () => {
     const info = updateInfo ?? (await checkAppUpdate());
@@ -486,6 +518,8 @@ export default function SettingsPanel({
     () => (remote?.fields ?? []).map((f) => f.key),
     [remote],
   );
+  const backendVersionBehind =
+    backendVersion !== null && compareVersions(backendVersion, __APP_VERSION__) < 0;
 
   const onResetSpeakers = () => {
     Modal.confirm({
@@ -758,6 +792,20 @@ export default function SettingsPanel({
                 </div>
               </div>
             </div>
+            {backendVersion && (
+              <div
+                className={`rounded border px-2 py-1.5 text-[11px] leading-relaxed ${
+                  backendVersionBehind
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-paper-300 bg-white text-ink-600"
+                }`}
+                data-testid="settings-backend-version"
+              >
+                当前 backend：v{backendVersion}
+                {backendVersionBehind &&
+                  `，落后于客户端 v${__APP_VERSION__}。请更新远程 backend，否则新版 STT/TTS/扫码保存修复不会完全生效。`}
+              </div>
+            )}
             {updateInfo?.assetName && (
               <div
                 className="font-mono text-[11px] text-ink-500 truncate"
@@ -810,7 +858,7 @@ export default function SettingsPanel({
           </div>
         </section>
 
-        <section>
+        <section data-testid="workspace-settings-section" tabIndex={-1}>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Folder className="w-4 h-4" />
             <span>工作区目录</span>

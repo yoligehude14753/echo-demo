@@ -143,6 +143,35 @@ export async function installEchoMock(
           );
         }
       }
+      if (
+        (path === "/intent/route" || path === "/api/intent/route") &&
+        method === "POST"
+      ) {
+        const intentMock = (
+          window as unknown as {
+            __echoIntentRouteMock?: {
+              kind: string;
+              confidence?: number;
+              artifact_type?: string;
+            };
+          }
+        ).__echoIntentRouteMock;
+        if (intentMock) {
+          const body = JSON.parse(bodyText ?? "{}") as { text?: string };
+          const text = body.text ?? "";
+          return new Response(
+            JSON.stringify({
+              kind: intentMock.kind,
+              confidence: intentMock.confidence ?? 0.95,
+              params: {
+                artifact_type: intentMock.artifact_type ?? "html",
+                brief: text.replace(/^@\S+\s*/, "") || "测试 HTML 报告",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+      }
       // 健康检查 / 占位
       if (path === "/healthz/full" || path === "/api/healthz/full") {
         return new Response(

@@ -95,6 +95,60 @@ body {
   line-height: 1.45 !important;
 }
 
+.echodesk-command-row {
+  display: grid !important;
+  grid-template-columns: 28px minmax(0, 1fr) 40px 40px;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.echodesk-command-leading-icon {
+  justify-self: center;
+}
+
+.echodesk-command-textarea,
+.echodesk-command-textarea textarea {
+  min-width: 0 !important;
+}
+
+.echodesk-command-textarea textarea {
+  min-height: 40px !important;
+  padding: 8px 12px !important;
+  resize: none !important;
+}
+
+.echodesk-command-icon-btn {
+  width: 40px !important;
+  height: 40px !important;
+  min-width: 40px !important;
+  min-height: 40px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+}
+
+.echodesk-command-icon-btn svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+[data-testid="meeting-status-bar"],
+[data-testid="tts-toggle"],
+[data-testid="open-settings"],
+[data-testid^="pill-"] {
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  white-space: nowrap !important;
+}
+
+[data-testid="tts-toggle"],
+[data-testid="open-settings"] {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -107,7 +161,7 @@ textarea:focus-visible,
   box-shadow: 0 0 0 6px rgba(16, 163, 127, 0.16) !important;
 }
 
-@media (min-width: 1180px) and (min-height: 650px) and (orientation: landscape) {
+@media (min-width: 1440px) and (min-height: 650px) and (orientation: landscape) {
   .app-header {
     height: 56px !important;
     padding-left: 28px !important;
@@ -181,7 +235,7 @@ textarea:focus-visible,
   }
 }
 
-@media (min-width: 768px) and (max-width: 1179px) {
+@media (min-width: 768px) and (max-width: 1439px) {
   .echodesk-output-pane {
     width: 360px !important;
   }

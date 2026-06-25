@@ -1,10 +1,10 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "description": "EchoDesk public demo desktop client",
   "author": "EchoDesk <support@yoliyoli.uk>",
   "homepage": "https://github.com/yoligehude14753/echo-demo",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {

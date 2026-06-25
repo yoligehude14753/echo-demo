@@ -103,7 +103,7 @@ export default function CommandBar(): JSX.Element {
   const textareaRef = useRef<TextAreaRef | null>(null);
   const commandPlaceholder = isTvLikeViewport()
     ? "输入指令，如 @总结会议"
-    : "拖入 / 粘贴文件入库 RAG · 输入 @生成 PPT … / @查 … · Shift+Enter 换行";
+    : "拖入文件入库 · @生成 PPT / @查 · Shift+Enter 换行";
 
   // M_minutes_refactor：MinutesView「执行待办」按钮通过 store.prefillCommandBar
   // 把 suggested_command 一键填入；只 setText + focus，不自动 onSubmit 防误触。
@@ -408,7 +408,7 @@ export default function CommandBar(): JSX.Element {
 
   return (
     <div
-      className={`relative border-t border-paper-300 bg-paper-100 px-4 py-2 transition ${
+      className={`echodesk-command-bar relative border-t border-paper-300 bg-paper-100 px-4 py-2 transition ${
         dropActive ? "ring-2 ring-inset ring-blue-400 bg-blue-50/50" : ""
       }`}
       onDragOver={onDragOver}
@@ -485,8 +485,8 @@ export default function CommandBar(): JSX.Element {
         </div>
       )}
 
-      <div className="flex items-center gap-2">
-        <Wand2 className="w-4 h-4 text-ink-500 shrink-0" />
+      <div className="echodesk-command-row flex items-center gap-2">
+        <Wand2 className="echodesk-command-leading-icon w-4 h-4 text-ink-500 shrink-0" />
         <Input.TextArea
           ref={textareaRef}
           value={text}
@@ -511,7 +511,7 @@ export default function CommandBar(): JSX.Element {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="shrink-0 p-1.5 rounded hover:bg-paper-200 text-ink-500 disabled:opacity-50"
+            className="echodesk-command-icon-btn shrink-0 p-1.5 rounded hover:bg-paper-200 text-ink-500 disabled:opacity-50"
             disabled={uploading > 0}
             data-testid="command-attach-btn"
             aria-label="上传文件"
@@ -547,7 +547,7 @@ export default function CommandBar(): JSX.Element {
           <button
             type="button"
             onClick={() => void onSubmit()}
-            className="shrink-0 p-1.5 rounded hover:bg-paper-200 text-accent disabled:opacity-40 disabled:text-ink-400 disabled:hover:bg-transparent"
+            className="echodesk-command-icon-btn shrink-0 p-1.5 rounded hover:bg-paper-200 text-accent disabled:opacity-40 disabled:text-ink-400 disabled:hover:bg-transparent"
             disabled={!canSubmit()}
             data-testid="command-send-btn"
             aria-label="发送"

@@ -11,23 +11,22 @@ import { test, expect } from "@playwright/test";
 import { installEchoMock, publishArtifactReady } from "./_mock";
 
 test("@生成 命令触发产物生成流程，卡片出现", async ({ page }) => {
-  // 拦截 /intent/route：测试不该依赖远端 LLM 分类
-  await page.route(/\/intent\/route$/, async (route) => {
-    const req = route.request();
-    const body = req.postDataJSON() ?? {};
-    const text = (body.text as string) ?? "";
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        kind: "generate_html",
-        confidence: 0.95,
-        params: {
-          artifact_type: "html",
-          brief: text.replace(/^@\S+\s*/, "") || "测试 HTML 报告",
-        },
-      }),
-    });
+  // 拦截 /intent/route：测试不该依赖远端 LLM 分类。放在 fetch mock 层，
+  // 避免 page.route 的网络拦截状态影响后续 capture specs。
+  await page.addInitScript(() => {
+    (
+      window as unknown as {
+        __echoIntentRouteMock?: {
+          kind: string;
+          confidence: number;
+          artifact_type: string;
+        };
+      }
+    ).__echoIntentRouteMock = {
+      kind: "generate_html",
+      confidence: 0.95,
+      artifact_type: "html",
+    };
   });
 
   const mock = await installEchoMock(page);

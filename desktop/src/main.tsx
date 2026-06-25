@@ -2,9 +2,14 @@ import ReactDOM from "react-dom/client";
 import { ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import App from "@/App";
-import { installRuntimeBodyClasses, installTvRemoteClickBridge } from "@/runtime";
+import {
+  installPublicDemoStorageMigration,
+  installRuntimeBodyClasses,
+  installTvRemoteClickBridge,
+} from "@/runtime";
 import "@/index.css";
 
+installPublicDemoStorageMigration();
 installRuntimeBodyClasses();
 installTvRemoteClickBridge();
 

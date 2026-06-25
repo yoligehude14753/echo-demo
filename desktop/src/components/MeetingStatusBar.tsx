@@ -127,13 +127,13 @@ export default function MeetingStatusBar(): JSX.Element {
   let buttonClass: string;
   if (isManual) {
     buttonClass =
-      "bg-rose-50 text-rose-700 hover:bg-rose-100 border-x border-rose-200";
+      "bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200";
   } else if (isAuto) {
     buttonClass =
-      "bg-amber-50 text-amber-700 hover:bg-amber-100 border-x border-amber-200";
+      "bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200";
   } else {
     buttonClass =
-      "bg-paper-100 text-ink-700 hover:bg-paper-200 border-x border-paper-300";
+      "bg-paper-100 text-ink-700 hover:bg-paper-200 border border-paper-300";
   }
 
   return (
@@ -142,7 +142,7 @@ export default function MeetingStatusBar(): JSX.Element {
         type="button"
         onClick={onClick}
         disabled={busy}
-        className={`app-no-drag inline-flex h-12 min-w-[112px] items-center justify-center gap-2 px-4 text-[13px] font-semibold transition ${buttonClass} disabled:opacity-50`}
+        className={`app-no-drag inline-flex h-8 min-w-[104px] items-center justify-center gap-1.5 rounded-md px-3 text-[12px] font-semibold transition ${buttonClass} disabled:opacity-50`}
         data-testid="meeting-status-bar"
         aria-label={tooltipTitle}
         aria-pressed={isMeeting}

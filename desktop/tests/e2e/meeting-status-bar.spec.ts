@@ -93,7 +93,7 @@ test("MeetingStatusBar · auto 显示「自动记录中」(不含计时 ':')", a
   expect(text).not.toContain("会议中");
 });
 
-test("MeetingStatusBar · 点击区域铺满顶栏高度", async ({ page }) => {
+test("MeetingStatusBar · 顶栏控制高度与设置 / TTS 保持一致", async ({ page }) => {
   await mockCurrentMeeting(page, {
     mode: "idle",
     meeting_id: null,
@@ -103,7 +103,24 @@ test("MeetingStatusBar · 点击区域铺满顶栏高度", async ({ page }) => {
   await installEchoMock(page, { skipPaths: ["/meetings/current"] });
   await page.goto("/");
 
-  const box = await page.getByTestId("meeting-status-bar").boundingBox();
-  expect(box?.height).toBeGreaterThanOrEqual(44);
-  expect(box?.width).toBeGreaterThanOrEqual(112);
+  const boxes = await page.evaluate(() => {
+    const rect = (testId: string) => {
+      const el = document.querySelector(`[data-testid="${testId}"]`);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { width: r.width, height: r.height };
+    };
+    return {
+      meeting: rect("meeting-status-bar"),
+      tts: rect("tts-toggle"),
+      settings: rect("open-settings"),
+      backend: rect("pill-backend"),
+    };
+  });
+  expect(boxes.meeting?.height).toBeGreaterThanOrEqual(30);
+  expect(boxes.meeting?.height).toBeLessThanOrEqual(36);
+  expect(boxes.meeting?.width).toBeGreaterThanOrEqual(104);
+  expect(Math.abs((boxes.meeting?.height ?? 0) - (boxes.tts?.height ?? 0))).toBeLessThanOrEqual(4);
+  expect(Math.abs((boxes.meeting?.height ?? 0) - (boxes.settings?.height ?? 0))).toBeLessThanOrEqual(4);
+  expect(Math.abs((boxes.meeting?.height ?? 0) - (boxes.backend?.height ?? 0))).toBeLessThanOrEqual(4);
 });
