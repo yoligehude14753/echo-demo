@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.adapters.audio import normalize_audio_bytes, pcm_to_wav
 from app.adapters.audio_gate import is_likely_hallucination, pre_stt_gate
 from app.config import Settings
 from app.ports.diarizer import DiarizerPort
@@ -128,7 +129,7 @@ class AmbientCapturePipeline:
         day_dir.mkdir(parents=True, exist_ok=True)
         name = f"{now.strftime('%H%M%S')}-{uuid.uuid4().hex[:8]}.wav"
         path = day_dir / name
-        path.write_bytes(audio_bytes)
+        path.write_bytes(pcm_to_wav(audio_bytes, sample_rate=sample_rate))
         return str(path)
 
     async def ingest_chunk(  # noqa: PLR0912, PLR0915
@@ -138,6 +139,9 @@ class AmbientCapturePipeline:
         sample_rate: int = 16_000,
         meeting_id: str | None = None,
     ) -> CaptureChunkResult:
+        normalized = normalize_audio_bytes(audio_bytes, sample_rate=sample_rate)
+        audio_bytes = normalized.pcm
+        sample_rate = normalized.sample_rate
         audio_ref = await asyncio.to_thread(self._persist_wav, audio_bytes, sample_rate)
 
         captured_dt = datetime.now(UTC)

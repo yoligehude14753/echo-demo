@@ -7,7 +7,7 @@ import wave
 
 import numpy as np
 import pytest
-from app.adapters.audio import pcm_to_wav, wav_to_float_mono16k
+from app.adapters.audio import normalize_audio_bytes, pcm_to_wav, wav_to_float_mono16k
 
 
 @pytest.mark.unit
@@ -41,3 +41,15 @@ def test_wav_to_float_resamples_8khz_to_16khz() -> None:
     assert arr is not None
     # 8k -> 16k: 大约 200 samples
     assert 180 <= len(arr) <= 220
+
+
+@pytest.mark.unit
+def test_normalize_uploaded_wav_returns_raw_pcm() -> None:
+    samples = np.array([1, -2, 300, -400], dtype=np.int16)
+    wav = pcm_to_wav(samples.tobytes(), sample_rate=16_000)
+
+    normalized = normalize_audio_bytes(wav, sample_rate=16_000)
+
+    assert normalized.sample_rate == 16_000
+    assert normalized.pcm == samples.tobytes()
+    assert not normalized.pcm.startswith(b"RIFF")

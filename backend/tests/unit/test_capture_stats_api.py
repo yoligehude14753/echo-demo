@@ -5,10 +5,13 @@
 
 from __future__ import annotations
 
+import io
+import wave
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from app.adapters.audio import pcm_to_wav
 from app.api.capture import reset_ambient_pipeline
 from app.config import Settings, get_settings
 from app.main import create_app
@@ -108,6 +111,27 @@ def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:
     body = r.json()
     assert "stt_status" in body
     assert body["stt_status"] in ("ok", "empty", "failed", "circuit_open", "gated")
+
+
+def test_post_chunk_accepts_frontend_wav_and_persists_valid_wav(
+    client: TestClient,
+) -> None:
+    """前端上传 WAV 容器时，pipeline 内部要解成 PCM，落盘仍写有效 WAV。"""
+    wav = pcm_to_wav(b"\x00\x00" * 16_000, sample_rate=16_000)
+    r = client.post(
+        "/capture/chunk",
+        files={"audio": ("chunk.wav", wav, "audio/wav")},
+        data={"sample_rate": "16000"},
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["stt_status"] == "gated"
+    saved = Path(body["audio_ref"]).read_bytes()
+    with wave.open(io.BytesIO(saved), "rb") as wf:
+        assert wf.getframerate() == 16_000
+        assert wf.getnchannels() == 1
+        assert wf.getnframes() == 16_000
 
 
 def test_get_stats_endpoint_independent_of_chunk_count(

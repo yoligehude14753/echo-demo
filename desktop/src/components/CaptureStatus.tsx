@@ -70,6 +70,11 @@ function formatCountdown(retryAtMs: number): string {
   return `${Math.floor(s / 60)}m${(s % 60).toString().padStart(2, "0")}s`;
 }
 
+function shouldShowMicRetry(errorMessage: string | null | undefined): boolean {
+  if (!errorMessage) return true;
+  return !/(USB|蓝牙|有效输入|电视麦克风|系统识别|原生录音不可用)/i.test(errorMessage);
+}
+
 function DoorBreakdown({
   stats,
   chunksDroppedCircuit,
@@ -201,10 +206,12 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
   }
 
   if (state === "error") {
+    const retryHint = shouldShowMicRetry(errorMessage) ? " · 5s 后重试" : "";
     return (
       <Tag color="red" data-testid="capture-status" tabIndex={-1}>
         麦克风不可用
-        {errorMessage ? ` · ${errorMessage}` : ""} · 5s 后重试
+        {errorMessage ? ` · ${errorMessage}` : ""}
+        {retryHint}
       </Tag>
     );
   }

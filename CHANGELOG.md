@@ -50,6 +50,98 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.16] – 2026-06-25
+
+TV 真机修复补丁：把智能电视端从“桌面 UI 缩放版”收敛成会议室可读布局，并补齐录音真实性诊断。
+
+### 修复
+
+- TV 端最终布局改为固定两栏会议室模式：隐藏会议历史侧栏，转写区优先，outputs 右栏固定，顶部服务状态、工作区行、转写头、输入栏和按钮统一基线。
+- TV 端字体和点击目标重新调到 960×540 CSS viewport 的远距可读尺寸：命令栏、转写气泡、speaker tag、会议纪要 / outputs 标题不再各自漂移。
+- Android 原生录音每个 chunk 记录 `source/sampleRate/bytes/rms/peak` 到 logcat，现场能直接区分“真的录到了声音”和“电视系统给了静音输入”。
+- TV e2e 增加更严格的视觉断言：header/workspace/outputs/transcript/input 高宽和字号必须满足电视布局边界。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.16`。
+- Android / TV `versionCode=216`、`versionName=0.2.16`。
+- backend 默认 `app_version=0.2.16`。
+
+### 已知限制
+
+- MiTV_ASTP0 现场设备当前没有向第三方 app 暴露有效麦克风输入；EchoDesk 会提示接入 USB / 蓝牙会议麦克风。STT 是否正确必须基于有声 chunk 或 public backend 上传测试判断，不能把电视静音输入误判为 STT 失败。
+
+---
+
+## [0.2.15] – 2026-06-25
+
+TV 现场可用性补丁：继续修正智能电视端前端比例、录音源兼容和错误提示。
+
+### 修复
+
+- Android 原生录音从单一 `16k + VOICE_RECOGNITION/MIC/CAMCORDER` 扩展为
+  `DEFAULT/MIC/VOICE_RECOGNITION/VOICE_COMMUNICATION/CAMCORDER` ×
+  `16k/48k/44.1k` 回退；实际选中的 source/sampleRate 会写入 log 并随 WAV
+  头传给后端。
+- 电视端读到全零输入时会停止上传静音块并继续定时重试，插入 USB / 蓝牙会议
+  麦克风后无需重启应用。
+- TV 视觉再次收口：顶部状态不再挤成一排大灰块，工作区行、转写头、输入栏、
+  outputs 面板固定基线和宽度；960×540 CSS viewport 下继续禁止横向溢出。
+- TV e2e 的布局断言同步更新，卡住 header/workspace/outputs/transcript/input 的
+  尺寸边界。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.15`。
+- Android / TV `versionCode=215`、`versionName=0.2.15`。
+- backend 默认 `app_version=0.2.15`。
+
+### 已知限制
+
+- MiTV_ASTP0 现场仍可能由系统 HAL 拒绝第三方 app 麦克风输入；此时 EchoDesk
+  会明确提示接入外置会议麦克风。TTS 播放命令已验证可走系统输出。
+
+---
+
+## [0.2.14] – 2026-06-25
+
+TV / STT 可用性补丁：修复前端 TV 视口挤压、录音上传格式错位和麦克风错误
+文案误导。
+
+### 修复
+
+- 后端 capture / meeting / STT / diarizer 入口统一兼容前端上传的 WAV 容器与旧
+  raw PCM；WAV 会先解成 16k mono PCM，再进入 RMS/VAD/STT/声纹链路，避免
+  把 `RIFF` 头当成音频样本或把 WAV 再包一层 WAV。
+- ambient 落盘的 `.wav` 永远写成有效 WAV 文件，便于后续回放和排查录音质量。
+- TV 布局改成稳定两栏：隐藏左侧会议历史，转写区优先，outputs 固定宽度，
+  输入栏和转写气泡统一字体大小，避免 960×540 CSS viewport 下互相挤压。
+- 麦克风不可用提示区分可自动重试和需要外接麦克风的错误；电视没有有效输入时
+  不再显示误导性的“5s 后重试”。
+
+### 验证
+
+- `cd desktop && npx tsc --noEmit`
+- `cd desktop && npm run lint -- --quiet`
+- `cd desktop && npx playwright test tests/e2e/tv-layout.spec.ts`
+- `cd backend && .venv/bin/python -m pytest tests/unit/test_audio_wav.py tests/unit/test_stt_adapter.py tests/unit/test_capture_stats_api.py tests/unit/test_meeting_pipeline.py tests/unit/test_ambient_capture.py`
+- 960×540 TV 视口截图：无横向溢出，转写区 640px，outputs 320px，会议侧栏 0px。
+- public backend `/capture/chunk` 真实上传合成语音返回 `stt_status="ok"`，主体文本正确识别。
+
+### 已知限制
+
+- 本机当前无法直连 eight `100.76.3.59:8090`，FireRed 直连集成测试会 skip；
+  public backend 可访问 eight STT，公开安装包默认走 public backend。
+- FireRed 对品牌词 `EchoDesk` 会误听成英文近音，后续需要热词或后处理。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.14`。
+- Android / TV `versionCode=214`、`versionName=0.2.14`。
+- backend 默认 `app_version=0.2.14`。
+
+---
+
 ## [0.2.13] – 2026-06-25
 
 TV 会议可用性 hotfix：修复智能电视端状态误报、录音兼容和公网 backend 纪要

@@ -225,9 +225,22 @@ class AudioCapture {
   private observeNativeInputHealth(event: EchoAudioChunkEvent): boolean {
     const rms = event.rms ?? 0;
     const peak = event.peak ?? 0;
+    if (rms === 0 && peak === 0) {
+      this.setState(
+        "error",
+        `请接入 USB/蓝牙会议麦克风；当前电视没有提供有效输入（${event.source ?? "unknown"} rms=0 peak=0）`,
+      );
+      this.teardownNative();
+      this.scheduleRetry();
+      return false;
+    }
+
     if (rms > NATIVE_SILENT_RMS_THRESHOLD || peak > NATIVE_SILENT_PEAK_THRESHOLD) {
       this.silentInputSinceMs = null;
       this.nativeSilentChunks = 0;
+      if (this.state !== "capturing") {
+        this.setState("capturing");
+      }
       return true;
     }
 
@@ -243,9 +256,10 @@ class AudioCapture {
 
     this.setState(
       "error",
-      "请接入 USB/蓝牙会议麦克风；当前电视没有提供有效输入",
+      `请接入 USB/蓝牙会议麦克风；当前电视没有提供有效输入（${event.source ?? "unknown"} rms=${Math.round(rms)} peak=${Math.round(peak)}）`,
     );
     this.teardownNative();
+    this.scheduleRetry();
     return false;
   }
 
@@ -346,7 +360,6 @@ class AudioCapture {
         chunkMs: 6000,
       });
       this.nativeActive = true;
-      this.setState("capturing");
     } catch (e) {
       this.teardownNative();
       const msg = e instanceof Error ? e.message : String(e);
@@ -354,6 +367,7 @@ class AudioCapture {
         "error",
         `Android 原生录音不可用：${msg}。请接入 USB/蓝牙会议麦克风`,
       );
+      this.scheduleRetry();
     }
   }
 }

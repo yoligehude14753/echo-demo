@@ -21,7 +21,7 @@ import time
 
 import httpx
 
-from app.adapters.audio import pcm_to_wav
+from app.adapters.audio import normalize_audio_bytes, pcm_to_wav
 from app.config import Settings
 from app.schemas.meeting import TranscriptSegment
 
@@ -57,6 +57,9 @@ class FireRedSTT:
         if not audio_bytes:
             return []
 
+        normalized = normalize_audio_bytes(audio_bytes, sample_rate=sample_rate)
+        audio_bytes = normalized.pcm
+        sample_rate = normalized.sample_rate
         lang = language or self._default_language
         wav = pcm_to_wav(audio_bytes, sample_rate=sample_rate)
         url = f"{self._base}/v1/audio/transcriptions"

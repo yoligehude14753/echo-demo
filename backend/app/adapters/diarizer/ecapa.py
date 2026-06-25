@@ -208,8 +208,11 @@ class ECAPADiarizer:
 
     async def _embed(self, audio_bytes: bytes, sample_rate: int) -> Any:
         await self._ensure_encoder()
-        from app.adapters.audio import pcm_to_wav, wav_to_float_mono16k
+        from app.adapters.audio import normalize_audio_bytes, pcm_to_wav, wav_to_float_mono16k
 
+        normalized = normalize_audio_bytes(audio_bytes, sample_rate=sample_rate)
+        audio_bytes = normalized.pcm
+        sample_rate = normalized.sample_rate
         wav = pcm_to_wav(audio_bytes, sample_rate=sample_rate)
         arr = wav_to_float_mono16k(wav)
         if arr is None or len(arr) == 0:

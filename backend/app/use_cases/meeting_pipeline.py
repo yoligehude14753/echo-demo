@@ -28,6 +28,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.adapters.audio import normalize_audio_bytes
 from app.config import Settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
@@ -263,6 +264,9 @@ class MeetingPipeline:
         sample_rate: int = 16_000,
     ) -> list[TranscriptSegment]:
         """单 chunk 入流：并发跑 STT + Diarizer。返回这段产生的 segments。"""
+        normalized = normalize_audio_bytes(audio_bytes, sample_rate=sample_rate)
+        audio_bytes = normalized.pcm
+        sample_rate = normalized.sample_rate
         if meeting_id in self._finalized:
             raise MeetingPipelineError(f"meeting {meeting_id} already ended")
         if meeting_id not in self._wall_clock_start:

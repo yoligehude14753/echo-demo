@@ -1220,3 +1220,1028 @@ textarea:focus-visible,
   outline-offset: 2px !important;
   box-shadow: 0 0 0 5px rgba(16, 163, 127, 0.14) !important;
 }
+
+/* v0.2.14 TV final layout reset
+   MiTV WebView reports a 960x540 CSS viewport on a 1080p panel. The old TV
+   rules tried to keep three panes and ended up squeezing the transcript and
+   command bar. TV now uses a stable 10-foot layout: transcript first, outputs
+   second, meeting history hidden, with one consistent text scale. */
+.echodesk-tv .echodesk-shell {
+  min-width: 0 !important;
+  font-size: 16px !important;
+  letter-spacing: 0 !important;
+}
+
+.echodesk-tv .app-header {
+  height: 46px !important;
+  min-height: 46px !important;
+  padding: 0 12px !important;
+  gap: 10px !important;
+}
+
+.echodesk-tv .app-header > div:first-child {
+  min-width: 152px !important;
+  flex: 0 0 152px !important;
+}
+
+.echodesk-tv .app-header .brand {
+  font-size: 18px !important;
+  line-height: 1 !important;
+}
+
+.echodesk-tv [data-testid="open-about"] {
+  font-size: 12px !important;
+}
+
+.echodesk-tv .app-header-status {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  justify-content: flex-end !important;
+  gap: 6px !important;
+  overflow: hidden !important;
+  font-size: 12px !important;
+}
+
+.echodesk-tv .app-header-separator,
+.echodesk-tv .app-event-count {
+  display: none !important;
+}
+
+.echodesk-tv [data-testid="status-bar"] {
+  min-width: 0 !important;
+  flex: 0 1 auto !important;
+  flex-wrap: nowrap !important;
+  gap: 5px !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv [data-testid^="pill-"],
+.echodesk-tv .app-header-status button,
+.echodesk-tv .app-connection-status {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 4px 7px !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] span:last-child {
+  max-width: 88px !important;
+}
+
+.echodesk-tv [data-testid="pill-backend"] span:last-child {
+  max-width: 74px !important;
+}
+
+.echodesk-tv [data-testid="open-settings"] {
+  flex: 0 0 30px !important;
+  min-width: 30px !important;
+  width: 30px !important;
+  height: 30px !important;
+  padding: 4px !important;
+}
+
+.echodesk-tv [data-testid="workspace-bar"] {
+  height: 42px !important;
+  min-height: 42px !important;
+  padding: 0 12px !important;
+  gap: 7px !important;
+  font-size: 14px !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv .workspace-icon {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.echodesk-tv .workspace-title {
+  font-size: 15px !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-tv [data-testid="workspace-upload-count"] {
+  display: none !important;
+}
+
+.echodesk-tv [data-testid="workspace-bar"] .ant-tag {
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 5px 8px !important;
+  font-size: 13px !important;
+  line-height: 18px !important;
+}
+
+.echodesk-tv .workspace-actions {
+  gap: 6px !important;
+  min-width: 0 !important;
+}
+
+.echodesk-tv .workspace-actions .ant-btn {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 9px !important;
+  font-size: 13px !important;
+  border-radius: 6px !important;
+}
+
+.echodesk-tv .echodesk-main-layout {
+  height: calc(100vh - 88px) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv .echodesk-meeting-sider {
+  display: none !important;
+}
+
+.echodesk-tv .echodesk-content {
+  display: flex !important;
+  min-width: 0 !important;
+  width: 100% !important;
+}
+
+.echodesk-tv .echodesk-transcript-pane {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.echodesk-tv .echodesk-output-pane {
+  flex: 0 0 320px !important;
+  width: 320px !important;
+  min-width: 320px !important;
+}
+
+.echodesk-tv .echodesk-transcript-header {
+  height: 46px !important;
+  min-height: 46px !important;
+  padding: 0 16px !important;
+  gap: 8px !important;
+}
+
+.echodesk-tv .echodesk-transcript-header .text-\[13px\] {
+  font-size: 16px !important;
+}
+
+.echodesk-tv .echodesk-transcript-header .text-\[11px\] {
+  max-width: 160px !important;
+  font-size: 12px !important;
+}
+
+.echodesk-tv [data-testid="capture-status"] {
+  max-width: 360px !important;
+  min-height: 30px !important;
+  padding: 5px 9px !important;
+  font-size: 13px !important;
+  line-height: 18px !important;
+}
+
+.echodesk-tv [data-testid="transcript-scroller"] {
+  padding: 12px 18px 14px !important;
+}
+
+.echodesk-tv [data-testid="transcript-scroller"] > div {
+  max-width: none !important;
+}
+
+.echodesk-tv [data-testid="transcript-scroller"] .sticky {
+  font-size: 12px !important;
+  line-height: 18px !important;
+  margin-bottom: 10px !important;
+}
+
+.echodesk-tv [data-testid="transcript-row"] {
+  gap: 10px !important;
+}
+
+.echodesk-tv [data-testid="speaker-avatar"],
+.echodesk-tv [data-testid="speaker-avatar"] + div {
+  width: 34px !important;
+  height: 34px !important;
+  font-size: 14px !important;
+}
+
+.echodesk-tv [data-testid="speaker-tag"] {
+  font-size: 13px !important;
+  line-height: 18px !important;
+}
+
+.echodesk-tv [data-testid="transcript-row"] .rounded-2xl {
+  font-size: 16px !important;
+  line-height: 1.55 !important;
+  padding: 9px 14px !important;
+  border-radius: 14px !important;
+}
+
+.echodesk-tv [data-testid="transcript-time"] {
+  display: none !important;
+}
+
+.echodesk-tv .echodesk-transcript-empty {
+  font-size: 16px !important;
+  line-height: 1.6 !important;
+  padding: 20px !important;
+  text-align: center !important;
+}
+
+.echodesk-tv .echodesk-transcript-empty .text-\[10px\] {
+  max-width: 520px !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] {
+  min-height: 66px !important;
+  padding: 8px 14px !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] > div:last-child {
+  gap: 10px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  min-height: 46px !important;
+  max-height: 46px !important;
+  padding: 11px 12px !important;
+  font-size: 16px !important;
+  line-height: 22px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea::placeholder,
+.echodesk-tv [data-testid="command-bar"] textarea::placeholder {
+  font-size: 16px !important;
+  line-height: 22px !important;
+}
+
+.echodesk-tv [data-testid="command-attach-btn"],
+.echodesk-tv [data-testid="command-send-btn"] {
+  width: 46px !important;
+  min-width: 46px !important;
+  height: 46px !important;
+  min-height: 46px !important;
+  padding: 8px !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] svg {
+  width: 22px !important;
+  height: 22px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .text-\[13px\] {
+  font-size: 15px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .text-\[11px\],
+.echodesk-tv .echodesk-output-pane .text-\[10px\],
+.echodesk-tv .ant-empty-description {
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+@media (max-width: 860px) {
+  .echodesk-tv .echodesk-output-pane {
+    flex-basis: 288px !important;
+    width: 288px !important;
+    min-width: 288px !important;
+  }
+
+  .echodesk-tv [data-testid="capture-status"] {
+    max-width: 280px !important;
+  }
+
+  .echodesk-tv .workspace-actions .ant-btn span:not(.ant-btn-icon) {
+    display: none !important;
+  }
+}
+
+/* v0.2.15 TV alignment pass
+   The TV shell is a meeting-room dashboard, not a desktop app squeezed onto a
+   television. Keep the visual system quiet and aligned: compact service status,
+   fixed-height rows, wider transcript, and equal-sized command controls. */
+.echodesk-tv body,
+.echodesk-tv #root,
+.echodesk-tv .echodesk-shell {
+  background: #ffffff !important;
+}
+
+.echodesk-tv .app-header {
+  height: 44px !important;
+  min-height: 44px !important;
+  padding: 0 14px !important;
+  border-bottom: 1px solid #e6e6e6 !important;
+}
+
+.echodesk-tv .app-header > div:first-child {
+  flex: 0 0 138px !important;
+  min-width: 138px !important;
+  gap: 7px !important;
+}
+
+.echodesk-tv .app-header .brand {
+  font-size: 17px !important;
+  font-weight: 650 !important;
+}
+
+.echodesk-tv [data-testid="open-about"] {
+  font-size: 11px !important;
+  padding: 0 !important;
+  color: #8b8b8b !important;
+}
+
+.echodesk-tv .app-header-status {
+  gap: 6px !important;
+  align-items: center !important;
+}
+
+.echodesk-tv [data-testid="status-bar"] {
+  gap: 6px !important;
+  flex: 0 1 auto !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 5px !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] > span:last-child {
+  max-width: 86px !important;
+  font-size: 12px !important;
+  line-height: 18px !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] svg {
+  width: 13px !important;
+  height: 13px !important;
+}
+
+.echodesk-tv [data-testid="meeting-status-bar"],
+.echodesk-tv [data-testid="tts-toggle"],
+.echodesk-tv .app-connection-status {
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 0 10px !important;
+  border: 1px solid #e5e5e5 !important;
+  border-radius: 8px !important;
+  background: #fafafa !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+}
+
+.echodesk-tv [data-testid="meeting-status-bar"] {
+  min-width: 82px !important;
+  font-weight: 650 !important;
+}
+
+.echodesk-tv [data-testid="tts-toggle"] {
+  min-width: 64px !important;
+  justify-content: center !important;
+}
+
+.echodesk-tv .app-connection-status {
+  color: #525252 !important;
+}
+
+.echodesk-tv [data-testid="open-settings"] {
+  width: 30px !important;
+  min-width: 30px !important;
+  border-radius: 8px !important;
+  background: #f5f5f5 !important;
+}
+
+.echodesk-tv [data-testid="workspace-bar"] {
+  height: 40px !important;
+  min-height: 40px !important;
+  padding: 0 14px !important;
+  border-bottom: 1px solid #e8e8e8 !important;
+  font-size: 13px !important;
+}
+
+.echodesk-tv .workspace-title {
+  font-size: 15px !important;
+  font-weight: 650 !important;
+}
+
+.echodesk-tv [data-testid="workspace-bar"] .ant-tag {
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 3px 7px !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+}
+
+.echodesk-tv .workspace-actions .ant-btn {
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 0 9px !important;
+  border-radius: 7px !important;
+  font-size: 12px !important;
+}
+
+.echodesk-tv .echodesk-main-layout {
+  height: calc(100vh - 84px) !important;
+}
+
+.echodesk-tv .echodesk-output-pane {
+  flex: 0 0 300px !important;
+  width: 300px !important;
+  min-width: 300px !important;
+  border-left: 1px solid #e6e6e6 !important;
+}
+
+.echodesk-tv .echodesk-transcript-header {
+  height: 44px !important;
+  min-height: 44px !important;
+  padding: 0 18px !important;
+  border-bottom: 1px solid #e8e8e8 !important;
+}
+
+.echodesk-tv .echodesk-transcript-header .text-\[13px\] {
+  font-size: 16px !important;
+  font-weight: 650 !important;
+}
+
+.echodesk-tv [data-testid="capture-status"] {
+  max-width: min(430px, 48vw) !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 4px 8px !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+  line-height: 18px !important;
+}
+
+.echodesk-tv [data-testid="transcript-scroller"] {
+  padding: 14px 20px 12px !important;
+}
+
+.echodesk-tv .echodesk-transcript-empty {
+  transform: translateY(-10px) !important;
+  color: #9b9b9b !important;
+}
+
+.echodesk-tv [data-testid="transcript-row"] {
+  margin-top: 12px !important;
+}
+
+.echodesk-tv [data-testid="transcript-row"] .rounded-2xl {
+  max-width: calc(100% - 52px) !important;
+  font-size: 16px !important;
+  line-height: 1.5 !important;
+  padding: 9px 13px !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] {
+  min-height: 62px !important;
+  padding: 7px 16px !important;
+  border-top: 1px solid #e6e6e6 !important;
+  background: #fafafa !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] > div:last-child {
+  display: grid !important;
+  grid-template-columns: 22px minmax(0, 1fr) 46px 46px !important;
+  align-items: center !important;
+  gap: 9px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea,
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  height: 46px !important;
+  min-height: 46px !important;
+  max-height: 46px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  padding: 11px 13px !important;
+  border-radius: 8px !important;
+  font-size: 16px !important;
+  line-height: 22px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea::placeholder,
+.echodesk-tv [data-testid="command-bar"] textarea::placeholder {
+  font-size: 16px !important;
+  line-height: 22px !important;
+}
+
+.echodesk-tv [data-testid="command-attach-btn"],
+.echodesk-tv [data-testid="command-send-btn"] {
+  width: 46px !important;
+  height: 46px !important;
+  min-width: 46px !important;
+  min-height: 46px !important;
+  border-radius: 9px !important;
+  background: #f0f0f0 !important;
+}
+
+.echodesk-tv .echodesk-output-pane > div:first-child {
+  min-height: 220px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .px-6 {
+  padding-left: 18px !important;
+  padding-right: 18px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .h-11 {
+  height: 40px !important;
+}
+
+@media (max-width: 860px) {
+  .echodesk-tv .app-header > div:first-child {
+    flex-basis: 124px !important;
+    min-width: 124px !important;
+  }
+
+  .echodesk-tv .echodesk-output-pane {
+    flex-basis: 280px !important;
+    width: 280px !important;
+    min-width: 280px !important;
+  }
+
+  .echodesk-tv [data-testid="capture-status"] {
+    max-width: 300px !important;
+  }
+}
+
+/* v0.2.16 TV room layout
+   Final override for real Android TV WebView: 960x540 CSS viewport on a 1080p
+   panel. This is tuned for meeting-room viewing, remote focus targets, and
+   predictable alignment rather than preserving the dense desktop chrome. */
+.echodesk-tv,
+.echodesk-tv body,
+.echodesk-tv #root,
+.echodesk-tv .echodesk-shell {
+  width: 100vw !important;
+  height: 100vh !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+  color: #171717 !important;
+  letter-spacing: 0 !important;
+}
+
+.echodesk-tv .app-header {
+  height: 50px !important;
+  min-height: 50px !important;
+  padding: 0 18px !important;
+  gap: 14px !important;
+  border-bottom: 1px solid #dedede !important;
+  background: #ffffff !important;
+}
+
+.echodesk-tv .app-header > div:first-child {
+  flex: 0 0 176px !important;
+  min-width: 176px !important;
+  gap: 10px !important;
+  align-items: center !important;
+}
+
+.echodesk-tv .app-header > div:first-child > span:first-child {
+  width: 12px !important;
+  height: 12px !important;
+  flex: 0 0 12px !important;
+  box-shadow: 0 0 0 5px rgba(16, 163, 127, 0.16) !important;
+}
+
+.echodesk-tv .app-header .brand {
+  font-size: 20px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-tv [data-testid="open-about"] {
+  margin-left: 8px !important;
+  padding: 2px 0 !important;
+  font-size: 13px !important;
+  color: #777777 !important;
+}
+
+.echodesk-tv .app-header-status {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  gap: 8px !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv .app-header-separator,
+.echodesk-tv .app-event-count {
+  display: none !important;
+}
+
+.echodesk-tv [data-testid="status-bar"] {
+  display: flex !important;
+  flex: 0 1 auto !important;
+  min-width: 0 !important;
+  gap: 7px !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] {
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 8px !important;
+  border-radius: 9px !important;
+  background: #fafafa !important;
+  border: 1px solid #e4e4e4 !important;
+  box-shadow: none !important;
+  font-size: 13px !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] > span:last-child {
+  max-width: 112px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  font-size: 13px !important;
+  line-height: 18px !important;
+}
+
+.echodesk-tv [data-testid="pill-backend"] > span:last-child {
+  max-width: 118px !important;
+}
+
+.echodesk-tv [data-testid^="pill-"] svg,
+.echodesk-tv .app-header-status svg {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.echodesk-tv [data-testid="meeting-status-bar"],
+.echodesk-tv [data-testid="tts-toggle"],
+.echodesk-tv .app-connection-status,
+.echodesk-tv [data-testid="open-settings"] {
+  height: 36px !important;
+  min-height: 36px !important;
+  border: 1px solid #e2e2e2 !important;
+  border-radius: 10px !important;
+  background: #fafafa !important;
+  color: #404040 !important;
+  font-size: 14px !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-tv [data-testid="meeting-status-bar"] {
+  min-width: 96px !important;
+  padding: 0 12px !important;
+  font-weight: 700 !important;
+}
+
+.echodesk-tv [data-testid="tts-toggle"] {
+  min-width: 74px !important;
+  justify-content: center !important;
+  padding: 0 12px !important;
+}
+
+.echodesk-tv .app-connection-status {
+  min-width: 90px !important;
+  justify-content: center !important;
+  padding: 0 12px !important;
+}
+
+.echodesk-tv [data-testid="open-settings"] {
+  flex: 0 0 36px !important;
+  width: 36px !important;
+  min-width: 36px !important;
+  padding: 0 !important;
+}
+
+.echodesk-tv [data-testid="workspace-bar"] {
+  height: 46px !important;
+  min-height: 46px !important;
+  padding: 0 18px !important;
+  gap: 10px !important;
+  border-bottom: 1px solid #e6e6e6 !important;
+  background: #fbfbfb !important;
+  overflow: hidden !important;
+  font-size: 14px !important;
+}
+
+.echodesk-tv .workspace-icon {
+  width: 19px !important;
+  height: 19px !important;
+  flex: 0 0 19px !important;
+}
+
+.echodesk-tv .workspace-title {
+  font-size: 17px !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-tv [data-testid="workspace-upload-count"],
+.echodesk-tv [data-testid="workspace-bar"] > .text-ink-400 {
+  display: none !important;
+}
+
+.echodesk-tv [data-testid="workspace-bar"] .ant-tag {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 5px 10px !important;
+  border-radius: 8px !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+}
+
+.echodesk-tv .workspace-actions {
+  margin-left: auto !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+}
+
+.echodesk-tv .workspace-actions .ant-btn {
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 12px !important;
+  border-radius: 9px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+}
+
+.echodesk-tv .workspace-actions svg {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.echodesk-tv .echodesk-main-layout {
+  height: calc(100vh - 96px) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv .echodesk-meeting-sider {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  flex: 0 0 0 !important;
+}
+
+.echodesk-tv .echodesk-content {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 320px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 100% !important;
+}
+
+.echodesk-tv .echodesk-transcript-pane {
+  min-width: 0 !important;
+  height: 100% !important;
+  border-right: 1px solid #dedede !important;
+}
+
+.echodesk-tv .echodesk-output-pane {
+  width: 320px !important;
+  min-width: 320px !important;
+  max-width: 320px !important;
+  height: 100% !important;
+  border-left: 0 !important;
+  background: #ffffff !important;
+}
+
+.echodesk-tv .echodesk-transcript-header {
+  height: 50px !important;
+  min-height: 50px !important;
+  padding: 0 22px !important;
+  gap: 10px !important;
+  border-bottom: 1px solid #e3e3e3 !important;
+  background: #ffffff !important;
+}
+
+.echodesk-tv .echodesk-transcript-header svg {
+  width: 21px !important;
+  height: 21px !important;
+}
+
+.echodesk-tv .echodesk-transcript-header .text-\[13px\] {
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+}
+
+.echodesk-tv .echodesk-transcript-header .text-\[11px\] {
+  max-width: 180px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  font-size: 13px !important;
+}
+
+.echodesk-tv [data-testid="capture-status"] {
+  max-width: min(480px, 50vw) !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 6px 10px !important;
+  border-radius: 8px !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-tv [data-testid="transcript-scroller"] {
+  padding: 16px 24px 14px !important;
+}
+
+.echodesk-tv [data-testid="transcript-scroller"] > div {
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+.echodesk-tv [data-testid="transcript-scroller"] .sticky {
+  margin-bottom: 12px !important;
+  padding: 6px 0 !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+}
+
+.echodesk-tv [data-testid="transcript-row"] {
+  gap: 12px !important;
+  margin-top: 14px !important;
+}
+
+.echodesk-tv [data-testid="speaker-avatar"],
+.echodesk-tv [data-testid="speaker-avatar"] + div {
+  width: 42px !important;
+  height: 42px !important;
+  flex: 0 0 42px !important;
+  font-size: 17px !important;
+}
+
+.echodesk-tv [data-testid="speaker-tag"] {
+  margin-bottom: 5px !important;
+  font-size: 15px !important;
+  line-height: 20px !important;
+  font-weight: 700 !important;
+}
+
+.echodesk-tv [data-testid="transcript-row"] .rounded-2xl {
+  max-width: calc(100% - 60px) !important;
+  padding: 11px 16px !important;
+  border-radius: 14px !important;
+  font-size: 18px !important;
+  line-height: 1.55 !important;
+}
+
+.echodesk-tv [data-testid="transcript-time"] {
+  display: none !important;
+}
+
+.echodesk-tv .echodesk-transcript-empty {
+  transform: translateY(-12px) !important;
+  padding: 24px !important;
+  color: #8f8f8f !important;
+  text-align: center !important;
+  font-size: 19px !important;
+  line-height: 1.55 !important;
+}
+
+.echodesk-tv .echodesk-transcript-empty .text-\[10px\] {
+  max-width: 620px !important;
+  font-size: 15px !important;
+  line-height: 1.55 !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] {
+  min-height: 72px !important;
+  padding: 10px 20px !important;
+  border-top: 1px solid #dedede !important;
+  background: #fafafa !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] > div:last-child {
+  display: grid !important;
+  grid-template-columns: 28px minmax(0, 1fr) 52px 52px !important;
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] svg {
+  width: 24px !important;
+  height: 24px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea,
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  height: 52px !important;
+  min-height: 52px !important;
+  max-height: 52px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  padding: 12px 15px !important;
+  border-radius: 10px !important;
+  font-size: 18px !important;
+  line-height: 26px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea::placeholder,
+.echodesk-tv [data-testid="command-bar"] textarea::placeholder {
+  font-size: 18px !important;
+  line-height: 26px !important;
+}
+
+.echodesk-tv [data-testid="command-attach-btn"],
+.echodesk-tv [data-testid="command-send-btn"] {
+  width: 52px !important;
+  height: 52px !important;
+  min-width: 52px !important;
+  min-height: 52px !important;
+  padding: 10px !important;
+  border-radius: 11px !important;
+  background: #efefef !important;
+}
+
+.echodesk-tv .echodesk-output-pane > div:first-child {
+  min-height: 220px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .px-6 {
+  padding-left: 20px !important;
+  padding-right: 20px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .h-11 {
+  height: 46px !important;
+  min-height: 46px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .text-\[13px\] {
+  font-size: 17px !important;
+  line-height: 1.25 !important;
+  font-weight: 700 !important;
+}
+
+.echodesk-tv .echodesk-output-pane .text-\[11px\],
+.echodesk-tv .echodesk-output-pane .text-\[10px\],
+.echodesk-tv .ant-empty-description {
+  font-size: 14px !important;
+  line-height: 1.55 !important;
+}
+
+.echodesk-tv .echodesk-output-pane svg {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.echodesk-tv .ant-modal {
+  top: 22px !important;
+  max-width: calc(100vw - 48px) !important;
+}
+
+@media (max-width: 860px) {
+  .echodesk-tv .app-header {
+    padding-left: 14px !important;
+    padding-right: 12px !important;
+  }
+
+  .echodesk-tv .app-header > div:first-child {
+    flex-basis: 160px !important;
+    min-width: 160px !important;
+  }
+
+  .echodesk-tv .app-header .brand {
+    font-size: 19px !important;
+  }
+
+  .echodesk-tv .echodesk-content {
+    grid-template-columns: minmax(0, 1fr) 320px !important;
+  }
+
+  .echodesk-tv .echodesk-output-pane {
+    width: 320px !important;
+    min-width: 320px !important;
+    max-width: 320px !important;
+  }
+
+  .echodesk-tv [data-testid="status-bar"] {
+    gap: 5px !important;
+  }
+
+  .echodesk-tv [data-testid^="pill-"] > span:last-child {
+    max-width: 92px !important;
+  }
+
+  .echodesk-tv .workspace-actions .ant-btn span:not(.ant-btn-icon) {
+    display: none !important;
+  }
+}

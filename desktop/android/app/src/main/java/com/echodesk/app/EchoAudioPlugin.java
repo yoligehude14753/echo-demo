@@ -35,8 +35,10 @@ public class EchoAudioPlugin extends Plugin {
   private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
   private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
   private static final int[] AUDIO_SOURCES = {
-      MediaRecorder.AudioSource.VOICE_RECOGNITION,
+      MediaRecorder.AudioSource.DEFAULT,
       MediaRecorder.AudioSource.MIC,
+      MediaRecorder.AudioSource.VOICE_RECOGNITION,
+      MediaRecorder.AudioSource.VOICE_COMMUNICATION,
       MediaRecorder.AudioSource.CAMCORDER
   };
 
@@ -75,35 +77,41 @@ public class EchoAudioPlugin extends Plugin {
       stopLocked();
       AudioRecord next = null;
       String sourceName = "unknown";
-      for (int source : AUDIO_SOURCES) {
-        next = buildRecorder(source, sampleRate);
-        if (next == null) continue;
-        try {
-          next.startRecording();
-        } catch (Throwable t) {
-          Log.w(TAG, "AudioRecord start failed for " + sourceToName(source), t);
+      int selectedSampleRate = sampleRate;
+      for (int candidateRate : candidateSampleRates(sampleRate)) {
+        for (int source : AUDIO_SOURCES) {
+          next = buildRecorder(source, candidateRate);
+          if (next == null) continue;
+          try {
+            next.startRecording();
+          } catch (Throwable t) {
+            Log.w(TAG, "AudioRecord start failed for " + sourceToName(source) + " @" + candidateRate, t);
+            next.release();
+            next = null;
+            continue;
+          }
+          if (next.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+            sourceName = sourceToName(source);
+            selectedSampleRate = candidateRate;
+            break;
+          }
           next.release();
           next = null;
-          continue;
         }
-        if (next.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
-          sourceName = sourceToName(source);
-          break;
-        }
-        next.release();
-        next = null;
+        if (next != null) break;
       }
 
       if (next == null) {
-        call.reject("Android AudioRecord cannot open any microphone input");
+        call.reject("Android AudioRecord cannot open any microphone input after source/rate fallback");
         return;
       }
 
       recorder = next;
-      activeSampleRate = sampleRate;
+      activeSampleRate = selectedSampleRate;
       activeSource = sourceName;
       running = true;
-      final int loopSampleRate = sampleRate;
+      Log.i(TAG, "AudioRecord started source=" + activeSource + " sampleRate=" + activeSampleRate);
+      final int loopSampleRate = activeSampleRate;
       final int loopChunkMs = chunkMs;
       worker = new Thread(() -> recordLoop(loopSampleRate, loopChunkMs), "EchoDeskAudioRecord");
       worker.start();
@@ -113,6 +121,29 @@ public class EchoAudioPlugin extends Plugin {
     result.put("sampleRate", activeSampleRate);
     result.put("source", activeSource);
     call.resolve(result);
+  }
+
+  private static int[] candidateSampleRates(int requested) {
+    int[] preferred = {requested, 48000, 44100, 16000};
+    int[] tmp = new int[preferred.length];
+    int n = 0;
+    for (int rate : preferred) {
+      if (rate <= 0) continue;
+      boolean exists = false;
+      for (int i = 0; i < n; i++) {
+        if (tmp[i] == rate) {
+          exists = true;
+          break;
+        }
+      }
+      if (!exists) {
+        tmp[n] = rate;
+        n += 1;
+      }
+    }
+    int[] out = new int[n];
+    System.arraycopy(tmp, 0, out, 0, n);
+    return out;
   }
 
   @PluginMethod
@@ -194,11 +225,20 @@ public class EchoAudioPlugin extends Plugin {
     if (chunk.size() > sampleRate * bytesPerSample / 2) {
       emitChunk(chunk.toByteArray(), sampleRate);
     }
+    Log.i(TAG, "AudioRecord loop ended source=" + activeSource + " sampleRate=" + sampleRate);
   }
 
   private void emitChunk(byte[] pcm, int sampleRate) {
     try {
       AudioStats stats = audioStats(pcm);
+      Log.i(
+          TAG,
+          "AudioRecord chunk source=" + activeSource
+              + " sampleRate=" + sampleRate
+              + " bytes=" + pcm.length
+              + " rms=" + Math.round(stats.rms)
+              + " peak=" + stats.peak
+      );
       JSObject data = new JSObject();
       data.put("sampleRate", sampleRate);
       data.put("source", activeSource);
@@ -233,8 +273,10 @@ public class EchoAudioPlugin extends Plugin {
   }
 
   private static String sourceToName(int source) {
+    if (source == MediaRecorder.AudioSource.DEFAULT) return "DEFAULT";
     if (source == MediaRecorder.AudioSource.VOICE_RECOGNITION) return "VOICE_RECOGNITION";
     if (source == MediaRecorder.AudioSource.MIC) return "MIC";
+    if (source == MediaRecorder.AudioSource.VOICE_COMMUNICATION) return "VOICE_COMMUNICATION";
     if (source == MediaRecorder.AudioSource.CAMCORDER) return "CAMCORDER";
     return String.valueOf(source);
   }

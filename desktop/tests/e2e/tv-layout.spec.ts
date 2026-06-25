@@ -76,6 +76,8 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
       sider: pick(".echodesk-meeting-sider"),
       transcript: pick(".echodesk-transcript-pane"),
       output: pick(".echodesk-output-pane"),
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
       commandTextarea: textarea ? textarea.getBoundingClientRect().height : 0,
       header: pick(".app-header"),
       workspace: pick("[data-testid='workspace-bar']"),
@@ -85,18 +87,18 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   });
 
   expect(boxes.shell?.width).toBe(960);
-  expect(boxes.header?.height).toBeGreaterThanOrEqual(38);
-  expect(boxes.header?.height).toBeLessThanOrEqual(44);
-  expect(boxes.workspace?.height).toBeGreaterThanOrEqual(32);
-  expect(boxes.workspace?.height).toBeLessThanOrEqual(38);
-  expect(boxes.sider?.width).toBeGreaterThanOrEqual(216);
-  expect(boxes.sider?.width).toBeLessThanOrEqual(224);
-  expect(boxes.transcript?.width).toBeGreaterThan(420);
-  expect(boxes.output?.width).toBeGreaterThanOrEqual(296);
-  expect(boxes.output?.width).toBeLessThanOrEqual(304);
-  expect(boxes.commandTextarea).toBeGreaterThanOrEqual(40);
-  expect(boxes.brandSize).toBeGreaterThanOrEqual(17);
-  expect(boxes.bubbleFontSize).toBeGreaterThanOrEqual(15);
+  expect(boxes.documentWidth).toBeLessThanOrEqual(boxes.viewportWidth + 1);
+  expect(boxes.header?.height).toBeGreaterThanOrEqual(49);
+  expect(boxes.header?.height).toBeLessThanOrEqual(51);
+  expect(boxes.workspace?.height).toBeGreaterThanOrEqual(45);
+  expect(boxes.workspace?.height).toBeLessThanOrEqual(47);
+  expect(boxes.sider?.width ?? 0).toBe(0);
+  expect(boxes.transcript?.width).toBeGreaterThanOrEqual(638);
+  expect(boxes.output?.width).toBeGreaterThanOrEqual(318);
+  expect(boxes.output?.width).toBeLessThanOrEqual(322);
+  expect(boxes.commandTextarea).toBeGreaterThanOrEqual(52);
+  expect(boxes.brandSize).toBeGreaterThanOrEqual(19);
+  expect(boxes.bubbleFontSize).toBeGreaterThanOrEqual(18);
 
   const fetchLog = await mock.fetchLog();
   expect(fetchLog.some((r) => /\/(api\/)?meetings\?/.test(r.url))).toBe(false);
