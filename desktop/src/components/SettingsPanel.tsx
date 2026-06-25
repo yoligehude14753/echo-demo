@@ -16,8 +16,10 @@
 
 import { Drawer, Button, Modal, message, Spin, Tooltip, Input, Form, Tag } from "antd";
 import {
+  ArrowUpCircle,
   Database,
   Download,
+  ExternalLink,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -36,8 +38,12 @@ import {
 } from "@/api";
 import {
   DEFAULT_ANDROID_BACKEND_BASE,
+  type AppUpdateStatus,
   apiUrl,
+  checkAppUpdate,
   configuredBackendBase,
+  installAppUpdate,
+  openUpdateTarget,
   setStoredBackendBase,
 } from "@/runtime";
 
@@ -153,6 +159,18 @@ const BREAKDOWN_LABELS: Array<{
   { key: "skill_build", label: "Skill 工作目录", hint: "@生成 临时构建目录" },
 ];
 
+function updateStatusLabel(status: AppUpdateStatus | null): string {
+  if (!status) return "尚未检查";
+  if (status.status === "checking") return "检查中";
+  if (status.status === "available") return "发现新版本";
+  if (status.status === "current") return "已是最新";
+  if (status.status === "downloading") return `下载中 ${status.percent ?? 0}%`;
+  if (status.status === "downloaded") return "已下载，准备安装";
+  if (status.status === "installing") return "正在安装";
+  if (status.status === "error") return "检查失败";
+  return "已检查";
+}
+
 export default function SettingsPanel({
   open,
   onClose,
@@ -168,6 +186,9 @@ export default function SettingsPanel({
   const [adminUnavailable, setAdminUnavailable] = useState(false);
   const [form] = Form.useForm<Record<string, string>>();
   const [backendBaseDraft, setBackendBaseDraft] = useState("");
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
   // P4-fix-rag-chat：工作区目录配置
   const [ws, setWs] = useState<WorkspaceStatusDTO | null>(null);
   const [wsBusy, setWsBusy] = useState(false);
@@ -239,6 +260,11 @@ export default function SettingsPanel({
       setBackendBaseDraft(configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE);
     }
   }, [open, refreshDataDir, refreshRemote, refreshWorkspace]);
+
+  useEffect(() => {
+    if (!open || !window.echo?.onUpdateStatus) return undefined;
+    return window.echo.onUpdateStatus((status) => setUpdateInfo(status));
+  }, [open]);
 
   const onAddWorkspaceDir = useCallback(async () => {
     // 优先用 Electron dialog；浏览器/纯 dev 模式回退到 prompt() 让用户手填路径
@@ -418,6 +444,43 @@ export default function SettingsPanel({
     setBackendBaseDraft(saved ?? DEFAULT_ANDROID_BACKEND_BASE);
     message.success(saved ? `后端地址已保存：${saved}` : "已恢复默认后端地址");
   };
+
+  const onCheckUpdate = useCallback(async () => {
+    setUpdateBusy(true);
+    try {
+      const info = await checkAppUpdate();
+      setUpdateInfo(info);
+      if (info.status === "error") {
+        message.warning(`检查更新失败：${info.error ?? "未知错误"}`);
+      } else if (info.updateAvailable) {
+        message.success(`发现新版本 v${info.latestVersion}`);
+      } else {
+        message.success("当前已是最新版本");
+      }
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, []);
+
+  const onInstallUpdate = useCallback(async () => {
+    const info = updateInfo ?? (await checkAppUpdate());
+    setUpdateInfo(info);
+    setUpdateInstallBusy(true);
+    try {
+      await installAppUpdate(info);
+      if (!info.canAutoInstall) {
+        message.info("已打开下载页面");
+      }
+    } catch (e) {
+      message.error(`更新失败：${(e as Error).message}`);
+    } finally {
+      setUpdateInstallBusy(false);
+    }
+  }, [updateInfo]);
+
+  const onOpenRelease = useCallback(async () => {
+    await openUpdateTarget(updateInfo ?? undefined);
+  }, [updateInfo]);
 
   const remoteFieldOrder = useMemo(
     () => (remote?.fields ?? []).map((f) => f.key),
@@ -661,6 +724,88 @@ export default function SettingsPanel({
               <span className="font-mono ml-1">{DEFAULT_ANDROID_BACKEND_BASE}</span>。
               内网演示或开发调试时，可临时改成电脑局域网地址，例如
               <span className="font-mono ml-1">http://10.10.12.32:8769</span>。
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
+            <ArrowUpCircle className="w-4 h-4" />
+            <span>更新</span>
+            <Tag
+              color={updateInfo?.updateAvailable ? "blue" : "default"}
+              className="!m-0 ml-auto"
+              data-testid="update-status-tag"
+            >
+              {updateStatusLabel(updateInfo)}
+            </Tag>
+          </div>
+          <div
+            className="bg-paper-150 rounded-md p-3 space-y-2"
+            data-testid="updates-section"
+          >
+            <div className="grid grid-cols-2 gap-2 text-[11px] text-ink-600">
+              <div className="rounded bg-white border border-paper-300 px-2 py-1.5">
+                <div className="text-ink-400">当前版本</div>
+                <div className="font-mono text-ink-800">
+                  v{updateInfo?.currentVersion ?? __APP_VERSION__}
+                </div>
+              </div>
+              <div className="rounded bg-white border border-paper-300 px-2 py-1.5">
+                <div className="text-ink-400">最新版本</div>
+                <div className="font-mono text-ink-800">
+                  {updateInfo?.latestVersion ? `v${updateInfo.latestVersion}` : "-"}
+                </div>
+              </div>
+            </div>
+            {updateInfo?.assetName && (
+              <div
+                className="font-mono text-[11px] text-ink-500 truncate"
+                title={updateInfo.assetName}
+                data-testid="update-asset-name"
+              >
+                {updateInfo.assetName}
+              </div>
+            )}
+            {updateInfo?.error && (
+              <div className="text-[11px] text-red-500" data-testid="update-error">
+                {updateInfo.error}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Button
+                size="small"
+                type="primary"
+                icon={<RefreshCw className="w-3.5 h-3.5" />}
+                loading={updateBusy}
+                onClick={() => void onCheckUpdate()}
+                data-testid="check-updates"
+              >
+                检查更新
+              </Button>
+              <Button
+                size="small"
+                icon={<Download className="w-3.5 h-3.5" />}
+                loading={updateInstallBusy}
+                disabled={!updateInfo}
+                onClick={() => void onInstallUpdate()}
+                data-testid="install-update"
+              >
+                {updateInfo?.canAutoInstall ? "下载并安装" : "下载最新版本"}
+              </Button>
+              <Button
+                size="small"
+                type="text"
+                icon={<ExternalLink className="w-3.5 h-3.5" />}
+                onClick={() => void onOpenRelease()}
+                data-testid="open-release-page"
+              >
+                Release
+              </Button>
+            </div>
+            <div className="text-[11px] text-ink-500 leading-relaxed">
+              桌面端更新会保留本机数据目录；Android / TV 侧载更新默认保留 app 数据。
+              只有 TV 一键安装脚本的首次安装模式会清理旧缓存。
             </div>
           </div>
         </section>

@@ -10,8 +10,19 @@ const {
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
 const http = require("node:http");
+const https = require("node:https");
 const fs = require("node:fs");
 const os = require("node:os");
+
+let autoUpdater = null;
+try {
+  ({ autoUpdater } = require("electron-updater"));
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowPrerelease = false;
+} catch (e) {
+  console.warn("[updates] electron-updater unavailable:", e?.message ?? e);
+}
 
 const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
@@ -20,6 +31,10 @@ const LOCAL_BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
 const PUBLIC_BACKEND_HOST =
   normalizeHttpBase(process.env.ECHO_PUBLIC_BACKEND_BASE) ||
   "https://echodesk.yoliyoli.uk";
+const RELEASE_OWNER = "yoligehude14753";
+const RELEASE_REPO = "echo-demo";
+const RELEASES_URL = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest`;
+const RELEASE_API_URL = `https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest`;
 const FORCE_LOCAL_BACKEND = process.env.ECHO_FORCE_LOCAL_BACKEND === "1";
 const PUBLIC_DEMO_MODE =
   process.env.ECHO_PUBLIC_DEMO === "1" || (!IS_DEV && !FORCE_LOCAL_BACKEND);
@@ -63,6 +78,11 @@ let pythonResolved = null; // { python: string|null, searched: string[] }
 // renderer 启动慢于 backend：early status 缓存到 lastStatus，等 did-finish-load 后 replay
 let lastStatus = null;
 let rendererReady = false;
+let lastUpdateStatus = {
+  status: "idle",
+  currentVersion: app.getVersion(),
+  releaseUrl: RELEASES_URL,
+};
 
 // 主进程未捕获异常不弹 fatal dialog；UI 应该自己感知 backend 状态
 process.on("uncaughtException", (err) => {
@@ -80,6 +100,169 @@ function normalizeHttpBase(raw) {
   const value = String(raw || "").trim().replace(/\/+$/, "");
   if (!value) return null;
   return /^https?:\/\//i.test(value) ? value : `http://${value}`;
+}
+
+function normalizeVersion(raw) {
+  return String(raw || "").trim().replace(/^v/i, "");
+}
+
+function compareVersions(a, b) {
+  const aa = normalizeVersion(a).split(".").map((x) => parseInt(x, 10) || 0);
+  const bb = normalizeVersion(b).split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(aa.length, bb.length); i += 1) {
+    const av = aa[i] || 0;
+    const bv = bb[i] || 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
+}
+
+function preferredReleaseAsset(assets) {
+  const names = (assets || []).map((asset) => asset.name || "");
+  const patterns =
+    process.platform === "darwin"
+      ? [/arm64\.dmg$/i, /arm64-mac\.zip$/i, /\.dmg$/i]
+      : process.platform === "win32"
+        ? [/Setup\.[\d.]+\.exe$/i, /\.exe$/i]
+        : [/\.AppImage$/i, /\.deb$/i];
+  for (const pattern of patterns) {
+    const name = names.find((n) => pattern.test(n));
+    if (name) return (assets || []).find((asset) => asset.name === name) || null;
+  }
+  return (assets || [])[0] || null;
+}
+
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: {
+          "Accept": "application/vnd.github+json",
+          "User-Agent": `EchoDesk/${app.getVersion()}`,
+        },
+        timeout: 8000,
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body));
+          } catch (e) {
+            reject(e);
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy(new Error("request timeout"));
+    });
+  });
+}
+
+async function fetchLatestReleaseStatus(base = {}) {
+  const release = await fetchJson(RELEASE_API_URL);
+  const latestVersion = normalizeVersion(release.tag_name || release.name || "");
+  const currentVersion = app.getVersion();
+  const assets = Array.isArray(release.assets)
+    ? release.assets.map((asset) => ({
+        name: asset.name,
+        size: asset.size,
+        url: asset.browser_download_url,
+      }))
+    : [];
+  const preferredAsset = preferredReleaseAsset(assets);
+  return {
+    ...base,
+    status: base.status || "checked",
+    currentVersion,
+    latestVersion,
+    updateAvailable: latestVersion
+      ? compareVersions(latestVersion, currentVersion) > 0
+      : false,
+    releaseName: release.name || release.tag_name || "",
+    releaseUrl: release.html_url || RELEASES_URL,
+    assetName: preferredAsset?.name || null,
+    assetUrl: preferredAsset?.url || null,
+    canAutoInstall: !!base.canAutoInstall,
+  };
+}
+
+function emitUpdateStatus(payload) {
+  lastUpdateStatus = {
+    ...lastUpdateStatus,
+    ...payload,
+    currentVersion: app.getVersion(),
+    releaseUrl: payload.releaseUrl || lastUpdateStatus.releaseUrl || RELEASES_URL,
+  };
+  log(`[updates] status -> ${JSON.stringify(lastUpdateStatus)}`);
+  if (mainWindow && !mainWindow.isDestroyed() && rendererReady) {
+    try {
+      mainWindow.webContents.send("updates:status", lastUpdateStatus);
+    } catch (e) {
+      log(`[updates] emit failed: ${e.message}`);
+    }
+  }
+}
+
+if (autoUpdater) {
+  autoUpdater.setFeedURL({
+    provider: "github",
+    owner: RELEASE_OWNER,
+    repo: RELEASE_REPO,
+    releaseType: "release",
+  });
+  autoUpdater.on("checking-for-update", () =>
+    emitUpdateStatus({ status: "checking", canAutoInstall: !IS_DEV }),
+  );
+  autoUpdater.on("update-available", (info) =>
+    emitUpdateStatus({
+      status: "available",
+      latestVersion: normalizeVersion(info.version),
+      updateAvailable: true,
+      releaseName: info.releaseName || `EchoDesk v${info.version}`,
+      releaseUrl: RELEASES_URL,
+      canAutoInstall: !IS_DEV,
+    }),
+  );
+  autoUpdater.on("update-not-available", (info) =>
+    emitUpdateStatus({
+      status: "current",
+      latestVersion: normalizeVersion(info.version),
+      updateAvailable: false,
+      canAutoInstall: !IS_DEV,
+    }),
+  );
+  autoUpdater.on("download-progress", (progress) =>
+    emitUpdateStatus({
+      status: "downloading",
+      percent: Math.round(progress.percent || 0),
+      canAutoInstall: true,
+    }),
+  );
+  autoUpdater.on("update-downloaded", (info) =>
+    emitUpdateStatus({
+      status: "downloaded",
+      latestVersion: normalizeVersion(info.version),
+      updateAvailable: true,
+      canAutoInstall: true,
+    }),
+  );
+  autoUpdater.on("error", (err) =>
+    emitUpdateStatus({
+      status: "error",
+      error: err?.message || String(err),
+      canAutoInstall: false,
+    }),
+  );
 }
 
 function firstLanAddress() {
@@ -540,6 +723,13 @@ function createWindow() {
         log(`[backend] replay failed: ${e.message}`);
       }
     }
+    if (lastUpdateStatus) {
+      try {
+        mainWindow.webContents.send("updates:status", lastUpdateStatus);
+      } catch (e) {
+        log(`[updates] replay failed: ${e.message}`);
+      }
+    }
   });
 
   mainWindow.on("closed", () => {
@@ -563,6 +753,92 @@ function createWindow() {
 
 ipcMain.handle("echo:backend-host", () => BACKEND_HOST);
 ipcMain.handle("echo:share-backend-host", () => shareBackendHost());
+
+ipcMain.handle("shell:open-external", async (_event, url) => {
+  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+    throw new Error("http(s) url required");
+  }
+  await shell.openExternal(url);
+  return { ok: true };
+});
+
+ipcMain.handle("updates:check", async () => {
+  emitUpdateStatus({ status: "checking" });
+  let fallback;
+  try {
+    fallback = await fetchLatestReleaseStatus({
+      status: "checked",
+      canAutoInstall: false,
+    });
+  } catch (e) {
+    fallback = {
+      status: "error",
+      currentVersion: app.getVersion(),
+      latestVersion: null,
+      updateAvailable: false,
+      releaseUrl: RELEASES_URL,
+      assetName: null,
+      assetUrl: null,
+      canAutoInstall: false,
+      error: e?.message || String(e),
+    };
+  }
+  if (!autoUpdater || IS_DEV) {
+    emitUpdateStatus(fallback);
+    return fallback;
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    const info = result?.updateInfo;
+    const latestVersion = normalizeVersion(info?.version || fallback.latestVersion);
+    const merged = {
+      ...fallback,
+      status: compareVersions(latestVersion, app.getVersion()) > 0
+        ? "available"
+        : "current",
+      latestVersion,
+      updateAvailable: compareVersions(latestVersion, app.getVersion()) > 0,
+      canAutoInstall: compareVersions(latestVersion, app.getVersion()) > 0,
+    };
+    emitUpdateStatus(merged);
+    return merged;
+  } catch (e) {
+    const merged = {
+      ...fallback,
+      status: fallback.updateAvailable ? "available" : "checked",
+      error: e?.message || String(e),
+      canAutoInstall: false,
+    };
+    emitUpdateStatus(merged);
+    return merged;
+  }
+});
+
+ipcMain.handle("updates:download-and-install", async () => {
+  if (!autoUpdater || IS_DEV) {
+    await shell.openExternal(RELEASES_URL);
+    return { ok: false, reason: "manual-release-page", releaseUrl: RELEASES_URL };
+  }
+  emitUpdateStatus({ status: "downloading", percent: 0, canAutoInstall: true });
+  try {
+    await autoUpdater.downloadUpdate();
+    emitUpdateStatus({ status: "installing", canAutoInstall: true });
+    autoUpdater.quitAndInstall(false, true);
+    return { ok: true };
+  } catch (e) {
+    emitUpdateStatus({
+      status: "error",
+      error: e?.message || String(e),
+      canAutoInstall: false,
+    });
+    throw e instanceof Error ? e : new Error(String(e));
+  }
+});
+
+ipcMain.handle("updates:open-release", async () => {
+  await shell.openExternal(RELEASES_URL);
+  return { ok: true, releaseUrl: RELEASES_URL };
+});
 
 // ---------- 麦克风权限 IPC（P3.5） ----------
 //

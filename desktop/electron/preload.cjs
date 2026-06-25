@@ -22,6 +22,18 @@ contextBridge.exposeInMainWorld("echo", {
   // degraded UI 上"重启 backend"按钮触发；主进程清 backoff + 重新 spawn
   manualRestartBackend: () => ipcRenderer.invoke("backend:manual-restart"),
 
+  // 更新检查：桌面打包版走 electron-updater；dev/浏览器/Android 由前端走 GitHub
+  // Release fallback。installUpdate 在不能静默安装的平台会打开 release 页面。
+  checkForUpdates: () => ipcRenderer.invoke("updates:check"),
+  installUpdate: () => ipcRenderer.invoke("updates:download-and-install"),
+  openReleasePage: () => ipcRenderer.invoke("updates:open-release"),
+  openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
+  onUpdateStatus: (cb) => {
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on("updates:status", handler);
+    return () => ipcRenderer.removeListener("updates:status", handler);
+  },
+
   // 麦克风权限（P3.5）
   // - getMicStatus: macOS systemPreferences.getMediaAccessStatus("microphone")
   //   返回 'not-determined'|'granted'|'denied'|'restricted'|'unknown'（非 mac → 'unknown'）

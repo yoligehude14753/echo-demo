@@ -45,9 +45,44 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 ### 计划中
 
 - P3.6 应用图标 + dmg 背景刷一刷
-- P3.7 自动更新检查（仅检查 latest release，不自动下载）
 - P4.2 keychain 集成（API key 不再以明文落 user.json）
 - P4.3 macOS Universal Binary（arm64 + x64 合并）
+
+---
+
+## [0.2.11] – 2026-06-25
+
+更新机制与分发 hotfix：补齐用户主动检查更新入口，并为后续桌面端自动覆盖安装
+生成所需的 GitHub Release updater 元数据。
+
+### 新增
+
+- 设置页新增「更新」区域：显示当前版本、GitHub Release 最新版本、匹配当前平台的
+  安装资产，并提供「检查更新 / 下载最新版本 / Release」入口。
+- macOS / Windows / Linux 桌面端接入 `electron-updater`：
+  - 打包版可从 GitHub Release 检查新版本；
+  - 发现新版本后可下载并安装；
+  - 更新安装保留用户本机数据目录，不清 `~/.echodesk`。
+- Android / TV 端复用同一个检查入口：不能静默安装 APK 时打开对应 APK 或 TV 一键包下载页。
+- electron-builder 增加 GitHub `publish` 配置，后续 release 会带 `latest*.yml`
+  元数据供桌面自动更新使用。
+
+### 修复
+
+- README / INSTALL 下载表同步列出 macOS、Windows、Linux、Android、TV 和一键包，
+  避免用户只看到 DMG。
+- TV 一键安装文案区分“首次安装清缓存”和“升级保留数据”，减少误以为所有升级都会清库。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.11`。
+- Android / TV `versionCode=211`、`versionName=0.2.11`。
+
+### 已知限制
+
+- 已安装的 `0.2.10` 客户端本身没有 updater 代码，不能自己弹出 0.2.11；
+  需要用户手动安装一次 0.2.11。之后的桌面版本可走应用内更新。
+- Android / TV 侧载 APK 受系统限制，不能无提示静默替换；会进入系统安装确认流程。
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "EchoDesk public demo desktop client",
   "author": "EchoDesk <support@yoliyoli.uk>",
   "homepage": "https://github.com/yoligehude14753/echo-demo",
@@ -37,6 +37,7 @@
     "@capacitor/core": "^8.4.0",
     "@types/qrcode": "^1.5.6",
     "antd": "^5.19.4",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.395.0",
     "mammoth": "^1.12.0",
     "qrcode": "^1.5.4",
@@ -76,6 +77,14 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "yoligehude14753",
+        "repo": "echo-demo",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "dist/**",
       "electron/**",
@@ -90,6 +99,7 @@
       ]
     },
     "win": {
+      "artifactName": "EchoDesk.Setup.${version}.${ext}",
       "target": [
         {
           "target": "nsis",

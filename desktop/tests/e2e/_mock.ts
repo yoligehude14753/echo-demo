@@ -158,14 +158,57 @@ export async function installEchoMock(
       if (path.startsWith("/healthz")) {
         return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
+      if (path === "/admin/settings/remote" || path === "/api/admin/settings/remote") {
+        return new Response(
+          JSON.stringify({
+            config_path: "/Users/test/.echodesk/config.json",
+            fields: [
+              {
+                key: "llm_main_base_url",
+                value: "https://yunwu.ai/v1",
+                sensitive: false,
+                source: "default",
+              },
+              { key: "yunwu_open_key", value: "", sensitive: true, source: "default" },
+              {
+                key: "llm_fast_base_url",
+                value: "http://100.76.3.59:7860/v1",
+                sensitive: false,
+                source: "default",
+              },
+              {
+                key: "stt_firered_url",
+                value: "http://100.76.3.59:8090",
+                sensitive: false,
+                source: "default",
+              },
+              {
+                key: "tts_qwen3_url",
+                value: "http://100.76.3.59:8094",
+                sensitive: false,
+                source: "default",
+              },
+              { key: "tts_qwen3_voice", value: "aiden", sensitive: false, source: "default" },
+              { key: "tavily_api_key", value: "", sensitive: true, source: "default" },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       // P2.5 管理 API：data-dir
       if (path === "/admin/data-dir" || path === "/api/admin/data-dir") {
         return new Response(
           JSON.stringify({
             path: "/Users/test/.echodesk",
             exists: true,
-            subdirs: { logs: true, storage: true, rag_index: true },
-            db_path: "/Users/test/.echodesk/echodesk.db",
+            size_bytes: 4096,
+            breakdown: {
+              db: 1024,
+              storage: 0,
+              rag_index: 2048,
+              logs: 1024,
+              skill_build: 0,
+            },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
