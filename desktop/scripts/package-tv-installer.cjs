@@ -15,7 +15,7 @@ const ROOT = join(__dirname, "..");
 const RELEASE_DIR = join(ROOT, "release");
 const { version } = require(join(ROOT, "package.json"));
 
-const SOURCE_APK = join(RELEASE_DIR, `EchoDesk-${version}-android-tv-debug.apk`);
+const SOURCE_APK = join(RELEASE_DIR, `EchoDesk-${version}-android-tv.apk`);
 const SMART_TV_APK_NAME = `EchoDesk-${version}-smart-tv.apk`;
 const SMART_TV_APK = join(RELEASE_DIR, SMART_TV_APK_NAME);
 const BUNDLE_NAME = `EchoDesk-${version}-smart-tv-oneclick`;

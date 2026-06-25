@@ -402,7 +402,15 @@ function healthcheckOnce() {
         resolve(ok);
       }
     };
-    const req = http.get(`${BACKEND_HOST}/healthz`, { timeout: HEALTH_TIMEOUT_MS }, (res) => {
+    let url;
+    try {
+      url = new URL("/healthz", BACKEND_HOST);
+    } catch {
+      done(false);
+      return;
+    }
+    const transport = url.protocol === "https:" ? https : http;
+    const req = transport.get(url, { timeout: HEALTH_TIMEOUT_MS }, (res) => {
       const ok = res.statusCode === 200;
       res.resume();
       done(ok);

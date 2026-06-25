@@ -50,6 +50,31 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.19] – 2026-06-26
+
+Public demo 发布补丁：修正客户端状态误报、安装包校验和 Android / TV APK 的对外分发形态。
+
+### 修复
+
+- Electron public demo 健康检查现在按 backend URL 协议选择 `http` / `https`，不再把
+  `https://echodesk.yoliyoli.uk` 误判为 backend unhealthy。
+- About 弹窗底部文案改为「Public demo · 客户端不内置模型密钥」，避免把公网 demo
+  误描述成“数据不出机”。
+- Android instrumentation 占位测试不再硬编码 `com.echodesk.app`，避免 TV 包名
+  `com.echodesk.tv` 跑测试时失败。
+- Android / TV 打包脚本改为生成非 debuggable 的 release variant APK，并在本机用 demo
+  signing key 签名；正式客户分发仍建议换私有 release keystore。
+- Release 校验文件改为 flat asset 文件名，用户在下载目录直接执行
+  `shasum -a 256 -c SHA256SUMS-0.2.19.txt` 即可校验。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.19`。
+- Android / TV `versionCode=219`、`versionName=0.2.19`。
+- backend 默认 `app_version=0.2.19`。
+
+---
+
 ## [0.2.18] – 2026-06-26
 
 Public demo 数据边界与 UI 一致性修复：解决新装/升级后误继承共享历史、远程 backend

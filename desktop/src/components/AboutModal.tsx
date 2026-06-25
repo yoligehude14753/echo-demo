@@ -163,7 +163,7 @@ export default function AboutModal({ open, onClose }: Props): JSX.Element {
         </ul>
 
         <div className="text-[10px] text-ink-400 text-center pt-1">
-          © 2026 EchoDesk · Proprietary · 本地优先 · 数据不出机
+          © 2026 EchoDesk · Public demo · 客户端不内置模型密钥
         </div>
       </div>
     </Modal>

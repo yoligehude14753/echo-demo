@@ -43,6 +43,8 @@ test("点 v 徽章 → 弹出关于对话框，前后端版本可见", async ({ 
     "href",
     "https://github.com/yoligehude14753/echo-demo/blob/main/docs/INSTALL.md",
   );
+  await expect(body).toContainText("客户端不内置模型密钥");
+  await expect(body).not.toContainText("数据不出机");
 
   // 关闭：用键盘路径验证关闭按钮，兼容 TV/遥控器 Enter 操作。
   const closeButton = page.locator(".ant-modal-close").first();

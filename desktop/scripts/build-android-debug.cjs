@@ -13,12 +13,12 @@ const APK_PATH = join(
   "build",
   "outputs",
   "apk",
-  "debug",
-  "app-debug.apk",
+  "release",
+  "app-release-unsigned.apk",
 );
 const { version } = require(join(ROOT, "package.json"));
 const RELEASE_DIR = join(ROOT, "release");
-const TV_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android-tv-debug.apk`);
+const TV_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android-tv.apk`);
 const ANDROID_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android.apk`);
 const ANDROID_APP_ID = "com.echodesk.app";
 const TV_APP_ID = "com.echodesk.tv";
@@ -57,6 +57,78 @@ function run(command, args, options = {}) {
   }
 }
 
+function resolveBuildTool(name) {
+  const candidates = [
+    join(androidHome, "build-tools", "36.1.0", name),
+    join(androidHome, "build-tools", "36.0.0", name),
+    join(androidHome, "build-tools", "35.0.0", name),
+    join(androidHome, "build-tools", "34.0.0", name),
+  ];
+  const tool = firstExisting(candidates);
+  if (!tool) {
+    console.error(`Android build failed: ${name} not found in Android SDK build-tools.`);
+    process.exit(1);
+  }
+  return tool;
+}
+
+function ensureDemoKeystore(env) {
+  const keytool = join(env.JAVA_HOME, "bin", "keytool");
+  const keystore = process.env.ECHODESK_ANDROID_KEYSTORE || join(homedir(), ".android", "debug.keystore");
+  const alias = process.env.ECHODESK_ANDROID_KEY_ALIAS || "androiddebugkey";
+  const storePass = process.env.ECHODESK_ANDROID_KEYSTORE_PASSWORD || "android";
+  const keyPass = process.env.ECHODESK_ANDROID_KEY_PASSWORD || storePass;
+  mkdirSync(join(homedir(), ".android"), { recursive: true });
+  if (!existsSync(keystore)) {
+    run(keytool, [
+      "-genkeypair",
+      "-v",
+      "-keystore",
+      keystore,
+      "-storepass",
+      storePass,
+      "-keypass",
+      keyPass,
+      "-alias",
+      alias,
+      "-keyalg",
+      "RSA",
+      "-keysize",
+      "2048",
+      "-validity",
+      "10000",
+      "-dname",
+      "CN=EchoDesk Demo,O=EchoDesk,C=CN",
+    ], { env });
+  }
+  return { keystore, alias, storePass, keyPass };
+}
+
+function signReleaseApk(appId, outputPath, env) {
+  const zipalign = resolveBuildTool("zipalign");
+  const apksigner = resolveBuildTool("apksigner");
+  const aligned = join(RELEASE_DIR, `.tmp-${appId}-aligned.apk`);
+  const signed = join(RELEASE_DIR, `.tmp-${appId}-signed.apk`);
+  const signing = ensureDemoKeystore(env);
+  run(zipalign, ["-p", "-f", "4", APK_PATH, aligned], { env });
+  run(apksigner, [
+    "sign",
+    "--ks",
+    signing.keystore,
+    "--ks-key-alias",
+    signing.alias,
+    "--ks-pass",
+    `pass:${signing.storePass}`,
+    "--key-pass",
+    `pass:${signing.keyPass}`,
+    "--out",
+    signed,
+    aligned,
+  ], { env });
+  run(apksigner, ["verify", "--verbose", signed], { env });
+  copyFileSync(signed, outputPath);
+}
+
 const javaHome = resolveJavaHome();
 const androidHome = resolveAndroidHome();
 
@@ -92,18 +164,18 @@ run("npm", ["run", "build"], { env });
 run("npx", ["cap", "sync", "android"], { env });
 mkdirSync(RELEASE_DIR, { recursive: true });
 
-run("./gradlew", ["clean", "assembleDebug", `-PechoApplicationId=${ANDROID_APP_ID}`], {
+run("./gradlew", ["clean", "assembleRelease", `-PechoApplicationId=${ANDROID_APP_ID}`], {
   cwd: ANDROID_DIR,
   env,
 });
 console.log(`[android] Android APK ready: ${APK_PATH}`);
-copyFileSync(APK_PATH, ANDROID_APK_PATH);
+signReleaseApk(ANDROID_APP_ID, ANDROID_APK_PATH, env);
 console.log(`[android] Android APK copied: ${ANDROID_APK_PATH}`);
 
-run("./gradlew", ["clean", "assembleDebug", `-PechoApplicationId=${TV_APP_ID}`], {
+run("./gradlew", ["clean", "assembleRelease", `-PechoApplicationId=${TV_APP_ID}`], {
   cwd: ANDROID_DIR,
   env,
 });
 console.log(`[android] TV APK ready: ${APK_PATH}`);
-copyFileSync(APK_PATH, TV_APK_PATH);
+signReleaseApk(TV_APP_ID, TV_APK_PATH, env);
 console.log(`[android] TV-compatible APK copied: ${TV_APK_PATH}`);
