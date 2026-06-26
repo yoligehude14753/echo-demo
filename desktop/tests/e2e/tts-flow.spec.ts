@@ -96,7 +96,9 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
     }),
   );
 
-  const mock = await installEchoMock(page, { skipPaths: ["/tts/diag"] });
+  const mock = await installEchoMock(page, {
+    skipPaths: ["/tts/diag", "/tts/speak"],
+  });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   // 启动时 toggle 是绿色 ok
