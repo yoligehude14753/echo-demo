@@ -204,6 +204,28 @@ export async function installEchoMock(
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      if (path === "/tts/speak" || path === "/api/tts/speak") {
+        return new Response(new Uint8Array(16000), {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+      }
+      if (path === "/rag/ask" || path === "/api/rag/ask") {
+        return new Response(
+          JSON.stringify({
+            answer: "Echo 已收到，这是 TV 问答文本回复。",
+            citations: [],
+            arbitration: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (path === "/chat" || path === "/api/chat") {
+        return new Response(
+          JSON.stringify({ answer: "Echo 已收到，这是 TV 闲聊文本回复。" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (path === "/meetings/current" || path === "/api/meetings/current") {
         return new Response(
           JSON.stringify({

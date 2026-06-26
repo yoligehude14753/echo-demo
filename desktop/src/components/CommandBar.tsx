@@ -104,6 +104,8 @@ export default function CommandBar(): JSX.Element {
   const commandPlaceholder = isTvLikeViewport()
     ? "输入指令，如 @总结会议"
     : "拖入文件入库 · @生成 PPT / @查 · Shift+Enter 换行";
+  const tvMode = isTvLikeViewport();
+  const quickCommands = ["@总结会议", "@chat 现在状态", "@查 当前会议要点"];
 
   // M_minutes_refactor：MinutesView「执行待办」按钮通过 store.prefillCommandBar
   // 把 suggested_command 一键填入；只 setText + focus，不自动 onSubmit 防误触。
@@ -230,6 +232,31 @@ export default function CommandBar(): JSX.Element {
     return false;
   }
 
+  async function submitValue(
+    value: string,
+    activePrefillMeta: CommandBarPrefillMeta | null,
+    clearPendingAfterSubmit: boolean,
+  ): Promise<void> {
+    if (!value) return;
+    setBusy(true);
+    try {
+      const r = await routeIntent(value, currentMeetingId);
+      setLastIntent(r);
+      await dispatch(r, value, activePrefillMeta);
+      setText("");
+      setPrefillMeta(null);
+      // 附件已被发出，清空 pendingDocs（后端 RAG 检索复用 doc_id）
+      if (clearPendingAfterSubmit) {
+        setPendingDocs([]);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      message.error(`发送失败：${msg}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onSubmit(): Promise<void> {
     if (busy || uploading > 0) return;
     const trimmed = text.trim();
@@ -239,25 +266,7 @@ export default function CommandBar(): JSX.Element {
         : pendingDocs.length > 0
           ? `请基于附件回答（${pendingDocs.map((d) => d.filename).join("、")}）`
           : "";
-    if (!value) return;
-    setBusy(true);
-    const activePrefillMeta = prefillMeta;
-    try {
-      const r = await routeIntent(value, currentMeetingId);
-      setLastIntent(r);
-      await dispatch(r, value, activePrefillMeta);
-      setText("");
-      setPrefillMeta(null);
-      // 附件已被发出，清空 pendingDocs（后端 RAG 检索复用 doc_id）
-      if (trimmed.length === 0 && pendingDocs.length > 0) {
-        setPendingDocs([]);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      message.error(`发送失败：${msg}`);
-    } finally {
-      setBusy(false);
-    }
+    await submitValue(value, prefillMeta, trimmed.length === 0 && pendingDocs.length > 0);
   }
 
   async function dispatch(
@@ -324,6 +333,12 @@ export default function CommandBar(): JSX.Element {
           message.warning("text 为空");
           return;
         }
+        applyEvent({
+          type: "rag.query",
+          seq: 0,
+          ts: new Date().toISOString(),
+          payload: { question },
+        });
         message.info("已派发：闲聊中（不查知识库）");
         void chatAsk(question)
           .then((answer) => {
@@ -368,6 +383,12 @@ export default function CommandBar(): JSX.Element {
           message.warning("question 为空");
           return;
         }
+        applyEvent({
+          type: "rag.query",
+          seq: 0,
+          ts: new Date().toISOString(),
+          payload: { question },
+        });
         message.info("已派发：检索中（后台进行中）");
 
         // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
@@ -485,6 +506,30 @@ export default function CommandBar(): JSX.Element {
         </div>
       )}
 
+      {tvMode && (
+        <div
+          className="echodesk-tv-quick-commands flex flex-wrap items-center gap-2 mb-2"
+          data-testid="tv-quick-commands"
+        >
+          {quickCommands.map((cmd) => (
+            <button
+              key={cmd}
+              type="button"
+              className="px-3 py-1.5 rounded-md border border-paper-300 bg-white text-[13px] text-ink-700 hover:border-accent hover:text-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              onClick={() => {
+                if (busy || uploading > 0) return;
+                setPrefillMeta(null);
+                void submitValue(cmd, null, false);
+              }}
+              disabled={busy || uploading > 0}
+              data-tv-clickable
+            >
+              {cmd}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="echodesk-command-row flex items-center gap-2">
         <Wand2 className="echodesk-command-leading-icon w-4 h-4 text-ink-500 shrink-0" />
         <Input.TextArea
@@ -502,7 +547,12 @@ export default function CommandBar(): JSX.Element {
           }}
           onPaste={onPaste}
           placeholder={commandPlaceholder}
-          autoSize={{ minRows: 1, maxRows: 4 }}
+          rows={1}
+          style={{
+            minHeight: "44px",
+            height: "44px",
+            maxHeight: "44px",
+          }}
           disabled={busy}
           className="echodesk-command-textarea !rounded-md"
           data-testid="command-textarea"

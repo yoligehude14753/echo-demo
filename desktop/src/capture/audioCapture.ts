@@ -21,7 +21,7 @@ export type CaptureChunkHandler = (wav: Blob) => void;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
 
 const RETRY_MS = 5_000;
-const TV_SILENT_INPUT_GRACE_MS = 12_000;
+const TV_SILENT_INPUT_GRACE_MS = 30_000;
 const TV_SILENT_PEAK_THRESHOLD = 0.000002;
 
 interface EchoAudioChunkEvent {
@@ -72,6 +72,12 @@ function isNativeAndroidRuntime(): boolean {
 
 function shouldUseNativeAudioRecord(): boolean {
   return isNativeAndroidRuntime();
+}
+
+function nativeSilentProbeSummary(message: string): string | null {
+  const summary = message.match(/Probe summary:\s*([^.]*)/i)?.[1]?.trim();
+  if (!summary) return null;
+  return summary;
 }
 
 function blobFromBase64Wav(base64: string): Blob {
@@ -225,15 +231,6 @@ class AudioCapture {
   private observeNativeInputHealth(event: EchoAudioChunkEvent): boolean {
     const rms = event.rms ?? 0;
     const peak = event.peak ?? 0;
-    if (rms === 0 && peak === 0) {
-      this.setState(
-        "error",
-        `请接入 USB/蓝牙会议麦克风；当前电视没有提供有效输入（${event.source ?? "unknown"} rms=0 peak=0）`,
-      );
-      this.teardownNative();
-      return false;
-    }
-
     if (rms > NATIVE_SILENT_RMS_THRESHOLD || peak > NATIVE_SILENT_PEAK_THRESHOLD) {
       this.silentInputSinceMs = null;
       this.nativeSilentChunks = 0;
@@ -246,19 +243,13 @@ class AudioCapture {
     const now = Date.now();
     this.silentInputSinceMs ??= now;
     this.nativeSilentChunks += 1;
-    if (
-      this.nativeSilentChunks < 2 &&
-      now - this.silentInputSinceMs < TV_SILENT_INPUT_GRACE_MS
-    ) {
-      return false;
+    if (this.state !== "capturing") {
+      this.setState("capturing");
     }
-
-    this.setState(
-      "error",
-      `请接入 USB/蓝牙会议麦克风；当前电视没有提供有效输入（${event.source ?? "unknown"} rms=${Math.round(rms)} peak=${Math.round(peak)}）`,
-    );
-    this.teardownNative();
-    return false;
+    // 会议麦克风在 Android TV 上经常有启动静音窗，甚至需要用户开口后才送
+    // 非零 PCM。不要把"当前 chunk 静音"等同于"麦克风不可用"；继续上传给
+    // 后端门控/STT 处理，同时保持 UI 为采集中，避免误导用户以为权限坏了。
+    return true;
   }
 
   private flush(force = false): void {
@@ -358,15 +349,19 @@ class AudioCapture {
         chunkMs: 6000,
       });
       this.nativeActive = true;
+      this.setState("capturing");
     } catch (e) {
       this.teardownNative();
       const msg = e instanceof Error ? e.message : String(e);
       const noUsableInput =
         /silent PCM|every source returned silent|microphone sources/i.test(msg);
+      const probeSummary = nativeSilentProbeSummary(msg);
       this.setState(
         "error",
         noUsableInput
-          ? "电视没有提供有效麦克风输入；请接入 USB/蓝牙会议麦克风后重新打开 EchoDesk"
+          ? probeSummary
+            ? `电视没有提供有效麦克风输入（${probeSummary}）；请接入 USB/蓝牙会议麦克风后重新打开 EchoDesk`
+            : "电视没有提供有效麦克风输入；请接入 USB/蓝牙会议麦克风后重新打开 EchoDesk"
           : `Android 原生录音不可用：${msg}。请接入 USB/蓝牙会议麦克风`,
       );
       if (!noUsableInput) {

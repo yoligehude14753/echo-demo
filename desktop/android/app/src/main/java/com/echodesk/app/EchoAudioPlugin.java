@@ -79,6 +79,7 @@ public class EchoAudioPlugin extends Plugin {
       AudioRecord next = null;
       String sourceName = "unknown";
       int selectedSampleRate = sampleRate;
+      StringBuilder probeSummary = new StringBuilder();
       for (int candidateRate : candidateSampleRates(sampleRate)) {
         for (int source : AUDIO_SOURCES) {
           next = buildRecorder(source, candidateRate);
@@ -100,18 +101,20 @@ public class EchoAudioPlugin extends Plugin {
                     + " rms=" + Math.round(probeStats.rms)
                     + " peak=" + probeStats.peak
             );
-            if (probeStats.peak > 0) {
-              sourceName = sourceToName(source);
-              selectedSampleRate = candidateRate;
-              break;
+            if (probeSummary.length() > 0) {
+              probeSummary.append("; ");
             }
-            try {
-              next.stop();
-            } catch (Throwable ignored) {
-            }
-            next.release();
-            next = null;
-            continue;
+            probeSummary
+                .append(sourceToName(source))
+                .append("@")
+                .append(candidateRate)
+                .append(" rms=")
+                .append(Math.round(probeStats.rms))
+                .append(" peak=")
+                .append(probeStats.peak);
+            sourceName = sourceToName(source);
+            selectedSampleRate = candidateRate;
+            break;
           }
           next.release();
           next = null;
@@ -120,7 +123,10 @@ public class EchoAudioPlugin extends Plugin {
       }
 
       if (next == null) {
-        call.reject("Android AudioRecord opened microphone sources, but every source returned silent PCM. Please connect a USB/Bluetooth conference microphone or enable TV microphone access.");
+        String details = probeSummary.length() > 0
+            ? " Probe summary: " + probeSummary + "."
+            : "";
+        call.reject("Android AudioRecord opened microphone sources, but every source returned silent PCM." + details + " Please connect a USB/Bluetooth conference microphone or enable TV microphone access.");
         return;
       }
 

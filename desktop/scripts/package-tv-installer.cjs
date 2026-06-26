@@ -21,6 +21,8 @@ const SMART_TV_APK = join(RELEASE_DIR, SMART_TV_APK_NAME);
 const BUNDLE_NAME = `EchoDesk-${version}-smart-tv-oneclick`;
 const BUNDLE_DIR = join(RELEASE_DIR, BUNDLE_NAME);
 const BUNDLE_ZIP = join(RELEASE_DIR, `${BUNDLE_NAME}.zip`);
+const INSTALL_PAGE_URL =
+  process.env.ECHODESK_TV_INSTALL_URL || "http://10.10.12.117:18080/tv.html";
 
 function fail(message) {
   console.error(`[tv-package] ${message}`);
@@ -77,24 +79,26 @@ fi
 echo "[EchoDesk TV] adb=$ADB"
 echo "[EchoDesk TV] connecting to $TV_IP:5555 ..."
 "$ADB" connect "$TV_IP:5555" || true
+SERIAL="$TV_IP:5555"
+ADB_DEVICE=("$ADB" -s "$SERIAL")
 
 if [ "\${ECHODESK_TV_KEEP_DATA:-0}" != "1" ]; then
   echo "[EchoDesk TV] clearing old local WebView / app data ..."
-  "$ADB" shell am force-stop "$PKG" >/dev/null 2>&1 || true
-  "$ADB" shell pm clear "$PKG" >/dev/null 2>&1 || true
+  "\${ADB_DEVICE[@]}" shell am force-stop "$PKG" >/dev/null 2>&1 || true
+  "\${ADB_DEVICE[@]}" shell pm clear "$PKG" >/dev/null 2>&1 || true
   if [ "\${ECHODESK_TV_KEEP_LEGACY:-0}" != "1" ]; then
-    "$ADB" shell am force-stop "$LEGACY_PKG" >/dev/null 2>&1 || true
-    "$ADB" shell pm clear "$LEGACY_PKG" >/dev/null 2>&1 || true
-    "$ADB" shell pm uninstall "$LEGACY_PKG" >/dev/null 2>&1 || true
+    "\${ADB_DEVICE[@]}" shell am force-stop "$LEGACY_PKG" >/dev/null 2>&1 || true
+    "\${ADB_DEVICE[@]}" shell pm clear "$LEGACY_PKG" >/dev/null 2>&1 || true
+    "\${ADB_DEVICE[@]}" shell pm uninstall "$LEGACY_PKG" >/dev/null 2>&1 || true
   fi
 fi
 
 echo "[EchoDesk TV] installing $APK ..."
-"$ADB" install -r -d "$APK"
+"\${ADB_DEVICE[@]}" install -r -d "$APK"
 
-"$ADB" shell pm grant "$PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
-"$ADB" shell appops set "$PKG" RECORD_AUDIO allow >/dev/null 2>&1 || true
-"$ADB" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
+"\${ADB_DEVICE[@]}" shell pm grant "$PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
+"\${ADB_DEVICE[@]}" shell appops set "$PKG" RECORD_AUDIO allow >/dev/null 2>&1 || true
+"\${ADB_DEVICE[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
 
 echo
 echo "安装完成，已尝试自动打开 EchoDesk。"
@@ -139,24 +143,25 @@ if (-not $Adb) {
 Write-Host "[EchoDesk TV] adb=$Adb"
 Write-Host "[EchoDesk TV] connecting to $($TvIp):5555 ..."
 & $Adb connect "$($TvIp):5555"
+$Serial = "$($TvIp):5555"
 
 if ($env:ECHODESK_TV_KEEP_DATA -ne "1") {
   Write-Host "[EchoDesk TV] clearing old local WebView / app data ..."
-  & $Adb shell am force-stop $Pkg | Out-Null
-  & $Adb shell pm clear $Pkg | Out-Null
+  & $Adb -s $Serial shell am force-stop $Pkg | Out-Null
+  & $Adb -s $Serial shell pm clear $Pkg | Out-Null
   if ($env:ECHODESK_TV_KEEP_LEGACY -ne "1") {
-    & $Adb shell am force-stop $LegacyPkg | Out-Null
-    & $Adb shell pm clear $LegacyPkg | Out-Null
-    & $Adb shell pm uninstall $LegacyPkg | Out-Null
+    & $Adb -s $Serial shell am force-stop $LegacyPkg | Out-Null
+    & $Adb -s $Serial shell pm clear $LegacyPkg | Out-Null
+    & $Adb -s $Serial shell pm uninstall $LegacyPkg | Out-Null
   }
 }
 
 Write-Host "[EchoDesk TV] installing $Apk ..."
-& $Adb install -r -d "$Apk"
+& $Adb -s $Serial install -r -d "$Apk"
 
-$null = & $Adb shell pm grant $Pkg android.permission.RECORD_AUDIO
-$null = & $Adb shell appops set $Pkg RECORD_AUDIO allow
-$null = & $Adb shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1
+$null = & $Adb -s $Serial shell pm grant $Pkg android.permission.RECORD_AUDIO
+$null = & $Adb -s $Serial shell appops set $Pkg RECORD_AUDIO allow
+$null = & $Adb -s $Serial shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1
 
 Write-Host ""
 Write-Host "安装完成，已尝试自动打开 EchoDesk。"
@@ -199,6 +204,76 @@ writeFileSync(join(BUNDLE_DIR, "install-tv-macos.sh"), macInstaller, "utf-8");
 chmodSync(join(BUNDLE_DIR, "install-tv-macos.sh"), 0o755);
 writeFileSync(join(BUNDLE_DIR, "install-tv-windows.ps1"), winInstaller, "utf-8");
 writeFileSync(join(BUNDLE_DIR, "README-TV-INSTALL.txt"), readme, "utf-8");
+
+const tvInstallPage = `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EchoDesk TV 安装</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #f6f7f8;
+        color: #1f2937;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(880px, calc(100vw - 64px));
+        padding: 48px;
+        border: 1px solid #e5e7eb;
+        border-radius: 24px;
+        background: #fff;
+        box-shadow: 0 18px 60px rgba(15, 23, 42, 0.12);
+      }
+      h1 { margin: 0 0 10px; font-size: 44px; line-height: 1.1; }
+      p { margin: 0 0 28px; color: #6b7280; font-size: 22px; line-height: 1.5; }
+      a {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 320px;
+        min-height: 72px;
+        padding: 0 32px;
+        border-radius: 18px;
+        background: #0f9f77;
+        color: #fff;
+        font-size: 26px;
+        font-weight: 800;
+        text-decoration: none;
+      }
+      a:focus, a:hover { outline: 6px solid rgba(15, 159, 119, 0.22); }
+      code {
+        display: block;
+        margin-top: 24px;
+        padding: 18px 20px;
+        border-radius: 14px;
+        background: #f3f4f6;
+        color: #374151;
+        font-size: 20px;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>EchoDesk TV</h1>
+      <p>点击下面按钮下载最新版 TV 兼容 APK。安装时如果系统询问是否替换现有应用，选择替换。</p>
+      <a href="./${SMART_TV_APK_NAME}" autofocus>下载 TV APK v${version}</a>
+      <code>${INSTALL_PAGE_URL}</code>
+    </main>
+  </body>
+</html>
+`;
+writeFileSync(join(RELEASE_DIR, "tv.html"), tvInstallPage, "utf-8");
+writeFileSync(
+  join(RELEASE_DIR, "t"),
+  '<!doctype html><meta http-equiv="refresh" content="0; url=/tv.html"><a href="/tv.html">EchoDesk TV</a>\n',
+  "utf-8",
+);
 
 if (!run("zip", ["-qr", BUNDLE_ZIP, "."], { cwd: BUNDLE_DIR })) {
   fail("zip command failed while creating the TV one-click package.");

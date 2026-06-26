@@ -5,6 +5,35 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   await page.setViewportSize({ width: 960, height: 540 });
   await page.addInitScript(() => {
     window.localStorage.setItem("echodesk.forceTvUi", "1");
+    window.localStorage.setItem(
+      "echodesk.localCaptureState.v1",
+      JSON.stringify({
+        schema: 1,
+        appVersion: "0.2.19",
+        savedAt: "2026-06-01T00:00:00.000Z",
+        currentMeetingId: "old-local-meeting",
+        meetings: [
+          {
+            meeting_id: "old-local-meeting",
+            title: "不该继承的旧会议",
+            state: "ended",
+            segments: [],
+            speakers: [],
+            artifacts: [],
+          },
+        ],
+        ambientSegments: [
+          {
+            text: "不该继承的旧转写",
+            captured_at: "2026-06-01T00:00:00.000Z",
+            speaker_id: null,
+            speaker_label: null,
+            duration_ms: 1000,
+          },
+        ],
+        artifacts: [],
+      }),
+    );
     (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
       isNativePlatform: () => true,
     };
@@ -60,6 +89,10 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   await expect(page.getByTestId("pill-backend")).toContainText("backend 外部", {
     timeout: 10_000,
   });
+  await expect(page.getByText("不该继承的旧会议")).toHaveCount(0);
+  await expect(page.getByText("不该继承的旧转写")).toHaveCount(0);
+  await expect(page.getByText("EchoDesk 启动失败")).toHaveCount(0);
+  await expect(page.getByTestId("tv-quick-commands")).toBeVisible();
 
   const boxes = await page.evaluate(() => {
     const pick = (selector: string) => {
@@ -93,9 +126,10 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   expect(boxes.workspace?.height).toBeGreaterThanOrEqual(45);
   expect(boxes.workspace?.height).toBeLessThanOrEqual(47);
   expect(boxes.sider?.width ?? 0).toBe(0);
-  expect(boxes.transcript?.width).toBeGreaterThanOrEqual(638);
-  expect(boxes.output?.width).toBeGreaterThanOrEqual(318);
-  expect(boxes.output?.width).toBeLessThanOrEqual(322);
+  const expectedOutputWidth = boxes.viewportWidth * 0.26;
+  expect(boxes.transcript?.width).toBeGreaterThanOrEqual(700);
+  expect(boxes.output?.width).toBeGreaterThanOrEqual(expectedOutputWidth - 2);
+  expect(boxes.output?.width).toBeLessThanOrEqual(expectedOutputWidth + 2);
   expect(boxes.commandTextarea).toBeGreaterThanOrEqual(52);
   expect(boxes.brandSize).toBeGreaterThanOrEqual(19);
   expect(boxes.bubbleFontSize).toBeGreaterThanOrEqual(18);
@@ -118,4 +152,23 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   await expect(settingsButton).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("mobile-backend-base")).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  if (await page.getByTestId("mobile-backend-base").isVisible()) {
+    await page.locator(".ant-modal-close").last().click();
+  }
+  await expect(page.getByTestId("mobile-backend-base")).toBeHidden();
+
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        __echoIntentRouteMock?: { kind: string; confidence: number };
+      }
+    ).__echoIntentRouteMock = { kind: "chat", confidence: 0.92 };
+  });
+  await page.getByRole("button", { name: "@查 当前会议要点" }).click();
+  await expect(page.getByTestId("user-message")).toContainText("@查 当前会议要点");
+  await expect(page.getByTestId("assistant-message")).toContainText(
+    "Echo 已收到，这是 TV 问答文本回复。",
+  );
 });

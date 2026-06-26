@@ -39,6 +39,7 @@ interface DisplaySegment {
   text: string;
   captured_at: string;
   speaker_label: string | null;
+  role?: "speaker" | "user" | "assistant";
 }
 
 function ambientToDisplay(s: AmbientSegment): DisplaySegment {
@@ -89,7 +90,7 @@ export default function TranscriptStream(): JSX.Element {
     (meeting.state === "ended" || localOnlyAmbient) &&
     meeting.segments.length > 0;
 
-  const segs: DisplaySegment[] = useMemo(() => {
+  const baseSegs: DisplaySegment[] = useMemo(() => {
     if (showMeetingHistory && meeting) {
       return meeting.segments.map((s) =>
         meetingSegmentToDisplay(s, meeting.started_at),
@@ -98,6 +99,48 @@ export default function TranscriptStream(): JSX.Element {
     if (localOnlyAmbient) return localAmbient.map(ambientToDisplay);
     return ambient.map(ambientToDisplay);
   }, [showMeetingHistory, meeting, localOnlyAmbient, localAmbient, ambient]);
+
+  const dialogSegs: DisplaySegment[] = useMemo(() => {
+    const out: DisplaySegment[] = [];
+    for (const ev of events.slice(-80)) {
+      const payload = (ev.payload ?? {}) as {
+        question?: unknown;
+        answer?: unknown;
+      };
+      if (ev.type === "rag.query") {
+        const question =
+          typeof payload.question === "string" ? payload.question.trim() : "";
+        if (question) {
+          out.push({
+            text: question,
+            captured_at: ev.ts,
+            speaker_label: "user",
+            role: "user",
+          });
+        }
+      }
+      if (ev.type === "rag.answer.done" || ev.type === "chat.done") {
+        const answer =
+          typeof payload.answer === "string" ? payload.answer.trim() : "";
+        if (answer) {
+          out.push({
+            text: answer,
+            captured_at: ev.ts,
+            speaker_label: "assistant",
+            role: "assistant",
+          });
+        }
+      }
+    }
+    return out.slice(-20);
+  }, [events]);
+
+  const segs: DisplaySegment[] = useMemo(
+    () => [...baseSegs, ...dialogSegs].sort((a, b) =>
+      a.captured_at.localeCompare(b.captured_at),
+    ),
+    [baseSegs, dialogSegs],
+  );
 
   const speakerDisplayMap = useMemo(
     () => buildSpeakerDisplayMap(segs),
@@ -241,18 +284,25 @@ export default function TranscriptStream(): JSX.Element {
             t >= winStart &&
             (winEnd === null || t <= winEnd);
 
-          // 当前后端没有标 self 的字段 → 全部 ambient 一律视作"他人"靠左
-          // 未来若 segment.speaker_id === 用户自己的 voiceprint，把这里改成 true
-          const isSelf = false;
+          const isAssistant = s.role === "assistant";
+          const isSelf = s.role === "user";
 
           // 连续同说话人合并：只在第一条显示头像，气泡间距收紧
           const prev = idx > 0 ? segs[idx - 1] : null;
           const sameSpeakerAsPrev =
-            prev !== null && prev.speaker_label === s.speaker_label;
+            prev !== null &&
+            prev.speaker_label === s.speaker_label &&
+            prev.role === s.role;
 
           const containerSpacing = sameSpeakerAsPrev ? "mt-1" : "mt-4";
           const displayLabel =
-            displayIdx > 0 ? `说话人 ${displayIdx}` : "未识别";
+            isSelf
+              ? "你"
+              : isAssistant
+                ? "Echo"
+                : displayIdx > 0
+                  ? `说话人 ${displayIdx}`
+                  : "未识别";
 
           // 头像：32px 圆形，背景柔色 + 同色边框，居中数字
           const avatar = (
@@ -264,13 +314,15 @@ export default function TranscriptStream(): JSX.Element {
                 boxShadow: `inset 0 0 0 1px ${c.ring}`,
               }}
               title={
-                s.speaker_label
+                isSelf || isAssistant
+                  ? displayLabel
+                  : s.speaker_label
                   ? `${displayLabel}（全局编号 ${s.speaker_label}）`
                   : "未识别说话人"
               }
               data-testid="speaker-avatar"
             >
-              {displayIdx > 0 ? displayIdx : "?"}
+              {isSelf ? "你" : isAssistant ? "E" : displayIdx > 0 ? displayIdx : "?"}
             </div>
           );
           const avatarSpacer = (
@@ -310,8 +362,17 @@ export default function TranscriptStream(): JSX.Element {
                   } ${
                     isSelf
                       ? "bg-blue-500 text-white border-blue-500"
+                      : isAssistant
+                        ? "bg-emerald-50 text-ink-900 border-emerald-200"
                       : "bg-white text-ink-800"
                   }`}
+                  data-testid={
+                    isAssistant
+                      ? "assistant-message"
+                      : isSelf
+                        ? "user-message"
+                        : "transcript-message"
+                  }
                 >
                   {s.text}
                   {/* hover 时显示时间（仅 HH:MM） */}

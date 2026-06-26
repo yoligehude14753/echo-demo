@@ -15,6 +15,12 @@ installLocalCapturePersistence();
 installRuntimeBodyClasses();
 installTvRemoteClickBridge();
 
+if (typeof window !== "undefined") {
+  (
+    window as Window & { __ECHODESK_REACT_MOUNTED__?: boolean }
+  ).__ECHODESK_REACT_MOUNTED__ = true;
+}
+
 // 不用 StrictMode：dev 下 double-mount 会让 WS 连两次、replay 翻倍
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <ConfigProvider
