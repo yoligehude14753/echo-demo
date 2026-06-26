@@ -68,6 +68,7 @@ export interface CaptureChunkResponse {
   audio_ref: string;
   speaker_id?: string | null;
   speaker_label?: string | null;
+  meeting_id?: string | null;
   meeting_segments: TranscriptSegment[];
   /** M_diag_brake：让前端能区分被哪道门吃了，仅 circuit_open 触发止血。 */
   stt_status: SttStatus;

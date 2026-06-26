@@ -231,7 +231,6 @@ class AudioCapture {
         `请接入 USB/蓝牙会议麦克风；当前电视没有提供有效输入（${event.source ?? "unknown"} rms=0 peak=0）`,
       );
       this.teardownNative();
-      this.scheduleRetry();
       return false;
     }
 
@@ -259,7 +258,6 @@ class AudioCapture {
       `请接入 USB/蓝牙会议麦克风；当前电视没有提供有效输入（${event.source ?? "unknown"} rms=${Math.round(rms)} peak=${Math.round(peak)}）`,
     );
     this.teardownNative();
-    this.scheduleRetry();
     return false;
   }
 
@@ -363,11 +361,17 @@ class AudioCapture {
     } catch (e) {
       this.teardownNative();
       const msg = e instanceof Error ? e.message : String(e);
+      const noUsableInput =
+        /silent PCM|every source returned silent|microphone sources/i.test(msg);
       this.setState(
         "error",
-        `Android 原生录音不可用：${msg}。请接入 USB/蓝牙会议麦克风`,
+        noUsableInput
+          ? "电视没有提供有效麦克风输入；请接入 USB/蓝牙会议麦克风后重新打开 EchoDesk"
+          : `Android 原生录音不可用：${msg}。请接入 USB/蓝牙会议麦克风`,
       );
-      this.scheduleRetry();
+      if (!noUsableInput) {
+        this.scheduleRetry();
+      }
     }
   }
 }

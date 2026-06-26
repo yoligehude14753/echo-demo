@@ -7,9 +7,11 @@ import {
   installRuntimeBodyClasses,
   installTvRemoteClickBridge,
 } from "@/runtime";
+import { installLocalCapturePersistence } from "@/store";
 import "@/index.css";
 
 installPublicDemoStorageMigration();
+installLocalCapturePersistence();
 installRuntimeBodyClasses();
 installTvRemoteClickBridge();
 

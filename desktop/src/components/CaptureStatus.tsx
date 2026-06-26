@@ -75,6 +75,14 @@ function shouldShowMicRetry(errorMessage: string | null | undefined): boolean {
   return !/(USB|蓝牙|有效输入|电视麦克风|系统识别|原生录音不可用)/i.test(errorMessage);
 }
 
+function displayMicError(errorMessage: string | null | undefined): string {
+  if (!errorMessage) return "";
+  if (/(USB|蓝牙|有效输入|silent PCM|microphone input)/i.test(errorMessage)) {
+    return "请接入 USB/蓝牙会议麦克风";
+  }
+  return errorMessage;
+}
+
 function DoorBreakdown({
   stats,
   chunksDroppedCircuit,
@@ -207,10 +215,11 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
 
   if (state === "error") {
     const retryHint = shouldShowMicRetry(errorMessage) ? " · 5s 后重试" : "";
+    const displayError = displayMicError(errorMessage);
     return (
       <Tag color="red" data-testid="capture-status" tabIndex={-1}>
         麦克风不可用
-        {errorMessage ? ` · ${errorMessage}` : ""}
+        {displayError ? ` · ${displayError}` : ""}
         {retryHint}
       </Tag>
     );

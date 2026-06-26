@@ -304,6 +304,17 @@ export function installPublicDemoStorageMigration(): void {
   if (typeof window === "undefined") return;
   if (!isPublicNativeOrTvContext()) return;
   try {
+    const markerRaw = window.localStorage.getItem(PUBLIC_DATA_BOUNDARY_KEY);
+    if (markerRaw) {
+      try {
+        const marker = JSON.parse(markerRaw) as { schema?: number };
+        if (marker.schema === 2) {
+          return;
+        }
+      } catch {
+        // marker 损坏时按首次迁移处理，避免继续继承旧共享状态。
+      }
+    }
     const explicitBackend = hasExplicitBackendOverride();
     if (!explicitBackend) {
       window.localStorage.removeItem(MOBILE_BACKEND_BASE_KEY);

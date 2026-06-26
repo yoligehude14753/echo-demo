@@ -20,6 +20,7 @@ import { uploadCaptureChunk } from "@/api";
 import { audioCapture } from "@/capture/audioCapture";
 import { CAPTURE_SAMPLE_RATE } from "@/capture/pcm";
 import { shouldAttachMeetingOverlay } from "@/domain/session";
+import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 
 export interface CaptureRouterHandlers {
@@ -144,6 +145,15 @@ export function attachCaptureChunkRouter(
           });
         }
         handlers?.onAmbientUploaded?.();
+      }
+      if (shouldHideSharedPublicHistory() && result.meeting_id) {
+        const store = useStore.getState();
+        store.markMeetingActive(result.meeting_id, { select: true });
+        if (result.meeting_segments.length > 0) {
+          store.addMeetingSegments(result.meeting_id, result.meeting_segments, {
+            select: true,
+          });
+        }
       }
       if (result.meeting_segments.length > 0) handlers?.onMeetingUploaded?.();
     } catch (e) {

@@ -52,6 +52,8 @@ export default function MeetingStatusBar(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
   const events = useStore((s) => s.events);
+  const markMeetingActive = useStore((s) => s.markMeetingActive);
+  const markMeetingEnded = useStore((s) => s.markMeetingEnded);
 
   const refresh = useCallback(async () => {
     try {
@@ -100,10 +102,19 @@ export default function MeetingStatusBar(): JSX.Element {
       if (snap.mode === "idle") {
         const s = await manualStartMeeting();
         setSnap(s);
+        if (s.meeting_id) {
+          markMeetingActive(s.meeting_id, {
+            startedAt: s.started_at,
+            select: true,
+          });
+        }
         message.success("已开始会议");
       } else {
         const s = await manualEndMeeting();
         setSnap(s);
+        if (s.meeting_id) {
+          markMeetingEnded(s.meeting_id);
+        }
         message.success("已结束会议，正在生成纪要…");
       }
     } catch (e) {
@@ -111,7 +122,7 @@ export default function MeetingStatusBar(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [busy, snap.mode]);
+  }, [busy, markMeetingActive, markMeetingEnded, snap.mode]);
 
   const isMeeting = snap.mode === "in_meeting";
   const isAuto = isMeeting && snap.started_by === "auto";

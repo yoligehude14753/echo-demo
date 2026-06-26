@@ -13,6 +13,7 @@ import {
   FAILED_ARTIFACT_LIMIT,
   type FailedArtifact,
 } from "@/lib/failedArtifact";
+import { shouldHideSharedPublicHistory } from "@/runtime";
 
 export interface LocalAmbientSegment {
   text: string;
@@ -77,6 +78,16 @@ interface Store {
   markMeetingDetailLoaded(id: string): void;
   addArtifact(a: GeneratedArtifact): void;
   addAmbientSegment(seg: LocalAmbientSegment): void;
+  markMeetingActive(
+    meetingId: string,
+    opts?: { title?: string | null; startedAt?: string | null; select?: boolean },
+  ): void;
+  markMeetingEnded(meetingId: string, endedAt?: string | null): void;
+  addMeetingSegments(
+    meetingId: string,
+    segments: TranscriptSegment[],
+    opts?: { startedAt?: string; select?: boolean },
+  ): void;
   /**
    * 清空全局 outputs 列表（顶栏「清空」按钮）。
    * 不清 failedArtifacts —— 它们有独立 dismiss，避免一键覆盖失败上下文。
@@ -96,6 +107,30 @@ interface Store {
   reset(): void;
 }
 
+const LOCAL_CAPTURE_STATE_KEY = "echodesk.localCaptureState.v1";
+const LOCAL_CAPTURE_STATE_SCHEMA = 1;
+const MAX_PERSISTED_MEETINGS = 50;
+const MAX_PERSISTED_SEGMENTS_PER_MEETING = 800;
+const MAX_PERSISTED_AMBIENT = 120;
+const MAX_PERSISTED_ARTIFACTS = 50;
+
+interface PersistedMeetingCard
+  extends Omit<MeetingCard, "speakers" | "segments" | "artifacts"> {
+  segments: TranscriptSegment[];
+  speakers: string[];
+  artifacts: GeneratedArtifact[];
+}
+
+interface LocalCaptureStateSnapshot {
+  schema: number;
+  appVersion: string;
+  savedAt: string;
+  currentMeetingId: string | null;
+  meetings: PersistedMeetingCard[];
+  ambientSegments: LocalAmbientSegment[];
+  artifacts: GeneratedArtifact[];
+}
+
 function emptyMeeting(id: string, title?: string): MeetingCard {
   return {
     meeting_id: id,
@@ -104,6 +139,74 @@ function emptyMeeting(id: string, title?: string): MeetingCard {
     segments: [],
     speakers: new Set<string>(),
     artifacts: [],
+  };
+}
+
+function segmentKey(s: TranscriptSegment): string {
+  return [
+    s.start_ms,
+    s.end_ms,
+    s.text,
+    s.speaker_id ?? "",
+    s.speaker_label ?? "",
+  ].join("\u0001");
+}
+
+function mergeSegments(
+  existing: TranscriptSegment[],
+  incoming: TranscriptSegment[],
+): TranscriptSegment[] {
+  if (incoming.length === 0) return existing;
+  const seen = new Set(existing.map(segmentKey));
+  const merged = [...existing];
+  for (const seg of incoming) {
+    const key = segmentKey(seg);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(seg);
+  }
+  return merged.slice(-MAX_PERSISTED_SEGMENTS_PER_MEETING);
+}
+
+function speakerSetFromSegments(
+  base: Set<string>,
+  segments: TranscriptSegment[],
+): Set<string> {
+  const speakers = new Set(base);
+  for (const seg of segments) {
+    if (seg.speaker_label) speakers.add(seg.speaker_label);
+  }
+  return speakers;
+}
+
+function shouldPersistLocalCaptureState(): boolean {
+  try {
+    return shouldHideSharedPublicHistory();
+  } catch {
+    return false;
+  }
+}
+
+function parseLocalCaptureSnapshot(raw: string | null): LocalCaptureStateSnapshot | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<LocalCaptureStateSnapshot>;
+    if (parsed.schema !== LOCAL_CAPTURE_STATE_SCHEMA) return null;
+    if (!Array.isArray(parsed.meetings)) return null;
+    if (!Array.isArray(parsed.ambientSegments)) return null;
+    if (!Array.isArray(parsed.artifacts)) return null;
+    return parsed as LocalCaptureStateSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+function serializeMeeting(m: MeetingCard): PersistedMeetingCard {
+  return {
+    ...m,
+    segments: m.segments.slice(-MAX_PERSISTED_SEGMENTS_PER_MEETING),
+    speakers: Array.from(m.speakers),
+    artifacts: m.artifacts.slice(0, MAX_PERSISTED_ARTIFACTS),
   };
 }
 
@@ -199,6 +302,63 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({
       ambientSegments: [...s.ambientSegments, seg].slice(-120),
     })),
+
+  markMeetingActive: (meetingId, opts) =>
+    set((s) => {
+      const cur = s.meetings[meetingId] ?? emptyMeeting(meetingId, opts?.title ?? undefined);
+      return {
+        currentMeetingId: opts?.select ? meetingId : s.currentMeetingId,
+        meetings: {
+          ...s.meetings,
+          [meetingId]: {
+            ...cur,
+            title: opts?.title || cur.title || meetingId,
+            state: "in_meeting",
+            started_at:
+              cur.started_at ?? opts?.startedAt ?? new Date().toISOString(),
+          },
+        },
+      };
+    }),
+
+  markMeetingEnded: (meetingId, endedAt) =>
+    set((s) => {
+      const cur = s.meetings[meetingId] ?? emptyMeeting(meetingId);
+      return {
+        meetings: {
+          ...s.meetings,
+          [meetingId]: {
+            ...cur,
+            state: "ended",
+            ended_at: endedAt ?? new Date().toISOString(),
+            minutes_status: cur.minutes
+              ? "ok"
+              : (cur.minutes_status ?? "generating"),
+          },
+        },
+      };
+    }),
+
+  addMeetingSegments: (meetingId, segments, opts) =>
+    set((s) => {
+      const cur = s.meetings[meetingId] ?? emptyMeeting(meetingId);
+      const mergedSegments = mergeSegments(cur.segments, segments);
+      const speakers = speakerSetFromSegments(cur.speakers, mergedSegments);
+      return {
+        currentMeetingId: opts?.select ? meetingId : s.currentMeetingId,
+        meetings: {
+          ...s.meetings,
+          [meetingId]: {
+            ...cur,
+            state: cur.state === "ended" ? "ended" : "in_meeting",
+            started_at:
+              cur.started_at ?? opts?.startedAt ?? new Date().toISOString(),
+            segments: mergedSegments,
+            speakers,
+          },
+        },
+      };
+    }),
 
   clearArtifacts: () => set({ artifacts: [] }),
 
@@ -376,3 +536,96 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 }));
+
+let localCapturePersistenceInstalled = false;
+let localCapturePersistTimer: number | null = null;
+
+function writeLocalCaptureSnapshot(state: Store): void {
+  if (typeof window === "undefined") return;
+  if (!shouldPersistLocalCaptureState()) return;
+  try {
+    const meetings = Object.values(state.meetings)
+      .sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""))
+      .slice(0, MAX_PERSISTED_MEETINGS)
+      .map(serializeMeeting);
+    const snapshot: LocalCaptureStateSnapshot = {
+      schema: LOCAL_CAPTURE_STATE_SCHEMA,
+      appVersion:
+        typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "unknown",
+      savedAt: new Date().toISOString(),
+      currentMeetingId:
+        state.currentMeetingId && state.meetings[state.currentMeetingId]
+          ? state.currentMeetingId
+          : null,
+      meetings,
+      ambientSegments: state.ambientSegments.slice(-MAX_PERSISTED_AMBIENT),
+      artifacts: state.artifacts.slice(0, MAX_PERSISTED_ARTIFACTS),
+    };
+    window.localStorage.setItem(
+      LOCAL_CAPTURE_STATE_KEY,
+      JSON.stringify(snapshot),
+    );
+  } catch {
+    // localStorage 写满或 WebView 禁用时不阻塞主链路。
+  }
+}
+
+function scheduleLocalCapturePersist(): void {
+  if (typeof window === "undefined") return;
+  if (!shouldPersistLocalCaptureState()) return;
+  if (localCapturePersistTimer) window.clearTimeout(localCapturePersistTimer);
+  localCapturePersistTimer = window.setTimeout(() => {
+    localCapturePersistTimer = null;
+    writeLocalCaptureSnapshot(useStore.getState());
+  }, 150);
+}
+
+function hydrateLocalCaptureSnapshot(): void {
+  if (typeof window === "undefined") return;
+  if (!shouldPersistLocalCaptureState()) return;
+  const snapshot = parseLocalCaptureSnapshot(
+    window.localStorage.getItem(LOCAL_CAPTURE_STATE_KEY),
+  );
+  if (!snapshot) return;
+  const meetings: Record<string, MeetingCard> = {};
+  for (const persisted of snapshot.meetings.slice(0, MAX_PERSISTED_MEETINGS)) {
+    if (!persisted?.meeting_id) continue;
+    meetings[persisted.meeting_id] = {
+      ...persisted,
+      segments: (persisted.segments ?? []).slice(
+        -MAX_PERSISTED_SEGMENTS_PER_MEETING,
+      ),
+      speakers: new Set(persisted.speakers ?? []),
+      artifacts: persisted.artifacts ?? [],
+    };
+  }
+  useStore.setState((s) => ({
+    meetings: { ...meetings, ...s.meetings },
+    currentMeetingId:
+      snapshot.currentMeetingId && meetings[snapshot.currentMeetingId]
+        ? snapshot.currentMeetingId
+        : s.currentMeetingId,
+    ambientSegments:
+      s.ambientSegments.length > 0
+        ? s.ambientSegments
+        : snapshot.ambientSegments.slice(-MAX_PERSISTED_AMBIENT),
+    artifacts:
+      s.artifacts.length > 0
+        ? s.artifacts
+        : snapshot.artifacts.slice(0, MAX_PERSISTED_ARTIFACTS),
+  }));
+}
+
+/**
+ * Public demo / Android TV 不读取共享 backend 历史，因此本机采集出的会议和
+ * ambient 片段必须落到 localStorage。该持久化只在 shouldHideSharedPublicHistory()
+ * 为 true 时生效；用户配置私有 backend 后仍以私有后端 DB 为真相源。
+ */
+export function installLocalCapturePersistence(): void {
+  if (localCapturePersistenceInstalled) return;
+  localCapturePersistenceInstalled = true;
+  hydrateLocalCaptureSnapshot();
+  useStore.subscribe(() => scheduleLocalCapturePersist());
+}
+
+export const __LOCAL_CAPTURE_STATE_KEY_FOR_TEST__ = LOCAL_CAPTURE_STATE_KEY;

@@ -77,15 +77,17 @@ export default function TranscriptStream(): JSX.Element {
   );
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickyToBottomRef = useRef(true);
+  const localOnlyAmbient = shouldHideSharedPublicHistory();
 
   // 是否走"会议历史"分支：会议已选 + 已结束（ended/finalized 等）+ 有 segments
   // 进行中会议仍走 ambient 分支保持实时性（ambient 是 chunk 写入的最近 100 条）
+  // 但 public/TV 模式会屏蔽共享 WS 和 /capture/recent，会议实时段只能来自本机
+  // /capture/chunk 回包，所以进行中会议也要优先显示 meeting.segments。
   const showMeetingHistory =
     currentMeetingId !== null &&
     meeting !== undefined &&
-    meeting.state === "ended" &&
+    (meeting.state === "ended" || localOnlyAmbient) &&
     meeting.segments.length > 0;
-  const localOnlyAmbient = shouldHideSharedPublicHistory();
 
   const segs: DisplaySegment[] = useMemo(() => {
     if (showMeetingHistory && meeting) {
@@ -197,7 +199,7 @@ export default function TranscriptStream(): JSX.Element {
   }
 
   const headerLine = showMeetingHistory
-    ? `历史会议 · ${meeting?.title || currentMeetingId} · ${segs.length} 段`
+    ? `${meeting?.state === "ended" ? "历史会议" : "本机会议转写"} · ${meeting?.title || currentMeetingId} · ${segs.length} 段`
     : localOnlyAmbient
       ? `本机实时转写 · ${segs.length} 条 · 不读取共享历史`
       : `ambient 持续转写 · ${segs.length} 条 · 每 3s 刷新`;
@@ -210,7 +212,13 @@ export default function TranscriptStream(): JSX.Element {
       ref={scrollerRef}
       className="flex-1 min-h-0 overflow-y-auto px-6 py-4"
       data-testid="transcript-scroller"
-      data-mode={showMeetingHistory ? "meeting-history" : "ambient"}
+      data-mode={
+        showMeetingHistory
+          ? meeting?.state === "ended"
+            ? "meeting-history"
+            : "meeting-live-local"
+          : "ambient"
+      }
     >
       <div className="max-w-3xl mx-auto">
         <div className="text-[11px] text-ink-400 mb-3 px-1 flex items-center gap-2 sticky top-0 bg-paper-50/90 backdrop-blur-sm py-1 z-10">

@@ -141,6 +141,82 @@ test("采集计数器与入库计数器分别走（mock /capture/chunk 交替返
   ).toBeVisible({ timeout: 5_000 });
 });
 
+test("public/TV 模式直接显示并持久化 capture/chunk 返回的会议转写", async ({
+  page,
+}) => {
+  test.setTimeout(30_000);
+
+  await page.addInitScript(() => {
+    (window as unknown as { echo?: Record<string, unknown> }).echo = {
+      isElectron: true,
+      isPublicDemo: true,
+    };
+    window.localStorage.setItem(
+      "echodesk.publicDataBoundary.v2",
+      JSON.stringify({ schema: 2, appVersion: "test" }),
+    );
+  });
+  await stubMicPermission(page);
+  const mock = await installEchoMock(page);
+
+  await page.route(/\/(api\/)?capture\/chunk$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ambient_stored: true,
+        ambient_text: "电视本机环境音",
+        audio_ref: "mock-tv-local",
+        speaker_id: "spk-tv",
+        speaker_label: "说话人1",
+        meeting_id: "m-tv-local",
+        meeting_segments: [
+          {
+            text: "电视会议段落已经进入本机 UI",
+            start_ms: 0,
+            end_ms: 1200,
+            speaker_id: "spk-tv",
+            speaker_label: "说话人1",
+          },
+        ],
+        stt_status: "ok",
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await emitChunks(page, 1);
+
+  await expect(page.getByText("电视会议段落已经进入本机 UI")).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.getByTestId("transcript-scroller")).toHaveAttribute(
+    "data-mode",
+    "meeting-live-local",
+  );
+  await expect(page.getByTestId("meeting-item-title")).toContainText(
+    "m-tv-local",
+  );
+
+  await mock.publish({
+    type: "server_resync",
+    seq: 9,
+    ts: new Date().toISOString(),
+    payload: { reason: "test" },
+  });
+  await expect(page.getByText("电视会议段落已经进入本机 UI")).toBeVisible();
+
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          window.localStorage.getItem("echodesk.localCaptureState.v1"),
+        ),
+      { timeout: 5_000, intervals: [100] },
+    )
+    .toContain("电视会议段落已经进入本机 UI");
+});
+
 test("待机文案：持续采集 · 采集 · 入库 · 静音/底噪自动过滤（无 meeting overlay 时）", async ({
   page,
 }) => {

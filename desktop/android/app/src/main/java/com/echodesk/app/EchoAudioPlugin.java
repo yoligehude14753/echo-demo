@@ -34,10 +34,11 @@ public class EchoAudioPlugin extends Plugin {
   private static final int DEFAULT_CHUNK_MS = 6000;
   private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
   private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
+  private static final int PROBE_MS = 500;
   private static final int[] AUDIO_SOURCES = {
-      MediaRecorder.AudioSource.DEFAULT,
       MediaRecorder.AudioSource.MIC,
       MediaRecorder.AudioSource.VOICE_RECOGNITION,
+      MediaRecorder.AudioSource.DEFAULT,
       MediaRecorder.AudioSource.VOICE_COMMUNICATION,
       MediaRecorder.AudioSource.CAMCORDER
   };
@@ -91,9 +92,26 @@ public class EchoAudioPlugin extends Plugin {
             continue;
           }
           if (next.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
-            sourceName = sourceToName(source);
-            selectedSampleRate = candidateRate;
-            break;
+            AudioStats probeStats = probeInput(next, candidateRate);
+            Log.i(
+                TAG,
+                "AudioRecord probe source=" + sourceToName(source)
+                    + " sampleRate=" + candidateRate
+                    + " rms=" + Math.round(probeStats.rms)
+                    + " peak=" + probeStats.peak
+            );
+            if (probeStats.peak > 0) {
+              sourceName = sourceToName(source);
+              selectedSampleRate = candidateRate;
+              break;
+            }
+            try {
+              next.stop();
+            } catch (Throwable ignored) {
+            }
+            next.release();
+            next = null;
+            continue;
           }
           next.release();
           next = null;
@@ -102,7 +120,7 @@ public class EchoAudioPlugin extends Plugin {
       }
 
       if (next == null) {
-        call.reject("Android AudioRecord cannot open any microphone input after source/rate fallback");
+        call.reject("Android AudioRecord opened microphone sources, but every source returned silent PCM. Please connect a USB/Bluetooth conference microphone or enable TV microphone access.");
         return;
       }
 
@@ -196,6 +214,22 @@ public class EchoAudioPlugin extends Plugin {
     }
   }
 
+  private static AudioStats probeInput(AudioRecord rec, int sampleRate) {
+    int probeBytes = Math.max(4096, sampleRate * 2 * PROBE_MS / 1000);
+    byte[] probe = new byte[probeBytes];
+    int offset = 0;
+    long deadline = System.currentTimeMillis() + 1200;
+    while (offset < probe.length && System.currentTimeMillis() < deadline) {
+      int n = rec.read(probe, offset, probe.length - offset);
+      if (n > 0) {
+        offset += n;
+      } else if (n == AudioRecord.ERROR_INVALID_OPERATION || n == AudioRecord.ERROR_DEAD_OBJECT) {
+        break;
+      }
+    }
+    return audioStats(probe, offset - (offset % 2));
+  }
+
   private void recordLoop(int sampleRate, int chunkMs) {
     int bytesPerSample = 2;
     int chunkBytes = Math.max(sampleRate * bytesPerSample, sampleRate * bytesPerSample * chunkMs / 1000);
@@ -282,10 +316,15 @@ public class EchoAudioPlugin extends Plugin {
   }
 
   private static AudioStats audioStats(byte[] pcm) {
+    return audioStats(pcm, pcm.length);
+  }
+
+  private static AudioStats audioStats(byte[] pcm, int length) {
     long sumSquares = 0;
     int peak = 0;
-    int samples = pcm.length / 2;
-    for (int i = 0; i + 1 < pcm.length; i += 2) {
+    int safeLength = Math.max(0, Math.min(length, pcm.length));
+    int samples = safeLength / 2;
+    for (int i = 0; i + 1 < safeLength; i += 2) {
       int lo = pcm[i] & 0xff;
       int hi = pcm[i + 1];
       int v = (short) ((hi << 8) | lo);

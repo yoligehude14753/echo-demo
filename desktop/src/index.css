@@ -2101,13 +2101,27 @@ textarea:focus-visible,
   max-width: min(480px, 50vw) !important;
   height: 34px !important;
   min-height: 34px !important;
-  padding: 6px 10px !important;
+  padding: 0 10px !important;
   border-radius: 8px !important;
   font-size: 14px !important;
-  line-height: 20px !important;
+  line-height: 32px !important;
+  display: inline-flex !important;
+  align-items: center !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   white-space: nowrap !important;
+  vertical-align: middle !important;
+}
+
+.echodesk-tv [data-testid="capture-status"] > span,
+.echodesk-tv [data-testid="capture-status"] .ant-tag-icon {
+  min-width: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  line-height: 1 !important;
 }
 
 .echodesk-tv [data-testid="transcript-scroller"] {

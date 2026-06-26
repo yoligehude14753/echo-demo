@@ -50,6 +50,39 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.20] – 2026-06-26
+
+Public demo / TV 录音同步热修复：解决 TV 端 capture/chunk 有结果但会议转写不显示、
+public 模式本机历史刷新后消失的问题。
+
+### 修复
+
+- Public / TV 模式下不再依赖共享 WebSocket 业务事件来显示本机会议转写；
+  `/capture/chunk` 回包带 `meeting_id` / `meeting_segments` 时，前端会直接创建/选中
+  本机会议并合并转写段。
+- Public / TV 模式新增本机 localStorage 快照 `echodesk.localCaptureState.v1`，保存本机
+  ambient、会议段、会议列表和 outputs，避免刷新或重启后历史空掉。
+- 数据边界迁移改为一次性执行；已完成迁移的设备升级后不再每次启动删除本机历史键。
+- Public / TV 模式收到共享 backend 的 `server_resync` 时不再清空本机 store，避免本机
+  会议列表被共享 WS 重同步误擦。
+- 手动开始/结束会议时立即更新本机 store，保证屏蔽共享 WS 的 public/TV 客户端也能
+  看到当前会议状态。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.20`。
+- Android / TV `versionCode=220`、`versionName=0.2.20`。
+- backend 默认 `app_version=0.2.20`。
+
+### 验证
+
+- `cd desktop && npm run typecheck -- --noEmit`
+- `cd desktop && npm run lint -- --quiet`
+- `cd desktop && npm run build`
+- `cd desktop && npm run e2e`
+
+---
+
 ## [0.2.19] – 2026-06-26
 
 Public demo 发布补丁：修正客户端状态误报、安装包校验和 Android / TV APK 的对外分发形态。

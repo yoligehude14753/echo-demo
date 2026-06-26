@@ -88,7 +88,9 @@ export function useEchoWS(): void {
       if (e.type === "server_resync") {
         console.warn("[ws] server_resync, drop client cache", e.payload);
         lastSeqRef.current = 0;
-        useStore.getState().reset();
+        if (!noSharedReplay) {
+          useStore.getState().reset();
+        }
       } else if (e.type === "server_hello") {
         const max = (e.payload as { max_seq?: number })?.max_seq ?? 0;
         if (noSharedReplay) {
