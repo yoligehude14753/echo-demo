@@ -172,3 +172,88 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
     "Echo 已收到，这是 TV 问答文本回复。",
   );
 });
+
+test("电视视口：Android WebView 可视高度变化时输入条不被底部裁切", async ({ page }) => {
+  await page.setViewportSize({ width: 2400, height: 1080 });
+  await page.addInitScript(() => {
+    window.localStorage.setItem("echodesk.forceTvUi", "1");
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+  });
+  await installEchoMock(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByText("转写流")).toBeVisible({ timeout: 10_000 });
+
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty("--echodesk-vh", "1030px");
+  });
+
+  const boxes = await page.evaluate(() => {
+    const command = document.querySelector("[data-testid='command-bar']");
+    const textarea = document.querySelector(
+      "textarea[data-testid='command-textarea'], [data-testid='command-textarea'] textarea, [data-testid='command-textarea']",
+    );
+    const shell = document.querySelector(".echodesk-shell");
+    const commandRect = command?.getBoundingClientRect();
+    const textareaRect = textarea?.getBoundingClientRect();
+    const shellRect = shell?.getBoundingClientRect();
+    return {
+      commandBottom: commandRect?.bottom ?? 0,
+      commandHeight: commandRect?.height ?? 0,
+      textareaHeight: textareaRect?.height ?? 0,
+      shellHeight: shellRect?.height ?? 0,
+      documentHeight: document.documentElement.scrollHeight,
+    };
+  });
+
+  expect(boxes.shellHeight).toBeLessThanOrEqual(1031);
+  expect(boxes.commandBottom).toBeLessThanOrEqual(1031);
+  expect(boxes.commandHeight).toBeGreaterThanOrEqual(70);
+  expect(boxes.textareaHeight).toBeGreaterThanOrEqual(50);
+  expect(boxes.documentHeight).toBeLessThanOrEqual(1080);
+});
+
+test("电视视口：首次打开直接进入主界面，不显示桌面 onboarding", async ({ page }) => {
+  await page.setViewportSize({ width: 2400, height: 1080 });
+  await page.addInitScript(() => {
+    window.localStorage.removeItem("echodesk.onboarding.completed");
+    window.localStorage.setItem("echodesk.forceTvUi", "1");
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+  });
+  await installEchoMock(page, { keepOnboarding: true });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByText("转写流")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("欢迎来到 EchoDesk")).toHaveCount(0);
+  await expect(page.getByTestId("tv-quick-commands")).toBeVisible();
+  await expect(page.getByTestId("command-textarea")).toHaveAttribute(
+    "placeholder",
+    "输入指令，如 @总结会议",
+  );
+});
+
+test("电视视口：横屏变化后 CommandBar 切换到 TV 文案和快捷命令", async ({ page }) => {
+  await page.setViewportSize({ width: 480, height: 800 });
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "userAgent", {
+      get: () => "Mozilla/5.0 (Linux; Android 8.0.0; P50X) AppleWebKit/537.36 Chrome/61.0 Mobile Safari/537.36",
+    });
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+  });
+  await installEchoMock(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByText("转写流")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("tv-quick-commands")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 2400, height: 1080 });
+  await expect(page.getByTestId("tv-quick-commands")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("command-textarea")).toHaveAttribute(
+    "placeholder",
+    "输入指令，如 @总结会议",
+  );
+});

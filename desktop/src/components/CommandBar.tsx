@@ -101,11 +101,22 @@ export default function CommandBar(): JSX.Element {
   const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<TextAreaRef | null>(null);
-  const commandPlaceholder = isTvLikeViewport()
+  const [tvMode, setTvMode] = useState(() => isTvLikeViewport());
+  const commandPlaceholder = tvMode
     ? "输入指令，如 @总结会议"
     : "拖入文件入库 · @生成 PPT / @查 · Shift+Enter 换行";
-  const tvMode = isTvLikeViewport();
   const quickCommands = ["@总结会议", "@chat 现在状态", "@查 当前会议要点"];
+
+  useEffect(() => {
+    const updateTvMode = () => setTvMode(isTvLikeViewport());
+    updateTvMode();
+    window.addEventListener("resize", updateTvMode, { passive: true });
+    window.addEventListener("orientationchange", updateTvMode, { passive: true });
+    return () => {
+      window.removeEventListener("resize", updateTvMode);
+      window.removeEventListener("orientationchange", updateTvMode);
+    };
+  }, []);
 
   // M_minutes_refactor：MinutesView「执行待办」按钮通过 store.prefillCommandBar
   // 把 suggested_command 一键填入；只 setText + focus，不自动 onSubmit 防误触。

@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import legacy from "@vitejs/plugin-legacy";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 
@@ -8,7 +9,14 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    legacy({
+      targets: ["Chrome >= 49", "Android >= 5"],
+      modernPolyfills: true,
+      renderLegacyChunks: true,
+    }),
+  ],
   base: "./", // 让 Electron file:// 加载 dist/index.html 时能找到资源
   build: {
     // 会议室 Android TV WebView 可能停在 Chrome 60~70，不能解析 optional

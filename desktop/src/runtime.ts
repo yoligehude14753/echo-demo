@@ -381,11 +381,24 @@ export function isTvLikeViewport(): boolean {
 
 export function installRuntimeBodyClasses(): void {
   if (typeof document === "undefined") return;
-  document.documentElement.classList.toggle("echodesk-tv", isTvLikeViewport());
-  document.documentElement.classList.toggle(
-    "echodesk-public-native",
-    shouldHideSharedPublicHistory(),
-  );
+  const applyRuntimeState = () => {
+    document.documentElement.classList.toggle("echodesk-tv", isTvLikeViewport());
+    document.documentElement.classList.toggle(
+      "echodesk-public-native",
+      shouldHideSharedPublicHistory(),
+    );
+    if (typeof window !== "undefined") {
+      document.documentElement.style.setProperty(
+        "--echodesk-vh",
+        `${window.innerHeight}px`,
+      );
+    }
+  };
+  applyRuntimeState();
+  if (typeof window !== "undefined") {
+    window.addEventListener("resize", applyRuntimeState, { passive: true });
+    window.addEventListener("orientationchange", applyRuntimeState, { passive: true });
+  }
 }
 
 export function installTvRemoteClickBridge(): void {

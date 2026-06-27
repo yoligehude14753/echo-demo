@@ -11,11 +11,13 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { isTvLikeViewport } from "@/runtime";
 
 const STORAGE_KEY = "echodesk.onboarding.completed";
 
 function loadCompleted(): boolean {
   if (typeof window === "undefined") return true;
+  if (isTvLikeViewport()) return true;
   try {
     return window.localStorage.getItem(STORAGE_KEY) === "1";
   } catch {
@@ -47,6 +49,23 @@ export interface OnboardingState {
 export function useOnboarding(): OnboardingState {
   const [shouldShow, setShouldShow] = useState<boolean>(() => !loadCompleted());
 
+  // TV / Android public demo should be usable immediately with a remote. The
+  // full desktop onboarding modal can be too tall on landscape TV WebViews.
+  useEffect(() => {
+    const bypassForTv = () => {
+      if (!isTvLikeViewport()) return;
+      persistCompleted(true);
+      setShouldShow(false);
+    };
+    bypassForTv();
+    window.addEventListener("resize", bypassForTv, { passive: true });
+    window.addEventListener("orientationchange", bypassForTv, { passive: true });
+    return () => {
+      window.removeEventListener("resize", bypassForTv);
+      window.removeEventListener("orientationchange", bypassForTv);
+    };
+  }, []);
+
   // 兼容 storage 在其他 tab 被改的场景（dev 调试方便）
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -64,6 +83,11 @@ export function useOnboarding(): OnboardingState {
   }, []);
 
   const resetForDebug = useCallback(() => {
+    if (isTvLikeViewport()) {
+      persistCompleted(true);
+      setShouldShow(false);
+      return;
+    }
     persistCompleted(false);
     setShouldShow(true);
   }, []);

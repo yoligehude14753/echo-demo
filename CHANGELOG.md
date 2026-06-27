@@ -8,6 +8,26 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.26] – 2026-06-27
+
+TV / 老 Android WebView 兼容热修复：为 Android / TV 打包产物补上 Vite legacy
+`nomodule` fallback，避免部分 Android 8 会议电视只支持较旧 WebView 时打开 APK
+停在白屏 / “EchoDesk 正在启动…”。
+
+### 修复
+
+- 前端生产构建启用 `@vitejs/plugin-legacy`，同时保留现代 `type=module` bundle；
+  桌面新浏览器继续走现代包，旧 TV WebView 走 legacy + SystemJS/polyfill fallback。
+- TV e2e 重新验证横屏 960×540 布局、遥控器确认键路径、扫码保存会议资料、删除输出、
+  待办生成产物携带 `meeting_id` / `todo_id`。
+
+### 验证
+
+- `npm run typecheck`
+- `npm run lint`
+- `npm run build`
+- `npx playwright test tests/e2e/tv-layout.spec.ts tests/e2e/tv-share.spec.ts`
+
 ## [Unreleased]
 
 ### 新增（P4.1 M4 · 产物预览）

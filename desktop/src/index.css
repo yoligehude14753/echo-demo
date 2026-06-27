@@ -11,6 +11,7 @@ body,
 
 html {
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  --echodesk-vh: 100vh;
 }
 
 body {
@@ -2459,4 +2460,20 @@ textarea:focus-visible,
   min-width: 220px !important;
   max-width: 520px !important;
   flex: 0 0 26vw !important;
+}
+
+/* Android / TV WebView can report 100vh as the physical panel height while
+   drawing below a system status bar. Runtime keeps --echodesk-vh synced to
+   window.innerHeight so the bottom command bar remains fully visible. */
+.echodesk-tv .echodesk-shell {
+  height: var(--echodesk-vh, 100vh) !important;
+  max-height: var(--echodesk-vh, 100vh) !important;
+}
+
+.echodesk-tv .echodesk-main-layout {
+  height: calc(var(--echodesk-vh, 100vh) - 96px) !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] {
+  flex: 0 0 auto !important;
 }
