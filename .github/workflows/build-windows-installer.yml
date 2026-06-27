@@ -62,18 +62,26 @@ jobs:
         run: |
           cd desktop/release
           shopt -s nullglob
-          files=(*.exe)
+          files=(
+            EchoDesk.Setup.*.exe
+            EchoDesk.Setup.*.exe.blockmap
+            EchoDesk-*-win-x64.zip
+            latest.yml
+          )
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "No Windows installer files found" >&2
+            echo "No Windows release files found" >&2
             exit 1
           fi
           sha256sum "${files[@]}" > SHA256SUMS-Windows.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: echodesk-windows-installer
+          name: echodesk-windows-release
           path: |
             desktop/release/*.exe
+            desktop/release/*.exe.blockmap
+            desktop/release/*-win-x64.zip
+            desktop/release/latest.yml
             desktop/release/SHA256SUMS-Windows.txt
           if-no-files-found: error
 
@@ -86,9 +94,11 @@ jobs:
             echo "Missing PUBLIC_RELEASE_TOKEN secret" >&2
             exit 1
           fi
-          gh release upload v0.2.0 \
+          gh release upload v0.2.25 \
             desktop/release/*.exe \
+            desktop/release/*.exe.blockmap \
+            desktop/release/*-win-x64.zip \
+            desktop/release/latest.yml \
             desktop/release/SHA256SUMS-Windows.txt \
-            --repo yoligehude14753/echodesk-public \
+            --repo yoligehude14753/echo-demo \
             --clobber
-

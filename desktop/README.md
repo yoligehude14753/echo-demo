@@ -1,18 +1,44 @@
-# desktop
+# EchoDesk Desktop
 
-EchoDesk 的桌面端（Electron + React + TypeScript）。
+EchoDesk 的桌面端（Electron + React 18 + TypeScript + Vite）。
 
-> 当前为 placeholder：将在 **Sprint 4（前端 + WebSocket，PR-10~12）** 中按 `docs/DEV_PLAN.md` 初始化。
->
-> 复用 echo 现有 `desktop/` 代码作为基线，重点改造：
-> - 主界面：清单式（列表）会议+对话流，而非单人对话
-> - WS 协议：对齐 backend 新 schema（`MeetingMinutes` / `ArtifactResult` / `TranscriptSegment`）
-> - 产物展示：PPT / Word / Excel / HTML 内嵌预览（PPT 用 PDF 转换，HTML 直接 iframe）
+当前 public demo 版本是 `v0.2.25`。正式安装包从 GitHub Release 下载：
+<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.25>
 
-## 启动（待 Sprint 4）
+公开安装包默认连接 `https://echodesk.yoliyoli.uk` 公网 demo backend，STT/TTS/LLM
+密钥不会打进客户端包。私有本机后端仍可通过 `ECHO_FORCE_LOCAL_BACKEND=1` 启用。
+
+## 开发启动
 
 ```bash
 cd desktop
 npm install
 npm run dev
 ```
+
+## 质量门
+
+```bash
+npm run typecheck
+npm run lint
+npm run e2e
+```
+
+## 打包
+
+```bash
+npm run app:dist:mac
+npm run app:dist:win
+npm run app:dist:linux
+npm run app:dist:android
+npm run app:package:tv
+```
+
+主要产物：
+
+- macOS: `release/EchoDesk-0.2.25-arm64.dmg`, `release/EchoDesk-0.2.25-arm64-mac.zip`
+- Windows: `release/EchoDesk.Setup.0.2.25.exe`, `release/EchoDesk-0.2.25-win-x64.zip`
+- Linux: `release/EchoDesk-0.2.25.AppImage`, `release/echodesk-desktop_0.2.25_amd64.deb`
+- Android/TV: `release/EchoDesk-0.2.25-android.apk`, `release/EchoDesk-0.2.25-smart-tv.apk`
+
+打包后可用 `scripts/cdp-packaged-smoke.cjs` 对 Electron 产物做 CDP 点击 smoke。
