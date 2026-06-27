@@ -27,8 +27,8 @@ def test_bootstrap_payload(client: TestClient) -> None:
     r = client.get("/bootstrap")
     assert r.status_code == 200
     body = r.json()
-    assert body["ws_url"].startswith("ws://")
-    assert body["http_url"].startswith("http://")
+    assert body["ws_url"].startswith(("ws://", "wss://"))
+    assert body["http_url"].startswith(("http://", "https://"))
     assert "app_version" in body
     assert body["stt_enabled"] is True
 

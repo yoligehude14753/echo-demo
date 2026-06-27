@@ -1,7 +1,7 @@
 """use_case: retrieve_and_answer — RAG-grounded 问答（取代 PR-2 的 ask_question 朴素版）。
 
 流程：
-  1) Fast 通道分类器（qwen3.5-9b-local）判别 query 类型：
+  1) Fast 通道分类器（qwen3.5-9b-local-gpu0）判别 query 类型：
      - "rag"：本地知识库可答（PDF/会议）
      - "web"：需联网（最新资讯/时事/价格）
      - "either"：两边都试

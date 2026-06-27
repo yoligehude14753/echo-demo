@@ -7,7 +7,7 @@
 | 服务 | 默认 URL | 模型 / 服务 |
 |---|---|---|
 | STT | `http://100.76.3.59:8090` | FireRedASR2-AED |
-| Fast LLM | `http://100.76.3.59:7860/v1` | `qwen3.5-9b-local` |
+| Fast LLM | `http://100.76.3.59:7860/v1` | `qwen3.5-9b-local-gpu0` |
 | TTS | `http://100.76.3.59:8094` | faster-qwen3-tts CustomVoice |
 
 这些默认值已写入：
@@ -30,7 +30,7 @@ curl -m 5 http://100.76.3.59:7860/v1/models
 
 - `8090` TCP 通，`/docs` 返回 HTTP 200。
 - `8094` TCP 通；根路由 HTTP 404 也表示服务在线。
-- `7860/v1/models` 返回 `qwen3.5-9b-local`。
+- `7860/v1/models` 返回 `qwen3.5-9b-local-gpu0`。
 
 ## 用户配置覆盖
 
@@ -46,7 +46,7 @@ env > ~/.echodesk/config.json > .env > code default
 {
   "stt_firered_url": "http://100.76.3.59:8090",
   "llm_fast_base_url": "http://100.76.3.59:7860/v1",
-  "llm_fast_model": "qwen3.5-9b-local",
+  "llm_fast_model": "qwen3.5-9b-local-gpu0",
   "tts_qwen3_url": "http://100.76.3.59:8094"
 }
 ```

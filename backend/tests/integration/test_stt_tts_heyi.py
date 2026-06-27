@@ -65,10 +65,10 @@ async def test_real_tts_synthesize(settings: Settings) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not _can_connect("100.76.3.59", 7860), reason="eight 7860 (qwen3.5-9b-local) 不可达"
+    not _can_connect("100.76.3.59", 7860), reason="eight 7860 (qwen3.5-9b-local-gpu0) 不可达"
 )
 async def test_real_fast_llm_qwen3() -> None:
-    """Fast 通道 qwen3.5-9b-local vLLM 完整流式。"""
+    """Fast 通道 qwen3.5-9b-local-gpu0 vLLM 完整流式。"""
     from app.adapters.llm import OpenAICompatibleLLM
     from app.schemas.llm import ChatMessage
 
@@ -78,7 +78,7 @@ async def test_real_fast_llm_qwen3() -> None:
         chunks: list[str] = []
         async for c in llm.chat_stream(
             [ChatMessage(role="user", content="一句话回答:1+1=?")],
-            model="qwen3.5-9b-local",
+            model="qwen3.5-9b-local-gpu0",
             max_tokens=200,
             timeout_s=60.0,
         ):

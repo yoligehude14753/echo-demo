@@ -16,7 +16,7 @@
 
 | 端口 | echo-demo `config.py` 命名 | swagger 实际服务 | 用途 | 状态 |
 |---|---|---|---|---|
-| `:7860` | `llm_fast_*` | `qwen3.5-9b-local` (vLLM) | 快速通道意图分类 + 短任务 | ✓ 活，名实相符 |
+| `:7860` | `llm_fast_*` | `qwen3.5-9b-local-gpu0` (vLLM) | 快速通道意图分类 + 短任务 | ✓ 活，名实相符 |
 | `:8090` | `stt_firered_url` | `FireRedASR2-AED` | **唯一 STT**（PR `echodesk-remove-sensevoice` 起） | ✓ 活，名实相符 |
 | ~~`:8093`~~ | — | ~~SenseVoice GPU ASR~~ | 已删除（PR `echodesk-remove-sensevoice`：多 backend 选项干扰架构判断） | ✗ 不再使用 |
 | `:8094` | `tts_qwen3_url`（alias `tts_cosyvoice_url`） | `faster-qwen3-tts CustomVoice` | 主 TTS | ✓ 活，命名已修正（arch-1） |

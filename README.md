@@ -54,7 +54,7 @@ echodesk/
 │   └── adr/                # 关键决策记录
 ├── backend/                # FastAPI server (Echo desktop 后端)
 │   ├── app/
-│   │   ├── llm/            # yoli_llm 中台 → Yunwu M2.7 主通道 + qwen3.5-9b-local fast
+│   │   ├── llm/            # yoli_llm 中台 → Yunwu M2.7 主通道 + qwen3.5-9b-local-gpu0 fast
 │   │   ├── stt/            # eight FireRedASR2-AED 客户端
 │   │   ├── tts/            # eight TTS 客户端
 │   │   ├── diarization/    # SpeechBrain ECAPA-TDNN（本地 CPU）默认参数
@@ -87,7 +87,7 @@ echodesk/
 
 | 决策 | 出处 | 实测数据 |
 |---|---|---|
-| LLM 主通道：**Yunwu M2.7** + qwen3.5-9b-local fast | PRD §四.A.2.6 | 12.6min 会议端到端 147s |
+| LLM 主通道：**Yunwu M2.7** + qwen3.5-9b-local-gpu0 fast | PRD §四.A.2.6 | 12.6min 会议端到端 147s |
 | RAG：**jieba + BM25Okapi**（不上 mem0/LightRAG）| PRD §A.3 P1-1 | doc_cite 100% / 9 query 并发 1.28s |
 | Web Search 仲裁：Inspiro 主 + Tavily 备 + DDG 兜底 | PRD §A.2 + Tavily 验证 | winner_ok 7/8 / fab_ok 6/8 |
 | 一键 PPT：**pptxgenjs + Midnight 色板** | PRD §A.2.11 v6.7.1 | 417 视觉 shapes / notes 772 字/页 |

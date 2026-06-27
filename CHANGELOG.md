@@ -53,6 +53,13 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 ## [0.2.24] – 2026-06-27
 
 Public demo 多端热修复：修正新装客户端继承旧历史、移动端/TV 版布局挤压，以及安装文档仍指向旧版本的问题。
+后端版本号同步到 `0.2.24`，避免 public demo 客户端误判公网 backend 仍落后，并便于确认
+STT / TTS / 扫码保存修复已部署到服务端。
+Fast LLM 模型名同步到 eight 当前实际 served model `qwen3.5-9b-local-gpu0`，避免
+纪要恢复、RAG 仲裁和短问答继续请求旧模型名导致 404。
+当 public backend 的 MAIN/FAST 都临时指向 eight 9B 时，显式 FAST 请求优先使用 fast
+token budget；线上 `LLM_MAIN_MAX_TOKENS` / `MINUTES_MAX_TOKENS` 同步降到 4096，
+避免超过 eight 当前 8192 上下文窗口。
 
 ### 修复
 

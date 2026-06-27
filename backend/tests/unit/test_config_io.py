@@ -129,3 +129,12 @@ class TestJsonConfigSource:
 
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.port == 8769  # P1.1 canonical default
+
+    def test_echo_lan_full_api_env_alias(
+        self, isolated_user_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ECHO_LAN_FULL_API_ENABLED", "true")
+        from app.config import Settings
+
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.lan_full_api_enabled is True

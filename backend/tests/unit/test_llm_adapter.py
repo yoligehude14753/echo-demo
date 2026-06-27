@@ -22,7 +22,7 @@ def settings() -> Settings:
         yunwu_open_key="sk-test",
         llm_main_model="MiniMax-M2.7",
         llm_main_base_url="https://yunwu.ai/v1",
-        llm_fast_model="qwen3.5-9b-local",
+        llm_fast_model="qwen3.5-9b-local-gpu0",
         llm_fast_base_url="http://100.76.3.59:7860/v1",
         llm_local_api_key="EMPTY",
         llm_main_max_tokens=80_000,
@@ -33,7 +33,7 @@ def settings() -> Settings:
 @pytest.mark.unit
 def test_reasoning_model_detection() -> None:
     assert _is_reasoning("MiniMax-M2.7")
-    assert _is_reasoning("qwen3.5-9b-local")
+    assert _is_reasoning("qwen3.5-9b-local-gpu0")
     assert _is_reasoning("GLM-5.1")
     assert not _is_reasoning("gpt-4")
     assert not _is_reasoning("Kimi-K2.6")
@@ -48,8 +48,8 @@ async def test_pick_routes_to_main_or_fast(settings: Settings) -> None:
         assert model_m == "MiniMax-M2.7"
         assert max_m == 80_000
 
-        client_f, model_f, max_f = llm._pick("qwen3.5-9b-local")
-        assert model_f == "qwen3.5-9b-local"
+        client_f, model_f, max_f = llm._pick("qwen3.5-9b-local-gpu0")
+        assert model_f == "qwen3.5-9b-local-gpu0"
         assert max_f == 512
         assert client_f is not client_m
 
@@ -60,6 +60,32 @@ async def test_pick_routes_to_main_or_fast(settings: Settings) -> None:
     finally:
         await llm.aclose()
         # 释放 asyncio loop 警告
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_pick_explicit_fast_wins_when_main_and_fast_share_model() -> None:
+    settings = Settings(
+        yunwu_open_key="sk-test",
+        llm_main_model="qwen3.5-9b-local-gpu0",
+        llm_main_base_url="http://100.76.3.59:7860/v1",
+        llm_fast_model="qwen3.5-9b-local-gpu0",
+        llm_fast_base_url="http://100.76.3.59:7860/v1",
+        llm_main_max_tokens=4096,
+        llm_fast_max_tokens=512,
+    )
+    llm = OpenAICompatibleLLM(settings)
+    try:
+        client_m, model_m, max_m = llm._pick(None)
+        client_f, model_f, max_f = llm._pick("qwen3.5-9b-local-gpu0")
+        assert model_m == model_f == "qwen3.5-9b-local-gpu0"
+        assert max_m == 4096
+        assert max_f == 512
+        assert client_f is llm._fast
+        assert client_f is not client_m
+    finally:
+        await llm.aclose()
         await asyncio.sleep(0)
 
 

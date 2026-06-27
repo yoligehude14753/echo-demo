@@ -67,6 +67,6 @@ async def test_ask_question_propagates_history() -> None:
 @pytest.mark.unit
 async def test_ask_question_forwards_model() -> None:
     llm = FakeLLM(["x"])
-    async for _ in ask_question(llm, "hi", model="qwen3.5-9b-local"):
+    async for _ in ask_question(llm, "hi", model="qwen3.5-9b-local-gpu0"):
         pass
-    assert llm.captured_model == "qwen3.5-9b-local"
+    assert llm.captured_model == "qwen3.5-9b-local-gpu0"

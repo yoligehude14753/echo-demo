@@ -8,7 +8,7 @@
 |---|---|---|---|
 | eight FireRedASR2-AED | `:8090` | 转写（ambient + meeting） | 录音 / TTS / @生成 / RAG |
 | eight qwen3-tts | `:8094` | TTS 播报 | 录音 / 转写 / @生成 / RAG |
-| eight qwen3.5-9b-local | `:7860` | intent 分类、RAG/web 仲裁 | 录音 / 转写 / TTS |
+| eight qwen3.5-9b-local-gpu0 | `:7860` | intent 分类、RAG/web 仲裁 | 录音 / 转写 / TTS |
 | Yunwu MiniMax-M2.7 | api | @生成、纪要、@查 RAG 答 | 录音 / 转写 / 分类 |
 | Tavily 搜索 | api | @查 web fallback | 全部其它 |
 

@@ -1,4 +1,4 @@
-"""Integration：意图路由真 LLM 端到端（qwen3.5-9b-local / eight）。
+"""Integration：意图路由真 LLM 端到端（qwen3.5-9b-local-gpu0 / eight）。
 
 跳过条件：eight LLM 不可达 → 自动 skip。
 覆盖：

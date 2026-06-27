@@ -24,7 +24,7 @@ def _settings(**overrides: Any) -> Settings:
     base: dict[str, Any] = {
         "ambient_llm_punctuate": True,
         "ambient_punctuator_timeout_s": 2.0,
-        "llm_fast_model": "qwen3.5-9b-local",
+        "llm_fast_model": "qwen3.5-9b-local-gpu0",
         "llm_fast_max_tokens": 512,
     }
     base.update(overrides)
@@ -37,7 +37,7 @@ def _mock_llm_with_json(content: str) -> MagicMock:
     llm.chat = AsyncMock(
         return_value=LLMResponse(
             content=content,
-            model="qwen3.5-9b-local",
+            model="qwen3.5-9b-local-gpu0",
             finish_reason="stop",
             usage=LLMUsage(),
         )
