@@ -20,7 +20,7 @@
     "app:build": "npm run build && electron-builder --mac --dir",
     "app:dist": "npm run build && electron-builder --mac",
     "app:dist:mac": "npm run build && electron-builder --mac",
-    "app:dist:win": "npm run build && electron-builder --win nsis --x64",
+    "app:dist:win": "npm run build && electron-builder --win nsis zip --x64",
     "app:dist:linux": "npm run build && electron-builder --linux AppImage deb --x64",
     "app:dist:android": "node scripts/build-android-debug.cjs",
     "app:package:tv": "node scripts/package-tv-installer.cjs",
@@ -102,10 +102,16 @@
       ]
     },
     "win": {
-      "artifactName": "EchoDesk.Setup.${version}.${ext}",
+      "artifactName": "EchoDesk-${version}-win-${arch}.${ext}",
       "target": [
         {
           "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "x64"
           ]
@@ -132,6 +138,7 @@
       ]
     },
     "nsis": {
+      "artifactName": "EchoDesk.Setup.${version}.${ext}",
       "oneClick": true,
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,
