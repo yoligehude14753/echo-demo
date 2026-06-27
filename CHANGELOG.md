@@ -8,6 +8,24 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.27] – 2026-06-28
+
+Android / TV 麦克风热修复：避免会议电视或外接会议麦克风在刚启动时短暂静音，
+导致 EchoDesk 直接判定“麦克风不可用”并停止采集。
+
+### 修复
+
+- Android 原生 `AudioRecord` 启动探测不再因为 500ms 初始静音直接拒绝启动；
+  现在优先选择有声源，若所有可启动 source 初始静音则进入采集循环，由前端 30s
+  健康检查提示用户检查 USB / 蓝牙会议麦克风。
+- Android Manifest 明确允许 cleartext traffic，避免会议室内网 `http://IP:8769`
+  backend 在 TV / Android 包中被系统网络策略拦截。
+
+### 验证
+
+- `npm run app:dist:android`
+- Android emulator 安装启动回归：无白屏 / 无崩溃，`EchoDeskAudio` 已进入 chunk 循环。
+
 ## [0.2.26] – 2026-06-27
 
 TV / 老 Android WebView 兼容热修复：为 Android / TV 打包产物补上 Vite legacy

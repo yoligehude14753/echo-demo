@@ -81,6 +81,9 @@ public class EchoAudioPlugin extends Plugin {
       AudioRecord next = null;
       String sourceName = "unknown";
       int selectedSampleRate = sampleRate;
+      int fallbackSource = -1;
+      int fallbackSampleRate = sampleRate;
+      String fallbackSourceName = "unknown";
       StringBuilder probeSummary = new StringBuilder();
       for (int candidateRate : candidateSampleRates(sampleRate)) {
         for (int source : AUDIO_SOURCES) {
@@ -117,11 +120,16 @@ public class EchoAudioPlugin extends Plugin {
             if (isDeadInput(probeStats)) {
               Log.w(
                   TAG,
-                  "AudioRecord rejected dead input source=" + sourceToName(source)
+                  "AudioRecord saw silent probe source=" + sourceToName(source)
                       + " sampleRate=" + candidateRate
                       + " rms=" + Math.round(probeStats.rms)
                       + " peak=" + probeStats.peak
               );
+              if (fallbackSource < 0) {
+                fallbackSource = source;
+                fallbackSampleRate = candidateRate;
+                fallbackSourceName = sourceToName(source);
+              }
               next.release();
               next = null;
               continue;
@@ -136,11 +144,39 @@ public class EchoAudioPlugin extends Plugin {
         if (next != null) break;
       }
 
+      if (next == null && fallbackSource >= 0) {
+        next = buildRecorder(fallbackSource, fallbackSampleRate);
+        if (next != null) {
+          try {
+            next.startRecording();
+          } catch (Throwable t) {
+            Log.w(TAG, "AudioRecord fallback start failed for " + fallbackSourceName + " @" + fallbackSampleRate, t);
+            next.release();
+            next = null;
+          }
+          if (next != null && next.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+            sourceName = fallbackSourceName;
+            selectedSampleRate = fallbackSampleRate;
+            Log.w(
+                TAG,
+                "AudioRecord falling back to silent probe source="
+                    + sourceName
+                    + " sampleRate="
+                    + selectedSampleRate
+                    + ". Runtime health check will report if input remains silent."
+            );
+          } else if (next != null) {
+            next.release();
+            next = null;
+          }
+        }
+      }
+
       if (next == null) {
         String details = probeSummary.length() > 0
             ? " Probe summary: " + probeSummary + "."
             : "";
-        call.reject("Android AudioRecord opened microphone sources, but every source returned silent PCM." + details + " Please connect a USB/Bluetooth conference microphone or enable TV microphone access.");
+        call.reject("Android AudioRecord could not start any microphone source." + details + " Please connect a USB/Bluetooth conference microphone or enable TV microphone access.");
         return;
       }
 
