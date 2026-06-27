@@ -35,6 +35,8 @@ public class EchoAudioPlugin extends Plugin {
   private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
   private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
   private static final int PROBE_MS = 500;
+  private static final double DEAD_INPUT_RMS_FLOOR = 1.0;
+  private static final int DEAD_INPUT_PEAK_FLOOR = 4;
   private static final int[] AUDIO_SOURCES = {
       MediaRecorder.AudioSource.MIC,
       MediaRecorder.AudioSource.VOICE_RECOGNITION,
@@ -112,6 +114,18 @@ public class EchoAudioPlugin extends Plugin {
                 .append(Math.round(probeStats.rms))
                 .append(" peak=")
                 .append(probeStats.peak);
+            if (isDeadInput(probeStats)) {
+              Log.w(
+                  TAG,
+                  "AudioRecord rejected dead input source=" + sourceToName(source)
+                      + " sampleRate=" + candidateRate
+                      + " rms=" + Math.round(probeStats.rms)
+                      + " peak=" + probeStats.peak
+              );
+              next.release();
+              next = null;
+              continue;
+            }
             sourceName = sourceToName(source);
             selectedSampleRate = candidateRate;
             break;
@@ -340,6 +354,10 @@ public class EchoAudioPlugin extends Plugin {
     }
     double rms = samples > 0 ? Math.sqrt((double) sumSquares / (double) samples) : 0.0;
     return new AudioStats(rms, peak);
+  }
+
+  private static boolean isDeadInput(AudioStats stats) {
+    return stats.rms <= DEAD_INPUT_RMS_FLOOR && stats.peak <= DEAD_INPUT_PEAK_FLOOR;
   }
 
   private static final class AudioStats {

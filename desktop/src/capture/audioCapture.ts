@@ -54,8 +54,8 @@ interface EchoAudioPlugin {
 }
 
 const EchoAudio = registerPlugin<EchoAudioPlugin>("EchoAudio");
-const NATIVE_SILENT_RMS_THRESHOLD = 16;
-const NATIVE_SILENT_PEAK_THRESHOLD = 96;
+const NATIVE_DEAD_INPUT_RMS_THRESHOLD = 1;
+const NATIVE_DEAD_INPUT_PEAK_THRESHOLD = 4;
 
 function isAndroidTvRuntime(): boolean {
   if (typeof window === "undefined" || typeof document === "undefined") return false;
@@ -231,7 +231,7 @@ class AudioCapture {
   private observeNativeInputHealth(event: EchoAudioChunkEvent): boolean {
     const rms = event.rms ?? 0;
     const peak = event.peak ?? 0;
-    if (rms > NATIVE_SILENT_RMS_THRESHOLD || peak > NATIVE_SILENT_PEAK_THRESHOLD) {
+    if (rms > NATIVE_DEAD_INPUT_RMS_THRESHOLD || peak > NATIVE_DEAD_INPUT_PEAK_THRESHOLD) {
       this.silentInputSinceMs = null;
       this.nativeSilentChunks = 0;
       if (this.state !== "capturing") {
@@ -246,10 +246,17 @@ class AudioCapture {
     if (this.state !== "capturing") {
       this.setState("capturing");
     }
-    // 会议麦克风在 Android TV 上经常有启动静音窗，甚至需要用户开口后才送
-    // 非零 PCM。不要把"当前 chunk 静音"等同于"麦克风不可用"；继续上传给
-    // 后端门控/STT 处理，同时保持 UI 为采集中，避免误导用户以为权限坏了。
-    return true;
+    if (now - this.silentInputSinceMs < TV_SILENT_INPUT_GRACE_MS) {
+      return true;
+    }
+
+    this.setState(
+      "error",
+      "Android/TV 麦克风持续返回全静音；请确认电视麦克风已开启，或接入 USB/蓝牙会议麦克风",
+    );
+    this.teardownNative();
+    this.scheduleRetry();
+    return false;
   }
 
   private flush(force = false): void {
