@@ -269,6 +269,7 @@ const tvInstallPage = `<!doctype html>
 </html>
 `;
 writeFileSync(join(RELEASE_DIR, "tv.html"), tvInstallPage, "utf-8");
+copyFileSync(join(ROOT, "..", "docs", "tv-install.html"), join(RELEASE_DIR, "tv-install.html"));
 writeFileSync(
   join(RELEASE_DIR, "t"),
   '<!doctype html><meta http-equiv="refresh" content="0; url=/tv.html"><a href="/tv.html">EchoDesk TV</a>\n',

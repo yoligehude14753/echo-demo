@@ -169,27 +169,27 @@ test("设置页：检查更新会展示当前平台优选 release 资产", async
         contentType: "application/json",
         headers: { "Access-Control-Allow-Origin": "*" },
         body: JSON.stringify({
-          tag_name: "v0.2.24",
-          name: "EchoDesk v0.2.24",
-          html_url: "https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.24",
+          tag_name: "v0.2.25",
+          name: "EchoDesk v0.2.25",
+          html_url: "https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.25",
           assets: [
             {
-              name: "EchoDesk.Setup.0.2.24.exe",
+              name: "EchoDesk.Setup.0.2.25.exe",
               size: 123,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.24/EchoDesk.Setup.0.2.24.exe",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.25/EchoDesk.Setup.0.2.25.exe",
             },
             {
-              name: "EchoDesk-0.2.24-smart-tv.apk",
+              name: "EchoDesk-0.2.25-smart-tv.apk",
               size: 456,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.24/EchoDesk-0.2.24-smart-tv.apk",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.25/EchoDesk-0.2.25-smart-tv.apk",
             },
             {
-              name: "EchoDesk-0.2.24-arm64.dmg",
+              name: "EchoDesk-0.2.25-arm64.dmg",
               size: 789,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.24/EchoDesk-0.2.24-arm64.dmg",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.25/EchoDesk-0.2.25-arm64.dmg",
             },
           ],
         }),
@@ -204,9 +204,9 @@ test("设置页：检查更新会展示当前平台优选 release 资产", async
   await page.getByTestId("check-updates").click();
 
   await expect(page.getByTestId("update-status-tag")).toContainText("发现新版本");
-  await expect(page.getByTestId("updates-section").getByText("v0.2.24")).toBeVisible();
+  await expect(page.getByTestId("updates-section").getByText("v0.2.25")).toBeVisible();
   await expect(page.getByTestId("update-asset-name")).toContainText(
-    "EchoDesk.Setup.0.2.24.exe",
+    "EchoDesk.Setup.0.2.25.exe",
   );
   await expect(page.getByTestId("install-update")).toBeEnabled();
 });
@@ -230,27 +230,27 @@ test("TV 模式检查更新优先展示 smart-tv APK", async ({ page }) => {
         contentType: "application/json",
         headers: { "Access-Control-Allow-Origin": "*" },
         body: JSON.stringify({
-          tag_name: "v0.2.24",
-          name: "EchoDesk v0.2.24",
-          html_url: "https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.24",
+          tag_name: "v0.2.25",
+          name: "EchoDesk v0.2.25",
+          html_url: "https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.25",
           assets: [
             {
-              name: "EchoDesk.Setup.0.2.24.exe",
+              name: "EchoDesk.Setup.0.2.25.exe",
               size: 123,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.24/EchoDesk.Setup.0.2.24.exe",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.25/EchoDesk.Setup.0.2.25.exe",
             },
             {
-              name: "EchoDesk-0.2.24-smart-tv.apk",
+              name: "EchoDesk-0.2.25-smart-tv.apk",
               size: 456,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.24/EchoDesk-0.2.24-smart-tv.apk",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.25/EchoDesk-0.2.25-smart-tv.apk",
             },
             {
-              name: "EchoDesk-0.2.24-android.apk",
+              name: "EchoDesk-0.2.25-android.apk",
               size: 789,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.24/EchoDesk-0.2.24-android.apk",
+                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.25/EchoDesk-0.2.25-android.apk",
             },
           ],
         }),
@@ -265,6 +265,6 @@ test("TV 模式检查更新优先展示 smart-tv APK", async ({ page }) => {
 
   await expect(page.getByTestId("update-status-tag")).toContainText("发现新版本");
   await expect(page.getByTestId("update-asset-name")).toContainText(
-    "EchoDesk-0.2.24-smart-tv.apk",
+    "EchoDesk-0.2.25-smart-tv.apk",
   );
 });

@@ -50,6 +50,36 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.24] – 2026-06-27
+
+Public demo 多端热修复：修正新装客户端继承旧历史、移动端/TV 版布局挤压，以及安装文档仍指向旧版本的问题。
+
+### 修复
+
+- Public / TV 首次启动的数据边界升级到 schema 3，并把
+  `echodesk.localCaptureState.v1` 纳入一次性清理范围；新装 public 包不再从旧 WebView
+  或共享 demo backend 继承其它设备历史，已完成迁移的设备升级后继续保留本机历史。
+- Android 手机 / 平板窄屏下压缩顶栏、工作区栏和底部输入区，保证设置、发送、附件按钮
+  不越界，输入框字号和按钮高度保持一致。
+- TV / 低分辨率横屏下把主内容固定为「转写流 + 右侧产物栏」两列，右侧栏按 26vw 收缩，
+  避免 960×540 电视 WebView 上转写区被挤窄或错位。
+- README、安装指南、TV 安装页统一指向 `v0.2.24` release 资产。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.24`。
+- Android / TV `versionCode=224`、`versionName=0.2.24`。
+
+### 验证
+
+- `cd desktop && npm run typecheck`
+- `cd desktop && npm run lint`
+- `cd desktop && npm run e2e`
+- Android emulator：安装 APK、授权麦克风、进入主界面并验证原生 `AudioRecord`
+  持续产出音频 chunk。
+
+---
+
 ## [0.2.20] – 2026-06-26
 
 Public demo / TV 录音同步热修复：解决 TV 端 capture/chunk 有结果但会议转写不显示、

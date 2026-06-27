@@ -79,6 +79,7 @@ export const MOBILE_BACKEND_BASE_USER_SET_KEY = "echodesk.mobileBackendBase.user
 export const PUBLIC_DATA_BOUNDARY_KEY = "echodesk.publicDataBoundary.v2";
 export const DEFAULT_ANDROID_BACKEND_BASE = "https://echodesk.yoliyoli.uk";
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
+const PUBLIC_DATA_BOUNDARY_SCHEMA = 3;
 export const RELEASES_URL =
   "https://github.com/yoligehude14753/echo-demo/releases/latest";
 const RELEASE_API_URL =
@@ -90,6 +91,7 @@ const PUBLIC_HISTORY_STORAGE_KEYS = [
   "echodesk.meetingHistory",
   "echodesk.meetings",
   "echodesk.capture.recent",
+  "echodesk.localCaptureState.v1",
   "echodesk.ambientSegments",
   "echodesk.lastAmbientSegments",
   "echodesk.currentMeeting",
@@ -308,7 +310,7 @@ export function installPublicDemoStorageMigration(): void {
     if (markerRaw) {
       try {
         const marker = JSON.parse(markerRaw) as { schema?: number };
-        if (marker.schema === 2) {
+        if ((marker.schema ?? 0) >= PUBLIC_DATA_BOUNDARY_SCHEMA) {
           return;
         }
       } catch {
@@ -326,7 +328,7 @@ export function installPublicDemoStorageMigration(): void {
     window.localStorage.setItem(
       PUBLIC_DATA_BOUNDARY_KEY,
       JSON.stringify({
-        schema: 2,
+        schema: PUBLIC_DATA_BOUNDARY_SCHEMA,
         appVersion: typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "unknown",
         explicitBackend,
       }),

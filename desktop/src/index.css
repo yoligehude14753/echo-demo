@@ -776,6 +776,133 @@ textarea:focus-visible,
   }
 }
 
+@media (max-width: 767px) {
+  .app-header {
+    height: 46px !important;
+    min-height: 46px !important;
+  }
+
+  .app-header > div:first-child {
+    flex: 0 0 auto !important;
+    min-width: 0 !important;
+    max-width: 48vw !important;
+  }
+
+  .app-header .brand {
+    max-width: 118px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .app-header-status {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    justify-content: flex-end !important;
+    gap: 6px !important;
+  }
+
+  .app-header-separator,
+  .app-event-count,
+  .app-connection-status {
+    display: none !important;
+  }
+
+  .app-header-status [data-testid="status-bar"] {
+    display: none !important;
+  }
+
+  [data-testid="meeting-status-bar"],
+  [data-testid="tts-toggle"],
+  [data-testid="open-settings"] {
+    height: 34px !important;
+    min-height: 34px !important;
+    max-height: 34px !important;
+    border-radius: 8px !important;
+  }
+
+  [data-testid="meeting-status-bar"] {
+    max-width: 112px !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  [data-testid="tts-toggle"] {
+    min-width: 60px !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+  [data-testid="open-settings"] {
+    width: 34px !important;
+    min-width: 34px !important;
+    padding: 0 !important;
+  }
+
+  [data-testid="workspace-bar"] {
+    height: 40px !important;
+    min-height: 40px !important;
+    gap: 6px !important;
+    overflow: hidden !important;
+  }
+
+  [data-testid="workspace-upload-count"],
+  [data-testid="workspace-bar"] > .text-ink-400 {
+    display: none !important;
+  }
+
+  .workspace-title {
+    flex: 0 0 auto !important;
+  }
+
+  .workspace-actions {
+    margin-left: auto !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+  }
+
+  .workspace-actions .ant-btn {
+    width: 32px !important;
+    min-width: 32px !important;
+    height: 30px !important;
+    padding: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  .workspace-actions .ant-btn span:not(.ant-btn-icon) {
+    display: none !important;
+  }
+
+  .echodesk-transcript-header {
+    height: 46px !important;
+    min-height: 46px !important;
+    gap: 8px !important;
+  }
+
+  .echodesk-transcript-header [data-testid="capture-status"] {
+    max-width: min(58vw, 260px) !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .echodesk-command-row {
+    grid-template-columns: 34px minmax(0, 1fr) 42px 42px !important;
+    gap: 6px !important;
+  }
+
+  .echodesk-command-icon-btn {
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+  }
+}
+
 /* Android TV / MiTV WebView 66 fallback.
    这些电视会把 1920x1080 屏报告成 960x540 CSS viewport，且不支持 flex gap。
    这里使用固定可容纳尺寸覆盖上面的 10-foot 大屏规则，避免文字撑爆和三栏错位。 */
@@ -2312,4 +2439,24 @@ textarea:focus-visible,
   .echodesk-tv .workspace-actions .ant-btn span:not(.ant-btn-icon) {
     display: none !important;
   }
+}
+
+/* Final TV ratio guard: several historical TV passes above set the outputs
+   rail to a fixed 320px. The tested 960x540 WebView needs a 26vw rail so the
+   transcript pane remains wide enough for readable meeting text. */
+.echodesk-tv .echodesk-content {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 26vw) !important;
+}
+
+.echodesk-tv .echodesk-transcript-pane {
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+.echodesk-tv .echodesk-output-pane {
+  width: 26vw !important;
+  min-width: 220px !important;
+  max-width: 520px !important;
+  flex: 0 0 26vw !important;
 }

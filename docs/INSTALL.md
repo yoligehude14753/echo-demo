@@ -1,25 +1,25 @@
 # EchoDesk 安装指南
 
-当前版本：`v0.2.23`
-下载页：<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.23>
+当前版本：`v0.2.24`
+下载页：<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.24>
 
 | 平台 | 直接下载 | 说明 |
 |---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.2.23-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.2.23-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows | `EchoDesk.Setup.0.2.23.exe` | Windows 安装包 |
-| Linux AppImage | `EchoDesk-0.2.23.AppImage` | Linux x64 免安装运行 |
-| Linux deb | `echodesk-desktop_0.2.23_amd64.deb` | Ubuntu / Debian 安装包 |
-| Android 手机 / 平板 | `EchoDesk-0.2.23-android.apk` | 默认连接公网 demo backend |
-| Android TV / 智能电视 | `EchoDesk-0.2.23-smart-tv.apk` | 适配遥控器和电视桌面入口 |
-| 智能电视一键安装 | `EchoDesk-0.2.23-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
-| 校验文件 | `SHA256SUMS-0.2.23.txt` | 校验下载完整性 |
+| macOS Apple Silicon | `EchoDesk-0.2.24-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.2.24-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows | `EchoDesk.Setup.0.2.24.exe` | Windows 安装包 |
+| Linux AppImage | `EchoDesk-0.2.24.AppImage` | Linux x64 免安装运行 |
+| Linux deb | `echodesk-desktop_0.2.24_amd64.deb` | Ubuntu / Debian 安装包 |
+| Android 手机 / 平板 | `EchoDesk-0.2.24-android.apk` | 默认连接公网 demo backend |
+| Android TV / 智能电视 | `EchoDesk-0.2.24-smart-tv.apk` | 适配遥控器和电视桌面入口 |
+| 智能电视一键安装 | `EchoDesk-0.2.24-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
+| 校验文件 | `SHA256SUMS-0.2.24.txt` | 校验下载完整性 |
 
 EchoDesk demo 现在是多端客户端 + 公网 demo backend。macOS / Windows / Linux 是桌面端；
 Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yoliyoli.uk`，
 模型服务和密钥都留在服务端。
 
-应用内也可以在「设置 → 更新」里主动检查 GitHub Release。桌面端从 `0.2.23`
+应用内也可以在「设置 → 更新」里主动检查 GitHub Release。桌面端从 `0.2.24`
 开始会保留本机数据并走自动下载/覆盖安装；Android / TV 因系统限制，会打开对应 APK
 下载并由系统安装器确认。
 
@@ -46,12 +46,12 @@ Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yol
 
 优先从 GitHub Releases 下载当前 demo 包：
 
-- macOS: `EchoDesk-0.2.23-arm64.dmg`
-- Windows: `EchoDesk.Setup.0.2.23.exe`
-- Linux: `EchoDesk-0.2.23.AppImage` 或 `echodesk-desktop_0.2.23_amd64.deb`
-- Android 手机 / 平板: `EchoDesk-0.2.23-android.apk`（demo 包）
-- Android TV / 智能电视: `EchoDesk-0.2.23-smart-tv.apk`
-- 智能电视一键安装包：`EchoDesk-0.2.23-smart-tv-oneclick.zip`
+- macOS: `EchoDesk-0.2.24-arm64.dmg`
+- Windows: `EchoDesk.Setup.0.2.24.exe`
+- Linux: `EchoDesk-0.2.24.AppImage` 或 `echodesk-desktop_0.2.24_amd64.deb`
+- Android 手机 / 平板: `EchoDesk-0.2.24-android.apk`（demo 包）
+- Android TV / 智能电视: `EchoDesk-0.2.24-smart-tv.apk`
+- 智能电视一键安装包：`EchoDesk-0.2.24-smart-tv-oneclick.zip`
 - 电视浏览器安装页：`https://yoligehude14753.github.io/echo-demo/tv-install.html`
 
 源码构建仅用于开发：
@@ -78,8 +78,8 @@ npm run app:dist:mac
 产物：
 
 ```text
-desktop/release/EchoDesk-0.2.23-arm64.dmg
-desktop/release/EchoDesk-0.2.23-arm64-mac.zip
+desktop/release/EchoDesk-0.2.24-arm64.dmg
+desktop/release/EchoDesk-0.2.24-arm64-mac.zip
 desktop/release/mac-arm64/EchoDesk.app
 ```
 
@@ -100,8 +100,8 @@ npm run app:dist:linux
 产物：
 
 ```text
-desktop/release/EchoDesk-0.2.23.AppImage
-desktop/release/echodesk-desktop_0.2.23_amd64.deb
+desktop/release/EchoDesk-0.2.24.AppImage
+desktop/release/echodesk-desktop_0.2.24_amd64.deb
 ```
 
 Android 当前用 Capacitor 打非 debuggable 的 release APK：
@@ -116,10 +116,10 @@ npm run app:package:tv
 
 ```text
 desktop/android/app/build/outputs/apk/release/app-release-unsigned.apk
-desktop/release/EchoDesk-0.2.23-android.apk
-desktop/release/EchoDesk-0.2.23-android-tv.apk
-desktop/release/EchoDesk-0.2.23-smart-tv.apk
-desktop/release/EchoDesk-0.2.23-smart-tv-oneclick.zip
+desktop/release/EchoDesk-0.2.24-android.apk
+desktop/release/EchoDesk-0.2.24-android-tv.apk
+desktop/release/EchoDesk-0.2.24-smart-tv.apk
+desktop/release/EchoDesk-0.2.24-smart-tv-oneclick.zip
 ```
 
 Android / TV APK 是前端客户端，不会在手机或电视里启动 Electron 的本机 Python backend。
@@ -145,11 +145,11 @@ ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --p
 ### 智能电视安装
 
 图里这种有「我的应用」入口的会议室电视，如果底层是 Android TV / Google TV /
-国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.23-smart-tv.apk`。
+国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.24-smart-tv.apk`。
 
 推荐路径：
 
-1. 下载 `EchoDesk-0.2.23-smart-tv-oneclick.zip`。
+1. 下载 `EchoDesk-0.2.24-smart-tv-oneclick.zip`。
 2. 电视打开开发者模式和 ADB 网络调试。
 3. 电脑和电视在同一个局域网。
 4. macOS 执行 `./install-tv-macos.sh 电视IP`；Windows 执行
