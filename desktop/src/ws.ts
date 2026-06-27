@@ -71,6 +71,9 @@ export function useEchoWS(): void {
 
     const isSharedPublicBusinessEvent = (e: EchoEvent): boolean => {
       if (!noSharedReplay) return false;
+      if (e.meeting_id && useStore.getState().meetings[e.meeting_id]) {
+        return false;
+      }
       if (typeof e.seq === "number" && e.seq <= replayFenceSeqRef.current) {
         return true;
       }

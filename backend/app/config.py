@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     public_ws_url: str = "ws://localhost:8769/ws/echo"
     public_http_url: str = "http://localhost:8769"
-    app_version: str = "0.2.24"
+    app_version: str = "0.2.25"
 
     # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
     llm_main_provider: str = "yunwu"
@@ -78,15 +78,17 @@ class Settings(BaseSettings):
     llm_fallback_2: str = "Kimi-K2.6"
     llm_main_max_tokens: int = 80_000
     # 会议纪要是结构化 JSON，不应复用 MAIN/skill 的 80k 长推理预算。
-    # public demo 可把主模型临时切到 eight 的 qwen3.5-9b-local-gpu0。当前线上
+    # public demo 可把主模型临时切到 eight 的 fast/VL 本地模型。当前线上
     # served model max_model_len=8192，public .env 必须把 MINUTES_MAX_TOKENS
     # / LLM_MAIN_MAX_TOKENS 降到 4096；这里的默认值保留给更长上下文的私有部署。
     minutes_max_tokens: int = 12_000
 
-    # ── LLM 快速通道（qwen3.5-9b-local-gpu0 on eight） ─────────────────
-    llm_fast_provider: str = "eight-local"
-    llm_fast_model: str = "qwen3.5-9b-local-gpu0"
-    llm_fast_base_url: str = "http://100.76.3.59:7860/v1"
+    # ── LLM 快速通道 ────────────────────────────────────────────────
+    # public demo 默认跟随 Yunwu 主通道，避免 eight fast LLM 未启动时影响可用性；
+    # 私有部署可在设置页改回 eight-local / vLLM 端点。
+    llm_fast_provider: str = "yunwu"
+    llm_fast_model: str = "MiniMax-M2.7"
+    llm_fast_base_url: str = "https://yunwu.ai/v1"
     llm_local_api_key: str = "EMPTY"
     llm_fast_max_tokens: int = 512
 
@@ -105,12 +107,12 @@ class Settings(BaseSettings):
     # 用户痛点（2026-05-28）：FireRedASR2 :8090 OpenAPI 只接受
     # file/model/language/response_format/timestamp_granularities，**没有 punc 开关**；
     # 6s ambient chunk 出来是一气呵成 30+ 字无标点的整行（截图 m-bdd1da4e7e21），
-    # 用户读不下去。STT 服务端无法直出标点 → ambient 主链路加 qwen3.5-9b-local-gpu0 (LLM_FAST)
+    # 用户读不下去。STT 服务端无法直出标点 → ambient 主链路加 LLM_FAST
     # 后处理批量加标点 + 自然分段。
     # 详见 `app/adapters/stt/llm_punctuator.py` 文件头。
     ambient_llm_punctuate: bool = True
     # 单次 batch（一个 chunk 1-3 段）超时上限；超时 → 退回原文本不阻塞主链路。
-    # qwen3.5-9b-local-gpu0 p50 < 700ms，2s 是宽松上限。
+    # fast/VL 本地模型通常 < 2s，2s 是宽松上限。
     ambient_punctuator_timeout_s: float = 2.0
 
     # ── TTS ───────────────────────────────────────────────────────
@@ -293,7 +295,7 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     web_search_top_n: int = 5
     tavily_api_key: str = ""
-    web_arbitration_model: str = "qwen3.5-9b-local-gpu0"
+    web_arbitration_model: str = "MiniMax-M2.7"
 
     # ── Skill 执行器 ──────────────────────────────────────────────
     skill_ppt_tool: str = "pptxgenjs"

@@ -263,7 +263,11 @@ class AmbientCapturePipeline:
         # 行无法预知 → 只能落入 ``__ambient__`` 池。下一 chunk 起 state.current 就
         # 不为 None，会正确路由到新 meeting 的 counter。
         ctx_meeting_id: str | None = meeting_id
-        if ctx_meeting_id is None and self._state is not None:
+        if (
+            ctx_meeting_id is None
+            and self._state is not None
+            and not self._settings.public_demo_mode
+        ):
             current = self._state.current
             if current is not None:
                 ctx_meeting_id = current.meeting_id
@@ -311,7 +315,11 @@ class AmbientCapturePipeline:
         # 自动会议检测：交给 MeetingState（单例状态机）；它内部协调 detector。
         # ambient 主链路只负责"喂观测"，状态/落库由 MeetingState 全权决定。
         effective_meeting_id: str | None = meeting_id
-        if self._state is not None and meeting_id is None:
+        if (
+            self._state is not None
+            and meeting_id is None
+            and not self._settings.public_demo_mode
+        ):
             duration_ms_obs = max((s.end_ms for s in stt_segs), default=0) if stt_segs else 0
             try:
                 effective_meeting_id = await self._state.observe_chunk(

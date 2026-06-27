@@ -1,7 +1,7 @@
-"""OpenAI 兼容 LLM adapter（Yunwu / eight fast Qwen 双路由 + 流式 + 重试）。
+"""OpenAI 兼容 LLM adapter（Yunwu 主通道 / 可选 fast 通道 + 流式 + 重试）。
 
 设计参考 echo backend/app/llm.py 的双通道架构（FAST/MAIN）：
-- FAST 通道：qwen3.5-9b-local-gpu0 on eight :7860 → 用于路由、短问答、纯结构化抽取
+- FAST 通道：默认跟随 MAIN；私有部署可切到 eight-local / vLLM
 - MAIN 通道：Yunwu MiniMax-M2.7 → 复杂任务、长生成；max_tokens=80000
 
 约定（用户决策 2026-05-26）：
@@ -122,6 +122,11 @@ class OpenAICompatibleLLM:
         if model is None:
             return self._main, s.llm_main_model, s.llm_main_max_tokens
         if model == s.llm_fast_model:
+            if (
+                s.llm_fast_model == s.llm_main_model
+                and s.llm_fast_base_url.rstrip("/") == s.llm_main_base_url.rstrip("/")
+            ):
+                return self._main, s.llm_main_model, s.llm_fast_max_tokens
             return self._fast, s.llm_fast_model, s.llm_fast_max_tokens
         if model == s.llm_main_model:
             return self._main, s.llm_main_model, s.llm_main_max_tokens

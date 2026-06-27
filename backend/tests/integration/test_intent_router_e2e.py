@@ -1,6 +1,6 @@
-"""Integration：意图路由真 LLM 端到端（qwen3.5-9b-local-gpu0 / eight）。
+"""Integration：意图路由真 LLM 端到端（当前 Settings 的 fast LLM）。
 
-跳过条件：eight LLM 不可达 → 自动 skip。
+跳过条件：fast LLM endpoint 不可达 → 自动 skip。
 覆盖：
 1. 关键字命中场景（零 LLM）：@生成 PPT / @财务模型 / @查
 2. LLM 兜底场景（无关键字）：模糊指令 → LLM 分类
@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import socket
+from urllib.parse import urlparse
 
 import pytest
 from app.adapters.intent.llm_router import LLMIntentRouter
@@ -20,18 +21,20 @@ pytestmark = pytest.mark.integration
 
 def _heyi_reachable() -> bool:
     s = Settings()
-    url = s.llm_fast_base_url.replace("http://", "").replace("https://", "")
-    host_port = url.split("/")[0]
+    parsed = urlparse(s.llm_fast_base_url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if not host:
+        return False
     try:
-        host, port_s = host_port.split(":")
-        with socket.create_connection((host, int(port_s)), timeout=1.5):
+        with socket.create_connection((host, port), timeout=1.5):
             return True
-    except (OSError, ValueError):
+    except OSError:
         return False
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _heyi_reachable(), reason="eight fast LLM unreachable")
+@pytest.mark.skipif(not _heyi_reachable(), reason="fast LLM endpoint unreachable")
 async def test_intent_keyword_hits_skip_llm() -> None:
     """关键字命中应当不调 LLM 即返回（带 0.85 置信度）。"""
     s = Settings()

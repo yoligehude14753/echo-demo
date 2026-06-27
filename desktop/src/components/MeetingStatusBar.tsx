@@ -2,10 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { Tooltip, message } from "antd";
 import { Mic, Square } from "lucide-react";
 import {
+  endMeeting,
   getCurrentMeeting,
   manualEndMeeting,
   manualStartMeeting,
+  startMeeting,
 } from "@/api";
+import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { EchoEvent, MeetingStateSnapshot } from "@/types";
 
@@ -42,6 +45,14 @@ function elapsedMinutes(startedAt?: string | null): number {
   return Math.floor(ms / 60000);
 }
 
+function newLocalMeetingId(): string {
+  const suffix =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(16).slice(2, 10);
+  return `m-local-${Date.now().toString(36)}-${suffix}`;
+}
+
 export default function MeetingStatusBar(): JSX.Element {
   const [snap, setSnap] = useState<MeetingStateSnapshot>({
     mode: "idle",
@@ -52,23 +63,57 @@ export default function MeetingStatusBar(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
   const events = useStore((s) => s.events);
+  const currentMeetingId = useStore((s) => s.currentMeetingId);
+  const currentMeetingState = useStore((s) =>
+    s.currentMeetingId ? s.meetings[s.currentMeetingId]?.state : undefined,
+  );
   const markMeetingActive = useStore((s) => s.markMeetingActive);
   const markMeetingEnded = useStore((s) => s.markMeetingEnded);
+  const hideSharedPublicHistory = shouldHideSharedPublicHistory();
 
   const refresh = useCallback(async () => {
+    if (hideSharedPublicHistory) return;
     try {
       const s = await getCurrentMeeting();
       setSnap(s);
     } catch {
       // 后端不通时静默；CaptureStatus 那里已有错误提示
     }
-  }, []);
+  }, [hideSharedPublicHistory]);
 
   useEffect(() => {
     void refresh();
     const t = setInterval(refresh, 10_000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  useEffect(() => {
+    if (!hideSharedPublicHistory) return;
+    if (currentMeetingId && currentMeetingState === "in_meeting") {
+      setSnap((prev) => {
+        if (prev.mode === "in_meeting" && prev.meeting_id === currentMeetingId) {
+          return prev;
+        }
+        return {
+          mode: "in_meeting",
+          meeting_id: currentMeetingId,
+          started_at: new Date().toISOString(),
+          started_by: "manual",
+        };
+      });
+    } else {
+      setSnap((prev) =>
+        prev.mode === "idle"
+          ? prev
+          : {
+              mode: "idle",
+              meeting_id: null,
+              started_at: null,
+              started_by: null,
+            },
+      );
+    }
+  }, [currentMeetingId, currentMeetingState, hideSharedPublicHistory]);
 
   // 1s 心跳刷新 elapsed
   useEffect(() => {
@@ -100,6 +145,23 @@ export default function MeetingStatusBar(): JSX.Element {
     setBusy(true);
     try {
       if (snap.mode === "idle") {
+        if (hideSharedPublicHistory) {
+          const meetingId = newLocalMeetingId();
+          await startMeeting(meetingId);
+          const next: MeetingStateSnapshot = {
+            mode: "in_meeting",
+            meeting_id: meetingId,
+            started_at: new Date().toISOString(),
+            started_by: "manual",
+          };
+          setSnap(next);
+          markMeetingActive(meetingId, {
+            startedAt: next.started_at,
+            select: true,
+          });
+          message.success("已开始本机会议");
+          return;
+        }
         const s = await manualStartMeeting();
         setSnap(s);
         if (s.meeting_id) {
@@ -110,6 +172,21 @@ export default function MeetingStatusBar(): JSX.Element {
         }
         message.success("已开始会议");
       } else {
+        if (hideSharedPublicHistory) {
+          const meetingId = snap.meeting_id ?? currentMeetingId;
+          if (meetingId) {
+            await endMeeting(meetingId).catch(() => undefined);
+            markMeetingEnded(meetingId);
+          }
+          setSnap({
+            mode: "idle",
+            meeting_id: null,
+            started_at: null,
+            started_by: null,
+          });
+          message.success("已结束本机会议");
+          return;
+        }
         const s = await manualEndMeeting();
         setSnap(s);
         if (s.meeting_id) {
@@ -122,7 +199,15 @@ export default function MeetingStatusBar(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [busy, markMeetingActive, markMeetingEnded, snap.mode]);
+  }, [
+    busy,
+    currentMeetingId,
+    hideSharedPublicHistory,
+    markMeetingActive,
+    markMeetingEnded,
+    snap.meeting_id,
+    snap.mode,
+  ]);
 
   const isMeeting = snap.mode === "in_meeting";
   const isAuto = isMeeting && snap.started_by === "auto";

@@ -8,7 +8,7 @@
 |---|---|---|---|
 | eight FireRedASR2-AED | `:8090` | 转写（ambient + meeting） | 录音 / TTS / @生成 / RAG |
 | eight qwen3-tts | `:8094` | TTS 播报 | 录音 / 转写 / @生成 / RAG |
-| eight qwen3.5-9b-local-gpu0 | `:7860` | intent 分类、RAG/web 仲裁 | 录音 / 转写 / TTS |
+| Yunwu MiniMax-M2.7 fast fallback | api | intent 分类、RAG/web 仲裁 | 录音 / 转写 / TTS |
 | Yunwu MiniMax-M2.7 | api | @生成、纪要、@查 RAG 答 | 录音 / 转写 / 分类 |
 | Tavily 搜索 | api | @查 web fallback | 全部其它 |
 
@@ -57,7 +57,7 @@
 用户**不需要**翻 log 就能看到降级：
 
 - `backend` pill 绿 = supervisor + /healthz/full 通
-- `eight` pill 绿 = STT/TTS/Fast-LLM 三子探针都通；橙 = 部分通；红 = 全断
+- `eight` pill 绿 = STT/TTS/Fast-LLM 三子探针都通；当前 public Fast-LLM 默认走 Yunwu 兜底，eight 机器只要求 STT/TTS 通
 - `云` pill 绿 = Yunwu + Tavily 都通；橙 = 缺 API key（功能不可用但不是"挂了"）；红 = key 配了但断
 - `麦克风` pill 绿 = 系统权限 granted
 
@@ -69,5 +69,5 @@
 ## 不做的事
 
 - 不做自动重试（除 STT FireRed 自身的 circuit breaker）：让 LLM 调用幂等性由用户判断
-- 不做远程切换 fallback（M2.7 → GLM-4.6 → Kimi）：当前只演示 Yunwu，配置一份就够
+- 不做自动多级远程切换（M2.7 → GLM-4.6 → Kimi）：当前只演示 Yunwu，配置一份就够
 - 不做离线模式：录音/转写依赖 STT，没 STT 就只能录但不能转写

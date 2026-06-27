@@ -1,7 +1,8 @@
 # heyi-bj · cloudflared named tunnel · systemd-user 守护 SOP
 
-> Obsolete (2026-06-18): EchoDesk demo 当前默认 STT/TTS/Fast LLM 已迁到 eight (`100.76.3.59`)。
-> 本文仅保留为 heyi-bj / `*.yoliyoli.uk` 历史归档，不是当前安装或排障入口。
+> Obsolete (2026-06-27): EchoDesk demo 当前 public 版本仅保留 STT/TTS 在 eight (`100.76.3.59:8090/8094`)。
+> Fast LLM 默认跟随 Yunwu / MiniMax-M2.7 fallback；本文仅保留为 heyi-bj / `*.yoliyoli.uk`
+> 历史 tunnel 归档，不是当前安装或排障入口。
 
 > Phase 4 · M_heyi_systemd · 2026-05-28
 > 目标：heyi-bj 重启后 4 个 `*.yoliyoli.uk` 对外 HTTPS endpoint 自动恢复，无需人工 `nohup`。
@@ -16,7 +17,7 @@
 |---|---|---|
 | `https://echo.yoliyoli.uk` | `http://localhost:8765` | echo backend |
 | `https://stt.yoliyoli.uk` | `http://localhost:8090` | FireRedASR2 |
-| `https://llm-fast.yoliyoli.uk` | `http://localhost:7860` | sglang vLLM Qwen3-1.7B |
+| `https://llm-fast.yoliyoli.uk` | 历史：`http://localhost:7860` | 历史 fast LLM tunnel，public 0.2.25 不再默认使用 |
 | `https://tts.yoliyoli.uk` | `http://localhost:8094` | Qwen3-TTS |
 
 全部走同一个 cloudflared named tunnel `bfd33448-3605-47c5-813d-70924ae5cd09`，路由表见 `/home/ai/.cloudflared/config.yml`。
@@ -68,6 +69,7 @@ ingress:
     service: http://localhost:8765
   - hostname: stt.yoliyoli.uk
     service: http://localhost:8090
+  # 历史 fast LLM tunnel；public 0.2.25 默认使用 Yunwu fallback。
   - hostname: llm-fast.yoliyoli.uk
     service: http://localhost:7860
   - hostname: tts.yoliyoli.uk
@@ -200,7 +202,7 @@ ps -ef | grep cloudflared | grep -v grep
 # 1) 本机 origin 是否在跑？
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8765/health    # echo
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/docs      # stt
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:7860/v1/models # llm-fast
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:7860/v1/models # historical llm-fast
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8094/          # tts
 # 任一非 200 → 对应后端服务挂了，不是 tunnel 的锅；
 # 排查相应 backend systemd-user service：echo-backend.service / echo-qwen.service / echo-sensevoice.service / Qwen3-TTS

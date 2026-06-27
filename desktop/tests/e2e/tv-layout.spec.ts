@@ -56,7 +56,7 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
         fields: [
           { key: "llm_main_base_url", value: "https://yunwu.ai/v1", sensitive: false, source: "default" },
           { key: "yunwu_open_key", value: "", sensitive: true, source: "default" },
-          { key: "llm_fast_base_url", value: "http://100.76.3.59:7860/v1", sensitive: false, source: "default" },
+          { key: "llm_fast_base_url", value: "https://yunwu.ai/v1", sensitive: false, source: "default" },
           { key: "stt_firered_url", value: "http://100.76.3.59:8090", sensitive: false, source: "default" },
           { key: "tts_qwen3_url", value: "http://100.76.3.59:8094", sensitive: false, source: "default" },
           { key: "tts_qwen3_voice", value: "aiden", sensitive: false, source: "default" },

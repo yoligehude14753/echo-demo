@@ -249,7 +249,9 @@ DEFAULT_CONFIG=$(cat <<'JSON'
   "llm_main_provider": "yunwu",
   "llm_main_model": "MiniMax-M2.7",
   "llm_main_base_url": "https://yunwu.ai/v1",
-  "llm_fast_base_url": "http://100.76.3.59:7860/v1",
+  "llm_fast_provider": "yunwu",
+  "llm_fast_model": "MiniMax-M2.7",
+  "llm_fast_base_url": "https://yunwu.ai/v1",
   "yunwu_open_key": "",
   "tavily_api_key": "",
   "diarizer_enabled": true

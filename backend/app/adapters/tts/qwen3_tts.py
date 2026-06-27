@@ -71,7 +71,7 @@ class Qwen3TTS:
     实现 ports.tts.TTSPort。
     """
 
-    def __init__(self, settings: Settings, *, timeout_s: float = 30.0) -> None:
+    def __init__(self, settings: Settings, *, timeout_s: float = 90.0) -> None:
         self._settings = settings
         self._base = settings.tts_qwen3_url.rstrip("/")
         self._default_voice = settings.tts_qwen3_voice

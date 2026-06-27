@@ -119,7 +119,7 @@ def ambient_pipeline_with_punctuator(tmp_path: Path) -> AmbientCapturePipeline:
     llm.chat = AsyncMock(
         return_value=LLMResponse(
             content='{"items": [{"id": 0, "text": "我现在身份不是打字员，我是代码总导演。"}]}',
-            model="qwen3.5-9b-local-gpu0",
+            model="fast-test-model",
             finish_reason="stop",
             usage=LLMUsage(),
         )

@@ -1,6 +1,6 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.2.24",
+  "version": "0.2.25",
   "description": "EchoDesk public demo desktop client",
   "author": "EchoDesk <support@yoliyoli.uk>",
   "homepage": "https://github.com/yoligehude14753/echo-demo",
@@ -132,11 +132,12 @@
       ]
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "runAfterFinish": false
     }
   }
 }

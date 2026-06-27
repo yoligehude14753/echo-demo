@@ -1,14 +1,15 @@
-# 远程后端：eight Endpoint
+# 远程后端：eight + Yunwu Endpoint
 
-> Current (2026-06-18): EchoDesk demo 的 STT / TTS / Fast LLM 已迁到 eight (`100.76.3.59`)。
+> Current (2026-06-27): EchoDesk demo 的 STT / TTS 在 eight (`100.76.3.59`)；
+> Fast LLM public 默认跟随 Yunwu 主通道，避免 eight fast LLM 未启动时影响可用性。
 
 ## 当前默认
 
 | 服务 | 默认 URL | 模型 / 服务 |
 |---|---|---|
 | STT | `http://100.76.3.59:8090` | FireRedASR2-AED |
-| Fast LLM | `http://100.76.3.59:7860/v1` | `qwen3.5-9b-local-gpu0` |
 | TTS | `http://100.76.3.59:8094` | faster-qwen3-tts CustomVoice |
+| Fast LLM | `https://yunwu.ai/v1` | `MiniMax-M2.7`（跟随主通道兜底） |
 
 这些默认值已写入：
 
@@ -23,14 +24,14 @@
 tailscale status | grep eight
 nc -zv 100.76.3.59 8090
 nc -zv 100.76.3.59 8094
-curl -m 5 http://100.76.3.59:7860/v1/models
+curl -m 5 https://yunwu.ai/v1/models
 ```
 
 期望：
 
 - `8090` TCP 通，`/docs` 返回 HTTP 200。
 - `8094` TCP 通；根路由 HTTP 404 也表示服务在线。
-- `7860/v1/models` 返回 `qwen3.5-9b-local-gpu0`。
+- `yunwu.ai/v1/models` 可达；public backend 使用服务端 `YUNWU_OPEN_KEY`。
 
 ## 用户配置覆盖
 
@@ -45,15 +46,15 @@ env > ~/.echodesk/config.json > .env > code default
 ```json
 {
   "stt_firered_url": "http://100.76.3.59:8090",
-  "llm_fast_base_url": "http://100.76.3.59:7860/v1",
-  "llm_fast_model": "qwen3.5-9b-local-gpu0",
+  "llm_fast_base_url": "https://yunwu.ai/v1",
+  "llm_fast_model": "MiniMax-M2.7",
   "tts_qwen3_url": "http://100.76.3.59:8094"
 }
 ```
 
 ## 排障顺序
 
-1. 看顶部 `eight` pill：绿表示 STT / TTS / Fast LLM 探针都通。
+1. 看顶部 `eight` pill：绿表示 STT / TTS / Fast LLM 探针都通；当前 Fast LLM 默认走 Yunwu，因此 eight 机器只要求 STT/TTS 通。
 2. 看 `curl http://127.0.0.1:8769/healthz/full` 的 `remote` 字段。
 3. 如果远场转写不清楚，先看 `/capture/stats` 的 `last_rms`、`last_speech_ratio`、`last_gate_reason`，区分麦克风输入太小、门控过滤、还是 STT 识别质量问题。
 4. 导出诊断包，附带 `~/.echodesk/logs/backend.log` 和 capture stats。

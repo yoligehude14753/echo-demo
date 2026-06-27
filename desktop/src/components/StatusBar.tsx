@@ -361,7 +361,7 @@ function HeyiPopover({
           {synthText}
         </span>
       </div>
-      <ProbeRow name="Fast LLM :7860" probe={fastLlm} />
+      <ProbeRow name="Fast LLM" probe={fastLlm} />
       <div className="flex items-center justify-between mt-2">
         <span className="text-ink-400 text-[10px]">
           TCP 探针 30s · 合成回环 30s

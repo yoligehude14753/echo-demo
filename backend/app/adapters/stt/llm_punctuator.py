@@ -6,7 +6,7 @@
   开关**。实测 6s ambient chunk 出来的中文是一气呵成 30+ 字、无标点的整行，
   用户反馈"读不下去"。
 - 既然 STT 服务侧无法直出标点，就在 ambient 主链路里加一个轻量 LLM 后处理：
-  qwen3.5-9b-local-gpu0 on eight :7860（与 llm_fast 同通道），把多段 raw text **一次性**
+  LLM_FAST（默认跟随 MAIN；私有部署可切本地 vLLM），把多段 raw text **一次性**
   发给 LLM，要求"只加标点和换行，不改字、不补字、不总结"。
 
 设计约束（与 18-llm-workflow.mdc / 19-quality-detail.mdc 对齐）：
@@ -16,7 +16,7 @@
   ambient 主链路 99% 时间在跑，任何阻塞都会让 stored counter 卡住。
 - **温度 0**：标点是确定性任务，避免 LLM 二次创作。
 - **批 batch**：单 chunk 通常只有 1-3 段，一次 LLM 调用 < 300 tokens prompt +
-  < 500 tokens completion，p50 < 700ms (qwen3.5-9b-local-gpu0)，配 2s 超时绰绰有余。
+  < 500 tokens completion，配 2s 超时；超时则回退原文，不阻塞转写主链路。
 - **flag 可关**：`AMBIENT_LLM_PUNCTUATE=false` 整体禁用；测试 / 出问题时
   立刻回退到无标点路径。
 

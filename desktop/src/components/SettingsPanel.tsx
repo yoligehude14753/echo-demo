@@ -101,8 +101,8 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
   },
   llm_fast_base_url: {
     label: "快速 LLM Base URL",
-    hint: "qwen3.5-9b-local-gpu0 (eight :7860)；用于 intent 分类等低延时任务",
-    placeholder: "http://100.76.3.59:7860/v1",
+    hint: "默认跟随主 LLM；私有部署可改为 eight / vLLM 端点",
+    placeholder: "https://yunwu.ai/v1",
   },
   stt_firered_url: {
     label: "STT URL",

@@ -50,6 +50,51 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.25] – 2026-06-27
+
+Public demo 数据隔离热修复：修正已安装 / 新安装客户端仍可能通过共享 public
+backend 当前会议状态继承其它设备会议的问题，并补充跨平台 packaged CDP smoke 工具。
+
+### 修复
+
+- Public / TV / Android 默认连接 `https://echodesk.yoliyoli.uk` 时，不再轮询共享
+  `/meetings/current` 作为本机会议状态；状态条只显示本机显式开始的会议。
+- `/capture/chunk` 回包里的 `meeting_id` 只有在前端本次 chunk 明确带出同一个
+  本机 `meeting_id` 时才会进入会议面板；待机状态下 public backend 的全局自动会议
+  不会再污染新装客户端。
+- WebSocket 在 public 默认 backend 下继续丢弃共享 replay，但允许本机已知
+  `meeting_id` 的事件进入，避免本机会议的产物 / 待办事件被误杀。
+- Public backend 服务端同步隔离待机采集：待机 `/capture/chunk` 不再沿用共享
+  `MeetingState.current`，也不会把无 `meeting_id` 的 chunk 写入其它设备当前会议。
+- TTS 客户端超时从 30s 放宽到 90s，避免 heyi 到 eight 的 tailnet 转发偶发慢响应时
+  误报 “TTS 上游熔断”。
+- Fast LLM public 默认改为跟随 Yunwu `MiniMax-M2.7` 主通道；当 eight fast LLM
+  未启动时，路由 / RAG 仲裁不再因为 `:7905` 连接失败而整体降级。
+
+### 工具 / 验证
+
+- 新增 `desktop/scripts/cdp-packaged-smoke.cjs`，可对 macOS / Windows / Linux
+  打包应用通过 Electron CDP 做不白屏、连接态、设置入口、工作区入口、输入框和
+  基础布局边界检查，并保存截图。
+- Windows NSIS 安装器改为 one-click/current-user 模式，禁用安装目录选择和
+  安装后自动启动，避免远程静默安装或普通用户一键安装卡在交互安装界面。
+- 新增 `EchoDesk-0.2.25-win-x64.zip` 便携包，便于远程/托管环境绕过 NSIS
+  安装器直接做 smoke 或临时使用。
+- E2E 新增回归：public / TV 待机时即使 `/capture/chunk` 返回共享 `meeting_id`，
+  也不会显示共享会议段落或切换会议状态。
+
+### 配置变更
+
+- 桌面版本升到 `0.2.25`。
+- backend 默认 `app_version=0.2.25`。
+- Android / TV `versionCode=225`、`versionName=0.2.25`。
+- STT / TTS 当前默认走 eight，Fast LLM 默认走 Yunwu 兜底：
+  - STT: `http://100.76.3.59:8090`
+  - TTS: `http://100.76.3.59:8094`
+  - Fast LLM: `https://yunwu.ai/v1`, model `MiniMax-M2.7`
+
+---
+
 ## [0.2.24] – 2026-06-27
 
 Public demo 多端热修复：修正新装客户端继承旧历史、移动端/TV 版布局挤压，以及安装文档仍指向旧版本的问题。

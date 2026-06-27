@@ -4,15 +4,15 @@ P1.4（独立产品 Phase 1）：UI 状态栏 4 个 pill 的数据源；诊断�
 都从这里读。
 
 实现：
-- 后台 task 每 30s 用 TCP socket connect 探一次远程依赖（不发实际 HTTP，避免
-  对远程加负担、产生噪音、消耗 quota）
+- STT/TTS 后台 task 每 30s 用 TCP socket connect 探一次远程依赖。
+- LLM 用带 Authorization 的 `/v1/models` 探针；只测 TCP 会把无效 key 误报为可用。
 - 探针结果缓存到内存；/healthz/full 直接读 cache
 - 启动时后台异步探测；避免 tailnet 抖动导致 backend 启动被健康探针阻塞
 
 远程探针名规范（前端 pill 引用同一份）：
   heyi_stt_firered    eight :8090 FireRedASR2-AED
   heyi_tts_qwen3      eight :8094 qwen3 TTS
-  heyi_llm_fast       eight :7860 qwen3.5-9b-local-gpu0 vLLM
+  heyi_llm_fast       Fast LLM endpoint (public default: Yunwu fallback)
   yunwu_llm_main      yunwu.ai MiniMax-M2.7（无 key 时 ok=null reason=no_api_key）
   tavily              api.tavily.com（无 key 时 ok=null reason=no_api_key）
 """
@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends
 
 from app import __version__
@@ -93,6 +94,32 @@ async def _probe_tcp(host: str, port: int) -> ProbeResult:
         return ProbeResult(ok=False, error=f"{type(e).__name__}: {e}"[:200])
 
 
+async def _probe_openai_models(base_url: str, api_key: str) -> ProbeResult:
+    """Probe an OpenAI-compatible `/models` endpoint with auth.
+
+    This is intentionally stronger than a TCP probe but cheaper than chat
+    completion. It catches the public-demo failure mode where Yunwu is reachable
+    but the configured key is missing/invalid.
+    """
+    if not api_key or api_key == "EMPTY":
+        return ProbeResult(ok=None, reason="no_api_key")
+    url = base_url.rstrip("/") + "/models"
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(trust_env=False, timeout=_PROBE_TIMEOUT_S) as client:
+            resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+        if resp.status_code < 400:
+            return ProbeResult(
+                ok=True,
+                latency_ms=round((time.monotonic() - t0) * 1000, 1),
+            )
+        return ProbeResult(ok=False, error=f"http_{resp.status_code}")
+    except httpx.TimeoutException:
+        return ProbeResult(ok=False, error="timeout")
+    except httpx.HTTPError as e:
+        return ProbeResult(ok=False, error=f"{type(e).__name__}: {e}"[:200])
+
+
 async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
     probes: list[tuple[str, asyncio.Future[ProbeResult] | asyncio.Task[ProbeResult]]] = []
     host, port = _host_port_from_url(settings.stt_firered_url)
@@ -111,8 +138,17 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
             )
         )
 
-    host, port = _host_port_from_url(settings.llm_fast_base_url)
-    probes.append(("heyi_llm_fast", asyncio.ensure_future(_probe_tcp(host, port))))
+    fast_key = (
+        settings.yunwu_open_key
+        if settings.llm_fast_base_url.rstrip("/") == settings.llm_main_base_url.rstrip("/")
+        else settings.llm_local_api_key
+    )
+    probes.append(
+        (
+            "heyi_llm_fast",
+            asyncio.ensure_future(_probe_openai_models(settings.llm_fast_base_url, fast_key)),
+        )
+    )
 
     if not settings.yunwu_open_key:
         probes.append(
@@ -122,8 +158,14 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
             )
         )
     else:
-        host, port = _host_port_from_url(settings.llm_main_base_url, 443)
-        probes.append(("yunwu_llm_main", asyncio.ensure_future(_probe_tcp(host, port))))
+        probes.append(
+            (
+                "yunwu_llm_main",
+                asyncio.ensure_future(
+                    _probe_openai_models(settings.llm_main_base_url, settings.yunwu_open_key)
+                ),
+            )
+        )
 
     if not settings.tavily_api_key:
         probes.append(

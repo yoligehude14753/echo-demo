@@ -1,4 +1,4 @@
-"""Integration: 真实访问 eight STT (8090 firered) / TTS (8094) / FAST LLM (7860)。
+"""Integration: 真实访问 eight STT (8090 firered) / TTS (8094) / FAST LLM fallback。
 
 不可达自动 skip（demo 网络下 eight 经常分阶段拉起）。
 
@@ -64,11 +64,8 @@ async def test_real_tts_synthesize(settings: Settings) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not _can_connect("100.76.3.59", 7860), reason="eight 7860 (qwen3.5-9b-local-gpu0) 不可达"
-)
-async def test_real_fast_llm_qwen3() -> None:
-    """Fast 通道 qwen3.5-9b-local-gpu0 vLLM 完整流式。"""
+async def test_real_fast_llm_fallback() -> None:
+    """Fast 通道默认跟随 Yunwu M2.7，可完整流式。"""
     from app.adapters.llm import OpenAICompatibleLLM
     from app.schemas.llm import ChatMessage
 
@@ -78,7 +75,7 @@ async def test_real_fast_llm_qwen3() -> None:
         chunks: list[str] = []
         async for c in llm.chat_stream(
             [ChatMessage(role="user", content="一句话回答:1+1=?")],
-            model="qwen3.5-9b-local-gpu0",
+            model="MiniMax-M2.7",
             max_tokens=200,
             timeout_s=60.0,
         ):

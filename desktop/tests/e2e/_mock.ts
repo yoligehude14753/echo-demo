@@ -256,7 +256,7 @@ export async function installEchoMock(
               { key: "yunwu_open_key", value: "", sensitive: true, source: "default" },
               {
                 key: "llm_fast_base_url",
-                value: "http://100.76.3.59:7860/v1",
+                value: "https://yunwu.ai/v1",
                 sensitive: false,
                 source: "default",
               },

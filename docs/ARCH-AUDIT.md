@@ -12,14 +12,17 @@
   echo-demo 是从它**简化 + Ports & Adapters 重构**而来，但很多决策来自 echo 实战
 - 任何对架构的怀疑，先去 echo 源头核对，**不要看 echo-demo 的变量名做判断**
 
-## 1. 模型 / 远程服务事实表（eight on Tailscale 100.76.3.59）
+## 1. 模型 / 远程服务事实表（public demo 0.2.25）
 
-| 端口 | echo-demo `config.py` 命名 | swagger 实际服务 | 用途 | 状态 |
+| 端点 | echo-demo `config.py` 命名 | 实际服务 | 用途 | 状态 |
 |---|---|---|---|---|
-| `:7860` | `llm_fast_*` | `qwen3.5-9b-local-gpu0` (vLLM) | 快速通道意图分类 + 短任务 | ✓ 活，名实相符 |
-| `:8090` | `stt_firered_url` | `FireRedASR2-AED` | **唯一 STT**（PR `echodesk-remove-sensevoice` 起） | ✓ 活，名实相符 |
+| `https://yunwu.ai/v1` | `llm_fast_*` | `MiniMax-M2.7` | public demo 快速通道 fallback | ✓ 当前默认 |
+| `100.76.3.59:8090` | `stt_firered_url` | `FireRedASR2-AED` | **唯一 STT**（PR `echodesk-remove-sensevoice` 起） | ✓ 当前默认 |
 | ~~`:8093`~~ | — | ~~SenseVoice GPU ASR~~ | 已删除（PR `echodesk-remove-sensevoice`：多 backend 选项干扰架构判断） | ✗ 不再使用 |
-| `:8094` | `tts_qwen3_url`（alias `tts_cosyvoice_url`） | `faster-qwen3-tts CustomVoice` | 主 TTS | ✓ 活，命名已修正（arch-1） |
+| `100.76.3.59:8094` | `tts_qwen3_url`（alias `tts_cosyvoice_url`） | `faster-qwen3-tts CustomVoice` | 主 TTS | ✓ 当前默认 |
+
+> 历史：早期 fast LLM 使用 `100.76.3.59:7860/qwen3.5-9b-local-gpu0`。
+> 0.2.25 public 版本不再默认依赖它，避免 eight 私有服务不可达时阻塞普通用户。
 
 外部云：
 - Yunwu / MiniMax-M2.7：会议纪要 / RAG / @生成 重路径 LLM

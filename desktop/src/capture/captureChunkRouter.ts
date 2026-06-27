@@ -146,11 +146,16 @@ export function attachCaptureChunkRouter(
         }
         handlers?.onAmbientUploaded?.();
       }
-      if (shouldHideSharedPublicHistory() && result.meeting_id) {
+      const acceptsLocalMeetingOverlay =
+        shouldHideSharedPublicHistory() &&
+        meetingId !== undefined &&
+        result.meeting_id === meetingId;
+      const localMeetingId = acceptsLocalMeetingOverlay ? result.meeting_id : null;
+      if (localMeetingId) {
         const store = useStore.getState();
-        store.markMeetingActive(result.meeting_id, { select: true });
+        store.markMeetingActive(localMeetingId, { select: true });
         if (result.meeting_segments.length > 0) {
-          store.addMeetingSegments(result.meeting_id, result.meeting_segments, {
+          store.addMeetingSegments(localMeetingId, result.meeting_segments, {
             select: true,
           });
         }
