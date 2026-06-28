@@ -22,7 +22,8 @@ const BUNDLE_NAME = `EchoDesk-${version}-smart-tv-oneclick`;
 const BUNDLE_DIR = join(RELEASE_DIR, BUNDLE_NAME);
 const BUNDLE_ZIP = join(RELEASE_DIR, `${BUNDLE_NAME}.zip`);
 const INSTALL_PAGE_URL =
-  process.env.ECHODESK_TV_INSTALL_URL || "http://10.10.12.117:18080/tv.html";
+  process.env.ECHODESK_TV_INSTALL_URL ||
+  "https://yoligehude14753.github.io/echo-demo/tv-install.html";
 
 function fail(message) {
   console.error(`[tv-package] ${message}`);
@@ -197,7 +198,8 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
 
 使用前提
 - APK 只是 EchoDesk 前端壳，不包含 Python backend，也不包含真实 API key。
-- 电视端需要能访问 EchoDesk backend。会议室内测建议让 Mac/Windows 后端监听 0.0.0.0:8769，并在 EchoDesk 设置里填电脑局域网地址。
+- 默认连接 https://echodesk.yoliyoli.uk 公网 demo backend；STT / TTS / LLM 由服务端转发到 eight。
+- 私有内网调试时，才需要让 Mac/Windows 后端监听 0.0.0.0:8769，并在 EchoDesk 设置里填电脑局域网地址。
 `;
 
 writeFileSync(join(BUNDLE_DIR, "install-tv-macos.sh"), macInstaller, "utf-8");

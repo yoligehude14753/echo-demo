@@ -16,8 +16,8 @@
 |---|---|---|
 | macOS Apple Silicon | `EchoDesk-0.2.30-arm64.dmg` | 桌面版安装包 |
 | macOS 备用 zip | `EchoDesk-0.2.30-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows | `EchoDesk.Setup.0.2.30.exe` | Windows 安装包 |
-| Windows 便携包 | `EchoDesk-0.2.30-win-x64.zip` | 解压后运行 `EchoDesk.exe`，适合远程/托管环境 |
+| Windows 安装器 | `EchoDesk.Setup.0.2.30.exe` | 普通 Windows 安装包 |
+| Windows 便携包 | `EchoDesk-0.2.30-win-x64.zip` | 解压后运行 `EchoDesk.exe`；受管/远程环境优先用这个 |
 | Linux AppImage | `EchoDesk-0.2.30.AppImage` | Linux x64 免安装运行 |
 | Linux deb | `echodesk-desktop_0.2.30_amd64.deb` | Ubuntu / Debian 安装包 |
 | Android 手机 / 平板 | `EchoDesk-0.2.30-android.apk` | 默认连接公网 demo backend |
@@ -26,6 +26,8 @@
 | 校验文件 | `SHA256SUMS-0.2.30.txt` | 校验下载完整性 |
 
 公开桌面包、Android 和 TV 客户端默认连接 `https://echodesk.yoliyoli.uk`，模型服务和密钥都在服务端。
+Windows 机器若出现 Device Guard / 组织策略拦截 `.exe` 安装器，请下载 `EchoDesk-0.2.30-win-x64.zip`，
+解压后直接运行 `EchoDesk.exe`；该形态已在 Windows 远程机通过启动和设置页点击 smoke。
 私有桌面部署可设置 `ECHO_FORCE_LOCAL_BACKEND=1` 恢复本机 Python backend。
 更详细的安装、电视侧载和本地后端说明见 [`docs/INSTALL.md`](docs/INSTALL.md)。
 TV / public demo 模式默认不拉取共享历史，新装设备只显示本机本次会议；若电视系统不向

@@ -7,8 +7,8 @@
 |---|---|---|
 | macOS Apple Silicon | `EchoDesk-0.2.30-arm64.dmg` | 桌面版安装包 |
 | macOS 备用 zip | `EchoDesk-0.2.30-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows | `EchoDesk.Setup.0.2.30.exe` | Windows 安装包 |
-| Windows 便携包 | `EchoDesk-0.2.30-win-x64.zip` | 解压后运行 `EchoDesk.exe`，适合远程/托管环境 |
+| Windows 安装器 | `EchoDesk.Setup.0.2.30.exe` | 普通 Windows 安装包 |
+| Windows 便携包 | `EchoDesk-0.2.30-win-x64.zip` | 解压后运行 `EchoDesk.exe`；受管/远程环境优先用这个 |
 | Linux AppImage | `EchoDesk-0.2.30.AppImage` | Linux x64 免安装运行 |
 | Linux deb | `echodesk-desktop_0.2.30_amd64.deb` | Ubuntu / Debian 安装包 |
 | Android 手机 / 平板 | `EchoDesk-0.2.30-android.apk` | 默认连接公网 demo backend |
@@ -48,8 +48,8 @@ Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yol
 优先从 GitHub Releases 下载当前 demo 包：
 
 - macOS: `EchoDesk-0.2.30-arm64.dmg`
-- Windows: `EchoDesk.Setup.0.2.30.exe`
-- Windows 便携包: `EchoDesk-0.2.30-win-x64.zip`
+- Windows 安装器: `EchoDesk.Setup.0.2.30.exe`
+- Windows 便携包（受管/远程环境推荐）: `EchoDesk-0.2.30-win-x64.zip`
 - Linux: `EchoDesk-0.2.30.AppImage` 或 `echodesk-desktop_0.2.30_amd64.deb`
 - Android 手机 / 平板: `EchoDesk-0.2.30-android.apk`（demo 包）
 - Android TV / 智能电视: `EchoDesk-0.2.30-smart-tv.apk`
@@ -91,6 +91,10 @@ Windows exe 有脚本入口，但建议在 Windows 机器或带 Wine/NSIS 的构
 cd ~/echo-demo/desktop
 npm run app:dist:win
 ```
+
+如果 Windows 机器出现 Device Guard / 组织策略拦截 `.exe` 安装器，请改用
+`EchoDesk-0.2.30-win-x64.zip`。解压后直接运行 `EchoDesk.exe`，本机数据仍保存在
+Windows 用户目录；后续升级只需要下载新版 zip 并替换解压目录。
 
 Linux x64 可构建 AppImage + deb：
 
