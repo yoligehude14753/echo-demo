@@ -8,6 +8,16 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.31] – 2026-06-28
+
+多端 public demo 同步热修复：桌面 / Android 普通包统一显示“公共演示模式”，
+避免 macOS / Windows / Linux 用户看到 TV / Android 专属文案而误判装错版本。
+
+### 修复
+
+- 桌面 public demo 的转写流提示从“TV / Android 公共演示模式”改为跨平台文案。
+- 版本号同步到 `0.2.31`；Android / TV `versionCode=231`、`versionName=0.2.31`。
+
 ## [0.2.30] – 2026-06-28
 
 Android / TV 更新入口热修复：普通 Android 手机 / 平板横屏时不再被误判成 TV 包，

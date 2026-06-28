@@ -234,7 +234,7 @@ export default function TranscriptStream(): JSX.Element {
         <div>等待环境音转写…</div>
         <div className="text-[10px] text-ink-300">
           {localOnlyAmbient
-            ? "TV / Android 公共演示模式只显示本机本次采集，不读取共享历史"
+            ? "公共演示模式只显示本机本次采集，不读取共享历史"
             : "开口说话即可触发；环境静音/底噪会被自动过滤"}
         </div>
       </div>
