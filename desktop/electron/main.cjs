@@ -799,8 +799,10 @@ ipcMain.handle("updates:check", async () => {
     const result = await autoUpdater.checkForUpdates();
     const info = result?.updateInfo;
     const latestVersion = normalizeVersion(info?.version || fallback.latestVersion);
+    const fallbackWithoutError = { ...fallback };
+    delete fallbackWithoutError.error;
     const merged = {
-      ...fallback,
+      ...fallbackWithoutError,
       status: compareVersions(latestVersion, app.getVersion()) > 0
         ? "available"
         : "current",

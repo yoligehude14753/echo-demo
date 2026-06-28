@@ -8,6 +8,17 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.29] – 2026-06-28
+
+桌面更新检查热修复：当 GitHub API 被限流但 `electron-updater` 已经成功确认当前版本时，
+设置页不再残留 403 错误，避免用户看到“已是最新”和“更新失败”同时出现。
+
+### 修复
+
+- macOS / Windows / Linux 打包版的“设置 → 更新 → 检查更新”现在以
+  `electron-updater` 的结果为准；GitHub API fallback 只在 updater 也不可用时展示错误。
+- 版本号同步到 `0.2.29`；Android / TV `versionCode=229`、`versionName=0.2.29`。
+
 ## [0.2.28] – 2026-06-28
 
 Windows 安装器升级修复：旧版安装目录或卸载器残留时，静默安装会先清理程序安装目录，
