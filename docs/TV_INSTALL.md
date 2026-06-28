@@ -39,7 +39,24 @@
 powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.1.23
 ```
 
+如果电视的 ADB 端口不是 `5555`，可以显式传端口：
+
+```bash
+./install-tv-macos.sh 192.168.1.23 5556
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.1.23 -AdbPort 5556
+```
+
 如果电视弹出 RSA 调试授权，先选择允许，再重新运行脚本。
+如果脚本提示 `ADB 尚未授权`，或 `adb devices` 里看到 `offline` / `unauthorized`，
+说明电脑已经连到电视调试端口，但电视没有接受这台电脑的 RSA 授权。处理顺序：
+
+1. 在电视上关闭再打开「ADB 调试 / 网络调试」。
+2. 看到 RSA 调试授权弹窗时选择允许；如果有「始终允许」也一起勾选。
+3. 没有弹窗时重启电视，再重新运行安装脚本。
+4. 仍然是 `offline` 时，换另一个 ADB 端口重试，例如 `5556`。
 
 一键脚本默认会执行干净安装：先停止旧 app、清理旧 WebView / app data，再安装、
 授权麦克风并自动打开 EchoDesk。这样新安装不会继承上一版的本地缓存。

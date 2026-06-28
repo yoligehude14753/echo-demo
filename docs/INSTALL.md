@@ -160,11 +160,18 @@ ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --p
 3. 电脑和电视在同一个局域网。
 4. macOS 执行 `./install-tv-macos.sh 电视IP`；Windows 执行
    `install-tv-windows.ps1 -TvIp 电视IP`。
+   如果电视的 ADB 端口不是默认 `5555`，macOS 可执行
+   `./install-tv-macos.sh 电视IP 5556`，Windows 可执行
+   `install-tv-windows.ps1 -TvIp 电视IP -AdbPort 5556`。
 5. 首次安装脚本默认清理旧 WebView / app data、授权麦克风并尝试自动打开 EchoDesk。
    升级保留数据时，运行前设置 `ECHODESK_TV_KEEP_DATA=1`。
    TV 包名是 `com.echodesk.tv`，和 Android 手机 / 平板包 `com.echodesk.app` 分离；
    默认一键安装会卸载旧 TV 遗留包 `com.echodesk.app`，避免历史数据串包。
    如需保留旧包，额外设置 `ECHODESK_TV_KEEP_LEGACY=1`。
+
+如果脚本提示 `ADB 尚未授权`，或 `adb devices` 显示 `offline` / `unauthorized`，
+说明电脑已连到电视调试端口，但电视没有接受这台电脑的 RSA 授权。请在电视上关闭再打开
+「ADB 调试 / 网络调试」，看到 RSA 授权弹窗时选择允许；没有弹窗时重启电视后重试。
 
 也可以用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/tv-install.html`，
 遥控器选择「下载电视 APK」。

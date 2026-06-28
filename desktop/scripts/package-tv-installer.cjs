@@ -57,6 +57,7 @@ const macInstaller = `#!/usr/bin/env bash
 set -euo pipefail
 
 TV_IP="\${1:-}"
+TV_PORT="\${2:-\${ECHODESK_TV_ADB_PORT:-5555}}"
 if [ -z "$TV_IP" ]; then
   read -r -p "请输入电视 IP（例如 192.168.1.23）: " TV_IP
 fi
@@ -78,9 +79,9 @@ else
 fi
 
 echo "[EchoDesk TV] adb=$ADB"
-echo "[EchoDesk TV] connecting to $TV_IP:5555 ..."
-"$ADB" connect "$TV_IP:5555" || true
-SERIAL="$TV_IP:5555"
+echo "[EchoDesk TV] connecting to $TV_IP:$TV_PORT ..."
+"$ADB" connect "$TV_IP:$TV_PORT" || true
+SERIAL="$TV_IP:$TV_PORT"
 ADB_DEVICE=("$ADB" -s "$SERIAL")
 STATE="$("$ADB" devices | awk -v serial="$SERIAL" '$1 == serial { print $2 }')"
 if [ "$STATE" != "device" ]; then
@@ -110,20 +111,29 @@ echo "[EchoDesk TV] installing $APK ..."
 "\${ADB_DEVICE[@]}" shell pm grant "$PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
 "\${ADB_DEVICE[@]}" shell appops set "$PKG" RECORD_AUDIO allow >/dev/null 2>&1 || true
 "\${ADB_DEVICE[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
+"\${ADB_DEVICE[@]}" shell dumpsys package "$PKG" | grep -E "versionName|versionCode" | head -3 || true
 
 echo
 echo "安装完成，已尝试自动打开 EchoDesk。"
 echo "如果电视弹出调试授权，请先在电视上点允许，再重新运行本脚本。"
-echo "如需保留旧配置更新，请用：ECHODESK_TV_KEEP_DATA=1 ./install-tv-macos.sh $TV_IP"
+echo "如需保留旧配置更新，请用：ECHODESK_TV_KEEP_DATA=1 ./install-tv-macos.sh $TV_IP $TV_PORT"
 echo "如需保留旧 com.echodesk.app 包，请同时设置：ECHODESK_TV_KEEP_LEGACY=1"
 `;
 
 const winInstaller = `param(
-  [string]$TvIp
+  [string]$TvIp,
+  [string]$AdbPort
 )
 
 if (-not $TvIp) {
   $TvIp = Read-Host "请输入电视 IP（例如 192.168.1.23）"
+}
+if (-not $AdbPort) {
+  if ($env:ECHODESK_TV_ADB_PORT) {
+    $AdbPort = $env:ECHODESK_TV_ADB_PORT
+  } else {
+    $AdbPort = "5555"
+  }
 }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -152,9 +162,9 @@ if (-not $Adb) {
 }
 
 Write-Host "[EchoDesk TV] adb=$Adb"
-Write-Host "[EchoDesk TV] connecting to $($TvIp):5555 ..."
-& $Adb connect "$($TvIp):5555"
-$Serial = "$($TvIp):5555"
+Write-Host "[EchoDesk TV] connecting to $($TvIp):$AdbPort ..."
+& $Adb connect "$($TvIp):$AdbPort"
+$Serial = "$($TvIp):$AdbPort"
 $StateLine = (& $Adb devices) | Where-Object { $_ -match ("^" + [regex]::Escape($Serial) + "\\s+") } | Select-Object -First 1
 $State = if ($StateLine -match "\\s+(\\S+)\\s*$") { $Matches[1] } else { "" }
 if ($State -ne "device") {
@@ -180,10 +190,17 @@ if ($env:ECHODESK_TV_KEEP_DATA -ne "1") {
 
 Write-Host "[EchoDesk TV] installing $Apk ..."
 & $Adb -s $Serial install -r -d "$Apk"
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "安装失败，adb install exit code=$LASTEXITCODE。"
+  exit $LASTEXITCODE
+}
 
 $null = & $Adb -s $Serial shell pm grant $Pkg android.permission.RECORD_AUDIO
 $null = & $Adb -s $Serial shell appops set $Pkg RECORD_AUDIO allow
 $null = & $Adb -s $Serial shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1
+& $Adb -s $Serial shell dumpsys package $Pkg |
+  Select-String "versionName|versionCode" |
+  Select-Object -First 3
 
 Write-Host ""
 Write-Host "安装完成，已尝试自动打开 EchoDesk。"
@@ -205,8 +222,12 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
 3. 查到电视 IP。
 4. macOS 运行：
    ./install-tv-macos.sh 电视IP
+   如果电视 ADB 端口不是 5555，运行：
+   ./install-tv-macos.sh 电视IP 5556
 5. Windows PowerShell 运行：
    powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP
+   如果电视 ADB 端口不是 5555，运行：
+   powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP -AdbPort 5556
 6. 脚本默认清理旧的本地 WebView / app data，授权麦克风并自动打开 EchoDesk。
    如需保留旧配置更新，设置 ECHODESK_TV_KEEP_DATA=1 后再运行。
    新 TV 版包名是 com.echodesk.tv，默认会卸载旧 com.echodesk.app 电视遗留包，避免历史数据串包。
