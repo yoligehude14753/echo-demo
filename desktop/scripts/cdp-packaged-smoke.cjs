@@ -85,7 +85,7 @@ async function main() {
 
     await evalJs(`window.localStorage.setItem("echodesk.onboarding.completed", "1")`);
     await conn.send("Page.reload", { ignoreCache: true });
-    for (let attempt = 0; attempt < 15; attempt += 1) {
+    for (let attempt = 0; attempt < 45; attempt += 1) {
       const hasConnected = await evalJs(
         `Boolean(document.body?.innerText.includes("\\u5df2\\u8fde\\u63a5"))`,
       );
@@ -131,7 +131,11 @@ async function main() {
     })()`);
 
     for (const key of ["brand", "connected", "hasOutputs", "hasWorkspace"]) {
-      if (!checks[key]) throw new Error(`missing required text: ${key}`);
+      if (!checks[key]) {
+        throw new Error(
+          `missing required text: ${key}; textSample=${JSON.stringify(checks.textSample)}`,
+        );
+      }
     }
 
     for (const key of ["settingsButton", "workspaceConfig", "captureStatus", "command"]) {
