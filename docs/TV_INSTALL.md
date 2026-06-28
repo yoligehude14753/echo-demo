@@ -9,12 +9,12 @@
 
 - `EchoDesk-0.2.30-smart-tv.apk`：电视直接安装用 APK。
 - `EchoDesk-0.2.30-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
-- `https://yoligehude14753.github.io/echo-demo/t.html`：电视浏览器短安装页，可用遥控器直接选择下载按钮。
+- `https://yoligehude14753.github.io/echo-demo/`：电视浏览器短安装页，可用遥控器直接选择下载按钮。
 
 ## 方法 A：电视浏览器安装
 
 1. 让电视连接网络。
-2. 用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/t.html`。
+2. 用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/`。
 3. 选择「下载电视 APK」。
 4. 下载完成后按系统提示允许安装未知来源应用。
 5. 安装完成后，从电视「我的应用」打开 EchoDesk。

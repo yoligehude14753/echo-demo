@@ -54,7 +54,7 @@ Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yol
 - Android 手机 / 平板: `EchoDesk-0.2.30-android.apk`（demo 包）
 - Android TV / 智能电视: `EchoDesk-0.2.30-smart-tv.apk`
 - 智能电视一键安装包：`EchoDesk-0.2.30-smart-tv-oneclick.zip`
-- 电视浏览器短安装页：`https://yoligehude14753.github.io/echo-demo/t.html`
+- 电视浏览器短安装页：`https://yoligehude14753.github.io/echo-demo/`
 
 源码构建仅用于开发：
 
@@ -173,7 +173,7 @@ ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --p
 说明电脑已连到电视调试端口，但电视没有接受这台电脑的 RSA 授权。请在电视上关闭再打开
 「ADB 调试 / 网络调试」，看到 RSA 授权弹窗时选择允许；没有弹窗时重启电视后重试。
 
-也可以用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/t.html`，
+也可以用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/`，
 遥控器选择「下载电视 APK」。
 Samsung Tizen、LG webOS、Apple TV 不能安装 APK；这类设备需要外接 Android 盒子或后续浏览器/PWA 版本。
 
