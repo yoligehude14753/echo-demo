@@ -81,6 +81,16 @@ const ACCEPT_EXT_SET = new Set(
   ACCEPT_EXT.split(",").map((s) => s.trim().toLowerCase()),
 );
 
+function detectTvCommandMode(): boolean {
+  if (
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("echodesk-tv")
+  ) {
+    return true;
+  }
+  return isTvLikeViewport();
+}
+
 function pickExt(filename: string): string {
   const i = filename.lastIndexOf(".");
   return i >= 0 ? filename.slice(i).toLowerCase() : "";
@@ -101,18 +111,31 @@ export default function CommandBar(): JSX.Element {
   const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<TextAreaRef | null>(null);
-  const [tvMode, setTvMode] = useState(() => isTvLikeViewport());
+  const [tvMode, setTvMode] = useState(() => detectTvCommandMode());
   const commandPlaceholder = tvMode
     ? "输入指令，如 @总结会议"
     : "拖入文件入库 · @生成 PPT / @查 · Shift+Enter 换行";
   const quickCommands = ["@总结会议", "@chat 现在状态", "@查 当前会议要点"];
 
   useEffect(() => {
-    const updateTvMode = () => setTvMode(isTvLikeViewport());
+    const updateTvMode = () => setTvMode(detectTvCommandMode());
     updateTvMode();
+    const timer = window.setTimeout(updateTvMode, 0);
+    const raf = window.requestAnimationFrame(updateTvMode);
+    const observer =
+      typeof MutationObserver !== "undefined"
+        ? new MutationObserver(updateTvMode)
+        : null;
+    observer?.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
     window.addEventListener("resize", updateTvMode, { passive: true });
     window.addEventListener("orientationchange", updateTvMode, { passive: true });
     return () => {
+      window.clearTimeout(timer);
+      window.cancelAnimationFrame(raf);
+      observer?.disconnect();
       window.removeEventListener("resize", updateTvMode);
       window.removeEventListener("orientationchange", updateTvMode);
     };

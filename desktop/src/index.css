@@ -2477,3 +2477,248 @@ textarea:focus-visible,
 .echodesk-tv [data-testid="command-bar"] {
   flex: 0 0 auto !important;
 }
+
+/* v0.2.32 TV verification pass
+   The release APK is used on touch conference panels as well as remote-driven
+   TVs. Keep the desktop information density, but scale hit targets and text so
+   the screen reads correctly from a meeting-room distance. */
+.echodesk-tv .app-header {
+  height: 56px !important;
+  min-height: 56px !important;
+  padding: 0 22px !important;
+}
+
+.echodesk-tv .app-header > div:first-child {
+  flex-basis: 190px !important;
+  min-width: 190px !important;
+}
+
+.echodesk-tv .app-header .brand {
+  font-size: 22px !important;
+}
+
+.echodesk-tv [data-testid="open-about"] {
+  font-size: 14px !important;
+}
+
+.echodesk-tv [data-testid^="pill-"],
+.echodesk-tv [data-testid="meeting-status-bar"],
+.echodesk-tv [data-testid="tts-toggle"],
+.echodesk-tv .app-connection-status,
+.echodesk-tv [data-testid="open-settings"] {
+  height: 40px !important;
+  min-height: 40px !important;
+  border-radius: 11px !important;
+  font-size: 15px !important;
+}
+
+.echodesk-tv [data-testid="workspace-bar"] {
+  height: 54px !important;
+  min-height: 54px !important;
+  padding: 0 22px !important;
+}
+
+.echodesk-tv .workspace-title {
+  font-size: 18px !important;
+}
+
+.echodesk-tv .workspace-actions .ant-btn,
+.echodesk-tv [data-testid="workspace-bar"] .ant-tag {
+  height: 36px !important;
+  min-height: 36px !important;
+  font-size: 15px !important;
+}
+
+.echodesk-tv .echodesk-main-layout {
+  height: calc(var(--echodesk-vh, 100vh) - 110px) !important;
+}
+
+.echodesk-tv .echodesk-content {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 24vw) !important;
+}
+
+.echodesk-tv .echodesk-output-pane {
+  width: 24vw !important;
+  min-width: 280px !important;
+  max-width: 460px !important;
+  flex-basis: 24vw !important;
+}
+
+.echodesk-tv .echodesk-transcript-header {
+  height: 58px !important;
+  min-height: 58px !important;
+  padding: 0 26px !important;
+}
+
+.echodesk-tv .echodesk-transcript-header .text-\[13px\] {
+  font-size: 20px !important;
+}
+
+.echodesk-tv [data-testid="capture-status"] {
+  height: 38px !important;
+  min-height: 38px !important;
+  font-size: 15px !important;
+  line-height: 36px !important;
+}
+
+.echodesk-tv [data-testid="transcript-scroller"] {
+  padding: 18px 28px 16px !important;
+}
+
+.echodesk-tv [data-testid="speaker-tag"] {
+  font-size: 16px !important;
+}
+
+.echodesk-tv [data-testid="transcript-row"] .rounded-2xl {
+  padding: 13px 18px !important;
+  font-size: 20px !important;
+  line-height: 1.6 !important;
+}
+
+.echodesk-tv .echodesk-transcript-empty {
+  font-size: 22px !important;
+}
+
+.echodesk-tv .echodesk-transcript-empty .text-\[10px\] {
+  font-size: 16px !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] {
+  min-height: 118px !important;
+  padding: 12px 24px 14px !important;
+}
+
+.echodesk-tv .echodesk-tv-quick-commands {
+  display: flex !important;
+  margin-bottom: 10px !important;
+  gap: 10px !important;
+}
+
+.echodesk-tv .echodesk-tv-quick-commands button {
+  min-height: 34px !important;
+  padding: 0 14px !important;
+  border-radius: 10px !important;
+  font-size: 15px !important;
+  font-weight: 650 !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] > div:last-child {
+  grid-template-columns: 30px minmax(0, 1fr) 60px 60px !important;
+  gap: 14px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea,
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  height: 60px !important;
+  min-height: 60px !important;
+  max-height: 60px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  padding: 14px 17px !important;
+  font-size: 21px !important;
+  line-height: 30px !important;
+}
+
+.echodesk-tv .echodesk-command-textarea textarea::placeholder,
+.echodesk-tv [data-testid="command-bar"] textarea::placeholder {
+  font-size: 21px !important;
+  line-height: 30px !important;
+}
+
+.echodesk-tv [data-testid="command-attach-btn"],
+.echodesk-tv [data-testid="command-send-btn"] {
+  width: 60px !important;
+  height: 60px !important;
+  min-width: 60px !important;
+  min-height: 60px !important;
+}
+
+.echodesk-tv .echodesk-output-pane > div:first-child {
+  min-height: 250px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .text-\[13px\] {
+  font-size: 18px !important;
+}
+
+.echodesk-tv .echodesk-output-pane .text-\[11px\],
+.echodesk-tv .echodesk-output-pane .text-\[10px\],
+.echodesk-tv .ant-empty-description {
+  font-size: 15px !important;
+}
+
+@media (max-width: 1100px) {
+  .echodesk-tv .app-header {
+    height: 50px !important;
+    min-height: 50px !important;
+    padding: 0 14px !important;
+  }
+
+  .echodesk-tv .app-header > div:first-child {
+    flex-basis: 164px !important;
+    min-width: 164px !important;
+  }
+
+  .echodesk-tv .app-header .brand {
+    font-size: 19px !important;
+  }
+
+  .echodesk-tv [data-testid="workspace-bar"] {
+    height: 48px !important;
+    min-height: 48px !important;
+    padding: 0 14px !important;
+  }
+
+  .echodesk-tv .echodesk-main-layout {
+    height: calc(var(--echodesk-vh, 100vh) - 98px) !important;
+  }
+
+  .echodesk-tv .echodesk-content {
+    grid-template-columns: minmax(0, 1fr) 280px !important;
+  }
+
+  .echodesk-tv .echodesk-output-pane {
+    width: 280px !important;
+    min-width: 280px !important;
+    max-width: 280px !important;
+    flex-basis: 280px !important;
+  }
+
+  .echodesk-tv [data-testid="command-bar"] {
+    min-height: 106px !important;
+    padding: 10px 16px 12px !important;
+  }
+
+  .echodesk-tv .echodesk-tv-quick-commands button {
+    min-height: 30px !important;
+    padding: 0 11px !important;
+    font-size: 14px !important;
+  }
+
+  .echodesk-tv .echodesk-command-textarea,
+  .echodesk-tv .echodesk-command-textarea textarea,
+  .echodesk-tv [data-testid="command-bar"] textarea {
+    height: 54px !important;
+    min-height: 54px !important;
+    max-height: 54px !important;
+  }
+
+  .echodesk-tv .echodesk-command-textarea textarea,
+  .echodesk-tv [data-testid="command-bar"] textarea,
+  .echodesk-tv .echodesk-command-textarea textarea::placeholder,
+  .echodesk-tv [data-testid="command-bar"] textarea::placeholder {
+    font-size: 18px !important;
+    line-height: 26px !important;
+  }
+
+  .echodesk-tv [data-testid="command-attach-btn"],
+  .echodesk-tv [data-testid="command-send-btn"] {
+    width: 54px !important;
+    height: 54px !important;
+    min-width: 54px !important;
+    min-height: 54px !important;
+  }
+}

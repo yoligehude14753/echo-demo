@@ -122,15 +122,14 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   expect(boxes.shell?.width).toBe(960);
   expect(boxes.documentWidth).toBeLessThanOrEqual(boxes.viewportWidth + 1);
   expect(boxes.header?.height).toBeGreaterThanOrEqual(49);
-  expect(boxes.header?.height).toBeLessThanOrEqual(51);
-  expect(boxes.workspace?.height).toBeGreaterThanOrEqual(45);
-  expect(boxes.workspace?.height).toBeLessThanOrEqual(47);
+  expect(boxes.header?.height).toBeLessThanOrEqual(57);
+  expect(boxes.workspace?.height).toBeGreaterThanOrEqual(47);
+  expect(boxes.workspace?.height).toBeLessThanOrEqual(55);
   expect(boxes.sider?.width ?? 0).toBe(0);
-  const expectedOutputWidth = boxes.viewportWidth * 0.26;
-  expect(boxes.transcript?.width).toBeGreaterThanOrEqual(700);
-  expect(boxes.output?.width).toBeGreaterThanOrEqual(expectedOutputWidth - 2);
-  expect(boxes.output?.width).toBeLessThanOrEqual(expectedOutputWidth + 2);
-  expect(boxes.commandTextarea).toBeGreaterThanOrEqual(52);
+  expect(boxes.transcript?.width).toBeGreaterThanOrEqual(650);
+  expect(boxes.output?.width).toBeGreaterThanOrEqual(278);
+  expect(boxes.output?.width).toBeLessThanOrEqual(282);
+  expect(boxes.commandTextarea).toBeGreaterThanOrEqual(54);
   expect(boxes.brandSize).toBeGreaterThanOrEqual(19);
   expect(boxes.bubbleFontSize).toBeGreaterThanOrEqual(18);
 
@@ -209,9 +208,58 @@ test("电视视口：Android WebView 可视高度变化时输入条不被底部�
 
   expect(boxes.shellHeight).toBeLessThanOrEqual(1031);
   expect(boxes.commandBottom).toBeLessThanOrEqual(1031);
-  expect(boxes.commandHeight).toBeGreaterThanOrEqual(70);
-  expect(boxes.textareaHeight).toBeGreaterThanOrEqual(50);
+  expect(boxes.commandHeight).toBeGreaterThanOrEqual(106);
+  expect(boxes.textareaHeight).toBeGreaterThanOrEqual(54);
   expect(boxes.documentHeight).toBeLessThanOrEqual(1080);
+});
+
+test("电视视口：1920x1080 面板使用放大的会议室布局", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.addInitScript(() => {
+    window.localStorage.setItem("echodesk.forceTvUi", "1");
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+  });
+  await installEchoMock(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByText("转写流")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("tv-quick-commands")).toBeVisible();
+
+  const boxes = await page.evaluate(() => {
+    const pick = (selector: string) => {
+      const el = document.querySelector(selector);
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    };
+    const textarea = document.querySelector(
+      "textarea[data-testid='command-textarea'], [data-testid='command-textarea'] textarea, [data-testid='command-textarea']",
+    );
+    return {
+      shell: pick(".echodesk-shell"),
+      header: pick(".app-header"),
+      workspace: pick("[data-testid='workspace-bar']"),
+      transcript: pick(".echodesk-transcript-pane"),
+      output: pick(".echodesk-output-pane"),
+      command: pick("[data-testid='command-bar']"),
+      textareaHeight: textarea ? textarea.getBoundingClientRect().height : 0,
+      textareaFont: textarea ? Number.parseFloat(getComputedStyle(textarea).fontSize) : 0,
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+    };
+  });
+
+  expect(boxes.shell?.width).toBe(1920);
+  expect(boxes.documentWidth).toBeLessThanOrEqual(boxes.viewportWidth + 1);
+  expect(boxes.header?.height).toBeGreaterThanOrEqual(55);
+  expect(boxes.workspace?.height).toBeGreaterThanOrEqual(53);
+  expect(boxes.transcript?.width).toBeGreaterThanOrEqual(1450);
+  expect(boxes.output?.width).toBeGreaterThanOrEqual(450);
+  expect(boxes.output?.width).toBeLessThanOrEqual(462);
+  expect(boxes.command?.height).toBeGreaterThanOrEqual(118);
+  expect(boxes.textareaHeight).toBeGreaterThanOrEqual(60);
+  expect(boxes.textareaFont).toBeGreaterThanOrEqual(20);
 });
 
 test("电视视口：首次打开直接进入主界面，不显示桌面 onboarding", async ({ page }) => {
