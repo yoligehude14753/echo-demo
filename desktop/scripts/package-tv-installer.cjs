@@ -82,6 +82,16 @@ echo "[EchoDesk TV] connecting to $TV_IP:5555 ..."
 "$ADB" connect "$TV_IP:5555" || true
 SERIAL="$TV_IP:5555"
 ADB_DEVICE=("$ADB" -s "$SERIAL")
+STATE="$("$ADB" devices | awk -v serial="$SERIAL" '$1 == serial { print $2 }')"
+if [ "$STATE" != "device" ]; then
+  echo
+  echo "ADB 尚未授权：$SERIAL 当前状态是 '$STATE'。"
+  echo "请在电视上打开「开发者模式 / ADB 调试 / 网络调试」，并在弹出的 RSA 调试授权里选择允许。"
+  echo "如果电视没有弹窗，请先关闭再打开 ADB 调试，或重启电视后重新运行本脚本。"
+  echo "当前 adb devices："
+  "$ADB" devices
+  exit 2
+fi
 
 if [ "\${ECHODESK_TV_KEEP_DATA:-0}" != "1" ]; then
   echo "[EchoDesk TV] clearing old local WebView / app data ..."
@@ -145,6 +155,17 @@ Write-Host "[EchoDesk TV] adb=$Adb"
 Write-Host "[EchoDesk TV] connecting to $($TvIp):5555 ..."
 & $Adb connect "$($TvIp):5555"
 $Serial = "$($TvIp):5555"
+$StateLine = (& $Adb devices) | Where-Object { $_ -match ("^" + [regex]::Escape($Serial) + "\\s+") } | Select-Object -First 1
+$State = if ($StateLine -match "\\s+(\\S+)\\s*$") { $Matches[1] } else { "" }
+if ($State -ne "device") {
+  Write-Host ""
+  Write-Error "ADB 尚未授权：$Serial 当前状态是 '$State'。"
+  Write-Host "请在电视上打开「开发者模式 / ADB 调试 / 网络调试」，并在弹出的 RSA 调试授权里选择允许。"
+  Write-Host "如果电视没有弹窗，请先关闭再打开 ADB 调试，或重启电视后重新运行本脚本。"
+  Write-Host "当前 adb devices："
+  & $Adb devices
+  exit 2
+}
 
 if ($env:ECHODESK_TV_KEEP_DATA -ne "1") {
   Write-Host "[EchoDesk TV] clearing old local WebView / app data ..."
