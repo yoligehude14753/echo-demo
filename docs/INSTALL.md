@@ -163,6 +163,9 @@ ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --p
    如果电视的 ADB 端口不是默认 `5555`，macOS 可执行
    `./install-tv-macos.sh 电视IP 5556`，Windows 可执行
    `install-tv-windows.ps1 -TvIp 电视IP -AdbPort 5556`。
+   如果你希望脚本等待电视 RSA 授权后自动继续，macOS 可执行
+   `ECHODESK_TV_WAIT_FOR_AUTH=1 ./install-tv-macos.sh 电视IP`，Windows 可执行
+   `install-tv-windows.ps1 -TvIp 电视IP -WaitForAuth`。
 5. 首次安装脚本默认清理旧 WebView / app data、授权麦克风并尝试自动打开 EchoDesk。
    升级保留数据时，运行前设置 `ECHODESK_TV_KEEP_DATA=1`。
    TV 包名是 `com.echodesk.tv`，和 Android 手机 / 平板包 `com.echodesk.app` 分离；

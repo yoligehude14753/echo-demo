@@ -58,6 +58,8 @@ set -euo pipefail
 
 TV_IP="\${1:-}"
 TV_PORT="\${2:-\${ECHODESK_TV_ADB_PORT:-5555}}"
+WAIT_FOR_AUTH="\${ECHODESK_TV_WAIT_FOR_AUTH:-0}"
+WAIT_SECONDS="\${ECHODESK_TV_AUTH_TIMEOUT_SECONDS:-120}"
 if [ -z "$TV_IP" ]; then
   read -r -p "请输入电视 IP（例如 192.168.1.23）: " TV_IP
 fi
@@ -85,9 +87,29 @@ SERIAL="$TV_IP:$TV_PORT"
 ADB_DEVICE=("$ADB" -s "$SERIAL")
 STATE="$("$ADB" devices | awk -v serial="$SERIAL" '$1 == serial { print $2 }')"
 if [ "$STATE" != "device" ]; then
+  if [ "$WAIT_FOR_AUTH" = "1" ]; then
+    echo
+    echo "ADB 尚未授权：$SERIAL 当前状态是 '$STATE'。"
+    echo "请现在在电视上允许 RSA 调试授权；脚本会等待最多 \${WAIT_SECONDS}s。"
+    DEADLINE=$((SECONDS + WAIT_SECONDS))
+    while [ "$SECONDS" -lt "$DEADLINE" ]; do
+      "$ADB" connect "$SERIAL" >/dev/null 2>&1 || true
+      STATE="$("$ADB" devices | awk -v serial="$SERIAL" '$1 == serial { print $2 }')"
+      if [ "$STATE" = "device" ]; then
+        echo "[EchoDesk TV] ADB 已授权，继续安装。"
+        break
+      fi
+      printf "."
+      sleep 3
+    done
+    echo
+  fi
+fi
+if [ "$STATE" != "device" ]; then
   echo
   echo "ADB 尚未授权：$SERIAL 当前状态是 '$STATE'。"
   echo "请在电视上打开「开发者模式 / ADB 调试 / 网络调试」，并在弹出的 RSA 调试授权里选择允许。"
+  echo "也可以用等待模式运行：ECHODESK_TV_WAIT_FOR_AUTH=1 ./install-tv-macos.sh $TV_IP $TV_PORT"
   echo "如果电视没有弹窗，请先关闭再打开 ADB 调试，或重启电视后重新运行本脚本。"
   echo "当前 adb devices："
   "$ADB" devices
@@ -122,7 +144,8 @@ echo "如需保留旧 com.echodesk.app 包，请同时设置：ECHODESK_TV_KEEP_
 
 const winInstaller = `param(
   [string]$TvIp,
-  [string]$AdbPort
+  [string]$AdbPort,
+  [switch]$WaitForAuth
 )
 
 if (-not $TvIp) {
@@ -134,6 +157,11 @@ if (-not $AdbPort) {
   } else {
     $AdbPort = "5555"
   }
+}
+$WaitSeconds = if ($env:ECHODESK_TV_AUTH_TIMEOUT_SECONDS) {
+  [int]$env:ECHODESK_TV_AUTH_TIMEOUT_SECONDS
+} else {
+  120
 }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -167,10 +195,29 @@ Write-Host "[EchoDesk TV] connecting to $($TvIp):$AdbPort ..."
 $Serial = "$($TvIp):$AdbPort"
 $StateLine = (& $Adb devices) | Where-Object { $_ -match ("^" + [regex]::Escape($Serial) + "\\s+") } | Select-Object -First 1
 $State = if ($StateLine -match "\\s+(\\S+)\\s*$") { $Matches[1] } else { "" }
+if ($State -ne "device" -and ($WaitForAuth -or $env:ECHODESK_TV_WAIT_FOR_AUTH -eq "1")) {
+  Write-Host ""
+  Write-Host "ADB 尚未授权：$Serial 当前状态是 '$State'。"
+  Write-Host "请现在在电视上允许 RSA 调试授权；脚本会等待最多 $($WaitSeconds)s。"
+  $Deadline = (Get-Date).AddSeconds($WaitSeconds)
+  while ((Get-Date) -lt $Deadline) {
+    $null = & $Adb connect $Serial
+    $StateLine = (& $Adb devices) | Where-Object { $_ -match ("^" + [regex]::Escape($Serial) + "\\s+") } | Select-Object -First 1
+    $State = if ($StateLine -match "\\s+(\\S+)\\s*$") { $Matches[1] } else { "" }
+    if ($State -eq "device") {
+      Write-Host "[EchoDesk TV] ADB 已授权，继续安装。"
+      break
+    }
+    Write-Host -NoNewline "."
+    Start-Sleep -Seconds 3
+  }
+  Write-Host ""
+}
 if ($State -ne "device") {
   Write-Host ""
   Write-Error "ADB 尚未授权：$Serial 当前状态是 '$State'。"
   Write-Host "请在电视上打开「开发者模式 / ADB 调试 / 网络调试」，并在弹出的 RSA 调试授权里选择允许。"
+  Write-Host "也可以用等待模式运行：install-tv-windows.ps1 -TvIp $TvIp -AdbPort $AdbPort -WaitForAuth"
   Write-Host "如果电视没有弹窗，请先关闭再打开 ADB 调试，或重启电视后重新运行本脚本。"
   Write-Host "当前 adb devices："
   & $Adb devices
@@ -224,10 +271,14 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
    ./install-tv-macos.sh 电视IP
    如果电视 ADB 端口不是 5555，运行：
    ./install-tv-macos.sh 电视IP 5556
+   如果希望脚本等待电视授权后自动继续，运行：
+   ECHODESK_TV_WAIT_FOR_AUTH=1 ./install-tv-macos.sh 电视IP
 5. Windows PowerShell 运行：
    powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP
    如果电视 ADB 端口不是 5555，运行：
    powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP -AdbPort 5556
+   如果希望脚本等待电视授权后自动继续，运行：
+   powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP -WaitForAuth
 6. 脚本默认清理旧的本地 WebView / app data，授权麦克风并自动打开 EchoDesk。
    如需保留旧配置更新，设置 ECHODESK_TV_KEEP_DATA=1 后再运行。
    新 TV 版包名是 com.echodesk.tv，默认会卸载旧 com.echodesk.app 电视遗留包，避免历史数据串包。

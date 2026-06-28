@@ -49,6 +49,16 @@ powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.
 powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.1.23 -AdbPort 5556
 ```
 
+如果你已经把电视设置页打开在 ADB 调试/RSA 授权附近，可以让脚本等待授权并自动继续：
+
+```bash
+ECHODESK_TV_WAIT_FOR_AUTH=1 ./install-tv-macos.sh 192.168.1.23
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.1.23 -WaitForAuth
+```
+
 如果电视弹出 RSA 调试授权，先选择允许，再重新运行脚本。
 如果脚本提示 `ADB 尚未授权`，或 `adb devices` 里看到 `offline` / `unauthorized`，
 说明电脑已经连到电视调试端口，但电视没有接受这台电脑的 RSA 授权。处理顺序：
