@@ -85,7 +85,13 @@ async function main() {
 
     await evalJs(`window.localStorage.setItem("echodesk.onboarding.completed", "1")`);
     await conn.send("Page.reload", { ignoreCache: true });
-    await sleep(4_000);
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      const hasConnected = await evalJs(
+        `Boolean(document.body?.innerText.includes("\\u5df2\\u8fde\\u63a5"))`,
+      );
+      if (hasConnected) break;
+      await sleep(1_000);
+    }
 
     const checks = await evalJs(`(() => {
       const text = document.body ? document.body.innerText : "";
@@ -164,11 +170,26 @@ async function main() {
     })()`);
     if (!settingsVisible) throw new Error("settings panel not visible after click");
 
-    const shot = await conn.send("Page.captureScreenshot", {
-      format: "png",
-      captureBeyondViewport: true,
-    });
-    fs.writeFileSync(outPng, Buffer.from(shot.data, "base64"));
+    let shot = null;
+    let screenshotError = null;
+    try {
+      shot = await conn.send("Page.captureScreenshot", {
+        format: "png",
+        captureBeyondViewport: true,
+      });
+    } catch (error) {
+      try {
+        shot = await conn.send("Page.captureScreenshot", {
+          format: "png",
+          captureBeyondViewport: false,
+        });
+      } catch (fallbackError) {
+        screenshotError = fallbackError.message;
+      }
+    }
+    if (shot?.data) {
+      fs.writeFileSync(outPng, Buffer.from(shot.data, "base64"));
+    }
 
     console.log(
       JSON.stringify(
@@ -177,7 +198,8 @@ async function main() {
           version,
           target: { url: target.url, title: target.title },
           checks,
-          screenshot: outPng,
+          screenshot: shot?.data ? outPng : null,
+          screenshotError,
         },
         null,
         2,

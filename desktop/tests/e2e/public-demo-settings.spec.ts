@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { installEchoMock } from "./_mock";
 
+const MOCK_UPDATE_VERSION = "9.9.9";
+
 test("公网 demo 设置页：admin 禁用时仍可查看和修改移动端后端地址", async ({ page }) => {
   await page.route(/\/(api\/)?admin\/(data-dir|settings\/remote)$/, async (route) => {
     await route.fulfill({
@@ -169,27 +171,27 @@ test("设置页：检查更新会展示当前平台优选 release 资产", async
         contentType: "application/json",
         headers: { "Access-Control-Allow-Origin": "*" },
         body: JSON.stringify({
-          tag_name: "v0.2.28",
-          name: "EchoDesk v0.2.28",
-          html_url: "https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.28",
+          tag_name: `v${MOCK_UPDATE_VERSION}`,
+          name: `EchoDesk v${MOCK_UPDATE_VERSION}`,
+          html_url: `https://github.com/yoligehude14753/echo-demo/releases/tag/v${MOCK_UPDATE_VERSION}`,
           assets: [
             {
-              name: "EchoDesk.Setup.0.2.28.exe",
+              name: `EchoDesk.Setup.${MOCK_UPDATE_VERSION}.exe`,
               size: 123,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.28/EchoDesk.Setup.0.2.28.exe",
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk.Setup.${MOCK_UPDATE_VERSION}.exe`,
             },
             {
-              name: "EchoDesk-0.2.28-smart-tv.apk",
+              name: `EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
               size: 456,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.28/EchoDesk-0.2.28-smart-tv.apk",
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
             },
             {
-              name: "EchoDesk-0.2.28-arm64.dmg",
+              name: `EchoDesk-${MOCK_UPDATE_VERSION}-arm64.dmg`,
               size: 789,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.28/EchoDesk-0.2.28-arm64.dmg",
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk-${MOCK_UPDATE_VERSION}-arm64.dmg`,
             },
           ],
         }),
@@ -204,9 +206,11 @@ test("设置页：检查更新会展示当前平台优选 release 资产", async
   await page.getByTestId("check-updates").click();
 
   await expect(page.getByTestId("update-status-tag")).toContainText("发现新版本");
-  await expect(page.getByTestId("updates-section").getByText("v0.2.28")).toBeVisible();
+  await expect(
+    page.getByTestId("updates-section").getByText(`v${MOCK_UPDATE_VERSION}`),
+  ).toBeVisible();
   await expect(page.getByTestId("update-asset-name")).toContainText(
-    "EchoDesk.Setup.0.2.28.exe",
+    `EchoDesk.Setup.${MOCK_UPDATE_VERSION}.exe`,
   );
   await expect(page.getByTestId("install-update")).toBeEnabled();
 });
@@ -230,27 +234,27 @@ test("TV 模式检查更新优先展示 smart-tv APK", async ({ page }) => {
         contentType: "application/json",
         headers: { "Access-Control-Allow-Origin": "*" },
         body: JSON.stringify({
-          tag_name: "v0.2.28",
-          name: "EchoDesk v0.2.28",
-          html_url: "https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.28",
+          tag_name: `v${MOCK_UPDATE_VERSION}`,
+          name: `EchoDesk v${MOCK_UPDATE_VERSION}`,
+          html_url: `https://github.com/yoligehude14753/echo-demo/releases/tag/v${MOCK_UPDATE_VERSION}`,
           assets: [
             {
-              name: "EchoDesk.Setup.0.2.28.exe",
+              name: `EchoDesk.Setup.${MOCK_UPDATE_VERSION}.exe`,
               size: 123,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.28/EchoDesk.Setup.0.2.28.exe",
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk.Setup.${MOCK_UPDATE_VERSION}.exe`,
             },
             {
-              name: "EchoDesk-0.2.28-smart-tv.apk",
+              name: `EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
               size: 456,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.28/EchoDesk-0.2.28-smart-tv.apk",
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
             },
             {
-              name: "EchoDesk-0.2.28-android.apk",
+              name: `EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
               size: 789,
               browser_download_url:
-                "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.28/EchoDesk-0.2.28-android.apk",
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
             },
           ],
         }),
@@ -265,6 +269,6 @@ test("TV 模式检查更新优先展示 smart-tv APK", async ({ page }) => {
 
   await expect(page.getByTestId("update-status-tag")).toContainText("发现新版本");
   await expect(page.getByTestId("update-asset-name")).toContainText(
-    "EchoDesk-0.2.28-smart-tv.apk",
+    `EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
   );
 });
