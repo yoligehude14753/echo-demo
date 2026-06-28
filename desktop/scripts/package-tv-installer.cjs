@@ -23,7 +23,7 @@ const BUNDLE_DIR = join(RELEASE_DIR, BUNDLE_NAME);
 const BUNDLE_ZIP = join(RELEASE_DIR, `${BUNDLE_NAME}.zip`);
 const INSTALL_PAGE_URL =
   process.env.ECHODESK_TV_INSTALL_URL ||
-  "https://yoligehude14753.github.io/echo-demo/tv-install.html";
+  "https://yoligehude14753.github.io/echo-demo/t.html";
 
 function fail(message) {
   console.error(`[tv-package] ${message}`);
