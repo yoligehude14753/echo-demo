@@ -8,6 +8,18 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.30] – 2026-06-28
+
+Android / TV 更新入口热修复：普通 Android 手机 / 平板横屏时不再被误判成 TV 包，
+“检查更新”会下载 Android APK；只有 TV 包或显式 TV 运行时才优先展示 smart-tv APK。
+
+### 修复
+
+- TV APK 构建时向 Web runtime 注入 `__ECHODESK_TV_PACKAGE__` 标记，前端不再只靠
+  横屏 viewport 猜测是否为电视包。
+- 普通 Android 横屏设备检查更新优先展示 `EchoDesk-*-android.apk`。
+- 版本号同步到 `0.2.30`；Android / TV `versionCode=230`、`versionName=0.2.30`。
+
 ## [0.2.29] – 2026-06-28
 
 桌面更新检查热修复：当 GitHub API 被限流但 `electron-updater` 已经成功确认当前版本时，

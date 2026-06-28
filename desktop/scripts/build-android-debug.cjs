@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { copyFileSync, existsSync, mkdirSync } = require("node:fs");
+const { readFileSync, writeFileSync } = require("node:fs");
 const { homedir } = require("node:os");
 const { join } = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -22,6 +23,16 @@ const TV_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android-tv.apk`);
 const ANDROID_APK_PATH = join(RELEASE_DIR, `EchoDesk-${version}-android.apk`);
 const ANDROID_APP_ID = "com.echodesk.app";
 const TV_APP_ID = "com.echodesk.tv";
+const WEB_INDEX_PATH = join(
+  ANDROID_DIR,
+  "app",
+  "src",
+  "main",
+  "assets",
+  "public",
+  "index.html",
+);
+const TV_RUNTIME_MARKER = "__ECHODESK_TV_PACKAGE__";
 
 function firstExisting(paths) {
   return paths.find((p) => p && existsSync(p)) || null;
@@ -129,6 +140,24 @@ function signReleaseApk(appId, outputPath, env) {
   copyFileSync(signed, outputPath);
 }
 
+function patchTvRuntimeMarker() {
+  const original = readFileSync(WEB_INDEX_PATH, "utf8");
+  if (original.includes(TV_RUNTIME_MARKER)) {
+    return () => writeFileSync(WEB_INDEX_PATH, original, "utf8");
+  }
+  const marker = [
+    "<script>",
+    "window.__ECHODESK_TV_PACKAGE__=true;",
+    "try{localStorage.setItem('echodesk.forceTvUi','1')}catch(e){}",
+    "</script>",
+  ].join("");
+  const patched = original.includes("<head>")
+    ? original.replace("<head>", `<head>${marker}`)
+    : `${marker}${original}`;
+  writeFileSync(WEB_INDEX_PATH, patched, "utf8");
+  return () => writeFileSync(WEB_INDEX_PATH, original, "utf8");
+}
+
 const javaHome = resolveJavaHome();
 const androidHome = resolveAndroidHome();
 
@@ -172,10 +201,15 @@ console.log(`[android] Android APK ready: ${APK_PATH}`);
 signReleaseApk(ANDROID_APP_ID, ANDROID_APK_PATH, env);
 console.log(`[android] Android APK copied: ${ANDROID_APK_PATH}`);
 
-run("./gradlew", ["clean", "assembleRelease", `-PechoApplicationId=${TV_APP_ID}`], {
-  cwd: ANDROID_DIR,
-  env,
-});
-console.log(`[android] TV APK ready: ${APK_PATH}`);
-signReleaseApk(TV_APP_ID, TV_APK_PATH, env);
-console.log(`[android] TV-compatible APK copied: ${TV_APK_PATH}`);
+const restoreTvRuntimeMarker = patchTvRuntimeMarker();
+try {
+  run("./gradlew", ["clean", "assembleRelease", `-PechoApplicationId=${TV_APP_ID}`], {
+    cwd: ANDROID_DIR,
+    env,
+  });
+  console.log(`[android] TV APK ready: ${APK_PATH}`);
+  signReleaseApk(TV_APP_ID, TV_APK_PATH, env);
+  console.log(`[android] TV-compatible APK copied: ${TV_APK_PATH}`);
+} finally {
+  restoreTvRuntimeMarker();
+}

@@ -272,3 +272,55 @@ test("TV 模式检查更新优先展示 smart-tv APK", async ({ page }) => {
     `EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
   );
 });
+
+test("Android 横屏非 TV 包检查更新仍优先展示 android APK", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "userAgent", {
+      value: "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36",
+      configurable: true,
+    });
+    (window as unknown as { Capacitor?: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+  });
+  await page.route(
+    "https://api.github.com/repos/yoligehude14753/echo-demo/releases/latest",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({
+          tag_name: `v${MOCK_UPDATE_VERSION}`,
+          name: `EchoDesk v${MOCK_UPDATE_VERSION}`,
+          html_url: `https://github.com/yoligehude14753/echo-demo/releases/tag/v${MOCK_UPDATE_VERSION}`,
+          assets: [
+            {
+              name: `EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
+              size: 456,
+              browser_download_url:
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
+            },
+            {
+              name: `EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
+              size: 789,
+              browser_download_url:
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
+            },
+          ],
+        }),
+      });
+    },
+  );
+  await installEchoMock(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("check-updates").click();
+
+  await expect(page.getByTestId("update-status-tag")).toContainText("发现新版本");
+  await expect(page.getByTestId("update-asset-name")).toContainText(
+    `EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
+  );
+});

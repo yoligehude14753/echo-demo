@@ -67,6 +67,7 @@ declare global {
   interface Window {
     echo?: ElectronEchoBridge;
     Capacitor?: { isNativePlatform?: () => boolean };
+    __ECHODESK_TV_PACKAGE__?: boolean;
   }
   // 由 vite.config.ts define 注入；编译时替换为 "0.2.0" 字面量
   const __APP_VERSION__: string;
@@ -126,8 +127,8 @@ function preferredUpdateAsset(
   let patterns: RegExp[] = [/\.dmg$/i, /-mac\.zip$/i];
   if (typeof window !== "undefined") {
     const ua = window.navigator.userAgent;
-    const tv = isTvLikeViewport();
-    if (tv && (isNativeMobile() || /Android|AFT|TV/i.test(ua))) {
+    const tv = isTvRuntime();
+    if (tv && (isNativeMobile() || /Android|AFT|TV|EchoDeskTV/i.test(ua))) {
       patterns = [/smart-tv\.apk$/i, /smart-tv-oneclick\.zip$/i];
     } else if (isNativeMobile() || /Android/i.test(ua)) {
       patterns = [/-android\.apk$/i, /smart-tv\.apk$/i];
@@ -360,6 +361,20 @@ export function shouldHideSharedPublicHistory(): boolean {
 }
 
 export function isTvLikeViewport(): boolean {
+  if (isTvRuntime()) return true;
+  if (typeof window === "undefined") return false;
+  const ua = window.navigator.userAgent;
+  const isAndroid = /Android/i.test(ua);
+  const width = Math.max(window.screen.width || 0, window.innerWidth || 0);
+  const height = Math.max(window.screen.height || 0, window.innerHeight || 0);
+  const shortSide = Math.min(width, height);
+  const longSide = Math.max(width, height);
+  // 仅作为最后兜底：部分 Android TV WebView 不暴露 TV UA。普通 Android
+  // 更新资产选择不会使用该 viewport 兜底，避免平板横屏下载 smart-tv APK。
+  return isAndroid && longSide >= 900 && shortSide >= 500;
+}
+
+export function isTvRuntime(): boolean {
   if (typeof window === "undefined") return false;
   let force = false;
   try {
@@ -368,15 +383,9 @@ export function isTvLikeViewport(): boolean {
     force = false;
   }
   if (force) return true;
+  if (window.__ECHODESK_TV_PACKAGE__ === true) return true;
   const ua = window.navigator.userAgent;
-  const isAndroid = /Android/i.test(ua);
-  const width = Math.max(window.screen.width || 0, window.innerWidth || 0);
-  const height = Math.max(window.screen.height || 0, window.innerHeight || 0);
-  const shortSide = Math.min(width, height);
-  const longSide = Math.max(width, height);
-  // 多数 Android TV WebView 使用 density-scaled CSS viewport（例如 1920x1080
-  // 物理屏常报告 1280x720 CSS px），不能按物理像素阈值判断。
-  return isAndroid && longSide >= 900 && shortSide >= 500;
+  return /EchoDeskTV|SmartTV|Android TV|AFT/i.test(ua);
 }
 
 export function installRuntimeBodyClasses(): void {
