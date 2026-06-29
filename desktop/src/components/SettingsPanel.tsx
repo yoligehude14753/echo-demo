@@ -29,7 +29,7 @@ import {
   Server,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   workspaceAddDir,
   workspaceRemoveDir,
@@ -213,6 +213,7 @@ export default function SettingsPanel({
   const [ws, setWs] = useState<WorkspaceStatusDTO | null>(null);
   const [wsBusy, setWsBusy] = useState(false);
   const [wsScanBusy, setWsScanBusy] = useState(false);
+  const workspaceInitialFocusDoneRef = useRef(false);
 
   const refreshDataDir = useCallback(async () => {
     setLoading(true);
@@ -302,15 +303,38 @@ export default function SettingsPanel({
   }, [open]);
 
   useEffect(() => {
-    if (!open || initialSection !== "workspace") return undefined;
-    const timer = window.setTimeout(() => {
+    if (!open) {
+      workspaceInitialFocusDoneRef.current = false;
+      return undefined;
+    }
+    if (initialSection !== "workspace" || !ws || workspaceInitialFocusDoneRef.current) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let attempts = 0;
+    const focusWorkspaceAddDir = () => {
+      if (cancelled) return;
       const section = document.querySelector<HTMLElement>(
         "[data-testid='workspace-settings-section']",
       );
       section?.scrollIntoView({ block: "start" });
-      document.querySelector<HTMLElement>("[data-testid='workspace-add-dir']")?.focus();
-    }, 80);
-    return () => window.clearTimeout(timer);
+      const addDir = document.querySelector<HTMLElement>("[data-testid='workspace-add-dir']");
+      addDir?.focus();
+      if (document.activeElement === addDir || attempts >= 10) {
+        workspaceInitialFocusDoneRef.current = true;
+        return;
+      }
+      attempts += 1;
+      timer = window.setTimeout(focusWorkspaceAddDir, 80);
+    };
+
+    timer = window.setTimeout(focusWorkspaceAddDir, 120);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [open, initialSection, ws]);
 
   const onAddWorkspaceDir = useCallback(async () => {
