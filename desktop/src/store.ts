@@ -108,8 +108,9 @@ interface Store {
 }
 
 const LOCAL_CAPTURE_STATE_KEY = "echodesk.localCaptureState.v1";
+const LOCAL_LEGACY_IMPORT_KEY = "echodesk.localLegacyHistoryImport.v1";
 const LOCAL_CAPTURE_STATE_SCHEMA = 1;
-const MAX_PERSISTED_MEETINGS = 50;
+const MAX_PERSISTED_MEETINGS = 200;
 const MAX_PERSISTED_SEGMENTS_PER_MEETING = 800;
 const MAX_PERSISTED_AMBIENT = 120;
 const MAX_PERSISTED_ARTIFACTS = 50;
@@ -129,6 +130,16 @@ interface LocalCaptureStateSnapshot {
   meetings: PersistedMeetingCard[];
   ambientSegments: LocalAmbientSegment[];
   artifacts: GeneratedArtifact[];
+}
+
+interface LegacyLocalHistorySnapshot extends LocalCaptureStateSnapshot {
+  sourcePath?: string;
+  sourceSize?: number;
+  sourceMtimeMs?: number;
+  importedAt?: string;
+  meetingCount?: number;
+  segmentCount?: number;
+  error?: string;
 }
 
 function emptyMeeting(id: string, title?: string): MeetingCard {
@@ -616,6 +627,107 @@ function hydrateLocalCaptureSnapshot(): void {
   }));
 }
 
+function importFingerprint(snapshot: LegacyLocalHistorySnapshot): string {
+  return [
+    snapshot.sourcePath ?? "",
+    snapshot.sourceSize ?? 0,
+    Math.round(snapshot.sourceMtimeMs ?? 0),
+    snapshot.meetingCount ?? snapshot.meetings.length,
+    snapshot.segmentCount ?? 0,
+  ].join("|");
+}
+
+function snapshotToMeetings(
+  snapshot: LocalCaptureStateSnapshot,
+): Record<string, MeetingCard> {
+  const meetings: Record<string, MeetingCard> = {};
+  for (const persisted of snapshot.meetings.slice(0, MAX_PERSISTED_MEETINGS)) {
+    if (!persisted?.meeting_id) continue;
+    meetings[persisted.meeting_id] = {
+      ...persisted,
+      segments: (persisted.segments ?? []).slice(
+        -MAX_PERSISTED_SEGMENTS_PER_MEETING,
+      ),
+      speakers: new Set(persisted.speakers ?? []),
+      artifacts: persisted.artifacts ?? [],
+    };
+  }
+  return meetings;
+}
+
+async function hydrateLegacyLocalHistory(): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (!shouldPersistLocalCaptureState()) return;
+  const loader = window.echo?.loadLocalLegacyHistory;
+  if (!loader) return;
+  try {
+    const snapshot = (await loader()) as LegacyLocalHistorySnapshot | null;
+    if (!snapshot || snapshot.error || !Array.isArray(snapshot.meetings)) return;
+    if (snapshot.meetings.length === 0 && snapshot.ambientSegments.length === 0) {
+      return;
+    }
+
+    const fingerprint = importFingerprint(snapshot);
+    const currentRaw = window.localStorage.getItem(LOCAL_CAPTURE_STATE_KEY);
+    const currentSnapshot = parseLocalCaptureSnapshot(currentRaw);
+    const markerRaw = window.localStorage.getItem(LOCAL_LEGACY_IMPORT_KEY);
+    if (markerRaw) {
+      try {
+        const marker = JSON.parse(markerRaw) as {
+          fingerprint?: string;
+          meetingCount?: number;
+        };
+        if (
+          marker.fingerprint === fingerprint &&
+          (currentSnapshot?.meetings.length ?? 0) >=
+            (marker.meetingCount ?? snapshot.meetings.length)
+        ) {
+          return;
+        }
+      } catch {
+        // marker 损坏时重新导入；merge 是幂等的。
+      }
+    }
+
+    const legacyMeetings = snapshotToMeetings(snapshot);
+    const legacyDetailLoaded = Object.fromEntries(
+      Object.keys(legacyMeetings).map((id) => [id, true]),
+    );
+    useStore.setState((s) => ({
+      meetings: { ...legacyMeetings, ...s.meetings },
+      meetingDetailLoaded: {
+        ...legacyDetailLoaded,
+        ...s.meetingDetailLoaded,
+      },
+      currentMeetingId:
+        s.currentMeetingId && s.meetings[s.currentMeetingId]
+          ? s.currentMeetingId
+          : null,
+      ambientSegments:
+        s.ambientSegments.length > 0
+          ? s.ambientSegments
+          : snapshot.ambientSegments.slice(-MAX_PERSISTED_AMBIENT),
+      artifacts:
+        s.artifacts.length > 0
+          ? s.artifacts
+          : snapshot.artifacts.slice(0, MAX_PERSISTED_ARTIFACTS),
+    }));
+    writeLocalCaptureSnapshot(useStore.getState());
+    window.localStorage.setItem(
+      LOCAL_LEGACY_IMPORT_KEY,
+      JSON.stringify({
+        fingerprint,
+        sourcePath: snapshot.sourcePath ?? null,
+        meetingCount: snapshot.meetings.length,
+        segmentCount: snapshot.segmentCount ?? null,
+        importedAt: new Date().toISOString(),
+      }),
+    );
+  } catch (e) {
+    console.warn("[legacy-history] local import failed:", e);
+  }
+}
+
 /**
  * Public demo / Android TV 不读取共享 backend 历史，因此本机采集出的会议和
  * ambient 片段必须落到 localStorage。该持久化只在 shouldHideSharedPublicHistory()
@@ -625,6 +737,7 @@ export function installLocalCapturePersistence(): void {
   if (localCapturePersistenceInstalled) return;
   localCapturePersistenceInstalled = true;
   hydrateLocalCaptureSnapshot();
+  void hydrateLegacyLocalHistory();
   useStore.subscribe(() => scheduleLocalCapturePersist());
 }
 

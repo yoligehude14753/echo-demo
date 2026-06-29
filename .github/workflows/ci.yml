@@ -140,6 +140,9 @@ jobs:
       - name: install deps
         working-directory: desktop
         run: npm ci
+      - name: check version sync
+        working-directory: desktop
+        run: npm run version:check
       - name: install playwright browsers
         working-directory: desktop
         run: npx playwright install --with-deps chromium

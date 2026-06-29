@@ -298,8 +298,25 @@ export default function SettingsPanel({
   }, [open, refreshDataDir, refreshRemote, refreshWorkspace, refreshBackendVersion]);
 
   useEffect(() => {
-    if (!open || !window.echo?.onUpdateStatus) return undefined;
-    return window.echo.onUpdateStatus((status) => setUpdateInfo(status));
+    if (!open) return undefined;
+    let alive = true;
+    if (window.echo?.getUpdateStatus) {
+      void window.echo.getUpdateStatus().then((status) => {
+        if (alive) setUpdateInfo(status);
+      });
+    }
+    if (!window.echo?.onUpdateStatus) {
+      return () => {
+        alive = false;
+      };
+    }
+    const unsubscribe = window.echo.onUpdateStatus((status) => {
+      setUpdateInfo(status);
+    });
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
   }, [open]);
 
   useEffect(() => {
@@ -893,7 +910,8 @@ export default function SettingsPanel({
               </Button>
             </div>
             <div className="text-[11px] text-ink-500 leading-relaxed">
-              桌面端更新会保留本机数据目录；Android / TV 侧载更新默认保留 app 数据。
+              桌面端启动后会自动检查新版本；点击下载并安装后才会退出覆盖安装，
+              本机数据目录会保留。Android / TV 侧载更新默认保留 app 数据，
               只有 TV 一键安装脚本的首次安装模式会清理旧缓存。
             </div>
           </div>

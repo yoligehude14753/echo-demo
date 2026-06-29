@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("echo", {
     (!process.env.ELECTRON_DEV && process.env.ECHO_FORCE_LOCAL_BACKEND !== "1"),
   getBackendHost: () => ipcRenderer.invoke("echo:backend-host"),
   getShareBackendHost: () => ipcRenderer.invoke("echo:share-backend-host"),
+  loadLocalLegacyHistory: () =>
+    ipcRenderer.invoke("echo:load-local-legacy-history"),
 
   // BackendSupervisor 状态推送（P1.5）
   // payload = {state, ...} 详见 main.cjs emitStatus
@@ -25,6 +27,7 @@ contextBridge.exposeInMainWorld("echo", {
   // 更新检查：桌面打包版走 electron-updater；dev/浏览器/Android 由前端走 GitHub
   // Release fallback。installUpdate 在不能静默安装的平台会打开 release 页面。
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
+  getUpdateStatus: () => ipcRenderer.invoke("updates:last-status"),
   installUpdate: () => ipcRenderer.invoke("updates:download-and-install"),
   openReleasePage: () => ipcRenderer.invoke("updates:open-release"),
   openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),

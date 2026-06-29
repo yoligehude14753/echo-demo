@@ -1,28 +1,28 @@
 # EchoDesk 安装指南
 
-当前版本：`v0.2.33`
-下载页：<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.33>
+当前版本：`v0.2.34`
+下载页：<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.34>
 
 | 平台 | 直接下载 | 说明 |
 |---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.2.33-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.2.33-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows 安装器 | `EchoDesk.Setup.0.2.33.exe` | 普通 Windows 安装包 |
-| Windows 便携包 | `EchoDesk-0.2.33-win-x64.zip` | 解压后运行 `EchoDesk.exe`；受管/远程环境优先用这个 |
-| Linux AppImage | `EchoDesk-0.2.33.AppImage` | Linux x64 免安装运行 |
-| Linux deb | `echodesk-desktop_0.2.33_amd64.deb` | Ubuntu / Debian 安装包 |
-| Android 手机 / 平板 | `EchoDesk-0.2.33-android.apk` | 默认连接公网 demo backend |
-| Android TV / 智能电视 | `EchoDesk-0.2.33-smart-tv.apk` | 适配遥控器和电视桌面入口 |
-| 智能电视一键安装 | `EchoDesk-0.2.33-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
-| 校验文件 | `SHA256SUMS-0.2.33.txt` | 校验下载完整性 |
+| macOS Apple Silicon | `EchoDesk-0.2.34-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.2.34-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows 安装器 | `EchoDesk.Setup.0.2.34.exe` | 普通 Windows 安装包 |
+| Windows 便携包 | `EchoDesk-0.2.34-win-x64.zip` | 解压后运行 `EchoDesk.exe`；受管/远程环境优先用这个 |
+| Linux AppImage | `EchoDesk-0.2.34.AppImage` | Linux x64 免安装运行 |
+| Linux deb | `echodesk-desktop_0.2.34_amd64.deb` | Ubuntu / Debian 安装包 |
+| Android 手机 / 平板 | `EchoDesk-0.2.34-android.apk` | 默认连接公网 demo backend |
+| Android TV / 智能电视 | `EchoDesk-0.2.34-smart-tv.apk` | 适配遥控器和电视桌面入口 |
+| 智能电视一键安装 | `EchoDesk-0.2.34-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
+| 校验文件 | `SHA256SUMS-0.2.34.txt` | 校验下载完整性 |
 
 EchoDesk demo 现在是多端客户端 + 公网 demo backend。macOS / Windows / Linux 是桌面端；
 Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yoliyoli.uk`，
 模型服务和密钥都留在服务端。
 
-应用内也可以在「设置 → 更新」里主动检查 GitHub Release。桌面端从 `0.2.28`
-开始会保留本机数据并走自动下载/覆盖安装；Android / TV 因系统限制，会打开对应 APK
-下载并由系统安装器确认。
+应用内也可以在「设置 → 更新」里主动检查 GitHub Release。桌面端会在启动后自动检查
+新版本；用户点击「下载并安装」后才会退出覆盖安装，本机数据目录会保留。
+Android / TV 因系统限制，会打开对应 APK 下载并由系统安装器确认。
 
 私有本地部署仍支持 Electron + React UI + Python FastAPI backend。需要本机 backend 时，
 先跑 install 脚本，再以 `ECHO_FORCE_LOCAL_BACKEND=1` 启动桌面端。
@@ -47,13 +47,13 @@ Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yol
 
 优先从 GitHub Releases 下载当前 demo 包：
 
-- macOS: `EchoDesk-0.2.33-arm64.dmg`
-- Windows 安装器: `EchoDesk.Setup.0.2.33.exe`
-- Windows 便携包（受管/远程环境推荐）: `EchoDesk-0.2.33-win-x64.zip`
-- Linux: `EchoDesk-0.2.33.AppImage` 或 `echodesk-desktop_0.2.33_amd64.deb`
-- Android 手机 / 平板: `EchoDesk-0.2.33-android.apk`（demo 包）
-- Android TV / 智能电视: `EchoDesk-0.2.33-smart-tv.apk`
-- 智能电视一键安装包：`EchoDesk-0.2.33-smart-tv-oneclick.zip`
+- macOS: `EchoDesk-0.2.34-arm64.dmg`
+- Windows 安装器: `EchoDesk.Setup.0.2.34.exe`
+- Windows 便携包（受管/远程环境推荐）: `EchoDesk-0.2.34-win-x64.zip`
+- Linux: `EchoDesk-0.2.34.AppImage` 或 `echodesk-desktop_0.2.34_amd64.deb`
+- Android 手机 / 平板: `EchoDesk-0.2.34-android.apk`（demo 包）
+- Android TV / 智能电视: `EchoDesk-0.2.34-smart-tv.apk`
+- 智能电视一键安装包：`EchoDesk-0.2.34-smart-tv-oneclick.zip`
 - 电视浏览器短安装页：`https://yoligehude14753.github.io/echo-demo/`
 
 源码构建仅用于开发：
@@ -80,8 +80,8 @@ npm run app:dist:mac
 产物：
 
 ```text
-desktop/release/EchoDesk-0.2.33-arm64.dmg
-desktop/release/EchoDesk-0.2.33-arm64-mac.zip
+desktop/release/EchoDesk-0.2.34-arm64.dmg
+desktop/release/EchoDesk-0.2.34-arm64-mac.zip
 desktop/release/mac-arm64/EchoDesk.app
 ```
 
@@ -93,7 +93,7 @@ npm run app:dist:win
 ```
 
 如果 Windows 机器出现 Device Guard / 组织策略拦截 `.exe` 安装器，请改用
-`EchoDesk-0.2.33-win-x64.zip`。解压后直接运行 `EchoDesk.exe`，本机数据仍保存在
+`EchoDesk-0.2.34-win-x64.zip`。解压后直接运行 `EchoDesk.exe`，本机数据仍保存在
 Windows 用户目录；后续升级只需要下载新版 zip 并替换解压目录。
 
 Linux x64 可构建 AppImage + deb：
@@ -106,8 +106,8 @@ npm run app:dist:linux
 产物：
 
 ```text
-desktop/release/EchoDesk-0.2.33.AppImage
-desktop/release/echodesk-desktop_0.2.33_amd64.deb
+desktop/release/EchoDesk-0.2.34.AppImage
+desktop/release/echodesk-desktop_0.2.34_amd64.deb
 ```
 
 Android 当前用 Capacitor 打非 debuggable 的 release APK：
@@ -122,10 +122,10 @@ npm run app:package:tv
 
 ```text
 desktop/android/app/build/outputs/apk/release/app-release-unsigned.apk
-desktop/release/EchoDesk-0.2.33-android.apk
-desktop/release/EchoDesk-0.2.33-android-tv.apk
-desktop/release/EchoDesk-0.2.33-smart-tv.apk
-desktop/release/EchoDesk-0.2.33-smart-tv-oneclick.zip
+desktop/release/EchoDesk-0.2.34-android.apk
+desktop/release/EchoDesk-0.2.34-android-tv.apk
+desktop/release/EchoDesk-0.2.34-smart-tv.apk
+desktop/release/EchoDesk-0.2.34-smart-tv-oneclick.zip
 ```
 
 Android / TV APK 是前端客户端，不会在手机或电视里启动 Electron 的本机 Python backend。
@@ -151,11 +151,11 @@ ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --p
 ### 智能电视安装
 
 图里这种有「我的应用」入口的会议室电视，如果底层是 Android TV / Google TV /
-国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.33-smart-tv.apk`。
+国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.34-smart-tv.apk`。
 
 推荐路径：
 
-1. 下载 `EchoDesk-0.2.33-smart-tv-oneclick.zip`。
+1. 下载 `EchoDesk-0.2.34-smart-tv-oneclick.zip`。
 2. 电视打开开发者模式和 ADB 网络调试。
 3. 电脑和电视在同一个局域网。
 4. macOS 执行 `./install-tv-macos.sh 电视IP`；Windows 执行

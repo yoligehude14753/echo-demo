@@ -1,6 +1,6 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.2.33",
+  "version": "0.2.34",
   "description": "EchoDesk public demo desktop client",
   "author": "EchoDesk <support@yoliyoli.uk>",
   "homepage": "https://github.com/yoligehude14753/echo-demo",
@@ -13,6 +13,7 @@
     "preview": "vite preview --port 4173",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "typecheck": "tsc -b --noEmit",
+    "version:check": "node scripts/check-version-sync.cjs",
     "electron:brand": "node electron/scripts/brand-dev-electron.cjs",
     "electron:dev": "npm run electron:brand && concurrently -k -n vite,electron -c blue,magenta \"vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_DEV=1 electron electron/main.cjs\"",
     "electron:start": "npm run electron:brand && cross-env ELECTRON_DEV=1 electron electron/main.cjs",

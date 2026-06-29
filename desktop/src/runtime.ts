@@ -43,10 +43,12 @@ interface ElectronEchoBridge {
   isPublicDemo?: boolean;
   getBackendHost?: () => Promise<string>;
   getShareBackendHost?: () => Promise<string>;
+  loadLocalLegacyHistory?: () => Promise<unknown | null>;
   // Phase 1 P1.5/P1.6 BackendSupervisor IPC
   onBackendStatus?: (cb: (status: unknown) => void) => () => void;
   manualRestartBackend?: () => Promise<{ ok: boolean }>;
   checkForUpdates?: () => Promise<AppUpdateStatus>;
+  getUpdateStatus?: () => Promise<AppUpdateStatus>;
   installUpdate?: () => Promise<{ ok: boolean; reason?: string; releaseUrl?: string }>;
   openReleasePage?: () => Promise<{ ok: boolean; releaseUrl?: string }>;
   openExternal?: (url: string) => Promise<{ ok: boolean }>;

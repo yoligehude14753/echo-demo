@@ -8,6 +8,26 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.34] – 2026-06-29
+
+本机历史继承与更新机制热修复：桌面端自动识别旧版本地会议库，启动后自动检查
+GitHub Release，并用 CI 守住多端版本号一致性。
+
+### 新增
+
+- macOS 桌面端启动时自动读取旧版 `~/.echodesk/echodesk.db`，把历史会议和转写段导入
+  当前本机历史列表；导入带 fingerprint，避免重复导入。
+- 桌面打包版启动后自动检查 GitHub Release，设置页会展示缓存的检查结果；
+  覆盖安装仍需要用户点击确认，避免会议中突然退出。
+- 新增 `npm run version:check`，CI 会校验 desktop/package、backend 版本、
+  Android / TV versionName/versionCode 和安装文档入口一致。
+
+### 修复
+
+- backend `settings.app_version` 改为直接跟随 `app.__version__`，不再维护第二份硬编码版本号。
+- Windows 安装器构建 workflow 不再硬编码上传到旧 tag，改为从 `desktop/package.json` 自动取 Release tag。
+- 版本号同步到 `0.2.34`；Android / TV `versionCode=234`、`versionName=0.2.34`。
+
 ## [0.2.33] – 2026-06-29
 
 多端发布文案与模型服务可见性热修复：公开安装包不再在状态栏、设置页和

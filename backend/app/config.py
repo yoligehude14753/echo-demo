@@ -21,6 +21,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from app import __version__
 from app.config_io import JsonConfigSource
 
 # 项目根目录的 .env（dev 期兜底；prod 装机后不强求存在）
@@ -67,7 +68,7 @@ class Settings(BaseSettings):
 
     public_ws_url: str = "ws://localhost:8769/ws/echo"
     public_http_url: str = "http://localhost:8769"
-    app_version: str = "0.2.33"
+    app_version: str = __version__
 
     # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
     llm_main_provider: str = "yunwu"

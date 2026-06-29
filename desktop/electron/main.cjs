@@ -35,6 +35,10 @@ const RELEASE_OWNER = "yoligehude14753";
 const RELEASE_REPO = "echo-demo";
 const RELEASES_URL = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest`;
 const RELEASE_API_URL = `https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest`;
+const AUTO_UPDATE_CHECK_DELAY_MS = Math.max(
+  0,
+  parseInt(process.env.ECHODESK_AUTO_UPDATE_CHECK_DELAY_MS || "15000", 10) || 15000,
+);
 const FORCE_LOCAL_BACKEND = process.env.ECHO_FORCE_LOCAL_BACKEND === "1";
 const PUBLIC_DEMO_MODE =
   process.env.ECHO_PUBLIC_DEMO === "1" || (!IS_DEV && !FORCE_LOCAL_BACKEND);
@@ -104,6 +108,157 @@ function normalizeHttpBase(raw) {
 
 function normalizeVersion(raw) {
   return String(raw || "").trim().replace(/^v/i, "");
+}
+
+function sqliteCliJson(dbPath, sql) {
+  const result = spawnSync("sqlite3", ["-readonly", "-json", dbPath, sql], {
+    encoding: "utf8",
+    maxBuffer: 80 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || "sqlite3 failed").trim());
+  }
+  const out = (result.stdout || "").trim();
+  if (!out) return [];
+  return JSON.parse(out);
+}
+
+function sqlQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function parseMinutesJson(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadLegacyEchodeskHistory() {
+  const candidates = [
+    process.env.ECHODESK_LEGACY_DB,
+    path.join(os.homedir(), ".echodesk", "echodesk.db"),
+  ].filter(Boolean);
+  const dbPath = candidates.find((candidate) => {
+    try {
+      return fs.existsSync(candidate) && fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  });
+  if (!dbPath) return null;
+
+  const stat = fs.statSync(dbPath);
+  const tables = sqliteCliJson(
+    dbPath,
+    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+  ).map((row) => row.name);
+  if (!tables.includes("meetings") || !tables.includes("meeting_segments")) {
+    return null;
+  }
+
+  const rawMeetings = sqliteCliJson(
+    dbPath,
+    `SELECT id, title, state, started_at, ended_at, finalized_at, minutes_json,
+            minutes_status, minutes_error, display_title
+       FROM meetings
+      ORDER BY started_at DESC
+      LIMIT 200`,
+  );
+  const ids = rawMeetings.map((row) => row.id).filter(Boolean);
+  const idList = ids.map(sqlQuote).join(",");
+  const rawSegments = idList
+    ? sqliteCliJson(
+        dbPath,
+        `SELECT meeting_id, text, start_ms, end_ms, speaker_id, speaker_label
+           FROM meeting_segments
+          WHERE meeting_id IN (${idList})
+          ORDER BY meeting_id ASC, id ASC`,
+      )
+    : [];
+
+  const segmentsByMeeting = new Map();
+  for (const seg of rawSegments) {
+    if (!seg.meeting_id || !seg.text) continue;
+    const list = segmentsByMeeting.get(seg.meeting_id) || [];
+    if (list.length < 800) {
+      list.push({
+        text: String(seg.text),
+        start_ms: Number(seg.start_ms) || 0,
+        end_ms: Number(seg.end_ms) || 0,
+        speaker_id: seg.speaker_id || null,
+        speaker_label: seg.speaker_label || null,
+      });
+    }
+    segmentsByMeeting.set(seg.meeting_id, list);
+  }
+
+  const meetings = rawMeetings
+    .filter((row) => row.id)
+    .map((row) => {
+      const segments = segmentsByMeeting.get(row.id) || [];
+      const speakers = Array.from(
+        new Set(
+          segments
+            .map((seg) => seg.speaker_label)
+            .filter((label) => typeof label === "string" && label.trim()),
+        ),
+      );
+      const minutes = parseMinutesJson(row.minutes_json);
+      return {
+        meeting_id: row.id,
+        title: row.title || row.id,
+        display_title: row.display_title || minutes?.title || null,
+        state: row.state === "in_meeting" ? "in_meeting" : "ended",
+        started_at: row.started_at || undefined,
+        ended_at: row.ended_at || row.finalized_at || undefined,
+        segments,
+        speakers,
+        minutes: minutes || undefined,
+        minutes_status: minutes ? "ok" : row.minutes_status || null,
+        minutes_error: row.minutes_error || null,
+        artifacts: [],
+      };
+    });
+
+  const ambientSegments = tables.includes("ambient_segments")
+    ? sqliteCliJson(
+        dbPath,
+        `SELECT text, captured_at, speaker_id, speaker_label, duration_ms
+           FROM ambient_segments
+          ORDER BY captured_at DESC
+          LIMIT 120`,
+      )
+        .reverse()
+        .map((row) => ({
+          text: String(row.text || ""),
+          captured_at: row.captured_at || new Date().toISOString(),
+          speaker_id: row.speaker_id || null,
+          speaker_label: row.speaker_label || null,
+          duration_ms: Number(row.duration_ms) || 0,
+        }))
+        .filter((row) => row.text)
+    : [];
+
+  return {
+    schema: 1,
+    appVersion: app.getVersion(),
+    savedAt: new Date().toISOString(),
+    currentMeetingId: null,
+    meetings,
+    ambientSegments,
+    artifacts: [],
+    sourcePath: dbPath,
+    sourceSize: stat.size,
+    sourceMtimeMs: stat.mtimeMs,
+    importedAt: new Date().toISOString(),
+    meetingCount: meetings.length,
+    segmentCount: rawSegments.length,
+  };
 }
 
 function compareVersions(a, b) {
@@ -211,6 +366,73 @@ function emitUpdateStatus(payload) {
       log(`[updates] emit failed: ${e.message}`);
     }
   }
+}
+
+async function checkForUpdatesWithFallback() {
+  emitUpdateStatus({ status: "checking" });
+  let fallback;
+  try {
+    fallback = await fetchLatestReleaseStatus({
+      status: "checked",
+      canAutoInstall: false,
+    });
+  } catch (e) {
+    fallback = {
+      status: "error",
+      currentVersion: app.getVersion(),
+      latestVersion: null,
+      updateAvailable: false,
+      releaseUrl: RELEASES_URL,
+      assetName: null,
+      assetUrl: null,
+      canAutoInstall: false,
+      error: e?.message || String(e),
+    };
+  }
+
+  if (!autoUpdater || IS_DEV) {
+    emitUpdateStatus(fallback);
+    return fallback;
+  }
+
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    const info = result?.updateInfo;
+    const latestVersion = normalizeVersion(
+      info?.version || fallback.latestVersion || app.getVersion(),
+    );
+    const updateAvailable = compareVersions(latestVersion, app.getVersion()) > 0;
+    const fallbackWithoutError = { ...fallback };
+    delete fallbackWithoutError.error;
+    const merged = {
+      ...fallbackWithoutError,
+      status: updateAvailable ? "available" : "current",
+      latestVersion,
+      updateAvailable,
+      canAutoInstall: updateAvailable,
+    };
+    emitUpdateStatus(merged);
+    return merged;
+  } catch (e) {
+    const merged = {
+      ...fallback,
+      status: fallback.updateAvailable ? "available" : "checked",
+      error: e?.message || String(e),
+      canAutoInstall: false,
+    };
+    emitUpdateStatus(merged);
+    return merged;
+  }
+}
+
+function scheduleStartupUpdateCheck() {
+  if (!autoUpdater || IS_DEV || process.env.ECHODESK_DISABLE_AUTO_UPDATE_CHECK === "1") {
+    return;
+  }
+  setTimeout(() => {
+    if (shuttingDown || quittingForReal) return;
+    void checkForUpdatesWithFallback();
+  }, AUTO_UPDATE_CHECK_DELAY_MS);
 }
 
 if (autoUpdater) {
@@ -762,6 +984,25 @@ function createWindow() {
 ipcMain.handle("echo:backend-host", () => BACKEND_HOST);
 ipcMain.handle("echo:share-backend-host", () => shareBackendHost());
 
+ipcMain.handle("echo:load-local-legacy-history", async () => {
+  if (process.platform !== "darwin") return null;
+  try {
+    return loadLegacyEchodeskHistory();
+  } catch (e) {
+    log(`[legacy-history] import failed: ${e?.message ?? e}`);
+    return {
+      schema: 1,
+      appVersion: app.getVersion(),
+      savedAt: new Date().toISOString(),
+      currentMeetingId: null,
+      meetings: [],
+      ambientSegments: [],
+      artifacts: [],
+      error: e?.message || String(e),
+    };
+  }
+});
+
 ipcMain.handle("shell:open-external", async (_event, url) => {
   if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
     throw new Error("http(s) url required");
@@ -771,58 +1012,10 @@ ipcMain.handle("shell:open-external", async (_event, url) => {
 });
 
 ipcMain.handle("updates:check", async () => {
-  emitUpdateStatus({ status: "checking" });
-  let fallback;
-  try {
-    fallback = await fetchLatestReleaseStatus({
-      status: "checked",
-      canAutoInstall: false,
-    });
-  } catch (e) {
-    fallback = {
-      status: "error",
-      currentVersion: app.getVersion(),
-      latestVersion: null,
-      updateAvailable: false,
-      releaseUrl: RELEASES_URL,
-      assetName: null,
-      assetUrl: null,
-      canAutoInstall: false,
-      error: e?.message || String(e),
-    };
-  }
-  if (!autoUpdater || IS_DEV) {
-    emitUpdateStatus(fallback);
-    return fallback;
-  }
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    const info = result?.updateInfo;
-    const latestVersion = normalizeVersion(info?.version || fallback.latestVersion);
-    const fallbackWithoutError = { ...fallback };
-    delete fallbackWithoutError.error;
-    const merged = {
-      ...fallbackWithoutError,
-      status: compareVersions(latestVersion, app.getVersion()) > 0
-        ? "available"
-        : "current",
-      latestVersion,
-      updateAvailable: compareVersions(latestVersion, app.getVersion()) > 0,
-      canAutoInstall: compareVersions(latestVersion, app.getVersion()) > 0,
-    };
-    emitUpdateStatus(merged);
-    return merged;
-  } catch (e) {
-    const merged = {
-      ...fallback,
-      status: fallback.updateAvailable ? "available" : "checked",
-      error: e?.message || String(e),
-      canAutoInstall: false,
-    };
-    emitUpdateStatus(merged);
-    return merged;
-  }
+  return checkForUpdatesWithFallback();
 });
+
+ipcMain.handle("updates:last-status", async () => lastUpdateStatus);
 
 ipcMain.handle("updates:download-and-install", async () => {
   if (!autoUpdater || IS_DEV) {
@@ -990,6 +1183,7 @@ app.whenReady().then(() => {
   // 主窗口先起，让用户看到 UI；backend 状态由 renderer 自己渲染（degraded UI 等）
   createWindow();
   startBackend();
+  scheduleStartupUpdateCheck();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
