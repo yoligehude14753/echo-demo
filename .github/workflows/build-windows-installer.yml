@@ -21,11 +21,19 @@ jobs:
         working-directory: backend
         shell: bash
         run: |
+          if [ ! -f packaging/echodesk-backend.spec ]; then
+            echo "No backend PyInstaller spec found; public demo Windows build uses the remote backend."
+            exit 0
+          fi
           python -m venv .venv
           PY=.venv/Scripts/python
           "$PY" -m pip install --upgrade pip
           "$PY" -m pip install -r requirements.txt
-          "$PY" -m pip install -r packaging/requirements-build.txt
+          if [ -f packaging/requirements-build.txt ]; then
+            "$PY" -m pip install -r packaging/requirements-build.txt
+          else
+            "$PY" -m pip install pyinstaller
+          fi
           "$PY" -m PyInstaller --noconfirm packaging/echodesk-backend.spec
 
       - uses: actions/setup-node@v4
