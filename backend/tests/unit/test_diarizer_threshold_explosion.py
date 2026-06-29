@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import struct
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -168,9 +169,15 @@ async def test_genuinely_distinct_speakers_still_separate_under_new_threshold() 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_default_settings_uses_loosened_threshold() -> None:
+async def test_default_settings_uses_loosened_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """锁死 settings default：保护 0.55 不被无意改回。"""
-    s = Settings()
+    # Settings normally reads ~/.echodesk/config.json. This regression test locks
+    # the code default, so isolate user config to avoid local machine overrides.
+    monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
+    monkeypatch.delenv("DIARIZER_MATCH_THRESHOLD", raising=False)
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.diarizer_match_threshold == 0.55, (
         "default threshold should be 0.55 after text-clarity PR; see config.py threshold 演进史"
     )

@@ -308,10 +308,10 @@ def test_export_includes_probes_cache(client: TestClient) -> None:
     """health._cache 有数据时 probes.json 含 entries；空时含 note 字段。"""
     from app.api.health import ProbeResult
 
-    health_mod._cache["heyi_stt_firered"] = ProbeResult(
+    health_mod._cache["speech_recognition"] = ProbeResult(
         ok=True, latency_ms=12.0, checked_at=1700000000.0
     )
-    health_mod._cache["yunwu_llm_main"] = ProbeResult(
+    health_mod._cache["main_model"] = ProbeResult(
         ok=None, reason="no_api_key", checked_at=1700000000.0
     )
 
@@ -320,8 +320,8 @@ def test_export_includes_probes_cache(client: TestClient) -> None:
     probes_name = next(n for n in zf.namelist() if n.endswith("/probes.json"))
     probes = json.loads(zf.read(probes_name))
     assert "entries" in probes
-    assert probes["entries"]["heyi_stt_firered"]["ok"] is True
-    assert probes["entries"]["yunwu_llm_main"]["ok"] is None
+    assert probes["entries"]["speech_recognition"]["ok"] is True
+    assert probes["entries"]["main_model"]["ok"] is None
 
 
 @pytest.mark.unit

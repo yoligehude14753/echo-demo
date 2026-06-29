@@ -1,4 +1,4 @@
-"""STT Port：firered (FireRedASR2-AED @ eight :8090) 唯一 backend。"""
+"""STT Port：当前唯一 backend 为 FireRedASR2-AED 兼容服务。"""
 
 from __future__ import annotations
 

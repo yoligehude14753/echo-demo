@@ -1,20 +1,20 @@
 # EchoDesk 安装指南
 
-当前版本：`v0.2.32`
-下载页：<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.32>
+当前版本：`v0.2.33`
+下载页：<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.33>
 
 | 平台 | 直接下载 | 说明 |
 |---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.2.32-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.2.32-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows 安装器 | `EchoDesk.Setup.0.2.32.exe` | 普通 Windows 安装包 |
-| Windows 便携包 | `EchoDesk-0.2.32-win-x64.zip` | 解压后运行 `EchoDesk.exe`；受管/远程环境优先用这个 |
-| Linux AppImage | `EchoDesk-0.2.32.AppImage` | Linux x64 免安装运行 |
-| Linux deb | `echodesk-desktop_0.2.32_amd64.deb` | Ubuntu / Debian 安装包 |
-| Android 手机 / 平板 | `EchoDesk-0.2.32-android.apk` | 默认连接公网 demo backend |
-| Android TV / 智能电视 | `EchoDesk-0.2.32-smart-tv.apk` | 适配遥控器和电视桌面入口 |
-| 智能电视一键安装 | `EchoDesk-0.2.32-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
-| 校验文件 | `SHA256SUMS-0.2.32.txt` | 校验下载完整性 |
+| macOS Apple Silicon | `EchoDesk-0.2.33-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.2.33-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows 安装器 | `EchoDesk.Setup.0.2.33.exe` | 普通 Windows 安装包 |
+| Windows 便携包 | `EchoDesk-0.2.33-win-x64.zip` | 解压后运行 `EchoDesk.exe`；受管/远程环境优先用这个 |
+| Linux AppImage | `EchoDesk-0.2.33.AppImage` | Linux x64 免安装运行 |
+| Linux deb | `echodesk-desktop_0.2.33_amd64.deb` | Ubuntu / Debian 安装包 |
+| Android 手机 / 平板 | `EchoDesk-0.2.33-android.apk` | 默认连接公网 demo backend |
+| Android TV / 智能电视 | `EchoDesk-0.2.33-smart-tv.apk` | 适配遥控器和电视桌面入口 |
+| 智能电视一键安装 | `EchoDesk-0.2.33-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
+| 校验文件 | `SHA256SUMS-0.2.33.txt` | 校验下载完整性 |
 
 EchoDesk demo 现在是多端客户端 + 公网 demo backend。macOS / Windows / Linux 是桌面端；
 Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yoliyoli.uk`，
@@ -47,13 +47,13 @@ Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yol
 
 优先从 GitHub Releases 下载当前 demo 包：
 
-- macOS: `EchoDesk-0.2.32-arm64.dmg`
-- Windows 安装器: `EchoDesk.Setup.0.2.32.exe`
-- Windows 便携包（受管/远程环境推荐）: `EchoDesk-0.2.32-win-x64.zip`
-- Linux: `EchoDesk-0.2.32.AppImage` 或 `echodesk-desktop_0.2.32_amd64.deb`
-- Android 手机 / 平板: `EchoDesk-0.2.32-android.apk`（demo 包）
-- Android TV / 智能电视: `EchoDesk-0.2.32-smart-tv.apk`
-- 智能电视一键安装包：`EchoDesk-0.2.32-smart-tv-oneclick.zip`
+- macOS: `EchoDesk-0.2.33-arm64.dmg`
+- Windows 安装器: `EchoDesk.Setup.0.2.33.exe`
+- Windows 便携包（受管/远程环境推荐）: `EchoDesk-0.2.33-win-x64.zip`
+- Linux: `EchoDesk-0.2.33.AppImage` 或 `echodesk-desktop_0.2.33_amd64.deb`
+- Android 手机 / 平板: `EchoDesk-0.2.33-android.apk`（demo 包）
+- Android TV / 智能电视: `EchoDesk-0.2.33-smart-tv.apk`
+- 智能电视一键安装包：`EchoDesk-0.2.33-smart-tv-oneclick.zip`
 - 电视浏览器短安装页：`https://yoligehude14753.github.io/echo-demo/`
 
 源码构建仅用于开发：
@@ -80,8 +80,8 @@ npm run app:dist:mac
 产物：
 
 ```text
-desktop/release/EchoDesk-0.2.32-arm64.dmg
-desktop/release/EchoDesk-0.2.32-arm64-mac.zip
+desktop/release/EchoDesk-0.2.33-arm64.dmg
+desktop/release/EchoDesk-0.2.33-arm64-mac.zip
 desktop/release/mac-arm64/EchoDesk.app
 ```
 
@@ -93,7 +93,7 @@ npm run app:dist:win
 ```
 
 如果 Windows 机器出现 Device Guard / 组织策略拦截 `.exe` 安装器，请改用
-`EchoDesk-0.2.32-win-x64.zip`。解压后直接运行 `EchoDesk.exe`，本机数据仍保存在
+`EchoDesk-0.2.33-win-x64.zip`。解压后直接运行 `EchoDesk.exe`，本机数据仍保存在
 Windows 用户目录；后续升级只需要下载新版 zip 并替换解压目录。
 
 Linux x64 可构建 AppImage + deb：
@@ -106,8 +106,8 @@ npm run app:dist:linux
 产物：
 
 ```text
-desktop/release/EchoDesk-0.2.32.AppImage
-desktop/release/echodesk-desktop_0.2.32_amd64.deb
+desktop/release/EchoDesk-0.2.33.AppImage
+desktop/release/echodesk-desktop_0.2.33_amd64.deb
 ```
 
 Android 当前用 Capacitor 打非 debuggable 的 release APK：
@@ -122,10 +122,10 @@ npm run app:package:tv
 
 ```text
 desktop/android/app/build/outputs/apk/release/app-release-unsigned.apk
-desktop/release/EchoDesk-0.2.32-android.apk
-desktop/release/EchoDesk-0.2.32-android-tv.apk
-desktop/release/EchoDesk-0.2.32-smart-tv.apk
-desktop/release/EchoDesk-0.2.32-smart-tv-oneclick.zip
+desktop/release/EchoDesk-0.2.33-android.apk
+desktop/release/EchoDesk-0.2.33-android-tv.apk
+desktop/release/EchoDesk-0.2.33-smart-tv.apk
+desktop/release/EchoDesk-0.2.33-smart-tv-oneclick.zip
 ```
 
 Android / TV APK 是前端客户端，不会在手机或电视里启动 Electron 的本机 Python backend。
@@ -151,11 +151,11 @@ ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --p
 ### 智能电视安装
 
 图里这种有「我的应用」入口的会议室电视，如果底层是 Android TV / Google TV /
-国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.32-smart-tv.apk`。
+国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.33-smart-tv.apk`。
 
 推荐路径：
 
-1. 下载 `EchoDesk-0.2.32-smart-tv-oneclick.zip`。
+1. 下载 `EchoDesk-0.2.33-smart-tv-oneclick.zip`。
 2. 电视打开开发者模式和 ADB 网络调试。
 3. 电脑和电视在同一个局域网。
 4. macOS 执行 `./install-tv-macos.sh 电视IP`；Windows 执行
@@ -206,12 +206,12 @@ bash ~/echo-demo/scripts/install-backend.sh
 
 ## 第 4 步：填密钥（可选）
 
-`~/.echodesk/config.json` 里这两个 key 不填会让对应功能灰：
+`~/.echodesk/config.json` 里这两类 key 不填会让对应功能灰：
 
 ```json
 {
-  "yunwu_open_key": "sk-...",     // 不填 → @生成 / 会议纪要不可用
-  "tavily_api_key": "tvly-..."    // 不填 → @查 联网检索不可用
+  "main_model_api_key": "sk-...", // 不填 → @生成 / 会议纪要不可用
+  "web_search_api_key": "..."     // 不填 → @查 联网检索不可用
 }
 ```
 
@@ -232,7 +232,7 @@ bash ~/echo-demo/scripts/install-backend.sh
 正常装好的 mac 上应该满足：
 
 - [ ] `curl http://127.0.0.1:8769/healthz` → `{"status":"ok"}`（.app 跑着时）
-- [ ] `curl http://127.0.0.1:8769/healthz/full` → 5 个远程依赖至少 3 个 `ok: true`
+- [ ] `curl http://127.0.0.1:8769/healthz/full` → 模型服务健康项为 `ok: true`
 - [ ] `~/.echodesk/logs/backend.log` 持续 append（按天 rotate）
 - [ ] `~/.echodesk/echodesk.db` 存在（启动后建空表）
 - [ ] 双击 .app → UI 出现 → 顶部不出现"后端连接断开"红条
@@ -293,19 +293,17 @@ python -m uvicorn app.main:app --port 8769
 
 Supervisor 看到端口已占会走 external 模式，监控存活但不重启。
 
-### "远程依赖（eight / Yunwu）连不上"
+### "模型服务连不上"
 
 `curl http://127.0.0.1:8769/healthz/full` 里 `remote.*.ok` 显示状态：
 
-| 字段 | 含义 | 看哪个 |
+| 健康项 | 含义 | 看哪个 |
 |---|---|---|
-| `heyi_stt_firered` | STT @ :8090 | eight 服务 + 你的 VPN |
-| `heyi_tts_qwen3` | TTS @ :8094 | 同上 |
-| `heyi_llm_fast` | MiniMax-M2.7 @ Yunwu（public 兜底） | Yunwu API key + 公网 |
-| `yunwu_llm_main` | Yunwu MiniMax-M2.7 | API key + 公网 |
-| `tavily` | Tavily 搜索 | API key + 公网 |
-
-`heyi_*` 是历史字段名，当前实际机器是 eight (`100.76.3.59`)。
+| 语音识别 | STT | 模型服务网络 + 权限 |
+| 语音合成 | TTS | 模型服务网络 + 权限 |
+| 快速智能引擎 | Fast LLM | 主模型 key + 网络 |
+| 主模型 | LLM | 主模型 key + 网络 |
+| 联网检索 | Web Search | 检索 key + 网络 |
 
 `ok: null` + `reason: "no_api_key"` 说明 key 没填，相关功能灰；`ok: false` 才是真断了。
 

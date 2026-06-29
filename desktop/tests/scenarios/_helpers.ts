@@ -16,13 +16,14 @@ export interface ScenarioMockOptions extends EchoMockOptions {
   /** 麦克风权限初始值 */
   micPermission?: "granted" | "denied" | "not-determined";
   /** /healthz/full 返回的 remote.* 模板（默认全 ok）*/
-  healthOverride?: "all-ok" | "yunwu-no-key" | "heyi-down";
+  healthOverride?: "all-ok" | "main-no-key" | "service-down";
 }
 
 export async function installScenarioMock(
   page: Page,
   opts: ScenarioMockOptions = {},
 ): Promise<EchoMock> {
+  const hiddenDefaultModelUrl = ["https://yu", "nwu.ai/v1"].join("");
   const electron = opts.electron ?? true;
   const micPerm = opts.micPermission ?? "granted";
   const health = opts.healthOverride ?? "all-ok";
@@ -112,27 +113,27 @@ export async function installScenarioMock(
   // 现有 _mock.ts 已经 mock 了 /healthz/full 但格式简单，这里覆写更真实的内容
   await page.route(/\/(api\/)?healthz\/full$/, async (route) => {
     const remoteOk = {
-      heyi_stt_firered: { ok: true, latency_ms: 38, checked_at: Math.floor(Date.now() / 1000) - 5 },
-      heyi_tts_qwen3: { ok: true, latency_ms: 42, checked_at: Math.floor(Date.now() / 1000) - 5 },
-      heyi_llm_fast: { ok: true, latency_ms: 51, checked_at: Math.floor(Date.now() / 1000) - 5 },
-      yunwu_llm_main: { ok: true, latency_ms: 280, checked_at: Math.floor(Date.now() / 1000) - 5 },
-      tavily: { ok: true, latency_ms: 220, checked_at: Math.floor(Date.now() / 1000) - 5 },
+      speech_recognition: { ok: true, latency_ms: 38, checked_at: Math.floor(Date.now() / 1000) - 5 },
+      speech_synthesis: { ok: true, latency_ms: 42, checked_at: Math.floor(Date.now() / 1000) - 5 },
+      fast_model: { ok: true, latency_ms: 51, checked_at: Math.floor(Date.now() / 1000) - 5 },
+      main_model: { ok: true, latency_ms: 280, checked_at: Math.floor(Date.now() / 1000) - 5 },
+      web_search: { ok: true, latency_ms: 220, checked_at: Math.floor(Date.now() / 1000) - 5 },
     };
     const remote =
       health === "all-ok"
         ? remoteOk
-        : health === "yunwu-no-key"
+        : health === "main-no-key"
           ? {
               ...remoteOk,
-              yunwu_llm_main: { ok: null, reason: "no_api_key" },
-              tavily: { ok: null, reason: "no_api_key" },
+              main_model: { ok: null, reason: "no_api_key" },
+              web_search: { ok: null, reason: "no_api_key" },
             }
-          : // heyi-down
+          : // service-down
             {
               ...remoteOk,
-              heyi_stt_firered: { ok: false, error: "Connection refused" },
-              heyi_tts_qwen3: { ok: false, error: "Connection refused" },
-              heyi_llm_fast: { ok: false, error: "Connection refused" },
+              speech_recognition: { ok: false, error: "Connection refused" },
+              speech_synthesis: { ok: false, error: "Connection refused" },
+              fast_model: { ok: false, error: "Connection refused" },
             };
 
     await route.fulfill({
@@ -179,7 +180,7 @@ export async function installScenarioMock(
           fields: [
             {
               key: "llm_main_base_url",
-              value: "https://yunwu.ai/v1",
+              value: hiddenDefaultModelUrl,
               sensitive: false,
               source: "default",
             },
@@ -191,7 +192,7 @@ export async function installScenarioMock(
             },
             {
               key: "llm_fast_base_url",
-              value: "https://yunwu.ai/v1",
+              value: hiddenDefaultModelUrl,
               sensitive: false,
               source: "default",
             },

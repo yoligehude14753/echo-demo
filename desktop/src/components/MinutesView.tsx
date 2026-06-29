@@ -66,7 +66,7 @@ function friendlyMinutesError(raw: string | null | undefined): {
   if (/timeout|timed out/i.test(s)) {
     return {
       headline: "LLM 调用超时",
-      hint: "云端模型当前响应较慢，稍后点击重新生成即可",
+      hint: "模型服务当前响应较慢，稍后点击重新生成即可",
     };
   }
   if (/connect refused|connection refused|read timed out/i.test(s)) {
@@ -90,7 +90,7 @@ function friendlyMinutesError(raw: string | null | undefined): {
  *   会议中（state="in_meeting" 且无 minutes）
  *     → 「会议进行中…」
  *   生成中（state="ended" 且 minutes_status=null|"generating"）
- *     → 「正在用 MiniMax-M2.7 生成纪要…」+ Spinner
+ *     → 「正在生成纪要…」+ Spinner
  *   生成失败（state="ended" 且 minutes_status="generation_failed"）
  *     → 「生成失败 · 点击重试」+ 错误消息
  *   已生成（minutes 有内容）

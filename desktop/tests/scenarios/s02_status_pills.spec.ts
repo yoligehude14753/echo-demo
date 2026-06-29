@@ -2,7 +2,7 @@
  * 场景 2：顶栏诊断 pill 巡检（点开 4 个 pill 看明细）
  *
  * 覆盖功能：
- *  - P2.1 状态可视化：backend / heyi-bj / 云 / 麦克风 4 个 pill
+ *  - P2.1 状态可视化：backend / 模型服务 / 智能引擎 / 麦克风 4 个 pill
  *  - 每个 pill popover 显示版本 / 探针 / 权限态
  *  - P3.5 mic denied 时显示「打开系统设置」深链按钮
  *
@@ -55,7 +55,7 @@ test("S02 · 顶栏 4 个 pill 巡检（P2.1 全绿态）", async ({ page }) => 
   await test.step("打开主界面，顶栏 4 个 pill 渲染", async () => {
     await page.goto("/");
     await expect(page.getByTestId("status-bar")).toBeVisible();
-    for (const id of ["pill-backend", "pill-heyi", "pill-yunwu", "pill-mic"]) {
+    for (const id of ["pill-backend", "pill-model-service", "pill-main-model", "pill-mic"]) {
       await expect(page.getByTestId(id)).toBeVisible();
     }
   });
@@ -68,18 +68,18 @@ test("S02 · 顶栏 4 个 pill 巡检（P2.1 全绿态）", async ({ page }) => 
     });
   });
 
-  await test.step("heyi-bj pill popover：3 个探针（STT / TTS / Fast LLM）", async () => {
-    await probePill(page, "pill-heyi", async (po) => {
-      await expect(po.getByText(/STT FireRed/i)).toBeVisible({ timeout: 3_000 });
-      await expect(po.getByText(/TTS Qwen3/i)).toBeVisible();
-      await expect(po.getByText(/Fast LLM/i)).toBeVisible();
+  await test.step("模型服务 pill popover：3 个探针（语音识别 / 语音合成 / 快速智能引擎）", async () => {
+    await probePill(page, "pill-model-service", async (po) => {
+      await expect(po.getByText("语音识别")).toBeVisible({ timeout: 3_000 });
+      await expect(po.getByText("语音合成连接")).toBeVisible();
+      await expect(po.getByText("快速智能引擎")).toBeVisible();
     });
   });
 
-  await test.step("云 pill popover：Yunwu MiniMax + Tavily", async () => {
-    await probePill(page, "pill-yunwu", async (po) => {
-      await expect(po.getByText(/Yunwu MiniMax/i)).toBeVisible({ timeout: 3_000 });
-      await expect(po.getByText(/Tavily/i)).toBeVisible();
+  await test.step("智能引擎 pill popover：主模型 + 联网检索", async () => {
+    await probePill(page, "pill-main-model", async (po) => {
+      await expect(po.getByText("主模型")).toBeVisible({ timeout: 3_000 });
+      await expect(po.getByText("联网检索")).toBeVisible();
     });
   });
 

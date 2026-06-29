@@ -1,7 +1,7 @@
 /**
  * StatusBar · Phase 2 P2.1
  *
- * 顶部 4 个 status pill：backend / eight / Yunwu / mic
+ * 顶部 4 个 status pill：backend / 模型服务 / 智能引擎 / mic
  * 每个 pill：
  *   - 颜色：绿(ok) / 橙(warn 含部分降级 / 缺 key / 重启中) / 红(fail) / 灰(unknown)
  *   - 点开 popover：详细诊断信息（version / latency / 错误）
@@ -11,7 +11,7 @@
  */
 
 import { Tooltip, Popover, Button } from "antd";
-import { RefreshCw, Mic, Server, Cloud, Cpu } from "lucide-react";
+import { RefreshCw, Mic, Server, Sparkles, Cpu } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { TtsDiagResult } from "@/api";
 import {
@@ -60,8 +60,20 @@ const COLORS: Record<Level, { dot: string; text: string; ring: string }> = {
   },
 };
 
-// 用 backend 远程探针 key（跟 backend/app/api/health.py:_probe_all 对齐）
-const HEYI_PROBES = ["heyi_stt_firered", "heyi_tts_qwen3", "heyi_llm_fast"] as const;
+// 用 backend 公开探针 key（跟 backend/app/api/health.py:_probe_all 对齐）。
+const MODEL_SERVICE_PROBES = ["speech_recognition", "speech_synthesis", "fast_model"] as const;
+
+function probe(
+  remote: HealthzFull["remote"] | undefined,
+  key: string,
+): ProbeResultDTO | undefined {
+  if (!remote) return undefined;
+  return remote[key];
+}
+
+function isProbeResult(probeValue: ProbeResultDTO | undefined): probeValue is ProbeResultDTO {
+  return Boolean(probeValue);
+}
 
 // ===== 等级聚合 =====
 
@@ -88,7 +100,7 @@ function levelFromProbes(probes: ProbeResultDTO[]): Level {
 }
 
 // 多个 level 合并取最差（unknown < ok 仅在两者都不为 fail/warn 时退到 unknown）。
-// 用于 eight pill 同时反映 TCP probe 与 /tts/diag 合成回环两条线索。
+// 用于模型服务 pill 同时反映 TCP probe 与 /tts/diag 合成回环两条线索。
 const LEVEL_ORDER: Record<Level, number> = { ok: 0, warn: 1, fail: 2, unknown: 3 };
 function mergeLevels(a: Level, b: Level): Level {
   // fail 永远胜出（有任何明确失败 → 整体 fail）；其次 warn；ok 与 unknown 取 ok。
@@ -115,7 +127,7 @@ function levelFromTtsHealth(
   return "fail";
 }
 
-function levelFromYunwu(p: ProbeResultDTO | undefined): Level {
+function levelFromMainModel(p: ProbeResultDTO | undefined): Level {
   if (!p) return "unknown";
   if (p.ok === true) return "ok";
   if (p.ok === false) return "fail";
@@ -294,7 +306,7 @@ function BackendPopover({
   );
 }
 
-function HeyiPopover({
+function ModelServicePopover({
   remote,
   ttsHealth,
   ttsEnabled,
@@ -307,9 +319,9 @@ function HeyiPopover({
   ttsLastError: string | null | undefined;
   onRefreshTtsHealth: (() => Promise<void> | void) | undefined;
 }): JSX.Element {
-  const stt = remote?.heyi_stt_firered;
-  const tts = remote?.heyi_tts_qwen3;
-  const fastLlm = remote?.heyi_llm_fast;
+  const stt = probe(remote, "speech_recognition");
+  const tts = probe(remote, "speech_synthesis");
+  const fastLlm = probe(remote, "fast_model");
   const [refreshing, setRefreshing] = useState(false);
   const refresh = async () => {
     if (!onRefreshTtsHealth) return;
@@ -347,10 +359,10 @@ function HeyiPopover({
     <div className="min-w-[300px] max-w-[420px] text-[12px] py-1">
       <div className="font-semibold mb-1.5 flex items-center gap-1.5">
         <Cpu className="w-3.5 h-3.5" />
-        eight 远端服务
+        语音与模型服务
       </div>
-      <ProbeRow name="STT FireRed :8090" probe={stt} />
-      <ProbeRow name="TTS Qwen3 :8094 (TCP)" probe={tts} />
+      <ProbeRow name="语音识别" probe={stt} />
+      <ProbeRow name="语音合成连接" probe={tts} />
       <div className="flex items-start justify-between text-[11px] mt-0.5">
         <span className="text-ink-700 shrink-0 mr-2">TTS 合成回环</span>
         <span
@@ -361,7 +373,7 @@ function HeyiPopover({
           {synthText}
         </span>
       </div>
-      <ProbeRow name="Fast LLM" probe={fastLlm} />
+      <ProbeRow name="快速智能引擎" probe={fastLlm} />
       <div className="flex items-center justify-between mt-2">
         <span className="text-ink-400 text-[10px]">
           TCP 探针 30s · 合成回环 30s
@@ -389,22 +401,22 @@ function HeyiPopover({
   );
 }
 
-function YunwuPopover({
+function MainModelPopover({
   remote,
 }: {
   remote: HealthzFull["remote"] | undefined;
 }): JSX.Element {
-  const yunwu = remote?.yunwu_llm_main;
-  const tavily = remote?.tavily;
+  const mainModel = probe(remote, "main_model");
+  const webSearch = probe(remote, "web_search");
   return (
     <div className="min-w-[260px] text-[12px] py-1">
       <div className="font-semibold mb-1.5 flex items-center gap-1.5">
-        <Cloud className="w-3.5 h-3.5" />
-        云端依赖
+        <Sparkles className="w-3.5 h-3.5" />
+        智能引擎
       </div>
-      <ProbeRow name="Yunwu MiniMax-M2.7" probe={yunwu} />
-      <ProbeRow name="Tavily 搜索" probe={tavily} />
-      {(yunwu?.reason === "no_api_key" || tavily?.reason === "no_api_key") && (
+      <ProbeRow name="主模型" probe={mainModel} />
+      <ProbeRow name="联网检索" probe={webSearch} />
+      {(mainModel?.reason === "no_api_key" || webSearch?.reason === "no_api_key") && (
         <div className="text-amber-600 text-[10px] mt-2">
           ⚠ 部分密钥未配置，相关功能（@生成/纪要/@查）将不可用。
           <br />
@@ -487,17 +499,19 @@ export default function StatusBar({
   const backendLevel = backendVersionBehind
     ? mergeLevels(backendBaseLevel, "warn")
     : backendBaseLevel;
-  // eight pill 级别：取「TCP 各探针」与「TTS 合成回环」二者的最差。
+  // 模型服务 pill 级别：取「TCP 各探针」与「TTS 合成回环」二者的最差。
   // 这样即便 STT/Fast LLM TCP 都通了，只要 /tts/diag 报 silent_output，
   // pill 也会立刻变红/橙——消除"绿灯但用户没声音"的欺骗。
   const ttsHealthLevel = levelFromTtsHealth(ttsEnabled, ttsHealth, ttsLastError);
-  const heyiLevel = useMemo(() => {
+  const modelServiceLevel = useMemo(() => {
     const tcpLevel = healthz?.remote
-      ? levelFromProbes(HEYI_PROBES.map((k) => healthz.remote[k]).filter(Boolean))
+      ? levelFromProbes(
+          MODEL_SERVICE_PROBES.map((k) => probe(healthz.remote, k)).filter(isProbeResult),
+        )
       : ("unknown" as Level);
     return mergeLevels(tcpLevel, ttsHealthLevel);
   }, [healthz?.remote, ttsHealthLevel]);
-  const yunwuLevel = levelFromYunwu(healthz?.remote?.yunwu_llm_main);
+  const mainModelLevel = levelFromMainModel(probe(healthz?.remote, "main_model"));
   const micLevel = levelFromMic(mic);
 
   const supervisorPretty: Record<SupervisorStatus["state"], string> = {
@@ -522,11 +536,11 @@ export default function StatusBar({
         testId="pill-backend"
       />
       <Pill
-        label="eight"
-        level={heyiLevel}
+        label="模型服务"
+        level={modelServiceLevel}
         icon={<Cpu className="w-3 h-3" />}
         popover={
-          <HeyiPopover
+          <ModelServicePopover
             remote={healthz?.remote}
             ttsHealth={ttsHealth}
             ttsEnabled={ttsEnabled}
@@ -534,14 +548,14 @@ export default function StatusBar({
             onRefreshTtsHealth={onRefreshTtsHealth}
           />
         }
-        testId="pill-heyi"
+        testId="pill-model-service"
       />
       <Pill
-        label="云"
-        level={yunwuLevel}
-        icon={<Cloud className="w-3 h-3" />}
-        popover={<YunwuPopover remote={healthz?.remote} />}
-        testId="pill-yunwu"
+        label="智能引擎"
+        level={mainModelLevel}
+        icon={<Sparkles className="w-3 h-3" />}
+        popover={<MainModelPopover remote={healthz?.remote} />}
+        testId="pill-main-model"
       />
       <Pill
         label="麦克风"

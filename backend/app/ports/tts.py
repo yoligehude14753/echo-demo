@@ -1,4 +1,4 @@
-"""TTS Port：当前 adapter = faster-qwen3-tts 1.7B CustomVoice @ eight :8094。
+"""TTS Port：当前 adapter = faster-qwen3-tts 1.7B CustomVoice。
 
 详见 docs/ARCH-AUDIT.md §1 §3。
 """

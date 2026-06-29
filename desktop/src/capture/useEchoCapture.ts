@@ -93,7 +93,7 @@ export function useEchoCapture(): CaptureStatus {
       onSttCircuitOpen: ({ retryAtMs }) => {
         setSttCircuitOpenUntil(retryAtMs);
         message.error({
-          content: `云端 STT 熔断 · 暂停上传 · ${formatRetryRemaining(retryAtMs)}`,
+          content: `语音识别暂时不可用 · 暂停上传 · ${formatRetryRemaining(retryAtMs)}`,
           key: CIRCUIT_TOAST_KEY,
           duration: 0,
         });
@@ -101,7 +101,7 @@ export function useEchoCapture(): CaptureStatus {
       onSttCircuitClosed: () => {
         setSttCircuitOpenUntil(null);
         message.success({
-          content: "云端 STT 已恢复，恢复上传",
+          content: "语音识别已恢复，恢复上传",
           key: CIRCUIT_TOAST_KEY,
           duration: 3,
         });

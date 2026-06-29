@@ -1,20 +1,20 @@
-"""扩展健康检查：/healthz/full 返回 backend + db + 各远程依赖最新探针。
+"""扩展健康检查：/healthz/full 返回 backend + db + 各服务最新探针。
 
 P1.4（独立产品 Phase 1）：UI 状态栏 4 个 pill 的数据源；诊断包 / 故障定位
 都从这里读。
 
 实现：
-- STT/TTS 后台 task 每 30s 用 TCP socket connect 探一次远程依赖。
+- STT/TTS 后台 task 每 30s 用 TCP socket connect 探一次服务。
 - LLM 用带 Authorization 的 `/v1/models` 探针；只测 TCP 会把无效 key 误报为可用。
 - 探针结果缓存到内存；/healthz/full 直接读 cache
 - 启动时后台异步探测；避免 tailnet 抖动导致 backend 启动被健康探针阻塞
 
-远程探针名规范（前端 pill 引用同一份）：
-  heyi_stt_firered    eight :8090 FireRedASR2-AED
-  heyi_tts_qwen3      eight :8094 qwen3 TTS
-  heyi_llm_fast       Fast LLM endpoint (public default: Yunwu fallback)
-  yunwu_llm_main      yunwu.ai MiniMax-M2.7（无 key 时 ok=null reason=no_api_key）
-  tavily              api.tavily.com（无 key 时 ok=null reason=no_api_key）
+公开探针名规范（前端 pill 引用同一份）：
+  speech_recognition  语音识别服务
+  speech_synthesis    语音合成服务
+  fast_model          快速模型服务
+  main_model          主模型服务（无 key 时 ok=null reason=no_api_key）
+  web_search          联网检索服务（无 key 时 ok=null reason=no_api_key）
 """
 
 from __future__ import annotations
@@ -98,8 +98,8 @@ async def _probe_openai_models(base_url: str, api_key: str) -> ProbeResult:
     """Probe an OpenAI-compatible `/models` endpoint with auth.
 
     This is intentionally stronger than a TCP probe but cheaper than chat
-    completion. It catches the public-demo failure mode where Yunwu is reachable
-    but the configured key is missing/invalid.
+    completion. It catches the public-demo failure mode where the endpoint is
+    reachable but the configured key is missing/invalid.
     """
     if not api_key or api_key == "EMPTY":
         return ProbeResult(ok=None, reason="no_api_key")
@@ -123,15 +123,15 @@ async def _probe_openai_models(base_url: str, api_key: str) -> ProbeResult:
 async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
     probes: list[tuple[str, asyncio.Future[ProbeResult] | asyncio.Task[ProbeResult]]] = []
     host, port = _host_port_from_url(settings.stt_firered_url)
-    probes.append(("heyi_stt_firered", asyncio.ensure_future(_probe_tcp(host, port))))
+    probes.append(("speech_recognition", asyncio.ensure_future(_probe_tcp(host, port))))
 
     if settings.tts_enabled:
         host, port = _host_port_from_url(settings.tts_qwen3_url)
-        probes.append(("heyi_tts_qwen3", asyncio.ensure_future(_probe_tcp(host, port))))
+        probes.append(("speech_synthesis", asyncio.ensure_future(_probe_tcp(host, port))))
     else:
         probes.append(
             (
-                "heyi_tts_qwen3",
+                "speech_synthesis",
                 asyncio.ensure_future(
                     asyncio.sleep(0, ProbeResult(ok=None, reason="tts_disabled"))
                 ),
@@ -145,7 +145,7 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
     )
     probes.append(
         (
-            "heyi_llm_fast",
+            "fast_model",
             asyncio.ensure_future(_probe_openai_models(settings.llm_fast_base_url, fast_key)),
         )
     )
@@ -153,14 +153,14 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
     if not settings.yunwu_open_key:
         probes.append(
             (
-                "yunwu_llm_main",
+                "main_model",
                 asyncio.ensure_future(asyncio.sleep(0, ProbeResult(ok=None, reason="no_api_key"))),
             )
         )
     else:
         probes.append(
             (
-                "yunwu_llm_main",
+                "main_model",
                 asyncio.ensure_future(
                     _probe_openai_models(settings.llm_main_base_url, settings.yunwu_open_key)
                 ),
@@ -170,24 +170,25 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
     if not settings.tavily_api_key:
         probes.append(
             (
-                "tavily",
+                "web_search",
                 asyncio.ensure_future(asyncio.sleep(0, ProbeResult(ok=None, reason="no_api_key"))),
             )
         )
     else:
-        probes.append(("tavily", asyncio.ensure_future(_probe_tcp("api.tavily.com", 443))))
+        probes.append(("web_search", asyncio.ensure_future(_probe_tcp("api.tavily.com", 443))))
 
     values = await asyncio.gather(*(probe for _, probe in probes))
     return {name: value for (name, _), value in zip(probes, values, strict=True)}
 
 
 def _apply_probe_results(results: dict[str, ProbeResult]) -> None:
-    """Update probe cache with a small grace window for flaky tailnet probes.
+    """Update probe cache with a small grace window for flaky service probes.
 
-    eight occasionally accepts real STT/TTS requests while a lightweight TCP probe
-    times out. Flipping the status pill red on the first missed probe makes the UI
-    look broken even when capture is still working, so keep the last known-good
-    status until the same dependency fails several rounds in a row.
+    A service can occasionally accept real STT/TTS requests while a lightweight
+    TCP probe times out. Flipping the status pill red on the first missed probe
+    makes the UI look broken even when capture is still working, so keep the
+    last known-good status until the same dependency fails several rounds in a
+    row.
     """
     stale_names = set(_cache) - set(results)
     for name in stale_names:
@@ -288,7 +289,7 @@ def _probe_to_dict(probe: ProbeResult) -> dict[str, Any]:
 async def healthz_full(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    """完整健康：backend + db + 5 个远程依赖 + mic（mic 由前端补）。"""
+    """完整健康：backend + db + 5 个服务探针 + mic（mic 由前端补）。"""
     return {
         "backend": {
             "ok": True,

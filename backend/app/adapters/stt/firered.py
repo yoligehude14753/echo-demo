@@ -1,4 +1,4 @@
-"""STT adapter: FireRedASR2-AED HTTP（eight :8090）。
+"""STT adapter: FireRedASR2-AED HTTP。
 
 接口：POST {base}/v1/audio/transcriptions（OpenAI 兼容，与 SenseVoice GPU 同构）
 - 上传 multipart：file=WAV(16k/16bit/mono)
@@ -11,8 +11,8 @@
 - 用户决策：切回 FireRed —— FireRed 判别式无幻觉，中文强（echo §6.30.8 RTF 0.18）
 - 中英混合差是 FireRed 已知短板，但 EchoDesk 主用 中文，可接受
 
-稳定性策略：不在 adapter 层做本地熔断。eight STT 偶发慢/空/断连时，调用方
-按单次失败处理；ambient pipeline 负责并发闸，避免慢请求堆积打爆 eight。
+稳定性策略：不在 adapter 层做本地熔断。语音识别服务偶发慢/空/断连时，调用方
+按单次失败处理；ambient pipeline 负责并发闸，避免慢请求堆积。
 """
 
 from __future__ import annotations

@@ -29,7 +29,7 @@ class TestHostPortFromUrl:
         "url,want",
         [
             ("http://100.76.3.59:8090", ("100.76.3.59", 8090)),
-            ("https://yunwu.ai/v1", ("yunwu.ai", 443)),
+            ("https://model.example.com/v1", ("model.example.com", 443)),
             ("http://localhost:7860/v1", ("localhost", 7860)),
             ("http://example.com", ("example.com", 80)),
             ("api.tavily.com", ("api.tavily.com", 80)),  # 裸 host
@@ -125,17 +125,17 @@ class TestHealthzFull:
 
         health_mod._cache.clear()
         health_mod._failure_counts.clear()
-        health_mod._cache["heyi_stt_firered"] = ProbeResult(
+        health_mod._cache["speech_recognition"] = ProbeResult(
             ok=True, latency_ms=10.0, checked_at=1700000000.0
         )
-        health_mod._cache["yunwu_llm_main"] = ProbeResult(
+        health_mod._cache["main_model"] = ProbeResult(
             ok=None, reason="no_api_key", checked_at=1700000000.0
         )
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         out = await healthz_full(s)
-        assert out["remote"]["heyi_stt_firered"]["ok"] is True
-        assert out["remote"]["yunwu_llm_main"]["ok"] is None
-        assert out["remote"]["yunwu_llm_main"]["reason"] == "no_api_key"
+        assert out["remote"]["speech_recognition"]["ok"] is True
+        assert out["remote"]["main_model"]["ok"] is None
+        assert out["remote"]["main_model"]["reason"] == "no_api_key"
 
 
 @pytest.mark.unit
@@ -147,10 +147,10 @@ class TestProbeResultApplication:
         health_mod._failure_counts.clear()
 
         _apply_probe_results(
-            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=1.0)}
+            {"speech_recognition": ProbeResult(ok=False, error="timeout", checked_at=1.0)}
         )
-        assert health_mod._cache["heyi_stt_firered"].ok is None
-        assert health_mod._cache["heyi_stt_firered"].reason == "checking_after_timeout_1/10"
+        assert health_mod._cache["speech_recognition"].ok is None
+        assert health_mod._cache["speech_recognition"].reason == "checking_after_timeout_1/10"
 
     def test_transient_timeout_keeps_last_ok_until_grace(self) -> None:
         from app.api import health as health_mod
@@ -159,32 +159,32 @@ class TestProbeResultApplication:
         health_mod._failure_counts.clear()
 
         _apply_probe_results(
-            {"heyi_stt_firered": ProbeResult(ok=True, latency_ms=12.0, checked_at=1.0)}
+            {"speech_recognition": ProbeResult(ok=True, latency_ms=12.0, checked_at=1.0)}
         )
-        assert health_mod._cache["heyi_stt_firered"].ok is True
+        assert health_mod._cache["speech_recognition"].ok is True
 
         _apply_probe_results(
-            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=2.0)}
+            {"speech_recognition": ProbeResult(ok=False, error="timeout", checked_at=2.0)}
         )
-        assert health_mod._cache["heyi_stt_firered"].ok is True
-        assert health_mod._cache["heyi_stt_firered"].reason == ("last_ok_retained_after_timeout")
+        assert health_mod._cache["speech_recognition"].ok is True
+        assert health_mod._cache["speech_recognition"].reason == ("last_ok_retained_after_timeout")
 
         for i in range(3, 11):
             _apply_probe_results(
                 {
-                    "heyi_stt_firered": ProbeResult(
+                    "speech_recognition": ProbeResult(
                         ok=False,
                         error="timeout",
                         checked_at=float(i),
                     )
                 }
             )
-            assert health_mod._cache["heyi_stt_firered"].ok is True
+            assert health_mod._cache["speech_recognition"].ok is True
 
         _apply_probe_results(
-            {"heyi_stt_firered": ProbeResult(ok=False, error="timeout", checked_at=11.0)}
+            {"speech_recognition": ProbeResult(ok=False, error="timeout", checked_at=11.0)}
         )
-        assert health_mod._cache["heyi_stt_firered"].ok is False
+        assert health_mod._cache["speech_recognition"].ok is False
 
 
 @pytest.mark.unit

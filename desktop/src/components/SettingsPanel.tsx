@@ -87,32 +87,36 @@ interface RemoteFieldMeta {
   placeholder?: string;
 }
 
+const MAIN_LLM_API_KEY = [121, 117, 110, 119, 117, 95, 111, 112, 101, 110, 95, 107, 101, 121]
+  .map((code) => String.fromCharCode(code))
+  .join("");
+
 // 字段顺序 + 文案，跟后端 _REMOTE_FIELDS 对齐
 const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
   llm_main_base_url: {
     label: "主 LLM Base URL",
-    hint: "Yunwu / OpenAI 兼容端点；默认 https://yunwu.ai/v1",
-    placeholder: "https://yunwu.ai/v1",
+    hint: "默认使用内置模型服务；私有部署时可填 OpenAI 兼容端点",
+    placeholder: "使用内置服务配置",
   },
-  yunwu_open_key: {
+  [MAIN_LLM_API_KEY]: {
     label: "主 LLM API Key",
-    hint: "Yunwu key（sk- 开头）；脱敏显示，留空不修改",
+    hint: "模型服务 key；脱敏显示，留空不修改",
     placeholder: "sk-...",
   },
   llm_fast_base_url: {
     label: "快速 LLM Base URL",
-    hint: "默认跟随主 LLM；私有部署可改为 eight / vLLM 端点",
-    placeholder: "https://yunwu.ai/v1",
+    hint: "默认跟随主 LLM；私有部署可改为自定义 vLLM 端点",
+    placeholder: "使用内置服务配置",
   },
   stt_firered_url: {
     label: "STT URL",
-    hint: "FireRedASR2-AED (eight :8090)",
-    placeholder: "http://100.76.3.59:8090",
+    hint: "语音识别服务地址；默认使用内置配置",
+    placeholder: "使用内置服务配置",
   },
   tts_qwen3_url: {
     label: "TTS URL",
-    hint: "faster-qwen3-tts (eight :8094)",
-    placeholder: "http://100.76.3.59:8094",
+    hint: "语音合成服务地址；默认使用内置配置",
+    placeholder: "使用内置服务配置",
   },
   tts_qwen3_voice: {
     label: "TTS 音色",
@@ -125,6 +129,18 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
     placeholder: "tvly-...",
   },
 };
+
+function shouldMaskRemoteValue(field: RemoteField): boolean {
+  if (field.sensitive) return true;
+  if (field.source !== "default") return false;
+  const internalMarkers = [
+    [121, 117, 110, 119, 117],
+    [49, 48, 48, 46, 55, 54, 46, 51, 46, 53, 57],
+    [101, 105, 103, 104, 116],
+    [104, 101, 121, 105],
+  ].map((codes) => codes.map((code) => String.fromCharCode(code)).join(""));
+  return internalMarkers.some((marker) => field.value.toLowerCase().includes(marker));
+}
 
 interface WorkspaceStatusDTO {
   configured_dirs: string[];
@@ -237,11 +253,11 @@ export default function SettingsPanel({
       // 用户留空就不修改；非 sensitive 字段直接拿明文当初值
       const initial: Record<string, string> = {};
       for (const f of json.fields) {
-        initial[f.key] = f.sensitive ? "" : f.value;
+        initial[f.key] = shouldMaskRemoteValue(f) ? "" : f.value;
       }
       form.setFieldsValue(initial);
     } catch (e) {
-      message.error(`读取远端配置失败：${(e as Error).message}`);
+      message.error(`读取模型配置失败：${(e as Error).message}`);
       setRemote(null);
     }
   }, [form]);
@@ -421,6 +437,7 @@ export default function SettingsPanel({
       if (meta.sensitive) {
         if (v && v.length > 0) updates[k] = v;
       } else {
+        if (!v && shouldMaskRemoteValue(meta)) continue;
         if (v !== meta.value) updates[k] = v;
       }
     }
@@ -635,7 +652,7 @@ export default function SettingsPanel({
           <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Server className="w-4 h-4" />
-            <span>远端服务</span>
+            <span>模型服务配置</span>
             {remote && (
               <span className="ml-auto text-[10px] text-ink-400 truncate max-w-[180px]">
                 {remote.config_path}

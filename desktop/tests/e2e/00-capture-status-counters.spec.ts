@@ -357,7 +357,7 @@ test("偶发 STT circuit_open 不进入长时间熔断暂停", async ({ page }) 
     .toBe(2);
 
   await page.waitForTimeout(300);
-  await expect(page.getByText(/云端 STT 熔断/)).toHaveCount(0);
+  await expect(page.getByText(/语音识别暂时不可用/)).toHaveCount(0);
   await expect(cap).not.toContainText("STT 熔断");
 });
 
@@ -391,8 +391,8 @@ test("STT 熔断退避到期后 UI 自动清除红条", async ({ page }) => {
 
   await emitChunks(page, 3);
   await expect(cap).toContainText("STT 熔断", { timeout: 8_000 });
-  await expect(page.getByText(/云端 STT 熔断/)).toBeVisible();
+  await expect(page.getByText(/语音识别暂时不可用/)).toBeVisible();
 
   await expect(cap).not.toContainText("STT 熔断", { timeout: 8_000 });
-  await expect(page.getByText(/云端 STT 熔断/)).toHaveCount(0);
+  await expect(page.getByText(/语音识别暂时不可用/)).toHaveCount(0);
 });

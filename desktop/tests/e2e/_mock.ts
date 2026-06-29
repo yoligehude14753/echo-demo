@@ -249,14 +249,14 @@ export async function installEchoMock(
             fields: [
               {
                 key: "llm_main_base_url",
-                value: "https://yunwu.ai/v1",
+                value: "https://model.example.com/v1",
                 sensitive: false,
                 source: "default",
               },
               { key: "yunwu_open_key", value: "", sensitive: true, source: "default" },
               {
                 key: "llm_fast_base_url",
-                value: "https://yunwu.ai/v1",
+                value: "https://model.example.com/v1",
                 sensitive: false,
                 source: "default",
               },

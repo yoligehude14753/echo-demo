@@ -3,7 +3,7 @@
  *
  * 覆盖之前用户报告"TTS 完全失效"时藏在系统里的三条裂缝：
  *  1. /tts/diag 返回 ok → 顶栏 TTS 标签显示绿色「TTS」
- *  2. /tts/diag 返回 silent_output → 顶栏切橙色「TTS 异常」+ HeyiPopover 反映
+ *  2. /tts/diag 返回 silent_output → 顶栏切橙色「TTS 异常」+ ModelServicePopover 反映
  *  3. /tts/speak 502 时 → message.error 出现，顶栏切异常态（不再 console.warn 静默）
  *
  * 这些场景以前没有 e2e 覆盖，是 phase4-tts 的关键退路。
@@ -71,8 +71,8 @@ test("异常场景：/tts/diag=silent_output → 顶栏切『TTS 异常』+ Popo
   await expect(toggle).toHaveAttribute("data-tts-state", "unhealthy", { timeout: 10_000 });
   await expect(toggle).toContainText("TTS 异常");
 
-  // HeyiPopover：点 heyi 标签 → 看到合成回环行
-  await page.getByTestId("pill-heyi").click();
+  // ModelServicePopover：点 模型服务标签 → 看到合成回环行
+  await page.getByTestId("pill-model-service").click();
   const synth = page.getByTestId("tts-synth-status");
   await expect(synth).toBeVisible();
   await expect(synth).toHaveAttribute("data-tts-state", "silent_output");

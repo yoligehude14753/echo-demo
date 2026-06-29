@@ -1,6 +1,6 @@
 """STT adapter 集合。
 
-echo-demo 部署：STT 走远程 GPU（eight tailscale）。
+demo 部署：STT 走受控语音识别服务。
 
 当前**唯一**支持的 STT backend = **FireRed**（`firered` @ :8090）——见
 docs/ARCH-AUDIT.md §2。SenseVoice 历史上作为 fallback 存在，已在 PR

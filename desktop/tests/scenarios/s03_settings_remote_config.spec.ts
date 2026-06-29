@@ -1,15 +1,15 @@
 /**
- * 场景 3：设置面板巡检 — 远端服务配置 + 数据目录 + 诊断 + 回放引导
+ * 场景 3：设置面板巡检 — 模型服务配置 + 数据目录 + 诊断 + 回放引导
  *
  * 覆盖功能：
  *  - P2.5 /admin/data-dir 渲染
  *  - P2.6 /admin/diagnostics/export 下载（验证 API 被调）
- *  - P3.2 远端服务 7 字段表单 + 保存 → 重启按钮出现
+ *  - P3.2 模型服务 7 字段表单 + 保存 → 重启按钮出现
  *  - P3.1 回放引导按钮 → onboarding Modal 再次显示
  *
  * 视频里观察点：
  *  - Drawer 从右边滑出
- *  - 远端服务表单里 yunwu_open_key 显示脱敏 sk-abcd***wxyz + user.json 标签
+ *  - 模型服务表单里主 LLM API Key 显示脱敏 + user.json 标签
  *  - 改 llm_main_base_url → 保存 → toast「已写入 1 项，需重启后端生效」
  *  - 「重启 backend 生效」按钮浮现
  *  - 回放引导 → onboarding modal 重新出现
@@ -17,7 +17,7 @@
 import { test, expect } from "@playwright/test";
 import { installScenarioMock } from "./_helpers";
 
-test("S03 · 设置面板：远端配置 + 数据目录 + 回放引导（P2.5 + P3.2 + P3.1）", async ({ page }) => {
+test("S03 · 设置面板：模型服务配置 + 数据目录 + 回放引导（P2.5 + P3.2 + P3.1）", async ({ page }) => {
   await installScenarioMock(page);
 
   // 在 helper 注入的 window.echo 上 patch manualRestartBackend，把调用标志位
@@ -46,14 +46,14 @@ test("S03 · 设置面板：远端配置 + 数据目录 + 回放引导（P2.5 + 
     await expect(page.getByText("/Users/test/.echodesk").first()).toBeVisible();
   });
 
-  await test.step("远端服务表单：7 个字段渲染 + yunwu_open_key 显示脱敏", async () => {
+  await test.step("模型服务表单：7 个字段渲染 + API Key 显示脱敏", async () => {
     // antd Form.Item 的 name=key 会渲染 input
     const form = page.getByTestId("remote-settings-form");
     await expect(form.locator("input[id='llm_main_base_url']")).toHaveValue(
-      "https://yunwu.ai/v1",
+      "",
     );
     await expect(form.locator("input[id='stt_firered_url']")).toHaveValue(
-      "http://100.76.3.59:8090",
+      "",
     );
     // sensitive 字段 placeholder 显示脱敏值
     await expect(form.locator("input[id='yunwu_open_key']")).toBeVisible();
@@ -63,7 +63,7 @@ test("S03 · 设置面板：远端配置 + 数据目录 + 回放引导（P2.5 + 
 
   await test.step("修改 llm_main_base_url 并保存", async () => {
     const input = page.getByTestId("remote-settings-form").locator("input[id='llm_main_base_url']");
-    await input.fill("https://yunwu-test.ai/v1");
+    await input.fill("https://model.example.com/v1");
     await page.getByTestId("save-remote-settings").click();
     // toast「已写入 1 项」
     await expect(page.getByText(/已写入\s*1\s*项/)).toBeVisible({ timeout: 5_000 });

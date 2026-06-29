@@ -104,7 +104,7 @@ function DoorBreakdown({
         <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-red-50 text-red-700 border border-red-200">
           <AlertTriangle className="w-3.5 h-3.5 flex-none" />
           <span className="font-medium">
-            云端 STT 熔断 · 暂停上传 · {formatCountdown(circuitOpenUntil)} 后探测
+            语音识别暂时不可用 · 暂停上传 · {formatCountdown(circuitOpenUntil)} 后探测
           </span>
         </div>
       )}
@@ -228,7 +228,7 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
   const circuitOpen =
     sttCircuitOpenUntil !== null && sttCircuitOpenUntil > Date.now();
   const ariaLabel = circuitOpen
-    ? `云端 STT 熔断，已采集 ${ambientChunks} 段，入库 ${ambientStored} 段，丢弃 ${chunksDroppedCircuit} 段`
+    ? `语音识别暂时不可用，已采集 ${ambientChunks} 段，入库 ${ambientStored} 段，丢弃 ${chunksDroppedCircuit} 段`
     : meetingOverlayId
       ? `持续采集中，已采集 ${ambientChunks} 段，入库 ${ambientStored} 段，会议中已上传 ${meetingChunks} 段`
       : `持续采集中，已采集 ${ambientChunks} 段，入库 ${ambientStored} 段（静音/底噪自动过滤）`;

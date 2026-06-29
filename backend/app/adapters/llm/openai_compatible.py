@@ -1,13 +1,13 @@
-"""OpenAI 兼容 LLM adapter（Yunwu 主通道 / 可选 fast 通道 + 流式 + 重试）。
+"""OpenAI 兼容 LLM adapter（主通道 / 可选 fast 通道 + 流式 + 重试）。
 
 设计参考 echo backend/app/llm.py 的双通道架构（FAST/MAIN）：
-- FAST 通道：默认跟随 MAIN；私有部署可切到 eight-local / vLLM
-- MAIN 通道：Yunwu MiniMax-M2.7 → 复杂任务、长生成；max_tokens=80000
+- FAST 通道：默认跟随 MAIN；私有部署可切到自定义 vLLM
+- MAIN 通道：复杂任务、长生成；max_tokens=80000
 
 约定（用户决策 2026-05-26）：
 - thinking-only 模型必须用 80k+ max_tokens（M2.7 / Qwen3 / GLM-5），否则 reasoning 段吃光预算 → content=""
 - Qwen3 reasoning 模型默认关 enable_thinking（实时场景不要思考链泄漏）
-- Yunwu 代理 minimax 时 enable_thinking=False 会被静默忽略 → 后处理剥 ``<think>...</think>``
+- 部分 OpenAI 兼容代理会忽略 enable_thinking=False → 后处理剥 ``<think>...</think>``
 - 任何失败抛 LLMError，不静默兜底；上层决定是否切 fallback
 """
 
@@ -35,7 +35,7 @@ def _is_reasoning(model: str) -> bool:
 
 
 def _strip_thinking(text: str) -> str:
-    """剥 ``<think>...</think>`` 段，兼容 thinking-only 模型 + Yunwu 代理。
+    """剥 ``<think>...</think>`` 段，兼容 thinking-only 模型 + OpenAI 兼容代理。
 
     - 完整闭合：直接删除整段
     - 仅有 ``</think>`` 闭合（开头标签被截）：取闭合之后的内容
@@ -96,7 +96,7 @@ class LLMError(RuntimeError):
 class OpenAICompatibleLLM:
     """实现 ports.llm.LLMPort 的 OpenAI 兼容客户端。
 
-    路由：根据 ``model`` 参数决定走 MAIN(Yunwu) 还是 FAST(eight-local)。
+        路由：根据 ``model`` 参数决定走 MAIN 还是 FAST。
     无 model 时按对应通道默认模型。
     """
 

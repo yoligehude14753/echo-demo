@@ -1,7 +1,7 @@
 """STT 后处理：用 LLM_FAST 给 FireRed 输出补标点 + 分段。
 
 为什么需要：
-- FireRedASR2 (eight :8090) 的 OpenAPI schema 只接受 file / model / language /
+- FireRedASR2 的 OpenAPI schema 只接受 file / model / language /
   response_format / timestamp_granularities —— **没有 punctuation / vad / punc
   开关**。实测 6s ambient chunk 出来的中文是一气呵成 30+ 字、无标点的整行，
   用户反馈"读不下去"。

@@ -37,7 +37,7 @@ test("S07 · LLM 失败 → 「生成失败 · 重试」→ 重试成功 → 渲
     await publishMinutesFailed(
       mock,
       meetingId,
-      "yunwu 502 bad gateway (mocked)",
+      "model service 502 bad gateway (mocked)",
       3,
     );
   });
