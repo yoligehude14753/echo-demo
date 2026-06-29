@@ -24,6 +24,7 @@
     "app:dist:linux": "npm run build && electron-builder --linux AppImage deb --x64",
     "app:dist:android": "node scripts/build-android-debug.cjs",
     "app:package:tv": "node scripts/package-tv-installer.cjs",
+    "tv:smoke": "node scripts/tv-adb-smoke.cjs",
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
     "e2e": "playwright test",
