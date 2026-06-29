@@ -28,7 +28,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.adapters.audio import normalize_audio_bytes
 from app.config import Settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
@@ -39,6 +38,7 @@ from app.ports.stt import STTPort
 from app.schemas.events import EchoEvent
 from app.schemas.llm import ChatMessage
 from app.schemas.meeting import MeetingMinutes, MinutesSection, TodoItem, TranscriptSegment
+from app.services.audio import normalize_audio_bytes
 
 # M_minutes_refactor（2026-05-28）：把以前只返「summary/sections/decisions/
 # action_items」的 prompt 升级为同时返「title（语义化标题，≤18 字中文）+ todos

@@ -122,10 +122,9 @@ class OpenAICompatibleLLM:
         if model is None:
             return self._main, s.llm_main_model, s.llm_main_max_tokens
         if model == s.llm_fast_model:
-            if (
-                s.llm_fast_model == s.llm_main_model
-                and s.llm_fast_base_url.rstrip("/") == s.llm_main_base_url.rstrip("/")
-            ):
+            if s.llm_fast_model == s.llm_main_model and s.llm_fast_base_url.rstrip(
+                "/"
+            ) == s.llm_main_base_url.rstrip("/"):
                 return self._main, s.llm_main_model, s.llm_fast_max_tokens
             return self._fast, s.llm_fast_model, s.llm_fast_max_tokens
         if model == s.llm_main_model:

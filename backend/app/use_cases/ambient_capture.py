@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.adapters.audio import normalize_audio_bytes, pcm_to_wav
 from app.adapters.audio_gate import is_likely_hallucination, pre_stt_gate
 from app.config import Settings
 from app.ports.diarizer import DiarizerPort
@@ -25,6 +24,7 @@ from app.ports.repository import RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.capture import CaptureChunkResult, SttStatus
 from app.schemas.meeting import TranscriptSegment
+from app.services.audio import normalize_audio_bytes, pcm_to_wav
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
@@ -315,11 +315,7 @@ class AmbientCapturePipeline:
         # 自动会议检测：交给 MeetingState（单例状态机）；它内部协调 detector。
         # ambient 主链路只负责"喂观测"，状态/落库由 MeetingState 全权决定。
         effective_meeting_id: str | None = meeting_id
-        if (
-            self._state is not None
-            and meeting_id is None
-            and not self._settings.public_demo_mode
-        ):
+        if self._state is not None and meeting_id is None and not self._settings.public_demo_mode:
             duration_ms_obs = max((s.end_ms for s in stt_segs), default=0) if stt_segs else 0
             try:
                 effective_meeting_id = await self._state.observe_chunk(

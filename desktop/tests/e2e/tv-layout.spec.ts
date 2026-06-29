@@ -141,10 +141,11 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   await workspaceTag.focus();
   await expect(workspaceTag).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.getByText("知识库 / 工作区文件")).toBeVisible();
-  await page.locator(".ant-modal-close").focus();
+  const workspaceModal = page.locator(".ant-modal-content").filter({ hasText: "知识库 / 工作区文件" });
+  await expect(workspaceModal).toBeVisible();
+  await workspaceModal.locator(".ant-modal-close").focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByText("知识库 / 工作区文件")).toBeHidden();
+  await expect(workspaceModal).toBeHidden();
 
   const settingsButton = page.getByTestId("open-settings");
   await settingsButton.focus();
@@ -154,7 +155,8 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
 
   await page.keyboard.press("Escape");
   if (await page.getByTestId("mobile-backend-base").isVisible()) {
-    await page.locator(".ant-modal-close").last().click();
+    const settingsDrawer = page.locator(".ant-drawer-content").filter({ has: page.getByTestId("mobile-backend-base") });
+    await settingsDrawer.locator(".ant-drawer-close").click();
   }
   await expect(page.getByTestId("mobile-backend-base")).toBeHidden();
 
