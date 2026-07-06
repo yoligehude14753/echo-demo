@@ -476,7 +476,7 @@ export async function backendBase(): Promise<string> {
   // file:// 协议（Electron prod）→ 必须走绝对地址
   if (typeof window !== "undefined" && window.location.protocol === "file:") {
     const host =
-      (await window.echo?.getBackendHost?.()) ?? "http://127.0.0.1:8769";
+      (await window.echo?.getBackendHost?.()) ?? "http://127.0.0.1:8772";
     cachedBase = host;
     return cachedBase;
   }
@@ -494,7 +494,7 @@ export async function backendWsUrl(): Promise<string> {
   if (typeof window !== "undefined" && window.location.protocol.startsWith("http")) {
     return `${window.location.protocol.replace("http", "ws")}//${window.location.host}/ws/echo`;
   }
-  return "ws://127.0.0.1:8769/ws/echo";
+  return "ws://127.0.0.1:8772/ws/echo";
 }
 
 export function apiPath(p: string): string {

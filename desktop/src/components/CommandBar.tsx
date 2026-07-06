@@ -12,15 +12,16 @@
  *    - chat → 仅展示提示，不真正接入流式（MVP）
  *
  * UI：
- *   一个紧凑的悬浮输入条；显示当前意图徽标 / 解析理由。
+ *   一个紧凑的悬浮输入条。路由细节只用于内部派发，不暴露给普通用户。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Input, Tag, Tooltip, message } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
-import { FileText, Loader2, Paperclip, Send, Sparkles, Upload, Wand2, X } from "lucide-react";
+import { FileText, Loader2, Paperclip, Send, Upload, Wand2, X } from "lucide-react";
 
 import {
+  artifactDownloadUrl,
   chatAsk,
   finalizeMeeting,
   generateArtifact,
@@ -52,24 +53,42 @@ const kindLabel: Record<IntentKind, string> = {
   generate_pdf: "生成 PDF",
   generate_txt: "生成 TXT",
   summarize_meeting: "总结会议",
-  chat_no_rag: "纯闲聊",
+  chat_no_rag: "对话",
   chat: "对话",
 };
 
-const kindColor: Record<IntentKind, string> = {
-  search_web: "blue",
-  search_rag: "purple",
-  generate_html: "magenta",
-  generate_pptx: "gold",
-  generate_xlsx: "green",
-  generate_word: "cyan",
-  generate_markdown: "geekblue",
-  generate_pdf: "red",
-  generate_txt: "default",
-  summarize_meeting: "geekblue",
-  chat_no_rag: "default",
-  chat: "default",
-};
+function routeExplicitGenerateCommand(value: string): IntentResult | null {
+  const match = value.match(
+    /@\s*生成\s*(pptx?|幻灯片|html|网页|页面|word|docx|文档|excel|xlsx|表格|markdown|md|pdf|txt|文本)/i,
+  );
+  const rawType = match?.[1]?.toLowerCase();
+  if (!rawType) return null;
+
+  const artifactType =
+    rawType === "ppt" || rawType === "pptx" || rawType === "幻灯片"
+      ? "pptx"
+      : rawType === "html" || rawType === "网页" || rawType === "页面"
+        ? "html"
+        : rawType === "word" || rawType === "docx" || rawType === "文档"
+          ? "word"
+          : rawType === "excel" || rawType === "xlsx" || rawType === "表格"
+            ? "xlsx"
+            : rawType === "markdown" || rawType === "md"
+              ? "markdown"
+              : rawType === "pdf"
+                ? "pdf"
+                : "txt";
+
+  return {
+    kind: `generate_${artifactType}` as IntentKind,
+    confidence: null,
+    params: {
+      artifact_type: artifactType,
+      brief: value,
+    },
+    rationale: "explicit @生成 command",
+  };
+}
 
 // 与后端 parsers.SUPPORTED_EXTS 保持一致的子集（最常用的；其他扩展名走 markitdown 也支持）
 const ACCEPT_EXT =
@@ -102,7 +121,6 @@ export default function CommandBar(): JSX.Element {
   const [uploading, setUploading] = useState(0);
   const [dropActive, setDropActive] = useState(false);
   const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
-  const [lastIntent, setLastIntent] = useState<IntentResult | null>(null);
   const [prefillMeta, setPrefillMeta] = useState<CommandBarPrefillMeta | null>(null);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
@@ -114,8 +132,12 @@ export default function CommandBar(): JSX.Element {
   const [tvMode, setTvMode] = useState(() => detectTvCommandMode());
   const commandPlaceholder = tvMode
     ? "输入指令，如 @总结会议"
-    : "拖入文件入库 · @生成 PPT / @查 · Shift+Enter 换行";
-  const quickCommands = ["@总结会议", "@chat 现在状态", "@查 当前会议要点"];
+    : "输入问题 / @生成 PPT / @查 · 可拖入文件";
+  const quickCommands = [
+    { label: "总结会议", command: "@总结会议" },
+    { label: "现在状态", command: "@chat 现在状态" },
+    { label: "会议要点", command: "@查 当前会议要点" },
+  ];
 
   useEffect(() => {
     const updateTvMode = () => setTvMode(detectTvCommandMode());
@@ -170,7 +192,7 @@ export default function CommandBar(): JSX.Element {
         workspaceHintShownRef.current = true;
         message.info({
           content:
-            "📂 想覆盖整个文件夹？点 设置（齿轮） → 工作区目录，加一个 ~/Documents 之类的目录，RAG 会自动扫描索引",
+            "📂 想覆盖整个文件夹？点 设置（齿轮） → 工作区目录，加一个 ~/Documents 之类的目录，EchoDesk 会自动扫描索引",
           duration: 8,
         });
       }
@@ -274,8 +296,7 @@ export default function CommandBar(): JSX.Element {
     if (!value) return;
     setBusy(true);
     try {
-      const r = await routeIntent(value, currentMeetingId);
-      setLastIntent(r);
+      const r = routeExplicitGenerateCommand(value) ?? (await routeIntent(value, currentMeetingId));
       await dispatch(r, value, activePrefillMeta);
       setText("");
       setPrefillMeta(null);
@@ -322,7 +343,23 @@ export default function CommandBar(): JSX.Element {
           message.warning("brief 为空，无法生成产物");
           return;
         }
-        message.info(`已派发：${kindLabel[r.kind]}（后台生成中，请稍候）`);
+        const now = new Date().toISOString();
+        applyEvent({
+          type: "rag.query",
+          seq: 0,
+          ts: now,
+          payload: { question: originalText },
+        });
+        applyEvent({
+          type: "chat.done",
+          seq: 0,
+          ts: new Date(Date.now() + 1).toISOString(),
+          payload: {
+            question: originalText,
+            answer: `已开始${kindLabel[r.kind]}：${brief}\n\n我会先检索本地知识库和联网搜索结果，再基于检索材料生成，完成后会自动出现在右侧 outputs。`,
+          },
+        });
+        message.info(`已派发：先检索知识库和联网搜索，再生成${kindLabel[r.kind]}（后台进行中）`);
         // 异步触发，结果通过 WS artifact.ready event 反馈到 store
         // 不 await，避免 busy/textarea 在 60-180s LLM 链路上一直锁住
         void generateArtifact({
@@ -335,15 +372,41 @@ export default function CommandBar(): JSX.Element {
             | "pdf"
             | "txt",
           brief,
+          extra_instructions: [
+            "生成前由后端统一执行本地知识库和联网证据 grounding；请严格基于自动检索证据生成。",
+            "本地知识库优先；联网搜索只用于补充最新信息、市场信息或知识库缺口。",
+            "不要生成泛化模板；每一页/每一节都要尽量落到检索材料里的具体事实。",
+            "如果证据不足，请在产物中明确标注“资料不足/待补充”，不要凭空编造。",
+            `用户原始需求：${originalText}`,
+          ].join("\n"),
           meeting_id: meta?.meeting_id ?? currentMeetingId ?? undefined,
           todo_id: meta?.todo_id,
         })
           .then((art) => {
             addArtifact(art);
+            const title = art.title || art.artifact_id;
+            applyEvent({
+              type: "chat.done",
+              seq: 0,
+              ts: new Date().toISOString(),
+              payload: {
+                question: originalText,
+                answer: `已生成 ${art.artifact_type.toUpperCase()}：${title}\n\n[下载/打开产物](${artifactDownloadUrl(art.artifact_id)})`,
+              },
+            });
             message.success(`已生成 ${art.artifact_type}`);
           })
           .catch((e) => {
             const msg = e instanceof Error ? e.message : String(e);
+            applyEvent({
+              type: "chat.done",
+              seq: 0,
+              ts: new Date().toISOString(),
+              payload: {
+                question: originalText,
+                answer: `生成 ${kindLabel[r.kind]} 失败：${msg}`,
+              },
+            });
             message.error(`生成失败：${msg}`);
           });
         return;
@@ -360,7 +423,7 @@ export default function CommandBar(): JSX.Element {
         return;
       }
       case "chat_no_rag": {
-        // P4-fix-rag-chat（2026-05-28）：显式 @chat → 纯 LLM 闲聊，不查 RAG。
+        // P4-fix-rag-chat（2026-05-28）：显式 @chat → 纯 LLM 对话。
         // 注意：本 case 必须放在 default 之前，否则 fall-through 永远不会到。
         const question = (r.params.text as string | undefined) ?? originalText;
         if (!question) {
@@ -373,7 +436,7 @@ export default function CommandBar(): JSX.Element {
           ts: new Date().toISOString(),
           payload: { question },
         });
-        message.info("已派发：闲聊中（不查知识库）");
+        message.info("正在回复…");
         void chatAsk(question)
           .then((answer) => {
             applyEvent({
@@ -385,12 +448,12 @@ export default function CommandBar(): JSX.Element {
                 answer,
               } as unknown as Record<string, unknown>,
             });
-            message.success("闲聊已回复");
+            message.success("已回复");
             void tts.speak(answer);
           })
           .catch((e) => {
             const msg = e instanceof Error ? e.message : String(e);
-            message.error(`闲聊失败：${msg}`);
+            message.error(`回复失败：${msg}`);
           });
         return;
       }
@@ -444,11 +507,7 @@ export default function CommandBar(): JSX.Element {
               } as unknown as Record<string, unknown>,
             });
             const nCite = ans.citations?.length ?? 0;
-            message.success(
-              nCite > 0
-                ? `已回答（${nCite} 处引用）`
-                : "已回答（无引用：可能 RAG 没找到相关内容，纯 LLM 回答）",
-            );
+            message.success(nCite > 0 ? `已回答（${nCite} 处引用）` : "已回答");
             // TTS 朗读 LLM 真实答案，而不是用户原文
             void tts.speak(ans.answer);
           })
@@ -475,38 +534,7 @@ export default function CommandBar(): JSX.Element {
       {dropActive && (
         <div className="absolute inset-2 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-blue-400 bg-white/95 text-sm text-blue-700 pointer-events-none">
           <Upload className="w-4 h-4 mr-2" />
-          松手即可入库到 RAG（PDF / Word / Excel / PPT / md / txt / html / csv …）
-        </div>
-      )}
-
-      {lastIntent && (
-        <div
-          className="flex items-center gap-2 mb-1.5 text-[11px] text-ink-500"
-          data-testid="intent-status"
-        >
-          <Sparkles className="w-3 h-3" />
-          <span>意图：</span>
-          <Tag color={kindColor[lastIntent.kind]} className="!m-0">
-            {kindLabel[lastIntent.kind]}
-          </Tag>
-          <span>·</span>
-          {typeof lastIntent.confidence === "number" ? (
-            // P4-fix（2026-05-28）：只在分类器真的产生了置信度时显示百分比；
-            // 纯规则匹配路径（无 @ 前缀）返回 null，改显 "规则匹配"，
-            // 避免把虚假的 "100%" 当成模型决策。
-            <span data-testid="intent-confidence">
-              置信度 {(lastIntent.confidence * 100).toFixed(0)}%
-            </span>
-          ) : (
-            <span data-testid="intent-rule-matched">规则匹配</span>
-          )}
-          {lastIntent.rationale && (
-            <Tooltip title={lastIntent.rationale}>
-              <span className="truncate max-w-[280px]">
-                · {lastIntent.rationale}
-              </span>
-            </Tooltip>
-          )}
+          松手即可加入知识库（PDF / Word / Excel / PPT / md / txt / html / csv …）
         </div>
       )}
 
@@ -545,20 +573,20 @@ export default function CommandBar(): JSX.Element {
           className="echodesk-tv-quick-commands flex flex-wrap items-center gap-2 mb-2"
           data-testid="tv-quick-commands"
         >
-          {quickCommands.map((cmd) => (
+          {quickCommands.map((item) => (
             <button
-              key={cmd}
+              key={item.command}
               type="button"
               className="px-3 py-1.5 rounded-md border border-paper-300 bg-white text-[13px] text-ink-700 hover:border-accent hover:text-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
               onClick={() => {
                 if (busy || uploading > 0) return;
                 setPrefillMeta(null);
-                void submitValue(cmd, null, false);
+                void submitValue(item.command, null, false);
               }}
               disabled={busy || uploading > 0}
               data-tv-clickable
             >
-              {cmd}
+              {item.label}
             </button>
           ))}
         </div>
@@ -591,7 +619,7 @@ export default function CommandBar(): JSX.Element {
           className="echodesk-command-textarea !rounded-md"
           data-testid="command-textarea"
         />
-        <Tooltip title="选择文件入库 RAG（多选可批量）">
+        <Tooltip title="选择文件加入知识库（多选可批量）">
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}

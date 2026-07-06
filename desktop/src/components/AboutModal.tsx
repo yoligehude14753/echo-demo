@@ -106,7 +106,7 @@ export default function AboutModal({ open, onClose }: Props): JSX.Element {
             <span data-testid="about-frontend-version">v{FRONTEND_VERSION}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-ink-500">后端</span>
+            <span className="text-ink-500">服务端</span>
             <span data-testid="about-backend-version">
               {loading && !backendVer ? <Spin size="small" /> : `v${backendVer ?? "-"}`}
               {backendPort != null && (

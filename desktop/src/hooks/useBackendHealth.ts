@@ -49,6 +49,9 @@ export interface ProbeResultDTO {
   latency_ms?: number;
   error?: string;
   reason?: string;
+  provider?: string;
+  model?: string;
+  endpoint?: string;
   checked_at?: number;
 }
 
@@ -77,10 +80,10 @@ export interface BackendHealth {
 // window.echo 全局声明在 runtime.ts；这里我们把 supervisor status 从 unknown 窄化到具体类型
 
 const POLL_INTERVAL_MS = 5000;
-const POLL_TIMEOUT_MS = 3000;
-const PUBLIC_BACKEND_POLL_TIMEOUT_MS = 10_000;
+const POLL_TIMEOUT_MS = 12_000;
+const PUBLIC_BACKEND_POLL_TIMEOUT_MS = 15_000;
 // healthz 失败连续 N 次后才视为"真断"，避免单次抖动导致 pill 闪红
-const HEALTHZ_FAIL_THRESHOLD = 2;
+const HEALTHZ_FAIL_THRESHOLD = 3;
 
 function healthzTimeoutMs(): number {
   const configured = configuredBackendBase();
@@ -194,12 +197,19 @@ export function useBackendHealth(): BackendHealth {
     }
   };
 
+  const healthzProvesBackendReady = healthzOk && healthz?.backend?.ok;
+  const supervisorLooksStale =
+    supervisor.state === "unknown" ||
+    supervisor.state === "degraded" ||
+    supervisor.state === "python-not-found" ||
+    supervisor.state === "backend-source-not-found";
+
   const effectiveSupervisor: SupervisorStatus =
-    supervisor.state === "unknown" && healthzOk && healthz?.backend?.ok
+    healthzProvesBackendReady && supervisorLooksStale
       ? {
           state: "external",
           port: healthz.backend.port,
-          reason: "connected through configured backend URL",
+          reason: "connected through healthz/full; supervisor state was stale",
         }
       : supervisor;
 

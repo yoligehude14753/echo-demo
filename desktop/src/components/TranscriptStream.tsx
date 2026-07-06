@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { listRecentAmbient, type AmbientSegment } from "@/api";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
@@ -66,6 +68,66 @@ function meetingSegmentToDisplay(
     captured_at: captured,
     speaker_label: s.speaker_label ?? null,
   };
+}
+
+function normalizeSpokenText(text: string): string {
+  return text
+    .replace(/[\s，。！？、,.!?;；:"“”'‘’（）()[\]【】<>《》]/g, "")
+    .toLowerCase();
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  const curr = new Array<number>(b.length + 1);
+  for (let i = 1; i <= a.length; i += 1) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j];
+  }
+  return prev[b.length];
+}
+
+function likelySameSpokenText(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length > b.length ? a : b;
+  if (shorter.length >= 8 && longer.includes(shorter)) return true;
+  if (longer.length > 80) return false;
+  const distance = editDistance(a, b);
+  const similarity = 1 - distance / Math.max(a.length, b.length);
+  return similarity >= 0.82;
+}
+
+function dedupeDisplaySegments(segments: DisplaySegment[]): DisplaySegment[] {
+  const out: DisplaySegment[] = [];
+  for (const seg of segments) {
+    const textKey = normalizeSpokenText(seg.text);
+    if (!textKey) continue;
+    const ts = new Date(seg.captured_at).getTime();
+    const prev = out[out.length - 1];
+    if (prev) {
+      const prevKey = normalizeSpokenText(prev.text);
+      const prevTs = new Date(prev.captured_at).getTime();
+      const sameSpeaker =
+        (prev.speaker_label ?? prev.role ?? "") ===
+        (seg.speaker_label ?? seg.role ?? "");
+      const near = Number.isFinite(ts) && Number.isFinite(prevTs)
+        ? Math.abs(ts - prevTs) <= 12_000
+        : false;
+      if (near && (prevKey === textKey || (sameSpeaker && likelySameSpokenText(prevKey, textKey)))) {
+        continue;
+      }
+    }
+    out.push(seg);
+  }
+  return out;
 }
 
 export default function TranscriptStream(): JSX.Element {
@@ -136,9 +198,12 @@ export default function TranscriptStream(): JSX.Element {
   }, [events]);
 
   const segs: DisplaySegment[] = useMemo(
-    () => [...baseSegs, ...dialogSegs].sort((a, b) =>
-      a.captured_at.localeCompare(b.captured_at),
-    ),
+    () =>
+      dedupeDisplaySegments(
+        [...baseSegs, ...dialogSegs].sort((a, b) =>
+          a.captured_at.localeCompare(b.captured_at),
+        ),
+      ),
     [baseSegs, dialogSegs],
   );
 
@@ -241,15 +306,6 @@ export default function TranscriptStream(): JSX.Element {
     );
   }
 
-  const headerLine = showMeetingHistory
-    ? `${meeting?.state === "ended" ? "历史会议" : "本机会议转写"} · ${meeting?.title || currentMeetingId} · ${segs.length} 段`
-    : localOnlyAmbient
-      ? `本机实时转写 · ${segs.length} 条 · 不读取共享历史`
-      : `ambient 持续转写 · ${segs.length} 条 · 每 3s 刷新`;
-  const headerDot = showMeetingHistory
-    ? "bg-ink-400"
-    : "bg-emerald-500 animate-pulse";
-
   return (
     <div
       ref={scrollerRef}
@@ -264,15 +320,6 @@ export default function TranscriptStream(): JSX.Element {
       }
     >
       <div className="max-w-3xl mx-auto">
-        <div className="text-[11px] text-ink-400 mb-3 px-1 flex items-center gap-2 sticky top-0 bg-paper-50/90 backdrop-blur-sm py-1 z-10">
-          <span className={`w-1.5 h-1.5 rounded-full ${headerDot}`} />
-          <span>{headerLine}</span>
-          {!showMeetingHistory && meeting && (
-            <span className="ml-auto text-[10px] text-ink-500">
-              高亮：{meeting.title || currentMeetingId} 时间窗
-            </span>
-          )}
-        </div>
         {segs.map((s, idx) => {
           const displayIdx = s.speaker_label
             ? (speakerDisplayMap.get(s.speaker_label) ?? 0)
@@ -296,9 +343,7 @@ export default function TranscriptStream(): JSX.Element {
 
           const containerSpacing = sameSpeakerAsPrev ? "mt-1" : "mt-4";
           const displayLabel =
-            isSelf
-              ? "你"
-              : isAssistant
+            isAssistant
                 ? "Echo"
                 : displayIdx > 0
                   ? `说话人 ${displayIdx}`
@@ -314,7 +359,7 @@ export default function TranscriptStream(): JSX.Element {
                 boxShadow: `inset 0 0 0 1px ${c.ring}`,
               }}
               title={
-                isSelf || isAssistant
+                isAssistant
                   ? displayLabel
                   : s.speaker_label
                   ? `${displayLabel}（全局编号 ${s.speaker_label}）`
@@ -322,7 +367,7 @@ export default function TranscriptStream(): JSX.Element {
               }
               data-testid="speaker-avatar"
             >
-              {isSelf ? "你" : isAssistant ? "E" : displayIdx > 0 ? displayIdx : "?"}
+              {isSelf ? "用户" : isAssistant ? "E" : displayIdx > 0 ? displayIdx : "?"}
             </div>
           );
           const avatarSpacer = (
@@ -337,13 +382,13 @@ export default function TranscriptStream(): JSX.Element {
               }`}
               data-testid="transcript-row"
             >
-              {sameSpeakerAsPrev ? avatarSpacer : avatar}
+              {isSelf ? null : sameSpeakerAsPrev ? avatarSpacer : avatar}
               <div
                 className={`flex flex-col min-w-0 max-w-[78%] ${
                   isSelf ? "items-end" : "items-start"
                 }`}
               >
-                {!sameSpeakerAsPrev && (
+                {!isSelf && !sameSpeakerAsPrev && (
                   <div
                     className={`text-[11px] mb-0.5 px-1 ${
                       isSelf ? "text-right" : "text-left"
@@ -374,7 +419,63 @@ export default function TranscriptStream(): JSX.Element {
                         : "transcript-message"
                   }
                 >
-                  {s.text}
+                  {isAssistant ? (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        h1: ({ children }) => (
+                          <h1 className="text-[18px] font-semibold leading-7 mt-1 mb-2">
+                            {children}
+                          </h1>
+                        ),
+                        h2: ({ children }) => (
+                          <h2 className="text-[16px] font-semibold leading-7 mt-1 mb-2">
+                            {children}
+                          </h2>
+                        ),
+                        h3: ({ children }) => (
+                          <h3 className="text-[15px] font-semibold leading-6 mt-2 mb-1">
+                            {children}
+                          </h3>
+                        ),
+                        p: ({ children }) => <p className="my-1">{children}</p>,
+                        ul: ({ children }) => (
+                          <ul className="list-disc pl-5 my-1 space-y-0.5">{children}</ul>
+                        ),
+                        ol: ({ children }) => (
+                          <ol className="list-decimal pl-5 my-1 space-y-0.5">{children}</ol>
+                        ),
+                        li: ({ children }) => <li className="pl-0.5">{children}</li>,
+                        strong: ({ children }) => (
+                          <strong className="font-semibold text-ink-950">{children}</strong>
+                        ),
+                        a: ({ children, href }) => (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-blue-600 underline underline-offset-2"
+                          >
+                            {children}
+                          </a>
+                        ),
+                        code: ({ children }) => (
+                          <code className="rounded bg-white/80 px-1 py-0.5 text-[13px] font-mono text-ink-800">
+                            {children}
+                          </code>
+                        ),
+                        blockquote: ({ children }) => (
+                          <blockquote className="border-l-2 border-emerald-300 pl-3 my-2 text-ink-700">
+                            {children}
+                          </blockquote>
+                        ),
+                      }}
+                    >
+                      {s.text}
+                    </ReactMarkdown>
+                  ) : (
+                    s.text
+                  )}
                   {/* hover 时显示时间（仅 HH:MM） */}
                   <span
                     className={`absolute top-1/2 -translate-y-1/2 text-[10px] text-ink-400 font-mono opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap select-none ${

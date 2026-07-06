@@ -292,7 +292,7 @@ class Settings(BaseSettings):
     # 用户拖入的最大上传大小（用户拖入；workspace 配置走 workspace_max_file_mb）
     upload_max_file_mb: float = 50.0
 
-    # ── Web Search（Tavily 主 + DDG 兜底，2026-05-26 用户决策） ──
+    # ── Web Search（Tavily-only；无 key 时联网检索不可用） ──
     web_search_enabled: bool = True
     web_search_top_n: int = 5
     tavily_api_key: str = ""

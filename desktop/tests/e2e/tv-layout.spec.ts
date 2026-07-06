@@ -86,7 +86,7 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   await expect(page.getByText("转写流")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("会议纪要", { exact: true })).toBeVisible();
   await expect(page.getByTestId("command-bar")).toBeVisible();
-  await expect(page.getByTestId("pill-backend")).toContainText("backend 外部", {
+  await expect(page.getByTestId("pill-backend")).toContainText("服务端 外部", {
     timeout: 10_000,
   });
   await expect(page.getByText("不该继承的旧会议")).toHaveCount(0);
@@ -167,7 +167,7 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
       }
     ).__echoIntentRouteMock = { kind: "chat", confidence: 0.92 };
   });
-  await page.getByRole("button", { name: "@查 当前会议要点" }).click();
+  await page.getByRole("button", { name: "会议要点" }).click();
   await expect(page.getByTestId("user-message")).toContainText("@查 当前会议要点");
   await expect(page.getByTestId("assistant-message")).toContainText(
     "Echo 已收到，这是 TV 问答文本回复。",

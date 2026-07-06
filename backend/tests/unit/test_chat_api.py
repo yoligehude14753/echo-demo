@@ -9,26 +9,40 @@ from typing import Any
 import pytest
 from app.api.deps import get_llm_singleton as get_llm
 from app.main import create_app
-from app.schemas.llm import ChatMessage
+from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
 from fastapi.testclient import TestClient
 
 
 class FakeLLM:
     def __init__(self, chunks: list[str]) -> None:
         self.chunks = chunks
+        self.chat_kwargs: list[dict[str, Any]] = []
+        self.stream_kwargs: list[dict[str, Any]] = []
 
-    async def chat(self, *_: Any, **__: Any) -> Any:
-        raise NotImplementedError
+    async def chat(self, _messages: list[ChatMessage], **_kw: Any) -> LLMResponse:
+        self.chat_kwargs.append(_kw)
+        return LLMResponse(
+            content="".join(self.chunks),
+            model=str(_kw.get("model") or "fake"),
+            usage=LLMUsage(),
+            latency_ms=1.0,
+        )
 
     async def chat_stream(self, _messages: list[ChatMessage], **_kw: Any) -> AsyncIterator[str]:
+        self.stream_kwargs.append(_kw)
         for c in self.chunks:
             yield c
 
 
 @pytest.fixture
-def client_with_fake() -> TestClient:
+def fake_llm() -> FakeLLM:
+    return FakeLLM(["你", "好"])
+
+
+@pytest.fixture
+def client_with_fake(fake_llm: FakeLLM) -> TestClient:
     app = create_app()
-    app.dependency_overrides[get_llm] = lambda: FakeLLM(["你", "好"])
+    app.dependency_overrides[get_llm] = lambda: fake_llm
     return TestClient(app)
 
 
@@ -42,7 +56,7 @@ def test_chat_sse_streams_and_terminates(client_with_fake: TestClient) -> None:
     payloads = [ln[len("data: ") :] for ln in lines]
     assert payloads[-1] == "[DONE]"
     deltas = [json.loads(p)["delta"] for p in payloads[:-1]]
-    assert deltas == ["你", "好"]
+    assert deltas == ["你好"]
 
 
 @pytest.mark.unit
@@ -56,3 +70,14 @@ def test_chat_model_alias_accepted(client_with_fake: TestClient) -> None:
     for alias in ("MAIN", "FAST", "Qwen3-1.7B", None):
         r = client_with_fake.post("/chat", json={"question": "hi", "model": alias})
         assert r.status_code == 200
+
+
+@pytest.mark.unit
+def test_chat_uses_short_generation_budget(
+    client_with_fake: TestClient,
+    fake_llm: FakeLLM,
+) -> None:
+    r = client_with_fake.post("/chat", json={"question": "只回答 pong"})
+    assert r.status_code == 200
+    assert fake_llm.chat_kwargs[-1]["max_tokens"] == 768
+    assert fake_llm.chat_kwargs[-1]["timeout_s"] == 45.0

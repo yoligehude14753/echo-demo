@@ -1,4 +1,4 @@
-"""Web Search adapter 单测：mock Tavily HTTP / DDG。"""
+"""Web Search adapter 单测：mock Tavily HTTP。"""
 
 from __future__ import annotations
 
@@ -62,57 +62,20 @@ async def test_search_empty_query_returns_empty(settings_with_key: Settings) -> 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_tavily_failure_falls_back_to_ddg(settings_with_key: Settings) -> None:
+async def test_tavily_failure_returns_empty(settings_with_key: Settings) -> None:
     fake_tavily = MagicMock()
     fake_tavily.post = AsyncMock(side_effect=RuntimeError("boom"))
     fake_tavily.__aenter__ = AsyncMock(return_value=fake_tavily)
     fake_tavily.__aexit__ = AsyncMock(return_value=None)
 
-    class _FakeDDGS:
-        def __enter__(self) -> object:
-            return self
-
-        def __exit__(self, *a: object) -> None:
-            return None
-
-        def text(self, q: str, max_results: int = 5) -> list[dict]:
-            return [{"title": "DDG ans", "href": "https://ddg.example/x", "body": "snippet"}]
-
-    fake_ddg_mod = MagicMock()
-    fake_ddg_mod.DDGS = _FakeDDGS
-
-    with (
-        patch("app.adapters.web_search.tavily.httpx.AsyncClient", return_value=fake_tavily),
-        patch.dict("sys.modules", {"duckduckgo_search": fake_ddg_mod}),
-    ):
+    with patch("app.adapters.web_search.tavily.httpx.AsyncClient", return_value=fake_tavily):
         web = TavilyWebSearch(settings_with_key)
         hits = await web.search("ddg fallback test")
-    assert len(hits) == 1
-    assert hits[0].source == "ddg"
-    assert hits[0].url == "https://ddg.example/x"
+    assert hits == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_no_tavily_key_skips_to_ddg(settings_no_key: Settings) -> None:
-    class _FakeDDGS:
-        def __enter__(self) -> object:
-            return self
-
-        def __exit__(self, *a: object) -> None:
-            return None
-
-        def text(self, q: str, max_results: int = 5) -> list[dict]:
-            return [
-                {"title": "x", "href": "https://x.example/", "body": "y"},
-                {"title": "z", "href": "https://z.example/", "body": "w"},
-            ]
-
-    fake_ddg_mod = MagicMock()
-    fake_ddg_mod.DDGS = _FakeDDGS
-
-    with patch.dict("sys.modules", {"duckduckgo_search": fake_ddg_mod}):
-        web = TavilyWebSearch(settings_no_key)
-        hits = await web.search("no key path")
-    assert len(hits) == 2
-    assert all(h.source == "ddg" for h in hits)
+async def test_no_tavily_key_returns_empty(settings_no_key: Settings) -> None:
+    web = TavilyWebSearch(settings_no_key)
+    assert await web.search("no key path") == []

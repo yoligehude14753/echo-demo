@@ -147,10 +147,12 @@ async def _run_db_migrations(db_path: Path) -> None:
 
 # 持有 lifespan 期间 fire-and-forget 任务的强引用，避免被 GC
 _LIFESPAN_TASKS: set[asyncio.Task[None]] = set()
+_meeting_state_for_shutdown: object | None = None
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
+    global _meeting_state_for_shutdown  # noqa: PLW0603
     settings = get_settings()
     logger.info(
         "echodesk 启动: version=%s port=%d llm_main=%s llm_fast=%s stt=%s tts=%s",
@@ -214,6 +216,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
         bus = _get_bus()
         state = _get_state(settings, repo, bus, detector)
         await state.hydrate()
+        state.start_watchdog()
+        _meeting_state_for_shutdown = state
         if state.current is not None:
             logger.info(
                 "meeting-state hydrated: %s started_by=%s",
@@ -274,6 +278,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
     yield
 
     # 顺序：探针先停（避免拿 settings 时 lifespan 已经清完）→ LLM → bus → repo
+    state_for_shutdown = _meeting_state_for_shutdown
+    if state_for_shutdown is not None:
+        stop_watchdog = getattr(state_for_shutdown, "stop_watchdog", None)
+        if callable(stop_watchdog):
+            await stop_watchdog()
+        _meeting_state_for_shutdown = None
     await stop_prober()
     await aclose_llm_singleton()
     await aclose_event_bus()

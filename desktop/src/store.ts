@@ -163,6 +163,58 @@ function segmentKey(s: TranscriptSegment): string {
   ].join("\u0001");
 }
 
+function normalizeSegmentText(text: string): string {
+  return text
+    .replace(/[\s，。！？、,.!?;；:"“”'‘’（）()[\]【】<>《》]/g, "")
+    .toLowerCase();
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  const curr = new Array<number>(b.length + 1);
+  for (let i = 1; i <= a.length; i += 1) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j];
+  }
+  return prev[b.length];
+}
+
+function likelySameTranscript(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length > b.length ? a : b;
+  if (shorter.length >= 8 && longer.includes(shorter)) return true;
+  if (longer.length > 80) return false;
+  const distance = editDistance(a, b);
+  const similarity = 1 - distance / Math.max(a.length, b.length);
+  return similarity >= 0.82;
+}
+
+function isNearDuplicateSegment(
+  existing: TranscriptSegment,
+  incoming: TranscriptSegment,
+): boolean {
+  const a = normalizeSegmentText(existing.text);
+  const b = normalizeSegmentText(incoming.text);
+  if (!likelySameTranscript(a, b)) return false;
+  const sameSpeaker =
+    (existing.speaker_label ?? existing.speaker_id ?? "") ===
+    (incoming.speaker_label ?? incoming.speaker_id ?? "");
+  const startDelta = Math.abs((existing.start_ms ?? 0) - (incoming.start_ms ?? 0));
+  const endDelta = Math.abs((existing.end_ms ?? 0) - (incoming.end_ms ?? 0));
+  const near = startDelta <= 6_000 || endDelta <= 6_000;
+  if (!near) return false;
+  return a === b || sameSpeaker;
+}
+
 function mergeSegments(
   existing: TranscriptSegment[],
   incoming: TranscriptSegment[],
@@ -173,6 +225,7 @@ function mergeSegments(
   for (const seg of incoming) {
     const key = segmentKey(seg);
     if (seen.has(key)) continue;
+    if (merged.some((item) => isNearDuplicateSegment(item, seg))) continue;
     seen.add(key);
     merged.push(seg);
   }
@@ -265,9 +318,9 @@ export const useStore = create<Store>((set, get) => ({
 
   hydrateMeetings: (summaries) =>
     set((s) => {
-      const next: Record<string, MeetingCard> = { ...s.meetings };
+      const next: Record<string, MeetingCard> = {};
       for (const sum of summaries) {
-        const cur = next[sum.meeting_id] ?? emptyMeeting(sum.meeting_id);
+        const cur = s.meetings[sum.meeting_id] ?? emptyMeeting(sum.meeting_id);
         // backend 状态三态 → 前端两态：finalized 视为 ended，保持已有 UI 颜色
         const uiState =
           sum.state === "in_meeting"
@@ -284,7 +337,13 @@ export const useStore = create<Store>((set, get) => ({
           ended_at: cur.ended_at ?? sum.ended_at ?? undefined,
         };
       }
-      return { meetings: next };
+      return {
+        meetings: next,
+        currentMeetingId:
+          s.currentMeetingId && next[s.currentMeetingId]
+            ? s.currentMeetingId
+            : null,
+      };
     }),
 
   markMeetingDetailLoaded: (id) =>
@@ -411,10 +470,10 @@ export const useStore = create<Store>((set, get) => ({
         if (!mid) break;
         const seg = e.payload as unknown as TranscriptSegment;
         const cur = get().meetings[mid] ?? emptyMeeting(mid);
-        const speakers = new Set(cur.speakers);
-        if (seg.speaker_label) speakers.add(seg.speaker_label);
+        const mergedSegments = mergeSegments(cur.segments, [seg]);
+        const speakers = speakerSetFromSegments(cur.speakers, mergedSegments);
         get().upsertMeeting(mid, {
-          segments: [...cur.segments, seg],
+          segments: mergedSegments,
           speakers,
           state: "in_meeting",
         });
@@ -601,19 +660,34 @@ function hydrateLocalCaptureSnapshot(): void {
   const meetings: Record<string, MeetingCard> = {};
   for (const persisted of snapshot.meetings.slice(0, MAX_PERSISTED_MEETINGS)) {
     if (!persisted?.meeting_id) continue;
+    const segments = (persisted.segments ?? []).slice(
+      -MAX_PERSISTED_SEGMENTS_PER_MEETING,
+    );
+    if (persisted.state === "in_meeting" && segments.length === 0) {
+      continue;
+    }
     meetings[persisted.meeting_id] = {
       ...persisted,
-      segments: (persisted.segments ?? []).slice(
-        -MAX_PERSISTED_SEGMENTS_PER_MEETING,
-      ),
+      state: persisted.state === "in_meeting" ? "ended" : persisted.state,
+      ended_at:
+        persisted.state === "in_meeting"
+          ? (persisted.ended_at ?? snapshot.savedAt)
+          : persisted.ended_at,
+      segments,
       speakers: new Set(persisted.speakers ?? []),
       artifacts: persisted.artifacts ?? [],
     };
   }
+  const snapshotCurrent =
+    snapshot.currentMeetingId && meetings[snapshot.currentMeetingId]
+      ? meetings[snapshot.currentMeetingId]
+      : null;
   useStore.setState((s) => ({
     meetings: { ...meetings, ...s.meetings },
     currentMeetingId:
-      snapshot.currentMeetingId && meetings[snapshot.currentMeetingId]
+      snapshot.currentMeetingId &&
+      snapshotCurrent &&
+      snapshotCurrent.state !== "in_meeting"
         ? snapshot.currentMeetingId
         : s.currentMeetingId,
     ambientSegments:
@@ -643,11 +717,20 @@ function snapshotToMeetings(
   const meetings: Record<string, MeetingCard> = {};
   for (const persisted of snapshot.meetings.slice(0, MAX_PERSISTED_MEETINGS)) {
     if (!persisted?.meeting_id) continue;
+    const segments = (persisted.segments ?? []).slice(
+      -MAX_PERSISTED_SEGMENTS_PER_MEETING,
+    );
+    if (persisted.state === "in_meeting" && segments.length === 0) {
+      continue;
+    }
     meetings[persisted.meeting_id] = {
       ...persisted,
-      segments: (persisted.segments ?? []).slice(
-        -MAX_PERSISTED_SEGMENTS_PER_MEETING,
-      ),
+      state: persisted.state === "in_meeting" ? "ended" : persisted.state,
+      ended_at:
+        persisted.state === "in_meeting"
+          ? (persisted.ended_at ?? snapshot.savedAt)
+          : persisted.ended_at,
+      segments,
       speakers: new Set(persisted.speakers ?? []),
       artifacts: persisted.artifacts ?? [],
     };

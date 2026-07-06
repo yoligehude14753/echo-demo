@@ -14,14 +14,49 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from app.ports.llm import LLMPort
-from app.schemas.llm import ChatMessage
+from app.schemas.llm import ChatMessage, LLMResponse
 
 SYSTEM_PROMPT = """你是 EchoDesk，会议+办公场景下的个人数字分身。
 特点：
 - 中文优先，回答简洁清晰，必要时分点
 - 不知道就说不知道，不要编造
-- 任何涉及"最新""今天""现在"的问题应说明你没有联网（本 PR 阶段 RAG/Web 未接入）
+- 需要最新信息时不要编造；如当前上下文没有证据，建议用户使用联网检索或知识库检索入口
 """
+
+
+def build_question_messages(
+    question: str,
+    *,
+    history: list[ChatMessage] | None = None,
+) -> list[ChatMessage]:
+    """构造 EchoDesk 纯对话消息。"""
+    messages: list[ChatMessage] = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
+    if history:
+        messages.extend(history)
+    messages.append(ChatMessage(role="user", content=question))
+    return messages
+
+
+async def answer_question_once(
+    llm: LLMPort,
+    question: str,
+    *,
+    history: list[ChatMessage] | None = None,
+    model: str | None = None,
+    max_tokens: int | None = 768,
+    timeout_s: float = 45.0,
+) -> LLMResponse:
+    """短对话一次性回答。
+
+    /chat 用它而不是 streaming create：当前公开模型的 streaming 首包偶发超过
+    60s，但非流式短回答稳定得多。前端仍收到 SSE，只是服务端一帧返回完整回答。
+    """
+    return await llm.chat(
+        build_question_messages(question, history=history),
+        model=model,
+        max_tokens=max_tokens,
+        timeout_s=timeout_s,
+    )
 
 
 async def ask_question(
@@ -30,6 +65,7 @@ async def ask_question(
     *,
     history: list[ChatMessage] | None = None,
     model: str | None = None,
+    max_tokens: int | None = 768,
 ) -> AsyncIterator[str]:
     """流式回答用户问题。
 
@@ -38,11 +74,9 @@ async def ask_question(
         question: 用户问题
         history: 可选历史消息（多轮上下文）
         model: 显式指定模型（None → MAIN 默认）
+        max_tokens: 纯对话默认收紧输出预算，避免简单问题走长生成慢路径
     """
-    messages: list[ChatMessage] = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
-    if history:
-        messages.extend(history)
-    messages.append(ChatMessage(role="user", content=question))
+    messages = build_question_messages(question, history=history)
 
-    async for chunk in llm.chat_stream(messages, model=model):
+    async for chunk in llm.chat_stream(messages, model=model, max_tokens=max_tokens):
         yield chunk

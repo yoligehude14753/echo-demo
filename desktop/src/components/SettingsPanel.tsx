@@ -91,7 +91,7 @@ const MAIN_LLM_API_KEY = [121, 117, 110, 119, 117, 95, 111, 112, 101, 110, 95, 1
   .map((code) => String.fromCharCode(code))
   .join("");
 
-// 字段顺序 + 文案，跟后端 _REMOTE_FIELDS 对齐
+// 字段顺序 + 文案，跟服务配置字段 对齐
 const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
   llm_main_base_url: {
     label: "主 LLM Base URL",
@@ -102,11 +102,6 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
     label: "主 LLM API Key",
     hint: "模型服务 key；脱敏显示，留空不修改",
     placeholder: "sk-...",
-  },
-  llm_fast_base_url: {
-    label: "快速 LLM Base URL",
-    hint: "默认跟随主 LLM；私有部署可改为自定义 vLLM 端点",
-    placeholder: "使用内置服务配置",
   },
   stt_firered_url: {
     label: "STT URL",
@@ -172,8 +167,8 @@ const BREAKDOWN_LABELS: Array<{
 }> = [
   { key: "db", label: "数据库", hint: "echodesk.db (会议/段/说话人)" },
   { key: "storage", label: "音频/产物", hint: "录音 wav + @生成 的 PPT/Word/Excel/HTML" },
-  { key: "rag_index", label: "RAG 索引", hint: "BM25 倒排索引" },
-  { key: "logs", label: "日志", hint: "backend.log 按天 rotate，保留 14 天" },
+  { key: "rag_index", label: "知识库索引", hint: "本地检索索引" },
+  { key: "logs", label: "日志", hint: "服务日志按天轮转，保留 14 天" },
   { key: "skill_build", label: "Skill 工作目录", hint: "@生成 临时构建目录" },
 ];
 
@@ -398,7 +393,7 @@ export default function SettingsPanel({
         content: (
           <div className="text-[12px] leading-relaxed">
             将移除 <span className="font-mono">{dir}</span>
-            。该目录下已索引的文件会在下次扫描时清理（保留其他来源的 RAG 数据）。
+            。该目录下已索引的文件会在下次扫描时清理（保留其他来源的知识库数据）。
           </div>
         ),
         okText: "移除",
@@ -503,7 +498,7 @@ export default function SettingsPanel({
         restart_required: boolean;
       };
       message.success(
-        `已写入 ${json.written_keys.length} 项${json.restart_required ? "，需重启后端生效" : ""}`,
+        `已写入 ${json.written_keys.length} 项${json.restart_required ? "，需重启服务生效" : ""}`,
       );
       setNeedsRestart(json.restart_required);
       void refreshRemote();
@@ -516,7 +511,7 @@ export default function SettingsPanel({
 
   const onRestartBackend = async () => {
     if (!window.echo?.manualRestartBackend) {
-      message.warning("仅 Electron 模式可一键重启；dev server 请手动重启 backend");
+      message.warning("仅桌面模式可一键重启；开发模式请手动重启服务");
       return;
     }
     try {
@@ -531,7 +526,7 @@ export default function SettingsPanel({
   const onSaveBackendBase = () => {
     const saved = setStoredBackendBase(backendBaseDraft);
     setBackendBaseDraft(saved ?? DEFAULT_ANDROID_BACKEND_BASE);
-    message.success(saved ? `后端地址已保存：${saved}` : "已恢复默认后端地址");
+    message.success(saved ? `服务地址已保存：${saved}` : "已恢复默认服务地址");
   };
 
   const onCheckUpdate = useCallback(async () => {
@@ -578,6 +573,14 @@ export default function SettingsPanel({
   );
   const backendVersionBehind =
     backendVersion !== null && compareVersions(backendVersion, __APP_VERSION__) < 0;
+  const releaseVersionBehind =
+    updateInfo?.latestVersion &&
+    compareVersions(updateInfo.latestVersion, updateInfo?.currentVersion ?? __APP_VERSION__) < 0;
+  const latestVersionDisplay = updateInfo?.latestVersion
+    ? releaseVersionBehind
+      ? `本机 v${updateInfo?.currentVersion ?? __APP_VERSION__}（公开发布 v${updateInfo.latestVersion}）`
+      : `v${updateInfo.latestVersion}`
+    : "-";
 
   const onResetSpeakers = () => {
     Modal.confirm({
@@ -618,10 +621,19 @@ export default function SettingsPanel({
   return (
     <Drawer
       title={<span className="text-[14px] font-semibold">设置</span>}
+      rootClassName="echodesk-settings-drawer"
+      data-testid="settings-drawer"
+      extra={
+        <Button size="small" onClick={onClose} data-testid="settings-close">
+          关闭
+        </Button>
+      }
       placement="right"
       width={420}
       open={open}
       onClose={onClose}
+      keyboard
+      maskClosable
       destroyOnClose
     >
       <div className="space-y-5 text-[13px]">
@@ -643,8 +655,8 @@ export default function SettingsPanel({
           <div className="bg-paper-150 rounded-md p-3 space-y-2">
             {adminUnavailable ? (
               <div className="text-[12px] text-ink-500 leading-relaxed">
-                公网 demo backend 不开放本机数据目录、日志和诊断导出。Mac / Windows
-                桌面端本机 backend 可继续使用这些管理功能。
+                公共演示服务不开放本机数据目录、日志和诊断导出。Mac / Windows
+                桌面端本机服务可继续使用这些管理功能。
               </div>
             ) : loading && !dataDir ? (
               <Spin size="small" />
@@ -769,7 +781,7 @@ export default function SettingsPanel({
                     onClick={() => void onRestartBackend()}
                     data-testid="restart-backend-after-config"
                   >
-                    重启 backend 生效
+                    重启服务生效
                   </Button>
                 )}
               </div>
@@ -805,14 +817,14 @@ export default function SettingsPanel({
                 onClick={() => {
                   setBackendBaseDraft("");
                   setStoredBackendBase("");
-                  message.success("已恢复默认后端地址");
+                  message.success("已恢复默认服务地址");
                 }}
               >
                 恢复默认
               </Button>
             </div>
             <div className="text-[11px] text-ink-500 leading-relaxed">
-              Android / TV 默认连接 EchoDesk 公网 demo backend：
+              Android / TV 默认连接 EchoDesk 公共演示服务：
               <span className="font-mono ml-1">{DEFAULT_ANDROID_BACKEND_BASE}</span>。
               内网演示或开发调试时，可临时改成电脑局域网地址，例如
               <span className="font-mono ml-1">http://10.10.12.32:8769</span>。
@@ -846,7 +858,7 @@ export default function SettingsPanel({
               <div className="rounded bg-white border border-paper-300 px-2 py-1.5">
                 <div className="text-ink-400">最新版本</div>
                 <div className="font-mono text-ink-800">
-                  {updateInfo?.latestVersion ? `v${updateInfo.latestVersion}` : "-"}
+                  {latestVersionDisplay}
                 </div>
               </div>
             </div>
@@ -859,9 +871,9 @@ export default function SettingsPanel({
                 }`}
                 data-testid="settings-backend-version"
               >
-                当前 backend：v{backendVersion}
+                当前服务端：v{backendVersion}
                 {backendVersionBehind &&
-                  `，落后于客户端 v${__APP_VERSION__}。请更新远程 backend，否则新版 STT/TTS/扫码保存修复不会完全生效。`}
+                  `，落后于客户端 v${__APP_VERSION__}。请更新服务端，否则新版 STT/TTS/扫码保存修复不会完全生效。`}
               </div>
             )}
             {updateInfo?.assetName && (
@@ -939,7 +951,7 @@ export default function SettingsPanel({
               <>
                 <div className="text-[11px] text-ink-500 leading-relaxed">
                   EchoDesk 会扫描这些目录下的可索引文件（PDF / Word / Excel / PPT /
-                  Markdown / TXT 等），自动入库 RAG，让"@查 / 提问"能覆盖整个文件夹。
+                  Markdown / TXT 等），自动加入知识库，让"@查 / 提问"能覆盖整个文件夹。
                   <br />
                   当前已索引 <span className="font-mono text-accent">{ws.n_indexed}</span> 个文件
                   · 单文件上限 {ws.max_file_mb} MB
@@ -1030,7 +1042,7 @@ export default function SettingsPanel({
             导出诊断包 (.zip)
           </Button>
           <div className="text-[11px] text-ink-500 mt-1.5 leading-relaxed">
-            包含：最近 7 天 backend log（≤5MB/文件）· 配置（API key
+            包含：最近 7 天 服务日志（≤5MB/文件）· 配置（API key
             已脱敏）· DB schema · 远程探针历史。报 bug 时把这个 zip 发给我们。
           </div>
           </section>

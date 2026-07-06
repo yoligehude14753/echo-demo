@@ -18,7 +18,7 @@ from app.adapters.llm import LLMError
 from app.api.deps import aclose_llm_singleton, get_llm_singleton
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
-from app.use_cases.ask_question import ask_question
+from app.use_cases.ask_question import answer_question_once
 
 router = APIRouter(tags=["chat"])
 
@@ -53,6 +53,24 @@ async def _sse(stream: AsyncIterator[str]) -> AsyncIterator[bytes]:
         yield b"data: [DONE]\n\n"
 
 
+async def _single_answer_sse(
+    llm: LLMPort,
+    question: str,
+    *,
+    model: str | None,
+) -> AsyncIterator[bytes]:
+    try:
+        resp = await answer_question_once(llm, question, model=model)
+        if resp.content:
+            payload = json.dumps({"delta": resp.content}, ensure_ascii=False)
+            yield f"data: {payload}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+    except LLMError as e:
+        err = json.dumps({"error": str(e)}, ensure_ascii=False)
+        yield f"data: {err}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+
+
 @router.post("/chat")
 async def chat_endpoint(
     body: ChatRequest,
@@ -62,5 +80,7 @@ async def chat_endpoint(
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="question empty")
     model_arg = _resolve_model_alias(body.model, settings)
-    stream = ask_question(llm, body.question, model=model_arg)
-    return StreamingResponse(_sse(stream), media_type="text/event-stream")
+    return StreamingResponse(
+        _single_answer_sse(llm, body.question, model=model_arg),
+        media_type="text/event-stream",
+    )

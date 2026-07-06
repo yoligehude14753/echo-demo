@@ -110,6 +110,78 @@ function buildAudioConstraints(): MediaStreamConstraints["audio"] {
   };
 }
 
+function getUserMediaWithTimeout(
+  constraints: MediaStreamConstraints,
+  timeoutMs: number,
+  label: string,
+): Promise<MediaStream> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`${label}超时（${Math.round(timeoutMs / 1000)} 秒）`));
+    }, timeoutMs);
+
+    navigator.mediaDevices
+      .getUserMedia(constraints)
+      .then((stream) => {
+        if (settled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(stream);
+      })
+      .catch((err: unknown) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+async function requestElectronMicAccess(): Promise<void> {
+  try {
+    await window.echo?.requestMic?.();
+  } catch {
+    /* Electron IPC 不可用时继续走浏览器 getUserMedia。 */
+  }
+}
+
+async function listAudioInputDevices(): Promise<MediaDeviceInfo[]> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((device) => device.kind === "audioinput");
+  } catch {
+    return [];
+  }
+}
+
+function normalizeDesktopMicError(
+  error: unknown,
+  audioInputs: MediaDeviceInfo[],
+): string {
+  const raw =
+    error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : String(error);
+  if (/notfounderror|requested device not found|device not found/i.test(raw)) {
+    if (audioInputs.length === 0) {
+      return "系统已授权，但 EchoDesk 没有枚举到任何麦克风输入。请到 系统设置 → 隐私与安全 → 麦克风 关闭后重新勾选 EchoDesk，或完全退出后重开 EchoDesk。";
+    }
+    return `找不到可用麦克风输入。当前可见输入：${audioInputs
+      .map((device) => device.label || "未命名麦克风")
+      .join("、")}`;
+  }
+  if (/notallowederror|permission denied|denied/i.test(raw)) {
+    return "麦克风权限被拒绝。请到 系统设置 → 隐私与安全 → 麦克风 勾选 EchoDesk。";
+  }
+  return raw;
+}
+
 class AudioCapture {
   private state: CaptureState = "initializing";
   private errorMessage: string | null = null;
@@ -300,10 +372,31 @@ class AudioCapture {
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: buildAudioConstraints(),
-        video: false,
-      });
+      await requestElectronMicAccess();
+      let audioInputs = await listAudioInputDevices();
+      let stream: MediaStream;
+      try {
+        stream = await getUserMediaWithTimeout(
+          {
+            audio: buildAudioConstraints(),
+            video: false,
+          },
+          12_000,
+          "麦克风初始化",
+        );
+      } catch (firstError) {
+        console.warn("[audio-capture] constrained getUserMedia failed:", firstError);
+        audioInputs = await listAudioInputDevices();
+        try {
+          stream = await getUserMediaWithTimeout(
+            { audio: true, video: false },
+            12_000,
+            "默认麦克风初始化",
+          );
+        } catch (fallbackError) {
+          throw new Error(normalizeDesktopMicError(fallbackError, audioInputs));
+        }
+      }
       this.stream = stream;
 
       const ctx = isAndroidTvRuntime()

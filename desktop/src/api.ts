@@ -258,6 +258,12 @@ export async function getMeetingArtifacts(
   return asJson<GeneratedArtifact[]>(r);
 }
 
+export async function listArtifacts(limit = 100): Promise<GeneratedArtifact[]> {
+  const u = await apiUrl(`/artifacts?limit=${limit}`);
+  const r = await fetch(u);
+  return asJson<GeneratedArtifact[]>(r);
+}
+
 export interface ClearMeetingOutputsResult {
   meeting_id: string;
   minutes_cleared: boolean;
@@ -366,7 +372,7 @@ export function artifactDownloadUrl(artifactId: string): string {
     typeof window !== "undefined" &&
     window.location.protocol === "file:"
   ) {
-    const host = "http://127.0.0.1:8769";
+    const host = "http://127.0.0.1:8772";
     return `${host}/artifacts/${encodeURIComponent(artifactId)}/download`;
   }
   return `/api/artifacts/${encodeURIComponent(artifactId)}/download`;

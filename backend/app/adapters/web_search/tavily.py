@@ -1,7 +1,6 @@
-"""Web Search adapter: Tavily 主 + DDG 兜底（2026-05-26 用户决策放弃 Inspiro）。
+"""Web Search adapter: Tavily only.
 
 Tavily：POST https://api.tavily.com/search
-DDG：duckduckgo_search 库（无 key 但不稳定，仅做兜底）
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ _CF_HEADERS = {
 class TavilyWebSearch:
     """实现 ports.web_search.WebSearchPort。
 
-    Tavily 失败/无 key → DDG 兜底。
+    无 Tavily key 或 Tavily 请求失败时返回空结果，让上层明确提示联网检索不可用。
     """
 
     def __init__(self, settings: Settings, *, timeout_s: float = 15.0) -> None:
@@ -36,15 +35,12 @@ class TavilyWebSearch:
     async def search(self, query: str, *, top_n: int = 5) -> list[WebHit]:
         if not query.strip():
             return []
-        if self._tavily_key:
-            try:
-                hits = await self._search_tavily(query, top_n)
-                if hits:
-                    return hits
-            except Exception:
-                # Tavily 挂了 → DDG 兜底
-                pass
-        return await self._search_ddg(query, top_n)
+        if not self._tavily_key:
+            return []
+        try:
+            return await self._search_tavily(query, top_n)
+        except Exception:
+            return []
 
     async def _search_tavily(self, query: str, top_n: int) -> list[WebHit]:
         async with httpx.AsyncClient(
@@ -74,32 +70,3 @@ class TavilyWebSearch:
             )
             for r in (data.get("results") or [])[:top_n]
         ]
-
-    async def _search_ddg(self, query: str, top_n: int) -> list[WebHit]:
-        try:
-            from duckduckgo_search import DDGS
-        except ImportError:
-            raise WebSearchError(
-                "ddg fallback unavailable; pip install duckduckgo-search"
-            ) from None
-
-        def _do() -> list[WebHit]:
-            out: list[WebHit] = []
-            with DDGS() as ddgs:
-                for i, r in enumerate(ddgs.text(query, max_results=top_n)):
-                    out.append(
-                        WebHit(
-                            title=str(r.get("title") or ""),
-                            url=str(r.get("href") or r.get("url") or ""),
-                            snippet=str(r.get("body") or "")[:500],
-                            score=float(top_n - i) / float(top_n),
-                            source="ddg",
-                        )
-                    )
-                    if len(out) >= top_n:
-                        break
-            return out
-
-        import asyncio
-
-        return await asyncio.to_thread(_do)

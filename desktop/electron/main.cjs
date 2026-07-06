@@ -6,6 +6,7 @@ const {
   shell,
   ipcMain,
   systemPreferences,
+  session,
 } = require("electron");
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
@@ -13,6 +14,8 @@ const http = require("node:http");
 const https = require("node:https");
 const fs = require("node:fs");
 const os = require("node:os");
+
+app.commandLine.appendSwitch("enable-media-stream");
 
 let autoUpdater = null;
 try {
@@ -26,7 +29,7 @@ try {
 
 const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
-const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8769", 10);
+const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8772", 10);
 const LOCAL_BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
 const PUBLIC_BACKEND_HOST =
   normalizeHttpBase(process.env.ECHO_PUBLIC_BACKEND_BASE) ||
@@ -40,15 +43,14 @@ const AUTO_UPDATE_CHECK_DELAY_MS = Math.max(
   parseInt(process.env.ECHODESK_AUTO_UPDATE_CHECK_DELAY_MS || "15000", 10) || 15000,
 );
 const FORCE_LOCAL_BACKEND = process.env.ECHO_FORCE_LOCAL_BACKEND === "1";
-const PUBLIC_DEMO_MODE =
-  process.env.ECHO_PUBLIC_DEMO === "1" || (!IS_DEV && !FORCE_LOCAL_BACKEND);
+const PUBLIC_DEMO_MODE = process.env.ECHO_PUBLIC_DEMO === "1";
 const BACKEND_HOST = PUBLIC_DEMO_MODE ? PUBLIC_BACKEND_HOST : LOCAL_BACKEND_HOST;
-const BACKEND_BIND_HOST = process.env.ECHO_BACKEND_BIND_HOST || "0.0.0.0";
+const BACKEND_BIND_HOST = process.env.ECHO_BACKEND_BIND_HOST || "127.0.0.1";
 
 // 公开发布包默认走 public backend：key 与模型服务留在服务端，新用户不需要本机 Python。
 // 私有/离线部署可以显式 ECHO_FORCE_LOCAL_BACKEND=1 恢复本地 backend spawn。
 const SPAWN_BACKEND =
-  !PUBLIC_DEMO_MODE && process.env.ECHO_SPAWN_BACKEND !== "0";
+  FORCE_LOCAL_BACKEND && !PUBLIC_DEMO_MODE && process.env.ECHO_SPAWN_BACKEND !== "0";
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
 // node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
@@ -104,6 +106,43 @@ function normalizeHttpBase(raw) {
   const value = String(raw || "").trim().replace(/\/+$/, "");
   if (!value) return null;
   return /^https?:\/\//i.test(value) ? value : `http://${value}`;
+}
+
+function isTrustedRenderer(webContents) {
+  try {
+    const url = webContents?.getURL?.() || "";
+    return (
+      url.startsWith("file://") ||
+      url.startsWith(VITE_URL) ||
+      url.startsWith(LOCAL_BACKEND_HOST) ||
+      url.startsWith(PUBLIC_BACKEND_HOST)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function installMediaPermissionHandlers() {
+  const mediaPermissions = new Set(["media", "microphone", "audioCapture"]);
+  const shouldAllowMedia = (webContents, permission, details = {}) => {
+    if (!isTrustedRenderer(webContents)) return false;
+    if (permission === "media") {
+      const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+      return mediaTypes.length === 0 || mediaTypes.includes("audio");
+    }
+    return mediaPermissions.has(permission);
+  };
+
+  session.defaultSession.setPermissionRequestHandler(
+    (webContents, permission, callback, details) => {
+      callback(shouldAllowMedia(webContents, permission, details));
+    },
+  );
+
+  session.defaultSession.setPermissionCheckHandler(
+    (webContents, permission, _requestingOrigin, details) =>
+      shouldAllowMedia(webContents, permission, details),
+  );
 }
 
 function normalizeVersion(raw) {
@@ -537,7 +576,7 @@ function resolveBackendCwd() {
     }
   }
   // 全找不到时退化用第一个（spawn 会失败，让上层走 handleBackendDeath）
-  return cands[1];
+  return cands[0];
 }
 
 // ---------- Python 解析（P1.6） ----------
@@ -791,6 +830,18 @@ async function handleBackendDeath(reason) {
 
 function spawnBackendAndWatch() {
   if (shuttingDown) return;
+
+  if (!SPAWN_BACKEND) {
+    externalMode = true;
+    log("[backend] spawn request ignored because local backend spawn is disabled");
+    emitStatus({
+      state: "external",
+      port: PUBLIC_DEMO_MODE ? undefined : BACKEND_PORT,
+      mode: PUBLIC_DEMO_MODE ? "public-demo" : "external",
+    });
+    startExternalHealthWatcher();
+    return;
+  }
 
   // 端口已经被外部 backend 占着（dev 期 cursor 已经跑了 uvicorn）→ 不要 spawn 第二份
   if (isPortListening(BACKEND_PORT)) {
@@ -1180,6 +1231,7 @@ ipcMain.handle("backend:manual-restart", async () => {
 // ---------- app 生命周期 ----------
 
 app.whenReady().then(() => {
+  installMediaPermissionHandlers();
   // 主窗口先起，让用户看到 UI；backend 状态由 renderer 自己渲染（degraded UI 等）
   createWindow();
   startBackend();

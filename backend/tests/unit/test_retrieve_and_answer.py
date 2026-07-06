@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -18,23 +17,24 @@ class FakeLLM:
         self.classify_label = classify_label
         self.answer_chunks = answer_chunks or ["答", "复"]
         self.classify_calls: list[str] = []
-        self.stream_messages: list[ChatMessage] | None = None
+        self.answer_messages: list[ChatMessage] | None = None
+        self.answer_kwargs: dict[str, Any] | None = None
 
-    async def chat(self, messages: list[ChatMessage], **_: Any) -> LLMResponse:
-        # 分类器调用
-        self.classify_calls.append(messages[-1].content)
+    async def chat(self, messages: list[ChatMessage], **kw: Any) -> LLMResponse:
+        if messages and "只能输出三个标签之一" in messages[0].content:
+            self.classify_calls.append(messages[-1].content)
+            content = self.classify_label
+        else:
+            self.answer_messages = list(messages)
+            self.answer_kwargs = dict(kw)
+            content = "".join(self.answer_chunks)
         return LLMResponse(
-            content=self.classify_label,
+            content=content,
             model="qwen3",
             finish_reason="stop",
             usage=LLMUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
             latency_ms=12.0,
         )
-
-    async def chat_stream(self, messages: list[ChatMessage], **_: Any) -> AsyncIterator[str]:
-        self.stream_messages = list(messages)
-        for c in self.answer_chunks:
-            yield c
 
 
 class FakeRag:
@@ -174,8 +174,11 @@ async def test_prompt_includes_citations() -> None:
         question="财报数据?",
     )
     _ = [c async for c in out.chunks]
-    assert llm.stream_messages is not None
-    body = llm.stream_messages[0].content
+    assert llm.answer_messages is not None
+    body = llm.answer_messages[0].content
     assert "2024 年营收 100 亿" in body
     assert "[doc:c1" in body
     assert "财报" in body
+    assert llm.answer_kwargs is not None
+    assert llm.answer_kwargs["max_tokens"] == 768
+    assert llm.answer_kwargs["timeout_s"] == 60.0

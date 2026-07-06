@@ -22,6 +22,10 @@ interface Props {
   status: CaptureStatusModel;
 }
 
+const INIT_DISPLAY_TIMEOUT_MS = 20_000;
+const INIT_TIMEOUT_TEXT =
+  "初始化超时；问答、知识库、联网搜索和文档生成仍可继续使用";
+
 interface DoorRow {
   key: keyof CaptureStatsSnapshot;
   label: string;
@@ -77,6 +81,15 @@ function shouldShowMicRetry(errorMessage: string | null | undefined): boolean {
 
 function displayMicError(errorMessage: string | null | undefined): string {
   if (!errorMessage) return "";
+  if (/requested device not found|device not found|notfounderror/i.test(errorMessage)) {
+    return "未找到可用麦克风，请检查系统输入设备";
+  }
+  if (/permission denied|notallowederror|denied/i.test(errorMessage)) {
+    return "系统未授权麦克风，请在 macOS 隐私设置中允许 EchoDesk";
+  }
+  if (/timeout|超时/i.test(errorMessage)) {
+    return "麦克风初始化超时";
+  }
   if (/(USB|蓝牙|有效输入|silent PCM|microphone input)/i.test(errorMessage)) {
     return "请接入 USB/蓝牙会议麦克风";
   }
@@ -194,13 +207,33 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
   } = status;
   // 让倒计时每秒刷新
   const [, setTick] = useState(0);
+  const [initializingTooLong, setInitializingTooLong] = useState(false);
   useEffect(() => {
     if (sttCircuitOpenUntil === null) return;
     const t = window.setInterval(() => setTick((n) => n + 1), 1000);
     return () => window.clearInterval(t);
   }, [sttCircuitOpenUntil]);
 
+  useEffect(() => {
+    if (state !== "initializing") {
+      setInitializingTooLong(false);
+      return;
+    }
+    const t = window.setTimeout(
+      () => setInitializingTooLong(true),
+      INIT_DISPLAY_TIMEOUT_MS,
+    );
+    return () => window.clearTimeout(t);
+  }, [state]);
+
   if (state === "initializing") {
+    if (initializingTooLong) {
+      return (
+        <Tag color="red" data-testid="capture-status" tabIndex={-1}>
+          麦克风不可用 · {INIT_TIMEOUT_TEXT}
+        </Tag>
+      );
+    }
     return (
       <Tag
         color="blue"

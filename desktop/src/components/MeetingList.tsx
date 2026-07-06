@@ -78,7 +78,10 @@ export default function MeetingList(): JSX.Element {
 
   if (items.length === 0) {
     return (
-      <div className="space-y-0.5">
+      <div
+        className="echodesk-meeting-list-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-0.5"
+        data-testid="meeting-list-scroll"
+      >
         {ambientButton}
         <div className="px-2 pt-4 pb-2">
           <Empty
@@ -97,7 +100,10 @@ export default function MeetingList(): JSX.Element {
   }
 
   return (
-    <div className="space-y-0.5">
+    <div
+      className="echodesk-meeting-list-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-0.5"
+      data-testid="meeting-list-scroll"
+    >
       {ambientButton}
       <div className="h-px bg-paper-300 my-1" aria-hidden="true" />
       {items.map((m) => {

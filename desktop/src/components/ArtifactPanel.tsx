@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { artifactDownloadUrl } from "@/api";
+import { artifactDownloadUrl, listArtifacts } from "@/api";
 import { useStore } from "@/store";
 import type { GeneratedArtifact } from "@/types";
 import { formatRelativeTime, type FailedArtifact } from "@/lib/failedArtifact";
@@ -65,6 +65,7 @@ export default function ArtifactPanel(): JSX.Element {
   const dismissFailedArtifact = useStore((s) => s.dismissFailedArtifact);
   const clearArtifacts = useStore((s) => s.clearArtifacts);
   const removeArtifact = useStore((s) => s.removeArtifact);
+  const addArtifact = useStore((s) => s.addArtifact);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const meeting = useStore((s) =>
     currentMeetingId ? s.meetings[currentMeetingId] : undefined,
@@ -72,14 +73,34 @@ export default function ArtifactPanel(): JSX.Element {
   const [previewArtifact, setPreviewArtifact] =
     useState<GeneratedArtifact | null>(null);
 
-  // 选中具体会议 → 仅展示该会议的产物（meeting.artifacts 由 ws 事件维护，
-  // 详见 store.ts 的 artifact.ready handler）。"待机时段"（currentMeetingId
-  // === null）走全局视图，与历史一致。
-  const scopedToMeeting = currentMeetingId !== null && meeting !== undefined;
-  const artifacts = scopedToMeeting ? meeting.artifacts : globalArtifacts;
-  // 失败卡片仍走全局：它们只活在当前会话，没有 per-meeting 归属
-  const showFailed = !scopedToMeeting;
-  const visibleFailed = showFailed ? failedArtifacts : [];
+  useEffect(() => {
+    let alive = true;
+    void (async (): Promise<void> => {
+      try {
+        const restored = await listArtifacts(120);
+        if (!alive) return;
+        restored
+          .slice()
+          .reverse()
+          .forEach((artifact) => addArtifact(artifact));
+      } catch (e) {
+        console.warn("[artifact-panel] listArtifacts failed:", e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [addArtifact]);
+
+  // outputs 是全局工作产物，不应因为用户正在查看某个历史会议而消失。
+  // 会议关联产物只作为补充来源合并进列表；全局新生成产物始终可见。
+  const meetingArtifacts = meeting?.artifacts ?? [];
+  const globalIds = new Set(globalArtifacts.map((a) => a.artifact_id));
+  const artifacts = [
+    ...globalArtifacts,
+    ...meetingArtifacts.filter((a) => !globalIds.has(a.artifact_id)),
+  ];
+  const visibleFailed = failedArtifacts;
 
   function onClearAll(): void {
     Modal.confirm({
@@ -96,7 +117,7 @@ export default function ArtifactPanel(): JSX.Element {
     <div className="flex-1 min-h-0 flex flex-col bg-paper-50">
       <div className="flex items-center justify-between px-6 h-11 border-b border-paper-300 shrink-0">
         <span className="text-[13px] text-ink-700 font-medium lowercase tracking-wider">
-          {scopedToMeeting ? "本会议产物" : "outputs"}
+          outputs
         </span>
         <span className="flex items-center gap-2">
           <span className="text-[11px] text-ink-400">
@@ -104,7 +125,7 @@ export default function ArtifactPanel(): JSX.Element {
               ? `${artifacts.length} · ${visibleFailed.length} 失败`
               : artifacts.length}
           </span>
-          {!scopedToMeeting && globalArtifacts.length > 0 && (
+          {globalArtifacts.length > 0 && (
             <button
               type="button"
               data-testid="clear-artifacts-btn"
@@ -122,7 +143,7 @@ export default function ArtifactPanel(): JSX.Element {
       <div
         className="flex-1 overflow-y-auto px-3 py-2 space-y-1"
         data-testid="artifact-list"
-        data-scope={scopedToMeeting ? "meeting" : "global"}
+        data-scope="global"
       >
         {visibleFailed.map((f) => (
           <FailedArtifactCard
@@ -133,11 +154,9 @@ export default function ArtifactPanel(): JSX.Element {
         ))}
         {artifacts.length === 0 && visibleFailed.length === 0 && (
           <div className="px-3 py-8 text-center text-ink-400 text-[11px] space-y-1">
-            <div>{scopedToMeeting ? "该会议暂无产物" : "暂无产物"}</div>
+            <div>暂无产物</div>
             <div className="text-ink-300">
-              {scopedToMeeting
-                ? "切到「待机时段」查看全部历史产物"
-                : "在输入框输入 @生成 PPT / @报告 / @Excel … 触发"}
+              在输入框输入 @生成 PPT / @报告 / @Excel … 触发
             </div>
           </div>
         )}

@@ -13,7 +13,13 @@ import {
   QrCode,
   RefreshCw,
 } from "lucide-react";
-import { artifactDownloadUrl, getMeetingMinutes, retryMinutesGeneration } from "@/api";
+import {
+  artifactDownloadUrl,
+  generateArtifact,
+  getMeetingMinutes,
+  retryMinutesGeneration,
+  type ArtifactKind,
+} from "@/api";
 import { buildSpeakerDisplayMap } from "@/lib/speakerDisplay";
 import MeetingShareModal from "@/components/MeetingShareModal";
 
@@ -43,7 +49,7 @@ function remapAssignee(
   return raw; // displayMap 里没这人，原样
 }
 import { useStore } from "@/store";
-import type { TodoItem } from "@/types";
+import type { MeetingMinutes, TodoItem } from "@/types";
 
 function isFinalizedLike(state: string | undefined): boolean {
   return state === "ended" || state === "finalized";
@@ -59,8 +65,8 @@ function friendlyMinutesError(raw: string | null | undefined): {
   }
   if (/JSON parse failed|delimiter|Expecting/i.test(s)) {
     return {
-      headline: "LLM 输出格式不规范",
-      hint: "MiniMax-M2.7 偶发会返回非标准 JSON。点击重新生成通常可解决",
+      headline: "纪要格式不规范",
+      hint: "智能引擎偶发会返回非标准结构。点击重新生成通常可解决",
     };
   }
   if (/timeout|timed out/i.test(s)) {
@@ -97,7 +103,7 @@ function friendlyMinutesError(raw: string | null | undefined): {
  *     → 渲染纪要详情
  *
  * 解决的 bug：echo-demo backend.log 2026-05-28 10:39 LLM 调用失败后，UI 永远
- * 显示「纪要尚未生成 / 结束会议后由 MiniMax-M2.7 自动产出」，用户没有任何重试入口。
+ * 显示「纪要尚未生成 / 结束会议后由智能引擎自动产出」，用户没有任何重试入口。
  */
 export default function MinutesView(): JSX.Element {
   const currentId = useStore((s) => s.currentMeetingId);
@@ -237,13 +243,13 @@ export default function MinutesView(): JSX.Element {
               <>
                 会议进行中…
                 <br />
-                结束会议后由 MiniMax-M2.7 自动产出
+                结束会议后由智能引擎自动产出
               </>
             ) : (
               <>
                 纪要尚未生成
                 <br />
-                结束会议后由 MiniMax-M2.7 自动产出
+                结束会议后由智能引擎自动产出
               </>
             )}
           </span>
@@ -274,7 +280,7 @@ function MinutesGeneratingCard({
 
   // 阶段文案随时间渐变：让用户感受到"还在跑"，不是死了
   let stage = "正在准备转写素材…";
-  if (elapsed > 5) stage = "正在用 MiniMax-M2.7 抽取要点…";
+  if (elapsed > 5) stage = "正在抽取会议要点…";
   if (elapsed > 30) stage = "正在整理决议与待办…";
   if (elapsed > 60) stage = "模型还在思考，长会议通常需要 60–120 秒…";
   if (elapsed > 150) stage = "比预期久了一点，若超过 3 分钟可点重试…";
@@ -468,7 +474,7 @@ function MinutesBody({
         </section>
       )}
 
-      <MinutesTodoList meetingId={m.meeting_id} todos={todos} />
+      <MinutesTodoList meetingId={m.meeting_id} minutes={m} todos={todos} />
     </div>
   );
 }
@@ -476,6 +482,69 @@ function MinutesBody({
 function useMeetingSpeakerMap(meetingId: string): Map<string, number> {
   const segs = useStore((s) => s.meetings[meetingId]?.segments ?? []);
   return useMemo(() => buildSpeakerDisplayMap(segs), [segs]);
+}
+
+type AutoExecutableTodo = {
+  artifact_type: ArtifactKind;
+  brief: string;
+  extra_instructions: string;
+};
+
+function inferAutoExecutableTodo(
+  todo: TodoItem,
+  minutes: MeetingMinutes,
+): AutoExecutableTodo | null {
+  if (todo.status !== "pending" || todo.kind !== "actionable") return null;
+  const source = `${todo.suggested_command ?? ""}\n${todo.text}`.trim();
+  if (!source) return null;
+  const lower = source.toLowerCase();
+  let artifactType: ArtifactKind | null = null;
+  if (/pptx?|幻灯|演示|路演/.test(lower)) artifactType = "pptx";
+  else if (/xlsx?|excel|表格|统计表|清单表/.test(lower)) artifactType = "xlsx";
+  else if (/html|网页|页面|单页|landing/.test(lower)) artifactType = "html";
+  else if (/markdown|md\b|要点|清单|纪要|总结/.test(lower)) artifactType = "markdown";
+  else if (/pdf/.test(lower)) artifactType = "pdf";
+  else if (/txt|文本/.test(lower)) artifactType = "txt";
+  else if (/word|docx|文档|报告|简报|方案|请示|通知/.test(lower)) artifactType = "word";
+  if (!artifactType) return null;
+
+  const sectionText = minutes.sections
+    .slice(0, 6)
+    .map((section) => `【${section.heading}】\n${section.bullets.slice(0, 5).join("\n")}`)
+    .join("\n\n");
+  const decisions = minutes.decisions.length
+    ? `会议决议：\n${minutes.decisions.join("\n")}`
+    : "会议决议：无";
+  const brief = todo.suggested_command?.trim() || `基于会议纪要执行待办：${todo.text}`;
+  const extraInstructions = [
+    "这是 EchoDesk 从会议纪要中识别出的可自动执行待办。",
+    "仅执行文档/表格/页面/演示稿等 EchoDesk 可完成的生成类任务；不要声称已完成外部联系、线下沟通、付款、审批等外部动作。",
+    `会议标题：${minutes.title}`,
+    `会议摘要：${minutes.summary}`,
+    decisions,
+    sectionText ? `会议要点：\n${sectionText}` : "会议要点：无",
+    `待办原文：${todo.text}`,
+    todo.assignee ? `负责人：${todo.assignee}` : "负责人：未指定",
+  ].join("\n\n");
+  return {
+    artifact_type: artifactType,
+    brief,
+    extra_instructions: extraInstructions,
+  };
+}
+
+function autoExecStorageKey(meetingId: string, todoId: string): string {
+  return `echodesk:auto-exec:v1:${meetingId}:${todoId}`;
+}
+
+function wasAutoExecAttempted(meetingId: string, todoId: string): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(autoExecStorageKey(meetingId, todoId)) === "1";
+}
+
+function markAutoExecAttempted(meetingId: string, todoId: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(autoExecStorageKey(meetingId, todoId), "1");
 }
 
 /**
@@ -494,13 +563,69 @@ function useMeetingSpeakerMap(meetingId: string): Map<string, number> {
  */
 function MinutesTodoList({
   meetingId,
+  minutes,
   todos,
 }: {
   meetingId: string;
+  minutes: MeetingMinutes;
   todos: TodoItem[];
 }): JSX.Element {
   const prefillCommandBar = useStore((s) => s.prefillCommandBar);
+  const addArtifact = useStore((s) => s.addArtifact);
   const speakerMap = useMeetingSpeakerMap(meetingId);
+  const inFlightRef = useRef<Set<string>>(new Set());
+  const [autoRunning, setAutoRunning] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const candidates = todos
+      .map((todo) => ({ todo, job: inferAutoExecutableTodo(todo, minutes) }))
+      .filter(
+        (item): item is { todo: TodoItem; job: AutoExecutableTodo } =>
+          item.job !== null &&
+          !wasAutoExecAttempted(meetingId, item.todo.id) &&
+          !inFlightRef.current.has(item.todo.id),
+      )
+      .slice(0, 3);
+    if (candidates.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      for (const { todo, job } of candidates) {
+        if (cancelled) return;
+        inFlightRef.current.add(todo.id);
+        markAutoExecAttempted(meetingId, todo.id);
+        setAutoRunning((prev) => ({ ...prev, [todo.id]: true }));
+        try {
+          const artifact = await generateArtifact({
+            artifact_type: job.artifact_type,
+            brief: job.brief,
+            extra_instructions: job.extra_instructions,
+            meeting_id: meetingId,
+            todo_id: todo.id,
+          });
+          if (cancelled) return;
+          addArtifact(artifact);
+          message.success(`已自动执行会议待办：${artifact.title || artifact.artifact_id}`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (!cancelled) message.error(`自动执行会议待办失败：${msg}`);
+        } finally {
+          inFlightRef.current.delete(todo.id);
+          if (!cancelled) {
+            setAutoRunning((prev) => {
+              const next = { ...prev };
+              delete next[todo.id];
+              return next;
+            });
+          }
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [addArtifact, meetingId, minutes, todos]);
 
   if (todos.length === 0) {
     return (
@@ -524,6 +649,7 @@ function MinutesTodoList({
             key={t.id}
             todo={t}
             displayAssignee={remapAssignee(t.assignee, speakerMap)}
+            autoRunning={autoRunning[t.id] === true}
             onExecute={(text) =>
               prefillCommandBar(text, {
                 meeting_id: meetingId,
@@ -540,10 +666,12 @@ function MinutesTodoList({
 function TodoRow({
   todo,
   displayAssignee,
+  autoRunning,
   onExecute,
 }: {
   todo: TodoItem;
   displayAssignee: string | null;
+  autoRunning: boolean;
   onExecute: (text: string) => void;
 }): JSX.Element {
   const done = todo.status === "done";
@@ -593,7 +721,9 @@ function TodoRow({
             </Tag>
           )}
           {todo.kind === "actionable" && !done && (
-            <span className="text-[10.5px] text-accent">可执行</span>
+            <span className="text-[10.5px] text-accent">
+              {autoRunning ? "自动执行中" : "可执行"}
+            </span>
           )}
           {done && todo.artifact_id && (
             <a
@@ -616,10 +746,12 @@ function TodoRow({
             size="small"
             icon={<Play className="w-3 h-3" />}
             data-testid="minutes-todo-execute-btn"
+            loading={autoRunning}
+            disabled={autoRunning}
             onClick={() => onExecute(todo.suggested_command as string)}
             className="!shrink-0 !text-accent"
           >
-            执行
+            {autoRunning ? "执行中" : "执行"}
           </Button>
         </Tooltip>
       )}

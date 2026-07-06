@@ -290,9 +290,9 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
 - 或者用电视浏览器打开 GitHub Release 的 APK 下载链接。
 
 使用前提
-- APK 只是 EchoDesk 前端壳，不包含 Python backend，也不包含真实 API key。
-- 默认连接 https://echodesk.yoliyoli.uk 公网 demo backend；STT / TTS / LLM 由服务端转发到 eight。
-- 私有内网调试时，才需要让 Mac/Windows 后端监听 0.0.0.0:8769，并在 EchoDesk 设置里填电脑局域网地址。
+- APK 是 EchoDesk 电视端客户端，不包含服务密钥。
+- 默认连接 https://echodesk.yoliyoli.uk 公共演示服务；模型、语音和检索能力由服务端统一提供。
+- 私有内网调试时，才需要让 Mac/Windows 本机服务监听 0.0.0.0:8769，并在 EchoDesk 设置里填电脑局域网地址。
 `;
 
 writeFileSync(join(BUNDLE_DIR, "install-tv-macos.sh"), macInstaller, "utf-8");

@@ -88,6 +88,26 @@ class AutoMeetingDetector:
     def active_meeting_id(self) -> str | None:
         return self._active_meeting_id
 
+    def adopt_active(
+        self,
+        meeting_id: str,
+        *,
+        started_at: datetime,
+        now: datetime,
+    ) -> None:
+        """从持久化状态接管一个正在进行的自动会议。
+
+        backend 重启后 ``MeetingState`` 可以从 DB 恢复 current meeting，但 detector
+        的内存字段会丢失。若不接管，后续 silence/max 事件可能生成另一个 auto id，
+        导致真正的 current meeting 永远收不到 end。
+        """
+        self._active_meeting_id = meeting_id
+        self._meeting_started_at = started_at
+        self._last_voice_at = now
+        self._distinct_active_at = now
+        self._last_end_at = None
+        self._prune_window(now)
+
     def observe(
         self,
         *,

@@ -2,11 +2,11 @@
 
 EchoDesk 的桌面端（Electron + React 18 + TypeScript + Vite）。
 
-当前 public demo 版本是 `v0.2.32`。正式安装包从 GitHub Release 下载：
-<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.32>
+当前公开版本是 `v0.2.35`。正式安装包从 GitHub Release 下载：
+<https://github.com/yoligehude14753/echo-demo/releases/tag/v0.2.35>
 
-公开安装包默认连接 `https://echodesk.yoliyoli.uk` 公网 demo backend，STT/TTS/LLM
-密钥不会打进客户端包。私有本机后端仍可通过 `ECHO_FORCE_LOCAL_BACKEND=1` 启用。
+公开安装包默认连接 `https://echodesk.yoliyoli.uk` 公共演示服务，STT/TTS/LLM
+密钥只保存在服务端，不会打进客户端包。私有本机服务仍可通过 `ECHO_FORCE_LOCAL_BACKEND=1` 启用。
 
 ## 开发启动
 
@@ -36,12 +36,12 @@ npm run app:package:tv
 
 主要产物：
 
-- macOS: `release/EchoDesk-0.2.32-arm64.dmg`, `release/EchoDesk-0.2.32-arm64-mac.zip`
-- Windows: `release/EchoDesk.Setup.0.2.32.exe`, `release/EchoDesk-0.2.32-win-x64.zip`
-- Linux: `release/EchoDesk-0.2.32.AppImage`, `release/echodesk-desktop_0.2.32_amd64.deb`
-- Android/TV: `release/EchoDesk-0.2.32-android.apk`, `release/EchoDesk-0.2.32-smart-tv.apk`
+- macOS: `release/EchoDesk-0.2.35-arm64.dmg`, `release/EchoDesk-0.2.35-arm64-mac.zip`
+- Windows: `release/EchoDesk.Setup.0.2.35.exe`, `release/EchoDesk-0.2.35-win-x64.zip`
+- Linux: `release/EchoDesk-0.2.35.AppImage`, `release/echodesk-desktop_0.2.35_amd64.deb`
+- Android/TV: `release/EchoDesk-0.2.35-android.apk`, `release/EchoDesk-0.2.35-smart-tv.apk`
 
-Windows 受管环境如果拦截 `.exe` 安装器，优先用 `EchoDesk-0.2.32-win-x64.zip`：
+Windows 受管环境如果拦截 `.exe` 安装器，优先用 `EchoDesk-0.2.35-win-x64.zip`：
 解压后直接运行 `EchoDesk.exe`，本机数据仍保存在系统用户目录，升级时替换解压目录即可。
 
 打包后可用 `scripts/cdp-packaged-smoke.cjs` 对 Electron 产物做 CDP 点击 smoke。

@@ -119,9 +119,9 @@ export default function App(): JSX.Element {
       <Layout className="echodesk-main-layout !bg-paper-50 !flex-1 !min-h-0 !overflow-hidden">
         <Sider
           width={260}
-          className="echodesk-meeting-sider !bg-paper-150 border-r border-paper-300 !px-2 !py-3 !overflow-y-auto"
+          className="echodesk-meeting-sider !bg-paper-150 border-r border-paper-300 !px-2 !py-3 !overflow-hidden flex flex-col min-h-0"
         >
-          <div className="echodesk-meeting-title flex items-center gap-1.5 px-2 mb-2 text-ink-500 text-[11px] uppercase tracking-wider">
+          <div className="echodesk-meeting-title shrink-0 flex items-center gap-1.5 px-2 mb-2 text-ink-500 text-[11px] uppercase tracking-wider">
             <MessageSquare className="w-3 h-3" />
             <span>会议</span>
           </div>

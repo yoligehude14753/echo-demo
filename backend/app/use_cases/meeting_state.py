@@ -35,6 +35,16 @@ MeetingMode = Literal["idle", "in_meeting"]
 StartReason = Literal["auto", "manual"]
 
 
+def _should_force_end_on_hydrate(meeting_id: str) -> bool:
+    """重启恢复时可兜底关闭的会议 id。
+
+    auto-* 是自动会议；m-local-* 是历史桌面端创建的本地会议。
+    它们如果跨重启仍停留在 in_meeting，通常已经失去前端控制链路，
+    继续保活只会污染会议计数和阻塞状态恢复。
+    """
+    return meeting_id.startswith("auto-") or meeting_id.startswith("m-local-")
+
+
 def _resolve_meeting_title(stored_title: str | None, meeting_id: str) -> str:
     """给 LLM 纪要选一个合适的 title。
 
@@ -73,6 +83,7 @@ class MeetingState:
         self._max_meeting_duration_s = max_meeting_duration_s
         self._current: CurrentMeeting | None = None
         self._lock = asyncio.Lock()
+        self._watchdog_task: asyncio.Task[None] | None = None
 
     @property
     def current(self) -> CurrentMeeting | None:
@@ -81,6 +92,40 @@ class MeetingState:
     @property
     def mode(self) -> MeetingMode:
         return "in_meeting" if self._current else "idle"
+
+    def start_watchdog(self, *, interval_s: float = 5.0) -> None:
+        """启动会议生命周期 watchdog。
+
+        detector 的 silence/max 检查依赖 ambient chunk 进入 ``observe_chunk``。
+        如果麦克风/上传链路断流，或者恢复出历史 ``m-local-*`` 状态，就可能没有
+        新 chunk 触发检查。watchdog 作为状态机层兜底，只关闭系统托管会议：
+        auto-* 和历史 m-local-*；普通用户手动会议不被误杀。
+        """
+        if self._watchdog_task is not None and not self._watchdog_task.done():
+            return
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop(interval_s=interval_s))
+
+    async def stop_watchdog(self) -> None:
+        """停止会议生命周期 watchdog（FastAPI lifespan shutdown 调用）。"""
+        task = self._watchdog_task
+        if task is None:
+            return
+        self._watchdog_task = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _watchdog_loop(self, *, interval_s: float) -> None:
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                await self._system_meeting_exceeded_max_duration(datetime.now(UTC))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # pragma: no cover - watchdog must never kill backend
+                logger.warning("meeting watchdog tick failed: %s", e)
 
     async def hydrate(self) -> None:
         """启动时恢复唯一的 in_meeting 会议；多于 1 个时强制结束所有旧的。
@@ -93,6 +138,9 @@ class MeetingState:
         这条规则关掉的结构性 bug 是：detector 进程崩溃 / 进程被杀重启时，
         sqlite 里残留的 auto-* in_meeting 行会让顶栏继续显示"会议中"，
         但 detector 已经丢了内存状态，永远不会再 emit silence_timeout。
+
+        2026-07 扩展：同样清理历史桌面端遗留的 m-local-*。这些会议不是当前
+        进程可接管的手动会议，若跨天仍是 in_meeting，也应按陈旧状态结束。
         """
         if self._repo is None:
             return
@@ -116,13 +164,13 @@ class MeetingState:
         if kept_started_at.tzinfo is None:
             kept_started_at = kept_started_at.replace(tzinfo=UTC)
         age_s = (now - kept_started_at).total_seconds()
-        if keep.id.startswith("auto-") and age_s > self._max_meeting_duration_s:
+        if _should_force_end_on_hydrate(keep.id) and age_s > self._max_meeting_duration_s:
             try:
                 await self._repo.update_meeting_state(keep.id, state="ended", ended_at=now)
             except Exception as e:
-                logger.warning("hydrate: failed to force-end stale auto-meeting %s: %s", keep.id, e)
+                logger.warning("hydrate: failed to force-end stale meeting %s: %s", keep.id, e)
             logger.warning(
-                "hydrate: stale auto-meeting force-ended %s (age=%.1fs > max=%.1fs)",
+                "hydrate: stale meeting force-ended %s (age=%.1fs > max=%.1fs)",
                 keep.id,
                 age_s,
                 self._max_meeting_duration_s,
@@ -135,6 +183,8 @@ class MeetingState:
             started_at=keep.started_at,
             started_by="auto" if keep.id.startswith("auto-") else "manual",
         )
+        if self._current.started_by == "auto":
+            self._adopt_current_auto_meeting(now)
         logger.info("hydrated current meeting: %s", keep.id)
 
     async def recover_stuck_minutes(self) -> int:
@@ -218,6 +268,8 @@ class MeetingState:
                 return None
             self._current = None
         title = await self._resolve_title(cur.meeting_id)
+        ended_at = datetime.now(UTC)
+        await self._mark_meeting_ended_for_generation(cur.meeting_id, ended_at=ended_at)
         # finalize 放到 lock 外（LLM 调用耗时，避免堵 ambient 链路）
         try:
             await self._pipeline.finalize_meeting(cur.meeting_id, title=title)
@@ -225,7 +277,7 @@ class MeetingState:
             # pipeline 内部已经把 state/minutes_status 落到 ended/generation_failed
             logger.warning("manual_end finalize failed for %s: %s", cur.meeting_id, e)
         # 让 detector 进 cooldown，避免用户结束后立刻又被自动开
-        self._detector.force_end(now=datetime.now(UTC), reason="manual_end")
+        self._detector.force_end(now=ended_at, reason="manual_end")
         await self._publish(
             "meeting.state_changed",
             cur.meeting_id,
@@ -235,6 +287,26 @@ class MeetingState:
             },
         )
         return cur.meeting_id
+
+    async def _mark_meeting_ended_for_generation(
+        self,
+        meeting_id: str,
+        *,
+        ended_at: datetime,
+    ) -> None:
+        """会议生命周期先落库结束，纪要可继续后台生成。"""
+        if self._repo is None:
+            return
+        try:
+            await self._repo.update_meeting_state(
+                meeting_id,
+                state="ended",
+                ended_at=ended_at,
+                minutes_status="generating",
+                minutes_error="",
+            )
+        except Exception as e:
+            logger.warning("mark meeting ended before minutes generation failed for %s: %s", meeting_id, e)
 
     async def _resolve_title(self, meeting_id: str) -> str:
         """优先取 repo 里 user 启动时落库的 title；缺则回退 ``"会议 <id>"``。
@@ -267,6 +339,10 @@ class MeetingState:
         - 当前 in_meeting(manual)：把 manual_meeting_id 喂进 detector 让其让步
         - 返回 effective_meeting_id，供 ambient pipeline 叠加 meeting overlay
         """
+        if await self._system_meeting_exceeded_max_duration(now):
+            return None
+        self._adopt_current_auto_meeting(now)
+
         manual_mid = (
             self._current.meeting_id
             if self._current is not None and self._current.started_by == "manual"
@@ -284,6 +360,52 @@ class MeetingState:
             elif ev.kind == "end":
                 await self._apply_auto_end(ev.meeting_id, reason=ev.reason)
         return self._current.meeting_id if self._current else None
+
+    async def _system_meeting_exceeded_max_duration(self, now: datetime) -> bool:
+        """运行中系统托管会议硬上限兜底。
+
+        ``AutoMeetingDetector`` 本身也有 max-duration，但 backend 重启后 detector
+        的内存状态可能丢失；如果没有新 chunk 进入 detector，会议也可能不再触发
+        silence/max 检查。这里统一兜底 auto-* 和历史 m-local-*。
+        """
+        cur = self._current
+        if cur is None:
+            return False
+        if cur.started_by != "auto" and not _should_force_end_on_hydrate(cur.meeting_id):
+            return False
+        started_at = cur.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        now_aware = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+        age_s = (now_aware - started_at).total_seconds()
+        if age_s <= self._max_meeting_duration_s:
+            return False
+
+        logger.warning(
+            "system-managed meeting max duration exceeded: %s age=%.1fs max=%.1fs; auto-ending",
+            cur.meeting_id,
+            age_s,
+            self._max_meeting_duration_s,
+        )
+        self._detector.force_end(now=now_aware, reason="max_duration_exceeded")
+        await self._apply_auto_end(cur.meeting_id, reason="max_duration_exceeded")
+        return True
+
+    def _adopt_current_auto_meeting(self, now: datetime) -> None:
+        """确保 detector 的 active id 与 MeetingState 的 current auto id 一致。"""
+        cur = self._current
+        if cur is None or cur.started_by != "auto":
+            return
+        if self._detector.active_meeting_id == cur.meeting_id:
+            return
+        started_at = cur.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        now_aware = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+        adopt_active = getattr(self._detector, "adopt_active", None)
+        if callable(adopt_active):
+            adopt_active(cur.meeting_id, started_at=started_at, now=now_aware)
+            logger.warning("detector adopted current auto meeting: %s", cur.meeting_id)
 
     async def _apply_auto_start(self, meeting_id: str, *, reason: str) -> None:
         async with self._lock:
@@ -315,6 +437,8 @@ class MeetingState:
                 return
             self._current = None
         title = await self._resolve_title(meeting_id)
+        ended_at = datetime.now(UTC)
+        await self._mark_meeting_ended_for_generation(meeting_id, ended_at=ended_at)
         try:
             await self._pipeline.finalize_meeting(meeting_id, title=title)
         except Exception as e:

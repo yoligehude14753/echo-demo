@@ -19,8 +19,11 @@ import type {
 import { useStore } from "@/store";
 
 const STATS_POLL_MS = 5_000;
+const CAPTURE_INIT_WATCHDOG_MS = 18_000;
 const CIRCUIT_TOAST_KEY = "stt-circuit-open";
 const FALLBACK_TOAST_KEY = "chunk-upload-error";
+const MIC_INIT_TIMEOUT_MESSAGE =
+  "系统录音初始化超时；问答、知识库、联网搜索和文档生成仍可继续使用，请稍后重新打开 EchoDesk 或检查 macOS 麦克风权限。";
 
 function formatRetryRemaining(retryAtMs: number): string {
   const remainingS = Math.max(0, Math.round((retryAtMs - Date.now()) / 1000));
@@ -59,6 +62,23 @@ export function useEchoCapture(): CaptureStatus {
     }, delayMs);
     return () => window.clearTimeout(timer);
   }, [sttCircuitOpenUntil]);
+
+  useEffect(() => {
+    if (captureState !== "initializing") return;
+    const timer = window.setTimeout(() => {
+      setCaptureState((current) => {
+        if (current !== "initializing") return current;
+        setErrorMessage((currentError) => currentError ?? MIC_INIT_TIMEOUT_MESSAGE);
+        message.error({
+          content: `麦克风不可用：${MIC_INIT_TIMEOUT_MESSAGE}`,
+          key: "mic-init-watchdog",
+          duration: 6,
+        });
+        return "error";
+      });
+    }, CAPTURE_INIT_WATCHDOG_MS);
+    return () => window.clearTimeout(timer);
+  }, [captureState]);
 
   useEffect(() => {
     audioCapture.start();

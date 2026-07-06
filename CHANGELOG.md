@@ -8,10 +8,9 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
-## [0.2.34] – 2026-06-29
+## [0.2.35] – 2026-06-30
 
-本机历史继承与更新机制热修复：桌面端自动识别旧版本地会议库，启动后自动检查
-GitHub Release，并用 CI 守住多端版本号一致性。
+多平台可用性热修复：统一公开安装包入口，收口 TV 自适应布局，隐藏内部路由/模型供应商文案，并让联网检索在缺 key 时明确不可用。
 
 ### 新增
 
@@ -21,12 +20,16 @@ GitHub Release，并用 CI 守住多端版本号一致性。
   覆盖安装仍需要用户点击确认，避免会议中突然退出。
 - 新增 `npm run version:check`，CI 会校验 desktop/package、backend 版本、
   Android / TV versionName/versionCode 和安装文档入口一致。
+- TV 布局增加最终自适应收口规则：小视口隐藏左侧列表，固定输出栏宽度；大屏使用 bounded clamp，保证输入栏、转写区和产物栏不互相挤压。
 
 ### 修复
 
 - backend `settings.app_version` 改为直接跟随 `app.__version__`，不再维护第二份硬编码版本号。
 - Windows 安装器构建 workflow 不再硬编码上传到旧 tag，改为从 `desktop/package.json` 自动取 Release tag。
-- 版本号同步到 `0.2.34`；Android / TV `versionCode=234`、`versionName=0.2.34`。
+- 顶栏、设置页、会议纪要和输入栏不再展示“意图/纯闲聊/关键字命中/具体模型名”等内部实现词。
+- 联网检索改为 Tavily-only：没有 key 或请求失败时返回空结果，由上层明确提示功能不可用，不再使用不稳定的隐式兜底。
+- README / INSTALL / TV_INSTALL 统一引导用户从 GitHub Release 下载 macOS / Windows / Linux / Android / TV 包。
+- 版本号同步到 `0.2.35`；Android / TV `versionCode=235`、`versionName=0.2.35`。
 
 ## [0.2.33] – 2026-06-29
 

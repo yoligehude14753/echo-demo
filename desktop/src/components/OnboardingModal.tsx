@@ -189,7 +189,7 @@ function WelcomeStep({ dataDirPath }: { dataDirPath: string | null }): JSX.Eleme
           {dataDirPath ?? "~/.echodesk/"}
         </div>
         <div className="text-ink-400 mt-1.5">
-          会议数据库、录音、RAG 索引、日志全部都在这里。可在「设置 → 数据」
+          会议数据库、录音、知识库索引、日志全部都在这里。可在「设置 → 数据」
           里查看占用 / 一键导出 / 卸载。
         </div>
       </div>

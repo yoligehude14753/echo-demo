@@ -259,6 +259,994 @@ textarea:focus-visible,
   }
 }
 
+/* ------------------------------------------------------------------
+   EchoDesk Executive Cockpit Theme
+   设计方向：正式、高级、统一的知识工作指挥台。只覆盖视觉层，不改变业务逻辑。
+------------------------------------------------------------------- */
+
+:root {
+  --ed-canvas: #eef1ec;
+  --ed-canvas-warm: #f7f3ea;
+  --ed-ink: #17202c;
+  --ed-muted: #6d7480;
+  --ed-soft: rgba(255, 255, 255, 0.74);
+  --ed-panel: rgba(255, 255, 255, 0.86);
+  --ed-panel-strong: rgba(255, 255, 255, 0.96);
+  --ed-line: rgba(31, 41, 55, 0.1);
+  --ed-line-strong: rgba(31, 41, 55, 0.16);
+  --ed-shadow: 0 22px 62px rgba(31, 41, 55, 0.12);
+  --ed-shadow-soft: 0 12px 30px rgba(31, 41, 55, 0.08);
+  --ed-accent: #0f9f8f;
+  --ed-accent-deep: #08766f;
+  --ed-blue: #2468e8;
+  --ed-blue-deep: #1747ad;
+  --ed-gold: #b8872f;
+  --ed-radius-lg: 24px;
+  --ed-radius-md: 18px;
+  --ed-font-ui: "Avenir Next", "Hiragino Sans GB", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --ed-font-display: "Songti SC", "Noto Serif CJK SC", "Hiragino Mincho ProN", serif;
+  --ed-font-mono: "SF Mono", "Cascadia Mono", "Menlo", monospace;
+}
+
+body {
+  font-family: var(--ed-font-ui) !important;
+  background:
+    radial-gradient(circle at 8% 8%, rgba(15, 159, 143, 0.16), transparent 26%),
+    radial-gradient(circle at 78% 2%, rgba(36, 104, 232, 0.16), transparent 24%),
+    linear-gradient(135deg, var(--ed-canvas-warm), var(--ed-canvas) 48%, #e9eef2) !important;
+  color: var(--ed-ink) !important;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.38;
+  background-image:
+    linear-gradient(rgba(31, 41, 55, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(31, 41, 55, 0.045) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(circle at 50% 18%, black, transparent 76%);
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+.echodesk-shell {
+  position: relative;
+  isolation: isolate;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.02)),
+    transparent !important;
+}
+
+.echodesk-shell::before {
+  content: "";
+  position: absolute;
+  inset: 58px 16px 16px;
+  border-radius: 32px;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.18)),
+    linear-gradient(180deg, rgba(15, 159, 143, 0.08), rgba(36, 104, 232, 0.04));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.62);
+  z-index: -1;
+}
+
+.app-header {
+  position: relative;
+  height: 58px !important;
+  padding-left: 24px !important;
+  padding-right: 24px !important;
+  color: #f7fbff !important;
+  background:
+    linear-gradient(120deg, rgba(15, 23, 42, 0.96), rgba(20, 39, 58, 0.94) 52%, rgba(12, 86, 83, 0.88)),
+    radial-gradient(circle at 12% 0%, rgba(184, 135, 47, 0.32), transparent 34%) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.22) !important;
+}
+
+.app-header::after {
+  content: "";
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+}
+
+.app-header .brand {
+  font-family: var(--ed-font-display) !important;
+  font-size: 19px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.015em !important;
+  color: #ffffff !important;
+  text-shadow: 0 1px 18px rgba(255, 255, 255, 0.22);
+}
+
+.app-header [data-testid="open-about"] {
+  color: rgba(255, 255, 255, 0.62) !important;
+  font-family: var(--ed-font-mono) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.app-header-status,
+.app-header-status * {
+  color: rgba(247, 251, 255, 0.82);
+}
+
+.app-header-status [data-testid^="pill-"],
+.app-header-status [data-testid="meeting-status-bar"],
+.app-header-status [data-testid="tts-toggle"],
+.app-header-status [data-testid="open-settings"],
+.app-event-count,
+.app-connection-status {
+  border: 1px solid rgba(255, 255, 255, 0.13) !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.085) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(14px);
+}
+
+.app-event-count,
+.app-connection-status {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+}
+
+.app-header-status [data-testid="tts-toggle"],
+.app-event-count,
+.app-connection-status {
+  display: none !important;
+}
+
+.app-header-separator {
+  background: rgba(255, 255, 255, 0.18) !important;
+}
+
+[data-testid="workspace-bar"] {
+  height: 46px !important;
+  padding-left: 24px !important;
+  padding-right: 24px !important;
+  color: var(--ed-muted) !important;
+  background: rgba(255, 255, 255, 0.56) !important;
+  border-bottom: 1px solid rgba(31, 41, 55, 0.08) !important;
+  backdrop-filter: blur(18px);
+}
+
+[data-testid="workspace-bar"] .workspace-title {
+  color: var(--ed-ink) !important;
+  font-weight: 700 !important;
+}
+
+.workspace-icon {
+  color: var(--ed-accent) !important;
+}
+
+.ant-tag {
+  border-radius: 999px !important;
+  border-color: rgba(31, 41, 55, 0.09) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  font-weight: 650 !important;
+}
+
+.ant-btn {
+  border-radius: 999px !important;
+  font-weight: 650 !important;
+  box-shadow: none !important;
+}
+
+.ant-btn-primary {
+  background: linear-gradient(135deg, var(--ed-accent), var(--ed-blue)) !important;
+  border-color: transparent !important;
+}
+
+.echodesk-main-layout {
+  padding: 14px 16px 16px !important;
+  gap: 14px !important;
+  background: transparent !important;
+  height: calc(var(--echodesk-vh, 100vh) - 104px) !important;
+  max-height: calc(var(--echodesk-vh, 100vh) - 104px) !important;
+  min-height: 0 !important;
+}
+
+.echodesk-content {
+  gap: 14px !important;
+  background: transparent !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+}
+
+.echodesk-meeting-sider,
+.echodesk-transcript-pane,
+.echodesk-output-pane {
+  background:
+    linear-gradient(180deg, var(--ed-panel-strong), var(--ed-panel)),
+    rgba(255, 255, 255, 0.82) !important;
+  border: 1px solid var(--ed-line) !important;
+  border-radius: var(--ed-radius-lg) !important;
+  box-shadow: var(--ed-shadow) !important;
+  overflow: hidden !important;
+  backdrop-filter: blur(22px);
+}
+
+.echodesk-meeting-sider {
+  padding: 14px 10px !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.echodesk-meeting-list-scroll {
+  flex: 1 1 auto !important;
+  height: calc(var(--echodesk-vh, 100vh) - 190px) !important;
+  max-height: calc(var(--echodesk-vh, 100vh) - 190px) !important;
+  min-height: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.echodesk-meeting-title {
+  margin: 2px 6px 12px !important;
+  padding: 8px 10px !important;
+  color: var(--ed-muted) !important;
+  border-radius: 999px;
+  background: rgba(15, 159, 143, 0.08);
+  letter-spacing: 0.18em !important;
+}
+
+[data-testid="meeting-item"],
+[data-testid="meeting-item-ambient"] {
+  position: relative;
+  margin-bottom: 6px;
+  padding: 11px 12px !important;
+  border: 1px solid transparent;
+  border-radius: 16px !important;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease,
+    border-color 180ms ease !important;
+}
+
+[data-testid="meeting-item"]:hover,
+[data-testid="meeting-item-ambient"]:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-color: rgba(15, 159, 143, 0.16);
+  box-shadow: 0 10px 24px rgba(31, 41, 55, 0.08);
+}
+
+[data-testid="meeting-item"][class*="bg-paper-300"],
+[data-testid="meeting-item-ambient"][class*="bg-paper-300"] {
+  color: var(--ed-ink) !important;
+  background:
+    linear-gradient(135deg, rgba(15, 159, 143, 0.14), rgba(36, 104, 232, 0.08)),
+    rgba(255, 255, 255, 0.9) !important;
+  border-color: rgba(15, 159, 143, 0.22);
+  box-shadow: inset 3px 0 0 var(--ed-accent), 0 12px 28px rgba(15, 159, 143, 0.1);
+}
+
+.echodesk-transcript-header,
+.echodesk-output-pane > div > div:first-child,
+.echodesk-output-pane > div:first-child > div:first-child {
+  min-height: 54px !important;
+  color: var(--ed-ink) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(250, 252, 251, 0.68)) !important;
+  border-bottom: 1px solid var(--ed-line) !important;
+}
+
+[data-testid="transcript-title"],
+.echodesk-output-pane span[class*="tracking-wider"] {
+  font-family: var(--ed-font-display) !important;
+  font-size: 15px !important;
+  color: var(--ed-ink) !important;
+  letter-spacing: 0.04em !important;
+}
+
+[data-testid="transcript-scroller"] {
+  background:
+    radial-gradient(circle at 82% 18%, rgba(36, 104, 232, 0.08), transparent 34%),
+    radial-gradient(circle at 18% 92%, rgba(15, 159, 143, 0.1), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(247, 249, 247, 0.1)) !important;
+}
+
+[data-testid="transcript-row"] {
+  animation: ed-rise 360ms ease both;
+}
+
+[data-testid="assistant-message"],
+[data-testid="transcript-message"],
+[data-testid="user-message"] {
+  border-radius: 20px !important;
+  box-shadow: var(--ed-shadow-soft) !important;
+}
+
+[data-testid="assistant-message"] {
+  background:
+    linear-gradient(145deg, rgba(237, 253, 247, 0.98), rgba(246, 255, 252, 0.92)) !important;
+  border-color: rgba(15, 159, 143, 0.2) !important;
+  color: var(--ed-ink) !important;
+}
+
+[data-testid="transcript-message"] {
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(31, 41, 55, 0.1) !important;
+}
+
+[data-testid="user-message"] {
+  background:
+    linear-gradient(135deg, var(--ed-blue), var(--ed-blue-deep)) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: #ffffff !important;
+  box-shadow: 0 16px 30px rgba(36, 104, 232, 0.22) !important;
+}
+
+[data-testid="speaker-avatar"] {
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow:
+    0 8px 18px rgba(31, 41, 55, 0.1),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.55) !important;
+}
+
+[data-testid="speaker-tag"] {
+  font-weight: 700 !important;
+  letter-spacing: 0.03em;
+}
+
+[data-testid="command-bar"] {
+  padding: 14px 18px 16px !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.86)) !important;
+  border-top: 1px solid rgba(31, 41, 55, 0.08) !important;
+}
+
+.echodesk-command-row {
+  padding: 8px !important;
+  border: 1px solid rgba(31, 41, 55, 0.11);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow:
+    0 18px 48px rgba(31, 41, 55, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.echodesk-command-textarea textarea {
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--ed-ink) !important;
+  font-family: var(--ed-font-ui) !important;
+}
+
+.echodesk-command-icon-btn {
+  border-radius: 16px !important;
+  color: var(--ed-muted) !important;
+  transition:
+    transform 180ms ease,
+    background 180ms ease,
+    color 180ms ease !important;
+}
+
+.echodesk-command-icon-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(15, 159, 143, 0.1) !important;
+  color: var(--ed-accent-deep) !important;
+}
+
+[data-testid="command-send-btn"] {
+  background: linear-gradient(135deg, var(--ed-accent), var(--ed-blue)) !important;
+  color: #ffffff !important;
+  box-shadow: 0 12px 24px rgba(15, 159, 143, 0.18) !important;
+}
+
+.echodesk-output-pane {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 248, 0.86)) !important;
+}
+
+[data-testid="artifact-list"] {
+  padding: 12px !important;
+}
+
+[data-testid="artifact-card"],
+[data-testid="knowledge-doc-row"] {
+  border: 1px solid rgba(31, 41, 55, 0.08);
+  border-radius: 18px !important;
+  background: rgba(255, 255, 255, 0.72) !important;
+  box-shadow: 0 8px 22px rgba(31, 41, 55, 0.06);
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease !important;
+}
+
+[data-testid="artifact-card"]:hover,
+[data-testid="knowledge-doc-row"]:hover {
+  transform: translateY(-2px);
+  border-color: rgba(15, 159, 143, 0.18);
+  background: rgba(255, 255, 255, 0.96) !important;
+  box-shadow: 0 16px 36px rgba(31, 41, 55, 0.12);
+}
+
+[data-testid="artifact-card"] [class*="uppercase"] {
+  letter-spacing: 0.08em;
+}
+
+.ant-modal-content,
+.ant-drawer-content {
+  border: 1px solid rgba(255, 255, 255, 0.68) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 248, 0.94)) !important;
+  border-radius: 24px !important;
+  box-shadow: 0 34px 90px rgba(15, 23, 42, 0.22) !important;
+  backdrop-filter: blur(24px);
+}
+
+.row-active {
+  background:
+    linear-gradient(135deg, rgba(15, 159, 143, 0.14), rgba(36, 104, 232, 0.08)) !important;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(15, 159, 143, 0.44), rgba(36, 104, 232, 0.34));
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+@keyframes ed-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 920px) {
+  .app-header {
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+  }
+
+  .app-header-status {
+    gap: 6px !important;
+  }
+
+  [data-testid="workspace-bar"] {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .echodesk-main-layout {
+    padding: 8px !important;
+    gap: 8px !important;
+  }
+
+  .echodesk-meeting-sider {
+    width: 230px !important;
+    min-width: 230px !important;
+    max-width: 230px !important;
+  }
+
+  .echodesk-output-pane {
+    width: 330px !important;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Design System Alignment Pass
+   统一尺度：字号、行高、控件高度、三栏比例、卡片 padding、按钮/Tag 对齐。
+------------------------------------------------------------------- */
+
+:root {
+  --ed-text-xs: 11px;
+  --ed-text-sm: 12px;
+  --ed-text-md: 13px;
+  --ed-text-lg: 15px;
+  --ed-line-xs: 16px;
+  --ed-line-sm: 18px;
+  --ed-line-md: 21px;
+  --ed-line-chat: 24px;
+  --ed-control-sm: 28px;
+  --ed-control-md: 34px;
+  --ed-header-h: 58px;
+  --ed-workspace-h: 46px;
+  --ed-panel-gap: 14px;
+  --ed-panel-pad: 14px;
+  --ed-panel-radius: 24px;
+  --ed-card-radius: 16px;
+  --ed-chat-radius: 20px;
+}
+
+html,
+body,
+button,
+input,
+textarea,
+select,
+.ant-btn,
+.ant-tag,
+.ant-popover,
+.ant-modal,
+.ant-drawer {
+  font-family: var(--ed-font-ui) !important;
+}
+
+body {
+  font-size: var(--ed-text-md) !important;
+  line-height: var(--ed-line-md) !important;
+}
+
+.app-header {
+  height: var(--ed-header-h) !important;
+  min-height: var(--ed-header-h) !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.app-header > div:first-child {
+  min-width: 210px;
+  height: var(--ed-control-md);
+  display: flex;
+  align-items: center;
+}
+
+.app-header-status {
+  height: var(--ed-control-md);
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  font-size: var(--ed-text-sm) !important;
+}
+
+.app-header-status [data-testid^="pill-"],
+.app-header-status [data-testid="meeting-status-bar"],
+.app-header-status [data-testid="tts-toggle"],
+.app-header-status [data-testid="open-settings"],
+.app-event-count,
+.app-connection-status {
+  height: var(--ed-control-md) !important;
+  min-height: var(--ed-control-md) !important;
+  max-height: var(--ed-control-md) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  padding: 0 11px !important;
+  font-size: var(--ed-text-sm) !important;
+  line-height: var(--ed-line-sm) !important;
+}
+
+.app-header-status [data-testid="open-settings"] {
+  width: var(--ed-control-md) !important;
+  min-width: var(--ed-control-md) !important;
+  padding: 0 !important;
+}
+
+.app-header-status svg {
+  width: 14px !important;
+  height: 14px !important;
+  flex: none;
+}
+
+[data-testid="workspace-bar"] {
+  height: var(--ed-workspace-h) !important;
+  min-height: var(--ed-workspace-h) !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  font-size: var(--ed-text-sm) !important;
+  line-height: var(--ed-line-sm) !important;
+}
+
+[data-testid="workspace-bar"] .ant-tag,
+.ant-tag {
+  height: 24px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 0 9px !important;
+  margin: 0 !important;
+  font-size: var(--ed-text-xs) !important;
+  line-height: var(--ed-line-xs) !important;
+}
+
+[data-testid="workspace-bar"] .ant-btn,
+.workspace-actions .ant-btn {
+  height: var(--ed-control-sm) !important;
+  min-height: var(--ed-control-sm) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 0 11px !important;
+  font-size: var(--ed-text-sm) !important;
+  line-height: var(--ed-line-sm) !important;
+}
+
+.echodesk-main-layout {
+  padding: var(--ed-panel-gap) 16px 16px !important;
+  gap: var(--ed-panel-gap) !important;
+}
+
+.echodesk-content {
+  gap: var(--ed-panel-gap) !important;
+}
+
+@media (min-width: 921px) and (max-width: 1439px) {
+  .echodesk-meeting-sider {
+    width: 292px !important;
+    min-width: 292px !important;
+    max-width: 292px !important;
+    flex: 0 0 292px !important;
+  }
+
+  .echodesk-output-pane {
+    width: 404px !important;
+    min-width: 404px !important;
+    max-width: 404px !important;
+    flex: 0 0 404px !important;
+  }
+}
+
+@media (min-width: 1440px) {
+  .echodesk-meeting-sider {
+    width: 320px !important;
+    min-width: 320px !important;
+    max-width: 320px !important;
+    flex: 0 0 320px !important;
+  }
+
+  .echodesk-output-pane {
+    width: 520px !important;
+    min-width: 520px !important;
+    max-width: 520px !important;
+    flex: 0 0 520px !important;
+  }
+}
+
+.echodesk-meeting-sider,
+.echodesk-transcript-pane,
+.echodesk-output-pane {
+  border-radius: var(--ed-panel-radius) !important;
+}
+
+.echodesk-meeting-sider,
+.echodesk-meeting-sider *,
+.echodesk-transcript-pane,
+.echodesk-transcript-pane *,
+.echodesk-output-pane,
+.echodesk-output-pane * {
+  font-family: var(--ed-font-ui) !important;
+}
+
+.echodesk-meeting-sider {
+  padding: var(--ed-panel-pad) 10px !important;
+  overflow: hidden !important;
+}
+
+.echodesk-meeting-list-scroll {
+  padding-right: 2px !important;
+}
+
+.echodesk-meeting-title {
+  height: 30px !important;
+  display: flex !important;
+  align-items: center !important;
+  margin: 0 4px 10px !important;
+  padding: 0 11px !important;
+  font-size: var(--ed-text-xs) !important;
+  line-height: var(--ed-line-xs) !important;
+}
+
+[data-testid="meeting-item"],
+[data-testid="meeting-item-ambient"] {
+  min-height: 62px !important;
+  padding: 10px 12px !important;
+}
+
+[data-testid="meeting-item"] > div:first-child,
+[data-testid="meeting-item-ambient"] > div:first-child {
+  height: 20px;
+  align-items: center !important;
+}
+
+[data-testid="meeting-item-title"],
+[data-testid="meeting-item-ambient"] span.text-\[13px\] {
+  font-size: var(--ed-text-md) !important;
+  line-height: var(--ed-line-md) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em;
+}
+
+[data-testid="meeting-item"] div[class*="text-[11px]"],
+[data-testid="meeting-item-ambient"] div[class*="text-[11px]"] {
+  margin-top: 5px !important;
+  font-size: var(--ed-text-xs) !important;
+  line-height: var(--ed-line-xs) !important;
+}
+
+.echodesk-transcript-header,
+.echodesk-output-pane > div > div:first-child,
+.echodesk-output-pane > div:first-child > div:first-child {
+  height: 54px !important;
+  min-height: 54px !important;
+  display: flex !important;
+  align-items: center !important;
+  padding-left: 20px !important;
+  padding-right: 20px !important;
+}
+
+[data-testid="transcript-title"],
+.echodesk-output-pane span[class*="tracking-wider"],
+.echodesk-output-pane span[class*="lowercase"] {
+  font-size: var(--ed-text-lg) !important;
+  line-height: var(--ed-line-md) !important;
+  font-weight: 700 !important;
+}
+
+[data-testid="capture-status"] {
+  height: 30px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  font-size: var(--ed-text-sm) !important;
+  line-height: var(--ed-line-sm) !important;
+}
+
+[data-testid="transcript-scroller"] {
+  padding: 16px 18px !important;
+}
+
+[data-testid="transcript-row"] {
+  gap: 10px !important;
+}
+
+[data-testid="speaker-avatar"] {
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  font-size: var(--ed-text-sm) !important;
+  line-height: var(--ed-line-sm) !important;
+}
+
+[data-testid="speaker-tag"] {
+  height: 18px !important;
+  margin-bottom: 4px !important;
+  padding: 0 2px !important;
+  font-size: var(--ed-text-xs) !important;
+  line-height: var(--ed-line-xs) !important;
+}
+
+[data-testid="assistant-message"],
+[data-testid="transcript-message"],
+[data-testid="user-message"] {
+  max-width: min(760px, 100%) !important;
+  padding: 10px 14px !important;
+  border-radius: var(--ed-chat-radius) !important;
+  font-size: 14px !important;
+  line-height: var(--ed-line-chat) !important;
+  letter-spacing: -0.005em;
+}
+
+[data-testid="assistant-message"] h1,
+[data-testid="assistant-message"] h2,
+[data-testid="assistant-message"] h3 {
+  margin-top: 8px !important;
+  margin-bottom: 6px !important;
+  line-height: 1.35 !important;
+}
+
+[data-testid="assistant-message"] p,
+[data-testid="assistant-message"] li {
+  line-height: var(--ed-line-chat) !important;
+}
+
+[data-testid="command-bar"] {
+  padding: 12px 18px 14px !important;
+}
+
+.echodesk-command-row {
+  min-height: 58px !important;
+  grid-template-columns: 42px minmax(0, 1fr) 42px 46px !important;
+  gap: 10px !important;
+  align-items: center !important;
+  padding: 7px 8px !important;
+}
+
+.echodesk-command-leading-icon,
+.echodesk-command-icon-btn {
+  width: 42px !important;
+  height: 42px !important;
+  min-width: 42px !important;
+  min-height: 42px !important;
+  border-radius: 16px !important;
+}
+
+.echodesk-command-leading-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: var(--ed-muted) !important;
+  background: rgba(15, 159, 143, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(15, 159, 143, 0.1);
+}
+
+.echodesk-command-leading-icon svg,
+.echodesk-command-icon-btn svg {
+  width: 20px !important;
+  height: 20px !important;
+  stroke-width: 2 !important;
+}
+
+svg.echodesk-command-leading-icon {
+  box-sizing: content-box !important;
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  min-height: 22px !important;
+  padding: 10px !important;
+  justify-self: center !important;
+  align-self: center !important;
+  border-radius: 16px !important;
+  color: var(--ed-muted) !important;
+  background: rgba(15, 159, 143, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(15, 159, 143, 0.1);
+  stroke-width: 2 !important;
+}
+
+.echodesk-command-textarea textarea,
+[data-testid="command-bar"] textarea {
+  height: 42px !important;
+  min-height: 42px !important;
+  max-height: 42px !important;
+  padding: 10px 12px !important;
+  font-size: 14px !important;
+  line-height: 22px !important;
+  overflow-y: hidden !important;
+  resize: none !important;
+  border-radius: 14px !important;
+  display: block !important;
+}
+
+.echodesk-command-textarea textarea::placeholder,
+[data-testid="command-bar"] textarea::placeholder {
+  font-size: 14px !important;
+  line-height: 22px !important;
+}
+
+.echodesk-command-textarea,
+.echodesk-command-textarea textarea,
+[data-testid="command-bar"] textarea {
+  font-family: var(--ed-font-ui) !important;
+}
+
+.echodesk-command-textarea,
+.echodesk-command-textarea .ant-input,
+.echodesk-command-textarea textarea {
+  align-self: center !important;
+}
+
+[data-testid="command-attach-btn"],
+[data-testid="command-send-btn"] {
+  align-self: center !important;
+}
+
+[data-testid="command-send-btn"] {
+  width: 46px !important;
+  height: 46px !important;
+  min-width: 46px !important;
+  min-height: 46px !important;
+  border-radius: 18px !important;
+}
+
+[data-testid="artifact-list"] {
+  padding: 12px !important;
+  gap: 8px !important;
+}
+
+[data-testid="artifact-card"] {
+  min-height: 76px !important;
+  padding: 12px !important;
+  border-radius: var(--ed-card-radius) !important;
+}
+
+[data-testid="artifact-card"] > div:first-child {
+  align-items: center !important;
+}
+
+[data-testid="artifact-card"] span[class*="uppercase"] {
+  font-size: 10px !important;
+  line-height: 14px !important;
+}
+
+[data-testid="artifact-title"] {
+  font-size: var(--ed-text-md) !important;
+  line-height: var(--ed-line-md) !important;
+  font-weight: 700 !important;
+}
+
+[data-testid="artifact-card"] .font-mono,
+.font-mono {
+  font-family: var(--ed-font-mono) !important;
+}
+
+.echodesk-output-pane .text-\[11px\],
+[data-testid="artifact-list"] .text-\[11px\] {
+  font-size: var(--ed-text-xs) !important;
+  line-height: var(--ed-line-xs) !important;
+}
+
+.ant-modal-title,
+.ant-drawer-title {
+  font-family: var(--ed-font-display) !important;
+  font-size: 17px !important;
+  line-height: 24px !important;
+  font-weight: 700 !important;
+  color: var(--ed-ink) !important;
+}
+
+.ant-modal-body,
+.ant-drawer-body {
+  font-size: var(--ed-text-md) !important;
+  line-height: var(--ed-line-md) !important;
+}
+
+.echodesk-shell,
+.echodesk-shell :where(button, input, textarea, select, div, span, p, li, label),
+.ant-app,
+.ant-app :where(button, input, textarea, select, div, span, p, li, label),
+.ant-popover,
+.ant-modal,
+.ant-drawer,
+.ant-message {
+  font-family: var(--ed-font-ui) !important;
+}
+
+.app-header {
+  line-height: normal !important;
+}
+
+.brand,
+[data-testid="transcript-title"],
+.echodesk-output-pane span[class*="tracking-wider"],
+.echodesk-output-pane span[class*="lowercase"],
+.ant-modal-title,
+.ant-drawer-title {
+  font-family: var(--ed-font-display) !important;
+}
+
+code,
+pre,
+kbd,
+samp,
+.font-mono,
+[class*="font-mono"] {
+  font-family: var(--ed-font-mono) !important;
+}
+
 /* Android TV / 会议室大屏：10-foot UI。通过 runtime.ts 在 Android 1920x1080
    视口上加 .echodesk-tv，避免桌面大屏浏览器被误切到电视布局。 */
 .echodesk-tv,
@@ -2721,4 +3709,727 @@ textarea:focus-visible,
     min-width: 54px !important;
     min-height: 54px !important;
   }
+}
+
+/* v0.2.35 canonical TV layout.
+   Keep one final source of truth after the historical TV patches above:
+   - 960x540 Android WebView: hide left meeting list, keep a 280px output rail.
+   - 1080p/4K meeting panels: scale rail and typography with bounded clamp().
+   - The command bar has stable rows so quick buttons, placeholder and icons
+     cannot resize the whole screen. */
+.echodesk-tv,
+.echodesk-tv body,
+.echodesk-tv #root,
+.echodesk-tv .echodesk-shell {
+  width: 100vw !important;
+  height: var(--echodesk-vh, 100vh) !important;
+  min-width: 0 !important;
+  max-width: 100vw !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv .echodesk-shell {
+  display: grid !important;
+  grid-template-rows: var(--tv-header-h, 56px) var(--tv-workspace-h, 54px) minmax(0, 1fr) !important;
+}
+
+.echodesk-tv .app-header {
+  height: var(--tv-header-h, 56px) !important;
+  min-height: var(--tv-header-h, 56px) !important;
+}
+
+.echodesk-tv [data-testid="workspace-bar"] {
+  height: var(--tv-workspace-h, 54px) !important;
+  min-height: var(--tv-workspace-h, 54px) !important;
+}
+
+.echodesk-tv .echodesk-main-layout {
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+.echodesk-tv .echodesk-meeting-sider {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  flex: 0 0 0 !important;
+}
+
+.echodesk-tv .echodesk-content {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) var(--tv-output-w, clamp(360px, 24vw, 520px)) !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+.echodesk-tv .echodesk-transcript-pane {
+  display: grid !important;
+  grid-template-rows: var(--tv-transcript-header-h, 58px) minmax(0, 1fr) var(--tv-command-h, 118px) !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  width: auto !important;
+}
+
+.echodesk-tv .echodesk-transcript-header {
+  height: var(--tv-transcript-header-h, 58px) !important;
+  min-height: var(--tv-transcript-header-h, 58px) !important;
+}
+
+.echodesk-tv .echodesk-output-pane {
+  width: var(--tv-output-w, clamp(360px, 24vw, 520px)) !important;
+  min-width: var(--tv-output-w, clamp(360px, 24vw, 520px)) !important;
+  max-width: var(--tv-output-w, clamp(360px, 24vw, 520px)) !important;
+  min-height: 0 !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] {
+  min-height: var(--tv-command-h, 118px) !important;
+  height: var(--tv-command-h, 118px) !important;
+  max-height: var(--tv-command-h, 118px) !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv .echodesk-tv-quick-commands {
+  height: var(--tv-quick-h, 34px) !important;
+  min-height: var(--tv-quick-h, 34px) !important;
+  max-height: var(--tv-quick-h, 34px) !important;
+  overflow: hidden !important;
+}
+
+.echodesk-tv .echodesk-tv-quick-commands button {
+  height: var(--tv-quick-h, 34px) !important;
+  min-height: var(--tv-quick-h, 34px) !important;
+  max-height: var(--tv-quick-h, 34px) !important;
+}
+
+.echodesk-tv [data-testid="command-bar"] > div:last-child {
+  display: grid !important;
+  grid-template-columns: 30px minmax(0, 1fr) var(--tv-command-button, 60px) var(--tv-command-button, 60px) !important;
+  align-items: center !important;
+}
+
+.echodesk-tv .echodesk-command-textarea,
+.echodesk-tv .echodesk-command-textarea textarea,
+.echodesk-tv [data-testid="command-bar"] textarea {
+  height: var(--tv-input-h, 60px) !important;
+  min-height: var(--tv-input-h, 60px) !important;
+  max-height: var(--tv-input-h, 60px) !important;
+}
+
+.echodesk-tv [data-testid="command-attach-btn"],
+.echodesk-tv [data-testid="command-send-btn"] {
+  width: var(--tv-command-button, 60px) !important;
+  height: var(--tv-command-button, 60px) !important;
+  min-width: var(--tv-command-button, 60px) !important;
+  min-height: var(--tv-command-button, 60px) !important;
+}
+
+@media (max-width: 1100px) {
+  .echodesk-tv {
+    --tv-header-h: 50px;
+    --tv-workspace-h: 48px;
+    --tv-transcript-header-h: 54px;
+    --tv-output-w: 280px;
+    --tv-command-h: 106px;
+    --tv-quick-h: 30px;
+    --tv-input-h: 54px;
+    --tv-command-button: 54px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .echodesk-tv {
+    --tv-header-h: 60px;
+    --tv-workspace-h: 56px;
+    --tv-transcript-header-h: 62px;
+    --tv-command-h: 124px;
+    --tv-quick-h: 36px;
+    --tv-input-h: 62px;
+    --tv-command-button: 62px;
+  }
+}
+
+/* Demo cockpit header: collapse duplicate runtime pills into the unified status bar. */
+.app-header .app-header-status [data-testid="tts-toggle"],
+.app-header .app-header-status .app-event-count,
+.app-header .app-header-status .app-connection-status {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Typography and cockpit density pass: keep the chrome visually consistent. */
+.echodesk-shell,
+.echodesk-shell .ant-layout,
+.echodesk-shell button,
+.echodesk-shell input,
+.echodesk-shell textarea,
+.echodesk-shell .ant-btn,
+.echodesk-shell .ant-tag,
+.echodesk-shell .ant-popover,
+.echodesk-shell .artifact-card,
+.echodesk-shell [data-testid="command-bar"] {
+  font-family:
+    "Avenir Next",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    sans-serif !important;
+}
+
+.app-header .brand {
+  font-family:
+    "Avenir Next",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    sans-serif !important;
+  font-weight: 760 !important;
+  letter-spacing: -0.035em !important;
+}
+
+.app-header-status [data-testid="status-bar"] {
+  gap: 8px !important;
+}
+
+.app-header-status [data-testid^="pill-"] {
+  height: 32px !important;
+  padding-inline: 10px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  background: rgba(255, 255, 255, 0.09) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 10px 24px rgba(5, 16, 30, 0.16) !important;
+}
+
+.app-header-status [data-testid^="pill-"] span:last-child {
+  font-size: 12px !important;
+  font-weight: 680 !important;
+  letter-spacing: -0.015em !important;
+}
+
+/* ------------------------------------------------------------------
+   Final Typography Consolidation
+   目标：主屏字体、字号、行高收敛为一套正式 UI 规格。
+   尺度：12 meta / 13 controls / 14 body / 15 emphasis / 16 panel title / 20 brand。
+------------------------------------------------------------------- */
+
+.echodesk-shell {
+  --ed-font-final:
+    "Avenir Next",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    sans-serif;
+  --ed-fs-meta: 12px;
+  --ed-fs-control: 13px;
+  --ed-fs-body: 14px;
+  --ed-fs-emphasis: 15px;
+  --ed-fs-title: 16px;
+  --ed-fs-brand: 20px;
+  --ed-lh-tight: 18px;
+  --ed-lh-body: 22px;
+  --ed-lh-reading: 24px;
+  font-family: var(--ed-font-final) !important;
+  font-size: var(--ed-fs-body) !important;
+  line-height: var(--ed-lh-body) !important;
+  letter-spacing: -0.012em;
+}
+
+.echodesk-shell :where(
+  button,
+  input,
+  textarea,
+  select,
+  .ant-btn,
+  .ant-tag,
+  .ant-typography,
+  .ant-popover,
+  .ant-drawer,
+  .ant-modal
+) {
+  font-family: var(--ed-font-final) !important;
+}
+
+.app-header .brand {
+  font-size: var(--ed-fs-brand) !important;
+  line-height: 24px !important;
+  font-weight: 760 !important;
+}
+
+.app-header-status [data-testid^="pill-"],
+.app-header-status [data-testid^="pill-"] *,
+[data-testid="meeting-status-bar"],
+[data-testid="meeting-status-bar"] * {
+  font-size: var(--ed-fs-control) !important;
+  line-height: var(--ed-lh-tight) !important;
+  font-weight: 650 !important;
+}
+
+[data-testid="workspace-bar"],
+[data-testid="workspace-bar"] *,
+.workspace-actions .ant-btn,
+.workspace-actions .ant-tag {
+  font-size: var(--ed-fs-control) !important;
+  line-height: var(--ed-lh-tight) !important;
+}
+
+.echodesk-meeting-sider,
+.echodesk-meeting-sider * {
+  font-size: var(--ed-fs-meta) !important;
+  line-height: var(--ed-lh-tight) !important;
+}
+
+[data-testid="meeting-item"] [class*="font-semibold"],
+[data-testid="meeting-item-ambient"] [class*="font-semibold"],
+[data-testid="meeting-item"] [class*="font-bold"],
+[data-testid="meeting-item-ambient"] [class*="font-bold"] {
+  font-size: var(--ed-fs-body) !important;
+  line-height: var(--ed-lh-body) !important;
+  font-weight: 720 !important;
+}
+
+[data-testid="meeting-item"],
+[data-testid="meeting-item-ambient"] {
+  min-height: 62px !important;
+}
+
+.echodesk-transcript-header,
+.echodesk-transcript-header * {
+  font-size: var(--ed-fs-control) !important;
+  line-height: var(--ed-lh-tight) !important;
+}
+
+[data-testid="transcript-title"],
+.echodesk-output-pane [class*="tracking-wider"],
+.echodesk-output-pane [class*="lowercase"] {
+  font-size: var(--ed-fs-title) !important;
+  line-height: var(--ed-lh-body) !important;
+  font-weight: 720 !important;
+  letter-spacing: -0.015em !important;
+  text-transform: none !important;
+}
+
+[data-testid="capture-status"],
+[data-testid="capture-status"] * {
+  font-size: var(--ed-fs-control) !important;
+  line-height: var(--ed-lh-tight) !important;
+}
+
+[data-testid="speaker-avatar"],
+[data-testid="speaker-avatar"] * {
+  font-size: var(--ed-fs-control) !important;
+  line-height: var(--ed-lh-tight) !important;
+}
+
+[data-testid="speaker-tag"],
+[data-testid="speaker-tag"] * {
+  font-size: var(--ed-fs-meta) !important;
+  line-height: 16px !important;
+  font-weight: 680 !important;
+}
+
+[data-testid="transcript-message"],
+[data-testid="assistant-message"],
+[data-testid="user-message"] {
+  font-size: var(--ed-fs-emphasis) !important;
+  line-height: var(--ed-lh-reading) !important;
+  font-weight: 450 !important;
+  letter-spacing: -0.012em !important;
+}
+
+[data-testid="assistant-message"] :where(h1, h2, h3),
+.echodesk-output-pane :where(h1, h2, h3, strong, b) {
+  font-size: var(--ed-fs-title) !important;
+  line-height: var(--ed-lh-body) !important;
+  font-weight: 720 !important;
+  letter-spacing: -0.014em !important;
+}
+
+.echodesk-output-pane,
+.echodesk-output-pane :where(p, li, div, span) {
+  font-size: var(--ed-fs-body) !important;
+  line-height: var(--ed-lh-body) !important;
+}
+
+.echodesk-output-pane .text-\[10px\],
+.echodesk-output-pane .text-\[11px\],
+.echodesk-output-pane .text-\[12px\],
+[data-testid="artifact-list"] .text-\[10px\],
+[data-testid="artifact-list"] .text-\[11px\],
+[data-testid="artifact-list"] .text-\[12px\] {
+  font-size: var(--ed-fs-meta) !important;
+  line-height: 16px !important;
+}
+
+[data-testid="artifact-list"],
+[data-testid="artifact-list"] * {
+  font-size: var(--ed-fs-meta) !important;
+  line-height: 16px !important;
+}
+
+[data-testid="artifact-list"] [class*="font-medium"],
+[data-testid="artifact-list"] [class*="font-semibold"] {
+  font-size: var(--ed-fs-control) !important;
+  line-height: var(--ed-lh-tight) !important;
+  font-weight: 720 !important;
+}
+
+[data-testid="command-bar"],
+[data-testid="command-bar"] *,
+.echodesk-command-textarea textarea,
+.echodesk-command-textarea textarea::placeholder {
+  font-size: var(--ed-fs-body) !important;
+  line-height: var(--ed-lh-body) !important;
+}
+
+.ant-tag {
+  font-size: var(--ed-fs-meta) !important;
+  line-height: 18px !important;
+  font-weight: 650 !important;
+}
+
+.echodesk-shell .font-serif,
+.echodesk-shell [class*="font-serif"] {
+  font-family: var(--ed-font-final) !important;
+}
+
+[data-testid="meeting-item"] [class*="font-medium"],
+[data-testid="meeting-item-ambient"] [class*="font-medium"],
+[data-testid="meeting-item"] span[class*="truncate"],
+[data-testid="meeting-item-ambient"] span[class*="truncate"] {
+  font-size: var(--ed-fs-body) !important;
+  line-height: var(--ed-lh-body) !important;
+  font-weight: 720 !important;
+}
+
+[data-testid="meeting-item"] [class*="text-[11px]"],
+[data-testid="meeting-item-ambient"] [class*="text-[11px]"] {
+  font-size: var(--ed-fs-meta) !important;
+  line-height: 16px !important;
+  font-weight: 450 !important;
+}
+
+[data-testid="transcript-title"],
+.echodesk-output-pane h1,
+.echodesk-output-pane h2,
+.echodesk-output-pane h3,
+.echodesk-output-pane strong,
+.echodesk-output-pane b,
+.echodesk-output-pane .font-serif {
+  font-family: var(--ed-font-final) !important;
+}
+
+/* ------------------------------------------------------------------
+   Hard Typography Clamp
+   演示主屏只保留 3 档字号：12 meta / 14 body-control / 18 title-brand。
+------------------------------------------------------------------- */
+
+.echodesk-shell {
+  --ed-fs-meta: 12px;
+  --ed-fs-body: 14px;
+  --ed-fs-emphasis: 14px;
+  --ed-fs-title: 18px;
+  --ed-fs-brand: 18px;
+  --ed-lh-meta: 16px;
+  --ed-lh-body: 22px;
+  --ed-lh-title: 24px;
+}
+
+.echodesk-shell :where(
+  div,
+  span,
+  p,
+  li,
+  button,
+  input,
+  textarea,
+  label,
+  a,
+  strong,
+  b,
+  h1,
+  h2,
+  h3,
+  h4,
+  .ant-btn,
+  .ant-tag,
+  .ant-typography
+) {
+  font-family: var(--ed-font-final) !important;
+  font-size: var(--ed-fs-body) !important;
+  line-height: var(--ed-lh-body) !important;
+}
+
+.echodesk-shell :where(.font-mono, [class*="font-mono"], code, kbd, pre) {
+  font-family: var(--ed-font-final) !important;
+}
+
+.app-header .brand,
+[data-testid="transcript-title"],
+.echodesk-output-pane :where(h1, h2, h3),
+.echodesk-output-pane > div:first-child,
+.echodesk-output-pane strong,
+.echodesk-output-pane b {
+  font-size: var(--ed-fs-title) !important;
+  line-height: var(--ed-lh-title) !important;
+  font-weight: 760 !important;
+}
+
+.app-header-status [data-testid^="pill-"],
+.app-header-status [data-testid^="pill-"] *,
+[data-testid="workspace-bar"],
+[data-testid="workspace-bar"] *,
+[data-testid="meeting-status-bar"],
+[data-testid="meeting-status-bar"] *,
+[data-testid="command-bar"],
+[data-testid="command-bar"] *,
+[data-testid="transcript-message"],
+[data-testid="assistant-message"],
+[data-testid="user-message"],
+[data-testid="artifact-title"],
+[data-testid="meeting-item-title"],
+[data-testid="meeting-item-ambient"] span[class*="truncate"] {
+  font-size: var(--ed-fs-body) !important;
+  line-height: var(--ed-lh-body) !important;
+}
+
+[data-testid="capture-status"],
+[data-testid="capture-status"] *,
+[data-testid="speaker-tag"],
+[data-testid="speaker-tag"] *,
+[data-testid="meeting-item"] [class*="text-[11px]"],
+[data-testid="meeting-item-ambient"] [class*="text-[11px]"],
+[data-testid="artifact-list"],
+[data-testid="artifact-list"] :where(span, div, p),
+[data-testid="artifact-list"] .text-\[10px\],
+[data-testid="artifact-list"] .text-\[11px\],
+[data-testid="artifact-list"] .text-\[12px\],
+.echodesk-output-pane .text-\[10px\],
+.echodesk-output-pane .text-\[11px\],
+.echodesk-output-pane .text-\[12px\] {
+  font-size: var(--ed-fs-meta) !important;
+  line-height: var(--ed-lh-meta) !important;
+}
+
+[data-testid="meeting-item-title"],
+[data-testid="meeting-item-ambient"] span[class*="truncate"],
+[data-testid="artifact-title"] {
+  font-weight: 720 !important;
+}
+
+.echodesk-command-row {
+  grid-template-columns: 42px minmax(0, 1fr) 40px 48px !important;
+  gap: 8px !important;
+}
+
+.echodesk-command-textarea,
+.echodesk-command-textarea textarea,
+[data-testid="command-bar"] textarea {
+  height: 48px !important;
+  min-height: 48px !important;
+  max-height: 48px !important;
+  padding: 12px 14px !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-command-textarea textarea::placeholder,
+[data-testid="command-bar"] textarea::placeholder {
+  font-size: var(--ed-fs-body) !important;
+  line-height: var(--ed-lh-body) !important;
+  white-space: nowrap !important;
+}
+
+.echodesk-command-icon-btn {
+  width: 42px !important;
+  height: 42px !important;
+  min-width: 42px !important;
+  min-height: 42px !important;
+}
+
+[data-testid="command-send-btn"] {
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  min-height: 48px !important;
+}
+
+/* Hard Typography Clamp v2: keep the app to exactly three visible text scales. */
+.echodesk-shell,
+.echodesk-shell *:not(svg):not(path):not(rect):not(circle):not(line):not(polyline):not(polygon) {
+  font-family: var(--ed-font-final) !important;
+  font-size: var(--ed-fs-body) !important;
+}
+
+.echodesk-shell .brand,
+.echodesk-shell h1,
+.echodesk-shell h2,
+.echodesk-shell h3,
+.echodesk-shell [class*="text-[15px]"],
+.echodesk-shell [class*="text-[16px]"],
+.echodesk-shell [class*="text-[17px]"],
+.echodesk-shell [class*="text-[18px]"],
+.echodesk-shell [class*="text-[19px]"],
+.echodesk-shell [class*="text-[20px]"],
+.echodesk-shell .meeting-summary-panel h2,
+.echodesk-shell .meeting-summary-panel h3,
+.echodesk-shell .right-panel-title,
+.echodesk-shell .outputs-title {
+  font-size: var(--ed-fs-title) !important;
+  line-height: 1.35 !important;
+}
+
+.echodesk-shell .text-\[10px\],
+.echodesk-shell .text-\[11px\],
+.echodesk-shell .text-\[12px\],
+.echodesk-shell .text-\[12\.5px\],
+.echodesk-shell .text-\[13px\],
+.echodesk-shell .font-mono,
+.echodesk-shell [class*="font-mono"],
+.echodesk-shell .ant-tag,
+.echodesk-shell .uppercase,
+.echodesk-shell .speaker-tag,
+.echodesk-shell .artifact-meta,
+.echodesk-shell .artifact-list-meta,
+.echodesk-shell .capture-status,
+.echodesk-shell .meeting-list-meta,
+.echodesk-shell .message-meta,
+.echodesk-shell .app-header-status span,
+.echodesk-shell .app-version,
+.echodesk-shell code,
+.echodesk-shell kbd,
+.echodesk-shell pre {
+  font-family: var(--ed-font-final) !important;
+  font-size: var(--ed-fs-meta) !important;
+  line-height: 1.45 !important;
+}
+
+.echodesk-shell textarea,
+.echodesk-shell input,
+.echodesk-shell button,
+.echodesk-shell .ant-btn,
+.echodesk-shell .ant-input,
+.echodesk-shell .ant-select,
+.echodesk-shell .ant-modal,
+.echodesk-shell .ant-drawer {
+  font-family: var(--ed-font-final) !important;
+}
+
+/* Final Typography Lock: no variables, no ambiguity. */
+body .echodesk-shell,
+body .echodesk-shell *:not(svg):not(path):not(rect):not(circle):not(line):not(polyline):not(polygon) {
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 14px !important;
+}
+
+body .echodesk-shell .brand,
+body .echodesk-shell h1,
+body .echodesk-shell h2,
+body .echodesk-shell h3,
+body .echodesk-shell .meeting-summary-panel h2,
+body .echodesk-shell .meeting-summary-panel h3,
+body .echodesk-shell .right-panel-title,
+body .echodesk-shell .outputs-title {
+  font-size: 18px !important;
+  line-height: 1.35 !important;
+}
+
+body .echodesk-shell .text-\[10px\],
+body .echodesk-shell .text-\[11px\],
+body .echodesk-shell .text-\[12px\],
+body .echodesk-shell .text-\[12\.5px\],
+body .echodesk-shell .text-\[13px\],
+body .echodesk-shell .font-mono,
+body .echodesk-shell [class*="font-mono"],
+body .echodesk-shell .ant-tag,
+body .echodesk-shell .uppercase,
+body .echodesk-shell .speaker-tag,
+body .echodesk-shell .artifact-meta,
+body .echodesk-shell .artifact-list-meta,
+body .echodesk-shell .capture-status,
+body .echodesk-shell .meeting-list-meta,
+body .echodesk-shell .message-meta,
+body .echodesk-shell .app-header-status,
+body .echodesk-shell .app-header-status *,
+body .echodesk-shell .app-version,
+body .echodesk-shell code,
+body .echodesk-shell kbd,
+body .echodesk-shell pre {
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+
+body .echodesk-shell .echodesk-command-textarea,
+body .echodesk-shell .echodesk-command-textarea *,
+body .echodesk-shell [data-testid="command-bar"],
+body .echodesk-shell [data-testid="command-bar"] * {
+  font-size: 14px !important;
+}
+
+/* Final Typography Lock v2: remove AntD/root inherited 13px remnants. */
+html body,
+html body #root,
+html body #root > div {
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 14px !important;
+}
+
+html body .echodesk-shell .ant-btn,
+html body .echodesk-shell .ant-btn *,
+html body .echodesk-shell .ant-btn-sm,
+html body .echodesk-shell .ant-btn-sm * {
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 14px !important;
+  line-height: 1.45 !important;
+}
+
+html body .echodesk-shell .brand,
+html body .echodesk-shell h1,
+html body .echodesk-shell h2,
+html body .echodesk-shell h3,
+html body .echodesk-shell .meeting-summary-panel h2,
+html body .echodesk-shell .meeting-summary-panel h3,
+html body .echodesk-shell .right-panel-title,
+html body .echodesk-shell .outputs-title {
+  font-size: 18px !important;
+  line-height: 1.35 !important;
+}
+
+html body .echodesk-shell .text-\[10px\],
+html body .echodesk-shell .text-\[11px\],
+html body .echodesk-shell .text-\[12px\],
+html body .echodesk-shell .text-\[12\.5px\],
+html body .echodesk-shell .text-\[13px\],
+html body .echodesk-shell .font-mono,
+html body .echodesk-shell [class*="font-mono"],
+html body .echodesk-shell .ant-tag,
+html body .echodesk-shell .uppercase,
+html body .echodesk-shell .speaker-tag,
+html body .echodesk-shell .artifact-meta,
+html body .echodesk-shell .artifact-list-meta,
+html body .echodesk-shell .capture-status,
+html body .echodesk-shell .meeting-list-meta,
+html body .echodesk-shell .message-meta,
+html body .echodesk-shell .app-header-status,
+html body .echodesk-shell .app-header-status *,
+html body .echodesk-shell .app-version,
+html body .echodesk-shell code,
+html body .echodesk-shell kbd,
+html body .echodesk-shell pre {
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
 }

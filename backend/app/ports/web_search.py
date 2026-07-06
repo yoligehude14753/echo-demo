@@ -1,4 +1,4 @@
-"""Web Search Port：Tavily(主) → DDG(兜底)。"""
+"""Web Search Port：Tavily-only controlled web search."""
 
 from __future__ import annotations
 
