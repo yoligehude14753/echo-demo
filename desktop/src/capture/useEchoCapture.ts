@@ -20,6 +20,7 @@ import { useStore } from "@/store";
 
 const STATS_POLL_MS = 5_000;
 const CAPTURE_INIT_WATCHDOG_MS = 18_000;
+const UPLOAD_ERROR_TOAST_DURATION_SECONDS = 8;
 const CIRCUIT_TOAST_KEY = "stt-circuit-open";
 const FALLBACK_TOAST_KEY = "chunk-upload-error";
 const MIC_INIT_TIMEOUT_MESSAGE =
@@ -90,12 +91,13 @@ export function useEchoCapture(): CaptureStatus {
       onConnectionLost: (e) => {
         const msg = e instanceof Error ? e.message : String(e);
         message.error({
-          content: `后端连接断开（${msg}），自动重试中…`,
+          content: `采集上传暂时失败（${msg}），后台会自动重试`,
           key: FALLBACK_TOAST_KEY,
-          duration: 0,
+          duration: UPLOAD_ERROR_TOAST_DURATION_SECONDS,
         });
       },
       onConnectionRecovered: () => {
+        message.destroy(FALLBACK_TOAST_KEY);
         message.success({
           content: "后端已恢复",
           key: FALLBACK_TOAST_KEY,
@@ -118,7 +120,10 @@ export function useEchoCapture(): CaptureStatus {
     const fetchStats = async () => {
       try {
         const next = await getCaptureStats();
-        if (!cancelled) setStats(next);
+        if (!cancelled) {
+          setStats(next);
+          message.destroy(FALLBACK_TOAST_KEY);
+        }
       } catch {
         // 静默：stats 是诊断辅助，主路径不依赖它
       }
