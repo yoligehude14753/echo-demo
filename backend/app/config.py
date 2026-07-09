@@ -92,6 +92,17 @@ class Settings(BaseSettings):
     llm_fast_base_url: str = "http://100.87.251.9:7920/v1"
     llm_local_api_key: str = "EMPTY"
     llm_fast_max_tokens: int = 512
+    # STT/TTS/本地模型网关共享 token。历史 eight 裸服务不需要鉴权，adapter 会回退到
+    # Bearer x；新部署走网关时用该字段或服务专用 api key 覆盖。
+    heyi_gateway_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "heyi_gateway_token",
+            "HEYI_GATEWAY_TOKEN",
+            "model_gateway_api_key",
+            "MODEL_GATEWAY_API_KEY",
+        ),
+    )
 
     # ── STT ───────────────────────────────────────────────────────
     # 当前**唯一** = firered（@ eight :8090，判别式无幻觉、中文强）；
@@ -101,6 +112,15 @@ class Settings(BaseSettings):
     # 保留 stt_backend 字段供未来扩展（如本地化离线 STT）。
     stt_backend: str = "firered"
     stt_firered_url: str = "http://100.76.3.59:8090"
+    stt_firered_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "stt_firered_api_key",
+            "STT_FIRERED_API_KEY",
+            "stt_api_key",
+            "STT_API_KEY",
+        ),
+    )
     stt_language: str = "zh"
     stt_llm_correct: bool = False
 
@@ -145,6 +165,27 @@ class Settings(BaseSettings):
             "TTS_COSYVOICE_VOICE",
         ),
     )
+    tts_qwen3_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "tts_qwen3_api_key",
+            "TTS_QWEN3_API_KEY",
+            "tts_api_key",
+            "TTS_API_KEY",
+            "tts_cosyvoice_api_key",
+            "TTS_COSYVOICE_API_KEY",
+        ),
+    )
+    tts_qwen3_timeout_s: float = Field(
+        default=30.0,
+        validation_alias=AliasChoices(
+            "tts_qwen3_timeout_s",
+            "TTS_QWEN3_TIMEOUT_S",
+            "tts_timeout_s",
+            "TTS_TIMEOUT_S",
+        ),
+    )
+    tts_macos_fallback_enabled: bool = False
 
     # ── Speaker Diarization ──────────────────────────────────────
     diarizer_enabled: bool = True

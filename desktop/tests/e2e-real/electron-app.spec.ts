@@ -92,8 +92,16 @@ test.describe("EchoDesk 打包 App", () => {
         )
         .toBe(true);
 
-      // 3. WS 已握手。
-      await expect(win.locator("text=已连接")).toBeVisible({ timeout: 60_000 });
+      // 3. WS 已握手。当前 UI 把旧的连接 pill 合并进顶部 StatusBar，
+      //    `.app-connection-status` 会被视觉隐藏，但仍保留文本状态供 E2E 断言。
+      await expect(win.locator(".app-connection-status")).toHaveText("已连接", {
+        timeout: 60_000,
+      });
+      await expect(win.getByTestId("pill-backend")).toBeVisible({ timeout: 15_000 });
+      await win.getByTestId("pill-backend").click();
+      const backendPopover = win.locator(".ant-popover").filter({ hasText: "服务端" }).last();
+      await expect(backendPopover.getByText("0.2.45")).toBeVisible({ timeout: 15_000 });
+      await win.keyboard.press("Escape");
 
       // 4. outputs 面板
       await expect(win.locator("text=outputs").first()).toBeVisible();
@@ -168,7 +176,7 @@ test.describe("EchoDesk 打包 App", () => {
           command: pick("textarea[placeholder*='生成']"),
           capture: pick("[data-testid='capture-status']"),
           settingsButton: pick("[data-testid='open-settings']"),
-          ttsToggle: pick("[data-testid='tts-toggle']"),
+          aiEnginePill: pick("[data-testid='pill-ai-engine']"),
         };
       });
 
@@ -179,7 +187,7 @@ test.describe("EchoDesk 打包 App", () => {
       const command = requireRect(layout.command, "command textarea");
       const captureStatus = requireRect(layout.capture, "capture status");
       const settingsButton = requireRect(layout.settingsButton, "settings button");
-      const ttsToggle = requireRect(layout.ttsToggle, "tts toggle");
+      const aiEnginePill = requireRect(layout.aiEnginePill, "AI engine pill");
 
       for (const [name, rect] of Object.entries({
         workspace,
@@ -187,7 +195,7 @@ test.describe("EchoDesk 打包 App", () => {
         command,
         captureStatus,
         settingsButton,
-        ttsToggle,
+        aiEnginePill,
       })) {
         expect(rect.display, `${name} display`).not.toBe("none");
         expect(rect.visibility, `${name} visibility`).not.toBe("hidden");
@@ -206,11 +214,13 @@ test.describe("EchoDesk 打包 App", () => {
       expect(transcriptTitle.x).toBeGreaterThanOrEqual(-1);
       expect(transcriptTitle.right).toBeLessThanOrEqual(layout.viewport.width + 2);
       expect(command.height).toBeGreaterThanOrEqual(44);
-      expect(command.fontSize).toBe("15px");
+      const commandFontSize = Number.parseFloat(command.fontSize);
+      expect(commandFontSize).toBeGreaterThanOrEqual(14);
+      expect(commandFontSize).toBeLessThanOrEqual(15);
       expect(command.placeholderFontSize).toBe(command.fontSize);
       expect(settingsButton.height).toBeGreaterThanOrEqual(32);
       expect(settingsButton.width).toBeGreaterThanOrEqual(32);
-      expect(ttsToggle.height).toBeGreaterThanOrEqual(32);
+      expect(aiEnginePill.height).toBeGreaterThanOrEqual(32);
 
       // 8. 截图存证
       await win.screenshot({

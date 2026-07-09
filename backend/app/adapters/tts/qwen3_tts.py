@@ -11,7 +11,7 @@ faster-qwen3-tts :8094（TTFB 5ms，比 cosyvoice 200×）。
 
 OpenAI 兼容接口（参考 echo `backend/app/tts.py` 的 _fasterqwen3_tts 实现）：
   POST {base}/v1/audio/speech
-  Authorization: Bearer x
+  Authorization: Bearer {configured_token}
   json: { model: "tts-1", input: text, voice: str, stream: false }
   resp: audio/wav 或 audio/pcm（按 content-type 决定）
 
@@ -77,11 +77,13 @@ class Qwen3TTS:
     实现 ports.tts.TTSPort。
     """
 
-    def __init__(self, settings: Settings, *, timeout_s: float = 3.0) -> None:
+    def __init__(self, settings: Settings, *, timeout_s: float | None = None) -> None:
         self._settings = settings
         self._base = settings.tts_qwen3_url.rstrip("/")
         self._default_voice = settings.tts_qwen3_voice
-        self._timeout = timeout_s
+        self._timeout = settings.tts_qwen3_timeout_s if timeout_s is None else timeout_s
+        self._api_key = settings.tts_qwen3_api_key or settings.heyi_gateway_token or "x"
+        self._macos_fallback_enabled = settings.tts_macos_fallback_enabled
 
     @property
     def base_url(self) -> str:
@@ -132,12 +134,16 @@ class Qwen3TTS:
                         "voice": use_voice,
                         "stream": False,
                     },
-                    headers={"Authorization": "Bearer x"},
+                    headers={"Authorization": f"Bearer {self._api_key}"},
                 )
                 resp.raise_for_status()
                 ct = resp.headers.get("content-type", "")
                 audio: bytes = bytes(resp.content)
         except Exception as e:
+            if not self._macos_fallback_enabled:
+                raise TTSError(
+                    f"qwen3_tts synthesize failed ({time.monotonic() - t0:.2f}s): {e}"
+                ) from e
             try:
                 fallback = await _macos_say_fallback(text)
                 logger.warning(

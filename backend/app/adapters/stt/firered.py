@@ -45,6 +45,7 @@ class FireRedSTT:
         self._base = settings.stt_firered_url.rstrip("/")
         self._default_language = settings.stt_language
         self._timeout = timeout_s
+        self._api_key = settings.stt_firered_api_key or settings.heyi_gateway_token or "x"
         self._fail_count = 0
 
     async def transcribe(
@@ -69,7 +70,7 @@ class FireRedSTT:
                 resp = await client.post(
                     url,
                     # FireRed server schema 默认 model="whisper-1" 也接受，固定写 firered-asr-aed 更清晰
-                    headers={"Authorization": "Bearer x"},
+                    headers={"Authorization": f"Bearer {self._api_key}"},
                     data={
                         "model": "firered-asr-aed",
                         "language": lang,

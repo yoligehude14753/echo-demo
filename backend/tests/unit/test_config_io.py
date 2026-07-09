@@ -114,6 +114,28 @@ class TestJsonConfigSource:
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.tts_qwen3_url == "http://example:9999"
 
+    def test_model_gateway_token_resolved_in_source(self, isolated_user_dir: Path) -> None:
+        write_user_config_json({"heyi_gateway_token": "gw-token"})
+        from app.config import Settings
+
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.heyi_gateway_token == "gw-token"
+
+    def test_service_api_key_aliases_resolved_in_source(self, isolated_user_dir: Path) -> None:
+        write_user_config_json(
+            {
+                "stt_api_key": "stt-token",
+                "tts_api_key": "tts-token",
+                "tts_timeout_s": 45,
+            }
+        )
+        from app.config import Settings
+
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.stt_firered_api_key == "stt-token"
+        assert s.tts_qwen3_api_key == "tts-token"
+        assert s.tts_qwen3_timeout_s == 45
+
     def test_unknown_field_ignored_with_warning(
         self, isolated_user_dir: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

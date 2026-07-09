@@ -8,6 +8,18 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.45] – 2026-07-09
+
+STT/TTS 网关部署热修复：适配新的语音识别与语音合成服务鉴权，避免把远端 TTS 故障伪装成本机系统音色。
+
+### 修复
+
+- STT/TTS adapter 读取 `heyi_gateway_token`，并支持 `stt_api_key` / `tts_api_key` 服务专用覆盖。
+- FireRed STT 与 Qwen3 TTS 请求使用配置中的 Bearer token，不再固定发送 `Bearer x`。
+- Qwen3 TTS 默认请求超时调整为可配置的 `tts_qwen3_timeout_s=30`，适配新部署约 5 秒的真实合成延迟。
+- TTS 上游错误默认返回明确失败，不再自动走 macOS `say` fallback；fallback 仅在显式启用 `tts_macos_fallback_enabled` 时生效。
+- 版本号同步到 `0.2.45`；Android / TV `versionCode=245`、`versionName=0.2.45`。
+
 ## [0.2.44] – 2026-07-09
 
 Agent 执行主路径改造 Phase 1：EchoDesk 作为唯一用户交互界面，新增任务事件流、授权后执行和任务卡恢复能力。

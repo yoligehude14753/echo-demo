@@ -24,6 +24,7 @@ def settings() -> Settings:
     return Settings(
         stt_backend="firered",
         stt_firered_url="http://100.76.3.59:8090",
+        heyi_gateway_token="gw-token",
     )
 
 
@@ -51,6 +52,7 @@ async def test_transcribe_returns_segment_with_text(settings: Settings) -> None:
     assert segs[0].text == "你好世界"
     assert segs[0].start_ms == 0
     assert segs[0].end_ms > 0
+    assert fake.post.await_args.kwargs["headers"] == {"Authorization": "Bearer gw-token"}
 
 
 @pytest.mark.asyncio
@@ -132,3 +134,19 @@ async def test_make_stt_returns_firered_regardless_of_legacy_backend_value() -> 
     s = Settings(stt_backend="sensevoice_gpu", stt_firered_url="http://x:8090")
     adapter = make_stt(s)
     assert isinstance(adapter, FireRedSTT)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_stt_specific_api_key_overrides_gateway_token() -> None:
+    settings = Settings(
+        stt_backend="firered",
+        stt_firered_url="http://100.76.3.59:8090",
+        heyi_gateway_token="gw-token",
+        stt_firered_api_key="stt-token",
+    )
+    stt = FireRedSTT(settings)
+    fake = _mock_async_client_post({"text": "你好"})
+    with patch("app.adapters.stt.firered.httpx.AsyncClient", return_value=fake):
+        await stt.transcribe(b"\x00\x01" * 8000, sample_rate=16_000)
+    assert fake.post.await_args.kwargs["headers"] == {"Authorization": "Bearer stt-token"}
