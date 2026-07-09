@@ -1,0 +1,76 @@
+version: '1.0'
+project: echo
+generated_at: '2026-07-09T15:34:26.983452+00:00'
+generated_by: replay.py
+fact_count: 3
+facts:
+- id: F-ECHO-001
+  claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
+  category: observation
+  volatility: low
+  evidence_strength: code
+  status: confirmed
+  confidence: 0.95
+  observed_at: '2026-07-09T23:28:06+08:00'
+  observed_by: agent/codex-0-3-prep
+  valid_until: null
+  ttl_hours: null
+  source:
+  - commit:e5574e9379e82f10057d5c84f401349c6f8e613b
+  evidence: git describe --tags --exact-match HEAD returned v0.2.50 before the 0.3 preparation branch was created.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - '0.3'
+  - baseline
+- id: F-ECHO-002
+  claim: EchoDesk 0.3 is scoped as a workflow architecture redesign covering meeting, knowledge, artifact, agent, share, and
+    diagnostics flows before implementation starts.
+  category: intent
+  volatility: medium
+  evidence_strength: doc
+  status: confirmed
+  confidence: 0.9
+  observed_at: '2026-07-09T23:28:06+08:00'
+  observed_by: agent/codex-0-3-prep
+  valid_until: null
+  ttl_hours: null
+  source:
+  - event:E-20260709T2328-001
+  evidence: The user approved the 0.3 direction and requested all documentation and pre-development preparation before implementation.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - '0.3'
+  - workflow
+  - planning
+- id: F-ECHO-003
+  claim: EchoDesk 0.3 pre-development documentation exists under docs/0.3 and includes architecture, workflows, data contracts,
+    tests, development plan, and checklist.
+  category: observation
+  volatility: low
+  evidence_strength: doc
+  status: confirmed
+  confidence: 0.95
+  observed_at: '2026-07-09T23:34:03+08:00'
+  observed_by: agent/codex-0-3-prep
+  valid_until: null
+  ttl_hours: null
+  source:
+  - docs/0.3/README.md
+  - docs/0.3/ARCHITECTURE.md
+  - docs/0.3/WORKFLOWS.md
+  - docs/0.3/DATA_MODEL_AND_CONTRACTS.md
+  - docs/0.3/TEST_PLAN.md
+  - docs/0.3/DEV_PLAN.md
+  - docs/0.3/PRE_DEV_CHECKLIST.md
+  evidence: The 0.3 documentation package was created before implementation work.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - '0.3'
+  - documentation
+  - pre-development

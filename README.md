@@ -6,6 +6,8 @@
 > **安装指南**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
 > **服务端模型配置**：公开安装包默认连接 EchoDesk 服务端，模型密钥不会进入客户端包。
+> **主线治理基准**：见 [`docs/GOVERNANCE_v0.2.50.md`](docs/GOVERNANCE_v0.2.50.md)。当前主线以 `v0.2.50` 为准，不继承旧 `0.2.7` 实验线。
+> **0.3 开发前准备**：见 [`docs/0.3/README.md`](docs/0.3/README.md)。0.3 将以统一 Workflow Core 收束会议、知识库、Artifact、Todo、Claude Code Agent、分享导出和诊断恢复。
 
 ## 立即下载
 
