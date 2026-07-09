@@ -2,14 +2,14 @@
 
 > **目标**：会议 + 办公场景的"数字分身"应用。公开安装包可直接使用 EchoDesk 服务；模型密钥不进入客户端包；私有部署仍可显式启用本机服务。
 > **当前源码版本**：v0.2.45（详见 [`CHANGELOG.md`](CHANGELOG.md)）
-> **公开下载**：见 [GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)；v0.2.45 资产需发布 workflow 生成后才会出现在 Release 中。
+> **公开下载**：见 [GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)；v0.2.45 macOS 资产已发布。
 > **安装指南**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
 > **服务端模型配置**：公开安装包默认连接 EchoDesk 服务端，模型密钥不会进入客户端包。
 
 ## 立即下载
 
-当前源码版本是 `v0.2.45`。公开安装包发布后会放在：
+当前源码版本是 `v0.2.45`。公开安装包下载页：
 <https://github.com/yoligehude14753/echo-demo/releases/latest>
 
 | 平台 | Release 资产命名 | 说明 |

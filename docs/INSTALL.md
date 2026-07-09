@@ -3,7 +3,7 @@
 当前源码版本：`v0.2.45`
 公开下载页：<https://github.com/yoligehude14753/echo-demo/releases/latest>
 
-> v0.2.45 资产需发布 workflow 生成后才会出现在 GitHub Release 中；本地开发可先用 `npm run app:build` 生成 macOS `.app`。
+> v0.2.45 macOS 资产已发布到 GitHub Release；本地开发仍可用 `npm run app:build` 生成 macOS `.app`。
 
 | 平台 | Release 资产命名 | 说明 |
 |---|---|---|
