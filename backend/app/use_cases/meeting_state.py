@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -112,10 +113,8 @@ class MeetingState:
             return
         self._watchdog_task = None
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     async def _watchdog_loop(self, *, interval_s: float) -> None:
         while True:

@@ -8,6 +8,22 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.44] – 2026-07-09
+
+Agent 执行主路径改造 Phase 1：EchoDesk 作为唯一用户交互界面，新增任务事件流、授权后执行和任务卡恢复能力。
+
+### 新增
+
+- 新增 `EchoTaskEvent` 契约、`agent_task_events` 持久化表和任务事件 replay/dedupe。
+- 新增 EchoDesk 后端的 Agent task API、runner grant API、AgentOS 事件 bridge 和 Claude Code runner adapter。
+- 桌面端 outputs 面板支持后台任务卡、首次授权入口、执行进度、产物链接和刷新后的任务恢复。
+
+### 变更
+
+- 后台任务事件通过 EchoDesk WS 广播为 `agent.task.event`，普通 UI 不展示底层 runner/provider 名称。
+- Agent 任务路由新增 `agent_task` intent，并由 LLM 分类路径承接非已对齐 skill 的长任务。
+- 版本号同步到 `0.2.44`；Android / TV `versionCode=244`、`versionName=0.2.44`。
+
 ## [0.2.35] – 2026-06-30
 
 多平台可用性热修复：统一公开安装包入口，收口 TV 自适应布局，隐藏内部路由/模型供应商文案，并让联网检索在缺 key 时明确不可用。

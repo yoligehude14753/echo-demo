@@ -7,11 +7,11 @@
  *
  * M_diag_brake：
  *  - hover 弹 Popover 展示 7 道门处理结果分布表（实时根因分布）
- *  - STT 熔断时 Tag 变红 + 倒计时 + 红色 banner
+ *  - STT 短暂不可用时仅内部退避，不在主界面打断展示
  */
 import { useEffect, useState } from "react";
 import { Popover, Progress, Tag } from "antd";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import type {
   CaptureStatsSnapshot,
@@ -68,12 +68,6 @@ function formatRelative(iso: string | null): string {
   return `${h} 小时前`;
 }
 
-function formatCountdown(retryAtMs: number): string {
-  const s = Math.max(0, Math.round((retryAtMs - Date.now()) / 1000));
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m${(s % 60).toString().padStart(2, "0")}s`;
-}
-
 function shouldShowMicRetry(errorMessage: string | null | undefined): boolean {
   if (!errorMessage) return true;
   return !/(USB|蓝牙|有效输入|电视麦克风|系统识别|原生录音不可用)/i.test(errorMessage);
@@ -99,11 +93,9 @@ function displayMicError(errorMessage: string | null | undefined): string {
 function DoorBreakdown({
   stats,
   chunksDroppedCircuit,
-  circuitOpenUntil,
 }: {
   stats: CaptureStatsSnapshot | null;
   chunksDroppedCircuit: number;
-  circuitOpenUntil: number | null;
 }): JSX.Element {
   if (!stats) {
     return (
@@ -113,14 +105,6 @@ function DoorBreakdown({
   const total = Math.max(1, stats.chunks_total); // 防 /0
   return (
     <div className="w-[340px] space-y-2 text-xs">
-      {circuitOpenUntil !== null && (
-        <div className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-red-50 text-red-700 border border-red-200">
-          <AlertTriangle className="w-3.5 h-3.5 flex-none" />
-          <span className="font-medium">
-            语音识别暂时不可用 · 暂停上传 · {formatCountdown(circuitOpenUntil)} 后探测
-          </span>
-        </div>
-      )}
       <div className="font-medium text-slate-700">
         7 道门处理结果（进程级 in-memory）
       </div>
@@ -201,18 +185,10 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
     meetingChunks,
     meetingOverlayId,
     errorMessage,
-    sttCircuitOpenUntil,
     chunksDroppedCircuit,
     stats,
   } = status;
-  // 让倒计时每秒刷新
-  const [, setTick] = useState(0);
   const [initializingTooLong, setInitializingTooLong] = useState(false);
-  useEffect(() => {
-    if (sttCircuitOpenUntil === null) return;
-    const t = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(t);
-  }, [sttCircuitOpenUntil]);
 
   useEffect(() => {
     if (state !== "initializing") {
@@ -258,11 +234,8 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
     );
   }
 
-  const circuitOpen =
-    sttCircuitOpenUntil !== null && sttCircuitOpenUntil > Date.now();
-  const ariaLabel = circuitOpen
-    ? `语音识别暂时不可用，已采集 ${ambientChunks} 段，入库 ${ambientStored} 段，丢弃 ${chunksDroppedCircuit} 段`
-    : meetingOverlayId
+  const circuitOpen = false;
+  const ariaLabel = meetingOverlayId
       ? `持续采集中，已采集 ${ambientChunks} 段，入库 ${ambientStored} 段，会议中已上传 ${meetingChunks} 段`
       : `持续采集中，已采集 ${ambientChunks} 段，入库 ${ambientStored} 段（静音/底噪自动过滤）`;
 
@@ -273,7 +246,6 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
         <DoorBreakdown
           stats={stats}
           chunksDroppedCircuit={chunksDroppedCircuit}
-          circuitOpenUntil={circuitOpen ? sttCircuitOpenUntil : null}
         />
       }
       mouseEnterDelay={0.2}
@@ -288,34 +260,19 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
         tabIndex={-1}
       >
         <span className="inline-flex items-center gap-1.5">
-          {circuitOpen ? (
-            <>
-              <AlertTriangle className="w-3 h-3" />
-              <span className="font-medium">STT 熔断</span>
-              <span className="text-[10px] opacity-80 tabular-nums">
-                · {formatCountdown(sttCircuitOpenUntil)} 后探测
-              </span>
-              <span className="text-[10px] opacity-70">
-                · 丢弃 {chunksDroppedCircuit}
-              </span>
-            </>
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+          持续采集
+          <span className="text-[10px] opacity-80">
+            · 采集 {ambientChunks} · 入库 {ambientStored}
+          </span>
+          {meetingOverlayId ? (
+            <span className="text-[10px] opacity-80">
+              · 会议中 · 段 {meetingChunks}
+            </span>
           ) : (
-            <>
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-              持续采集
-              <span className="text-[10px] opacity-80">
-                · 采集 {ambientChunks} · 入库 {ambientStored}
-              </span>
-              {meetingOverlayId ? (
-                <span className="text-[10px] opacity-80">
-                  · 会议中 · 段 {meetingChunks}
-                </span>
-              ) : (
-                <span className="text-[10px] opacity-70">
-                  · 静音/底噪自动过滤
-                </span>
-              )}
-            </>
+            <span className="text-[10px] opacity-70">
+              · 静音/底噪自动过滤
+            </span>
           )}
         </span>
       </Tag>

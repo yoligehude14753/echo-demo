@@ -23,6 +23,7 @@ import { FileText, Loader2, Paperclip, Send, Upload, Wand2, X } from "lucide-rea
 import {
   artifactDownloadUrl,
   chatAsk,
+  createAgentTask,
   finalizeMeeting,
   generateArtifact,
   ingestFile,
@@ -53,6 +54,7 @@ const kindLabel: Record<IntentKind, string> = {
   generate_pdf: "生成 PDF",
   generate_txt: "生成 TXT",
   summarize_meeting: "总结会议",
+  agent_task: "后台任务",
   chat_no_rag: "对话",
   chat: "对话",
 };
@@ -125,6 +127,7 @@ export default function CommandBar(): JSX.Element {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
+  const upsertAgentTask = useStore((s) => s.upsertAgentTask);
   const registerCommandBarPrefill = useStore((s) => s.registerCommandBarPrefill);
   const tts = useTtsPlayer();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -420,6 +423,26 @@ export default function CommandBar(): JSX.Element {
         message.info(`正在总结会议 ${mid}…`);
         const minutes = await finalizeMeeting(mid, `会议 ${mid}`);
         message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
+        return;
+      }
+      case "agent_task": {
+        const taskText = (r.params.text as string | undefined) ?? originalText;
+        if (!taskText) {
+          message.warning("任务内容为空");
+          return;
+        }
+        const task = await createAgentTask({
+          text: taskText,
+          title: (r.params.title as string | undefined) ?? taskText.slice(0, 42),
+          task_kind: "agent_task",
+          context: {
+            current_meeting_id: currentMeetingId,
+          },
+        });
+        upsertAgentTask(task);
+        message.info(
+          task.state === "waiting_permission" ? "需要授权后开始执行" : "已开始后台执行",
+        );
         return;
       }
       case "chat_no_rag": {

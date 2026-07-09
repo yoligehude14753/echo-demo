@@ -25,10 +25,12 @@ from fastapi.responses import PlainTextResponse
 from app import __version__
 from app.adapters.repo.migrator import run_migrations
 from app.api.admin import router as admin_router
+from app.api.agents import router as agents_router
 from app.api.artifacts import router as artifacts_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
 from app.api.deps import (
+    aclose_agents,
     aclose_event_bus,
     aclose_llm_singleton,
     aclose_repository,
@@ -151,7 +153,7 @@ _meeting_state_for_shutdown: object | None = None
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0915
     global _meeting_state_for_shutdown  # noqa: PLW0603
     settings = get_settings()
     logger.info(
@@ -240,6 +242,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
     except Exception as e:
         logger.warning("meeting-state hydrate failed: %s", e)
 
+    try:
+        from app.agents.service import get_agent_task_service
+        from app.api.deps import get_event_bus as _get_bus
+
+        restored = await get_agent_task_service(settings, _get_bus()).restore_unfinished()
+        if restored:
+            logger.info("agent task bridges restored: %d", restored)
+    except Exception as e:
+        logger.warning("agent task bridge restore failed: %s", e)
+
     # 授权工作区：启动后 fire-and-forget 扫描（不阻塞 startup）
     if settings.workspace_scan_on_startup and settings.workspace_dirs_list:
         from app.adapters.rag.workspace_scanner import WorkspaceScanner
@@ -285,6 +297,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915
             await stop_watchdog()
         _meeting_state_for_shutdown = None
     await stop_prober()
+    await aclose_agents()
     await aclose_llm_singleton()
     await aclose_event_bus()
     await aclose_repository()
@@ -355,6 +368,7 @@ def create_app() -> FastAPI:
     app.include_router(speakers_router)
     app.include_router(intent_router)
     app.include_router(tts_router)
+    app.include_router(agents_router)
     app.include_router(ws_router)
     # P2.5：数据管理 endpoints（data-dir / meeting export / speaker reset）
     app.include_router(

@@ -25,14 +25,6 @@ const FALLBACK_TOAST_KEY = "chunk-upload-error";
 const MIC_INIT_TIMEOUT_MESSAGE =
   "系统录音初始化超时；问答、知识库、联网搜索和文档生成仍可继续使用，请稍后重新打开 EchoDesk 或检查 macOS 麦克风权限。";
 
-function formatRetryRemaining(retryAtMs: number): string {
-  const remainingS = Math.max(0, Math.round((retryAtMs - Date.now()) / 1000));
-  if (remainingS < 60) return `${remainingS} 秒后重试`;
-  const m = Math.floor(remainingS / 60);
-  const s = remainingS % 60;
-  return s > 0 ? `${m} 分 ${s} 秒后重试` : `${m} 分钟后重试`;
-}
-
 export function useEchoCapture(): CaptureStatus {
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const meetingState = useStore((s) =>
@@ -112,19 +104,11 @@ export function useEchoCapture(): CaptureStatus {
       },
       onSttCircuitOpen: ({ retryAtMs }) => {
         setSttCircuitOpenUntil(retryAtMs);
-        message.error({
-          content: `语音识别暂时不可用 · 暂停上传 · ${formatRetryRemaining(retryAtMs)}`,
-          key: CIRCUIT_TOAST_KEY,
-          duration: 0,
-        });
+        message.destroy(CIRCUIT_TOAST_KEY);
       },
       onSttCircuitClosed: () => {
         setSttCircuitOpenUntil(null);
-        message.success({
-          content: "语音识别已恢复，恢复上传",
-          key: CIRCUIT_TOAST_KEY,
-          duration: 3,
-        });
+        message.destroy(CIRCUIT_TOAST_KEY);
       },
       onChunkDropped: () => setChunksDroppedCircuit((n) => n + 1),
     });

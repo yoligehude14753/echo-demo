@@ -27,13 +27,19 @@ silence/empty 检测——cold-start 静音输出不再被悄悄当成正常响�
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
 from app.adapters.audio import wav_to_float_mono16k
 from app.config import Settings
+
+logger = logging.getLogger("echodesk.tts")
 
 
 class TTSError(RuntimeError):
@@ -71,7 +77,7 @@ class Qwen3TTS:
     实现 ports.tts.TTSPort。
     """
 
-    def __init__(self, settings: Settings, *, timeout_s: float = 90.0) -> None:
+    def __init__(self, settings: Settings, *, timeout_s: float = 3.0) -> None:
         self._settings = settings
         self._base = settings.tts_qwen3_url.rstrip("/")
         self._default_voice = settings.tts_qwen3_voice
@@ -132,9 +138,20 @@ class Qwen3TTS:
                 ct = resp.headers.get("content-type", "")
                 audio: bytes = bytes(resp.content)
         except Exception as e:
-            raise TTSError(
-                f"qwen3_tts synthesize failed ({time.monotonic() - t0:.2f}s): {e}"
-            ) from e
+            try:
+                fallback = await _macos_say_fallback(text)
+                logger.warning(
+                    "qwen3_tts unavailable; fallback→macOS say ok: text_len=%d pcm_bytes=%d latency=%.2fs",
+                    len(text),
+                    len(fallback.pcm),
+                    fallback.latency_s,
+                )
+                return fallback
+            except Exception as fallback_exc:
+                raise TTSError(
+                    f"qwen3_tts synthesize failed ({time.monotonic() - t0:.2f}s): {e}; "
+                    f"macOS say fallback failed: {fallback_exc}"
+                ) from e
 
         elapsed = time.monotonic() - t0
         pcm = _decode_to_pcm16k(audio, ct)
@@ -162,6 +179,57 @@ def _decode_to_pcm16k(audio: bytes, content_type: str) -> bytes:
 
     pcm16 = (arr * 32767.0).clip(-32768, 32767).astype(np.int16)
     return bytes(pcm16.tobytes())
+
+
+async def _macos_say_fallback(text: str) -> SynthesisResult:
+    """本机 macOS TTS 兜底：heyi/eight TTS 掉线时仍返回 16k PCM。"""
+    t0 = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="echodesk-tts-") as tmp:
+        tmpdir = Path(tmp)
+        aiff_path = tmpdir / "speech.aiff"
+        wav_path = tmpdir / "speech.wav"
+        say_proc = await asyncio.create_subprocess_exec(
+            "say",
+            "-v",
+            "Ting-Ting",
+            "-o",
+            str(aiff_path),
+            text,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, say_err = await say_proc.communicate()
+        if say_proc.returncode != 0:
+            raise TTSError(say_err.decode("utf-8", errors="ignore") or "say failed")
+
+        convert_proc = await asyncio.create_subprocess_exec(
+            "afconvert",
+            "-f",
+            "WAVE",
+            "-d",
+            "LEI16@16000",
+            str(aiff_path),
+            str(wav_path),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, convert_err = await convert_proc.communicate()
+        if convert_proc.returncode != 0:
+            raise TTSError(
+                convert_err.decode("utf-8", errors="ignore") or "afconvert failed"
+            )
+        audio = wav_path.read_bytes()
+
+    pcm = _decode_to_pcm16k(audio, "audio/wav")
+    rms, max_abs = _pcm16_quality(pcm)
+    return SynthesisResult(
+        pcm=pcm,
+        raw_bytes=audio,
+        raw_content_type="audio/wav; fallback=macos-say",
+        rms=rms,
+        max_abs=max_abs,
+        latency_s=time.monotonic() - t0,
+    )
 
 
 def _pcm16_quality(pcm: bytes) -> tuple[float, int]:

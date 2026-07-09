@@ -5,9 +5,8 @@
 2. 强 RAG 信号词组（"基于附件" / "产品手册里" 等）→ search_rag（confidence=0.9）
 3. 现有关键字命中（``@生成 PPT`` / ``@查...``）→ 对应意图（confidence=0.85）
 4. 问句信号（含问号 / 含"什么/介绍" 等）→ search_rag（confidence=0.7，默认走 RAG）
-5. 仅当以上全部未命中且非 ``@`` 前缀 → chat 兜底（前端会再走一层 RAG 兜底）
-6. ``@`` 前缀但关键字未命中 → 走 Fast LLM 分类
-7. LLM 解析失败 / 服务不可达 → chat 兜底
+5. 关键字未命中 → 走 Fast LLM 分类，让 AgentIntentRouter 决定 chat / agent_task 等
+6. LLM 解析失败 / 服务不可达 → chat 兜底
 
 P4-fix-rag-chat（2026-05-28）：旧策略硬把"非 @ 前缀"全归 chat，导致用户
 输入"请基于附件回答（XX.pdf）"被丢到 chat 兜底链路 → 不调 LLM 不查 RAG。
@@ -36,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 _SYS_PROMPT = """你是 EchoDesk 桌面助手的意图路由器。
 
-把用户输入分类为以下 12 类之一：
+把用户输入分类为以下类别之一：
 
 - search_web        : 用户想查最新资讯 / 价格 / 时事 / 联网
 - search_rag        : 用户想问/查本地知识库（已上传 PDF / 会议 / 文档 / 工作区文件）
@@ -48,10 +47,13 @@ _SYS_PROMPT = """你是 EchoDesk 桌面助手的意图路由器。
 - generate_pdf      : 用户想生成 PDF 报告 / 简历 / 单据
 - generate_txt      : 用户想生成纯文本 / 列表 / 日志 / 代码片段（不带格式）
 - summarize_meeting : 用户想总结当前会议 / 生成会议纪要
+- agent_task        : 用户要 EchoDesk 后台执行长任务、复杂文件操作、浏览器/GUI 操作、深度调研或其它未对齐内置 skill 的 agent 任务
 - chat_no_rag       : 用户显式声明只闲聊不用知识库（如以 "@chat" 开头）
 - chat              : 真正的闲聊（你好/谢谢/再见/打招呼），既不查 RAG 也不生成
 
 判定要点：
+- 已对齐的生成类任务仍归 generate_*；未对齐 skill 的执行类任务归 agent_task
+- 需要打开网页、浏览器操作、GUI 操作、跨多步研究、读写多个文件或长期执行 → agent_task
 - 用户问"什么/为什么/怎么/介绍/讲讲/对比" → 多数是 search_rag
 - 用户说"基于附件 / 根据文档 / 参考资料 / 在手册里" → 一定是 search_rag
 - 用户只是寒暄 / 表达情绪 / 无具体诉求 → chat
@@ -100,17 +102,11 @@ class LLMIntentRouter:
                 rationale="关键字命中",
             )
 
-        # 非 @ 开头且关键字未命中 → chat 兜底（不调 LLM，省 60% 路由开销）
-        # 这条路径没跑分类器，confidence=None，前端按 null 改成 "规则匹配"。
-        # 注意：前端 CommandBar 的 chat 分支默认仍会走 RAG（见 CommandBar.tsx
-        # dispatch），即便这里返回 chat，用户的问题仍能用上 PDF/workspace。
+        # 非 @ 开头且关键字未命中 → 交给 LLM 路由。
+        # ADR-012 的 claude_code/agent_task 决策不能靠关键词表；这里让 LLM
+        # 判断是否为后台执行任务，闲聊仍会被分类为 chat。
         if not has_at:
-            return IntentResult(
-                kind="chat",
-                confidence=None,
-                rationale="无 @ 前缀（规则匹配）",
-                params={"text": stripped},
-            )
+            return await self._llm_classify(stripped, current_meeting_id)
 
         # @ 前缀但关键字未命中 → 走 Fast LLM 分类 + 兜底
         return await self._llm_classify(stripped, current_meeting_id)
@@ -205,6 +201,9 @@ class LLMIntentRouter:
             params["question"] = body or text.strip()
         elif kind == "summarize_meeting":
             params["meeting_id"] = current_meeting_id or ""
+        elif kind == "agent_task":
+            params["text"] = body or text.strip()
+            params["title"] = (body or text.strip())[:42]
         else:  # chat / chat_no_rag
             params["text"] = body or text.strip()
         return params

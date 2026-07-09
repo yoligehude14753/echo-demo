@@ -1,4 +1,4 @@
-"""Intent schema：@路由 12 类意图（2026-05 修订 + P4-M3 扩展 + P4-fix RAG 收口）。
+"""Intent schema：@路由意图（2026-05 修订 + P4-M3 扩展 + ADR-012 agent task）。
 
 PR-16 / m5-t5：用户在前端聊天框输入"@查英伟达营收"等，
 调 /intent/route → LLM 分类返回 IntentResult{kind, params, confidence}
@@ -28,6 +28,7 @@ PR-16 / m5-t5：用户在前端聊天框输入"@查英伟达营收"等，
 - generate_pdf      : @生成 PDF / @简历
 - generate_txt      : @生成 TXT / @文本 / @纯文本
 - summarize_meeting : @总结当前会议 / @生成纪要
+- agent_task        : 后台执行任务（长任务 / 文件操作 / GUI / 浏览器 / 深度调研）
 - chat_no_rag       : @chat 前缀（明示不用 RAG，纯 LLM 闲聊）
 - chat              : 兜底，不带 @ 且不像问句也不像 RAG 检索请求
 """
@@ -49,6 +50,7 @@ IntentKind = Literal[
     "generate_pdf",
     "generate_txt",
     "summarize_meeting",
+    "agent_task",
     "chat_no_rag",
     "chat",
 ]
@@ -65,6 +67,7 @@ SUPPORTED_INTENTS: frozenset[str] = frozenset(
         "generate_pdf",
         "generate_txt",
         "summarize_meeting",
+        "agent_task",
         "chat_no_rag",
         "chat",
     ]

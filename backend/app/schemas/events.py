@@ -33,6 +33,7 @@ EventType = Literal[
     "chat.delta",
     "chat.done",
     "tts.suggested",
+    "agent.task.event",
     "error",
 ]
 
@@ -63,6 +64,7 @@ EchoEventType = Literal[
     "chat.delta",
     "tts.suggested",
     "chat.done",
+    "agent.task.event",
     "error",
     "server_hello",
     "server_ping",

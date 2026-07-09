@@ -74,6 +74,12 @@ export function useEchoWS(): void {
       if (e.meeting_id && useStore.getState().meetings[e.meeting_id]) {
         return false;
       }
+      if (e.type === "agent.task.event") {
+        const taskId = (e.payload as { task_id?: unknown })?.task_id;
+        if (typeof taskId === "string" && useStore.getState().agentTasks[taskId]) {
+          return false;
+        }
+      }
       if (typeof e.seq === "number" && e.seq <= replayFenceSeqRef.current) {
         return true;
       }

@@ -45,6 +45,15 @@ def client_llm_json() -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture
+def client_llm_agent_task() -> TestClient:
+    app = create_app()
+    app.dependency_overrides[get_llm] = lambda: _StubLLM(
+        content='{"kind":"agent_task","confidence":0.86,"rationale":"长任务"}'
+    )
+    return TestClient(app)
+
+
 @pytest.mark.unit
 def test_intent_route_keyword_pptx(client_kw_hit: TestClient) -> None:
     r = client_kw_hit.post(
@@ -76,6 +85,19 @@ def test_intent_route_llm_search_rag(client_llm_json: TestClient) -> None:
     body = r.json()
     # 走 LLM 返回的 JSON
     assert body["kind"] in {"search_rag", "search_web", "chat"}
+
+
+@pytest.mark.unit
+def test_intent_route_llm_agent_task(client_llm_agent_task: TestClient) -> None:
+    r = client_llm_agent_task.post(
+        "/intent/route",
+        json={"text": "帮我连续操作我的电脑整理竞品信息"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "agent_task"
+    assert body["params"]["text"] == "帮我连续操作我的电脑整理竞品信息"
+    assert "竞品信息" in body["params"]["title"]
 
 
 @pytest.mark.unit

@@ -1,5 +1,7 @@
 import type {
   GeneratedArtifact,
+  AgentTaskCard,
+  AgentTaskEvent,
   IntentResult,
   MeetingMinutes,
   MeetingStateSnapshot,
@@ -261,6 +263,7 @@ export async function getMeetingArtifacts(
 export async function listArtifacts(limit = 100): Promise<GeneratedArtifact[]> {
   const u = await apiUrl(`/artifacts?limit=${limit}`);
   const r = await fetch(u);
+  if (r.status === 404) return [];
   return asJson<GeneratedArtifact[]>(r);
 }
 
@@ -358,6 +361,90 @@ export async function generateArtifact(req: {
     body: JSON.stringify(req),
   });
   return asJson<GeneratedArtifact>(r);
+}
+
+const AGENT_DEVICE_ID_KEY = "echodesk.agentDeviceId";
+
+export function agentDeviceId(): string {
+  if (typeof window === "undefined") return "desktop";
+  try {
+    const existing = window.localStorage.getItem(AGENT_DEVICE_ID_KEY);
+    if (existing) return existing;
+    const next = `desktop-${Math.random().toString(36).slice(2, 10)}`;
+    window.localStorage.setItem(AGENT_DEVICE_ID_KEY, next);
+    return next;
+  } catch {
+    return "desktop";
+  }
+}
+
+export async function createAgentTask(req: {
+  text: string;
+  title?: string;
+  task_kind?: string;
+  conversation_id?: string;
+  message_id?: string;
+  context?: Record<string, unknown>;
+  output_contract?: Record<string, unknown>;
+}): Promise<AgentTaskCard> {
+  const u = await apiUrl("/agents/tasks");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_id: agentDeviceId(), ...req }),
+  });
+  return asJson<AgentTaskCard>(r);
+}
+
+export async function listAgentTasks(limit = 50): Promise<AgentTaskCard[]> {
+  const u = await apiUrl(
+    `/agents/tasks?device_id=${encodeURIComponent(agentDeviceId())}&limit=${limit}`,
+  );
+  const r = await fetch(u);
+  return asJson<AgentTaskCard[]>(r);
+}
+
+export async function listAgentTaskEvents(
+  taskId: string,
+  afterSeq = 0,
+): Promise<{
+  task_id: string;
+  events: AgentTaskEvent[];
+  snapshot: Record<string, unknown>;
+  last_seq: number;
+}> {
+  const u = await apiUrl(
+    `/agents/tasks/${encodeURIComponent(taskId)}/events?after_seq=${afterSeq}`,
+  );
+  const r = await fetch(u);
+  return asJson<{
+    task_id: string;
+    events: AgentTaskEvent[];
+    snapshot: Record<string, unknown>;
+    last_seq: number;
+  }>(r);
+}
+
+export async function cancelAgentTask(taskId: string): Promise<AgentTaskCard> {
+  const u = await apiUrl(`/agents/tasks/${encodeURIComponent(taskId)}/cancel`);
+  const r = await fetch(u, { method: "POST" });
+  return asJson<AgentTaskCard>(r);
+}
+
+export async function grantAgentRunnerAndResume(
+  resumeTaskId?: string,
+): Promise<{ grant: Record<string, unknown>; resumed_task?: AgentTaskCard | null }> {
+  const u = await apiUrl("/agents/grants/claude_code");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      device_id: agentDeviceId(),
+      workspace_ids: [],
+      resume_task_id: resumeTaskId,
+    }),
+  });
+  return asJson<{ grant: Record<string, unknown>; resumed_task?: AgentTaskCard | null }>(r);
 }
 
 export function artifactDownloadUrl(artifactId: string): string {

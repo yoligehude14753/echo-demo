@@ -87,9 +87,9 @@ class Settings(BaseSettings):
     # ── LLM 快速通道 ────────────────────────────────────────────────
     # public demo 默认跟随 Yunwu 主通道，避免 eight fast LLM 未启动时影响可用性；
     # 私有部署可在设置页改回 eight-local / vLLM 端点。
-    llm_fast_provider: str = "yunwu"
-    llm_fast_model: str = "MiniMax-M2.7"
-    llm_fast_base_url: str = "https://yunwu.ai/v1"
+    llm_fast_provider: str = "bj-model-gateway"
+    llm_fast_model: str = "qwen3-vl-8b-local"
+    llm_fast_base_url: str = "http://100.87.251.9:7920/v1"
     llm_local_api_key: str = "EMPTY"
     llm_fast_max_tokens: int = 512
 
@@ -296,7 +296,7 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     web_search_top_n: int = 5
     tavily_api_key: str = ""
-    web_arbitration_model: str = "MiniMax-M2.7"
+    web_arbitration_model: str = "qwen3-vl-8b-local"
 
     # ── Skill 执行器 ──────────────────────────────────────────────
     skill_ppt_tool: str = "pptxgenjs"
@@ -316,6 +316,11 @@ class Settings(BaseSettings):
     # 设 true 可回滚到旧版 prompt（HTML=Tailwind dark，PPT=LLM 直写 pptxgenjs js）—
     # 用于灰度对比 / 紧急止血。详见 `prompts.LEGACY_SKILL_PROMPTS`。
     use_legacy_html_pptx: bool = False
+
+    # ── Agent runner（ADR-012：EchoDesk UI + AgentOS control plane）────
+    agent_os_enabled: bool = False
+    agent_os_url: str = "http://127.0.0.1:4128"
+    agent_task_timeout_s: float = 1800.0
 
     # ── DB ────────────────────────────────────────────────────────
     db_path: Path = Field(default=Path("~/.echodesk/echodesk.db").expanduser())

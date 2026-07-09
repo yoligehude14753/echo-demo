@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type {
   EchoEvent,
+  AgentTaskCard,
+  AgentTaskEvent,
   GeneratedArtifact,
   MeetingCard,
   MeetingMinutes,
@@ -54,6 +56,7 @@ interface Store {
   artifacts: GeneratedArtifact[];
   ambientSegments: LocalAmbientSegment[];
   failedArtifacts: FailedArtifact[];
+  agentTasks: Record<string, AgentTaskCard>;
   /**
    * 暂存最近一次 artifact.generating 的 brief，按 artifact_type 索引（最新覆盖旧的）。
    * artifact.failed 到达时按 artifact_type 配对回填 intent_text；artifact.ready 时清除。
@@ -97,6 +100,8 @@ interface Store {
   /** 删除单条产物（hover × 按钮）。也同步从所有 meeting 的 artifacts 中清掉，避免悬挂引用。 */
   removeArtifact(artifactId: string): void;
   dismissFailedArtifact(id: string): void;
+  upsertAgentTask(task: AgentTaskCard): void;
+  applyAgentTaskEvent(event: AgentTaskEvent): void;
   /**
    * M_minutes_refactor：CommandBar 启动时注册 prefill handler；返回的 unregister
    * 可在 unmount 时调，避免 handler 引用陈旧实例（HMR 场景）。
@@ -281,6 +286,7 @@ export const useStore = create<Store>((set, get) => ({
   artifacts: [],
   ambientSegments: [],
   failedArtifacts: [],
+  agentTasks: {},
   pendingArtifactBriefs: {},
   connected: false,
   events: [],
@@ -312,6 +318,7 @@ export const useStore = create<Store>((set, get) => ({
       artifacts: [],
       ambientSegments: [],
       failedArtifacts: [],
+      agentTasks: {},
       pendingArtifactBriefs: {},
       events: [],
     }),
@@ -355,6 +362,61 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({
       failedArtifacts: s.failedArtifacts.filter((f) => f.id !== id),
     })),
+
+  upsertAgentTask: (task) =>
+    set((s) => ({
+      agentTasks: {
+        ...s.agentTasks,
+        [task.task_id]: task,
+      },
+    })),
+
+  applyAgentTaskEvent: (event) =>
+    set((s) => {
+      if (event.visibility !== "user") return s;
+      const prev = s.agentTasks[event.task_id];
+      const snap = event.snapshot ?? {};
+      const eventArtifacts =
+        Array.isArray(event.artifacts) && event.artifacts.length > 0
+          ? event.artifacts
+          : null;
+      const next: AgentTaskCard = {
+        task_id: event.task_id,
+        runner_task_id: event.runner_task_id ?? prev?.runner_task_id ?? null,
+        device_id: prev?.device_id ?? "desktop",
+        conversation_id: event.conversation_id ?? prev?.conversation_id ?? null,
+        message_id: event.message_id ?? prev?.message_id ?? null,
+        title: String(snap.title ?? event.title ?? prev?.title ?? "EchoDesk 正在执行"),
+        intent_text: prev?.intent_text ?? String(snap.title ?? event.title ?? ""),
+        route: prev?.route ?? "agent",
+        task_kind: prev?.task_kind ?? "agent_task",
+        state: event.state,
+        progress_text: String(snap.progress_text ?? event.message ?? prev?.progress_text ?? ""),
+        final_text:
+          typeof snap.final_text === "string"
+            ? snap.final_text
+            : (event.message ?? prev?.final_text ?? null),
+        error:
+          typeof snap.error === "string"
+            ? snap.error
+            : (event.event.includes("failed") ? event.message ?? prev?.error ?? null : prev?.error ?? null),
+        artifacts: Array.isArray(snap.artifacts) ? snap.artifacts : (eventArtifacts ?? prev?.artifacts ?? []),
+        snapshot: snap,
+        last_seq: event.seq,
+        submitted_at: prev?.submitted_at ?? event.ts,
+        finished_at:
+          ["succeeded", "failed", "cancelled", "timeout"].includes(event.state)
+            ? event.ts
+            : (prev?.finished_at ?? null),
+        timeout_s: prev?.timeout_s ?? 1800,
+      };
+      return {
+        agentTasks: {
+          ...s.agentTasks,
+          [event.task_id]: next,
+        },
+      };
+    }),
 
   upsertMeeting: (id, patch) =>
     set((s) => {
@@ -599,6 +661,10 @@ export const useStore = create<Store>((set, get) => ({
             pendingArtifactBriefs: nextBriefs,
           };
         });
+        break;
+      }
+      case "agent.task.event": {
+        get().applyAgentTaskEvent(e.payload as unknown as AgentTaskEvent);
         break;
       }
       default:

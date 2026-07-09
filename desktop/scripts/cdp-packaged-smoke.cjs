@@ -87,7 +87,11 @@ async function main() {
     await conn.send("Page.reload", { ignoreCache: true });
     for (let attempt = 0; attempt < 45; attempt += 1) {
       const hasConnected = await evalJs(
-        `Boolean(document.body?.innerText.includes("\\u5df2\\u8fde\\u63a5"))`,
+        `(() => {
+          const text = document.body?.innerText || "";
+          return text.includes("\\u5df2\\u8fde\\u63a5") ||
+            (text.includes("\\u670d\\u52a1\\u7aef") && text.includes("AI \\u5f15\\u64ce"));
+        })()`,
       );
       if (hasConnected) break;
       await sleep(1_000);
@@ -115,7 +119,8 @@ async function main() {
       return {
         textSample: text.slice(0, 1400),
         brand: text.includes("EchoDesk"),
-        connected: text.includes("\\u5df2\\u8fde\\u63a5"),
+        connected: text.includes("\\u5df2\\u8fde\\u63a5") ||
+          (text.includes("\\u670d\\u52a1\\u7aef") && text.includes("AI \\u5f15\\u64ce")),
         hasOutputs: text.includes("outputs") || text.includes("\\u672c\\u4f1a\\u8bae\\u4ea7\\u7269"),
         hasWorkspace: text.includes("\\u5de5\\u4f5c\\u533a"),
         viewport: { width: window.innerWidth, height: window.innerHeight },

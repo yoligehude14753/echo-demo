@@ -17,6 +17,7 @@ export type BusinessEventType =
   | "chat.delta"
   | "chat.done"
   | "tts.suggested"
+  | "agent.task.event"
   | "error";
 
 export type ProtocolEventType =
@@ -117,6 +118,7 @@ export type IntentKind =
   | "generate_pdf"
   | "generate_txt"
   | "summarize_meeting"
+  | "agent_task"
   | "chat_no_rag"
   | "chat";
 
@@ -178,4 +180,48 @@ export interface MeetingCard {
   artifacts: GeneratedArtifact[];
   started_at?: string;
   ended_at?: string;
+}
+
+export interface AgentTaskEvent {
+  type: "echo_task_event";
+  task_id: string;
+  runner_task_id?: string | null;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  seq: number;
+  event: string;
+  state: string;
+  visibility: "user" | "debug" | "hidden";
+  title?: string | null;
+  text_delta?: string | null;
+  message?: string | null;
+  step?: Record<string, unknown> | null;
+  artifacts: Array<Record<string, unknown>>;
+  snapshot: Record<string, unknown>;
+  actions: Array<Record<string, unknown>>;
+  permission?: Record<string, unknown> | null;
+  raw_ref?: string | null;
+  ts: string;
+}
+
+export interface AgentTaskCard {
+  task_id: string;
+  runner_task_id?: string | null;
+  device_id: string;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  title: string;
+  intent_text: string;
+  route: string;
+  task_kind?: string | null;
+  state: string;
+  progress_text: string;
+  final_text?: string | null;
+  error?: string | null;
+  artifacts: Array<Record<string, unknown>>;
+  snapshot: Record<string, unknown>;
+  last_seq: number;
+  submitted_at: string;
+  finished_at?: string | null;
+  timeout_s: number;
 }

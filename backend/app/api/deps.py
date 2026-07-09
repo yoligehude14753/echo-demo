@@ -10,6 +10,7 @@ from app.adapters.diarizer import make_diarizer
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import OpenAICompatibleLLM
 from app.adapters.repo import make_repository
+from app.agents.service import aclose_agent_task_service
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
@@ -168,6 +169,10 @@ async def aclose_repository() -> None:
     if _repo_singleton is not None:
         await _repo_singleton.aclose()
         _repo_singleton = None
+
+
+async def aclose_agents() -> None:
+    await aclose_agent_task_service()
 
 
 def reset_deps_for_test() -> None:
