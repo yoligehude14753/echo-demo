@@ -329,7 +329,7 @@ export async function installEchoMock(
             configured_dirs: [],
             authorized_dirs: [],
             n_indexed: 0,
-            max_file_mb: 20,
+            max_file_mb: 100,
             scan_on_startup: true,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },

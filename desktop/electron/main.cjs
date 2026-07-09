@@ -312,6 +312,437 @@ function loadLegacyEchodeskHistory() {
   };
 }
 
+const WORKSPACE_MAX_FILE_MB = Math.max(
+  1,
+  Number.parseFloat(process.env.ECHO_WORKSPACE_MAX_FILE_MB || "100") || 100,
+);
+const WORKSPACE_MAX_BYTES = Math.floor(WORKSPACE_MAX_FILE_MB * 1024 * 1024);
+const WORKSPACE_SUPPORTED_EXTS = new Set([
+  ".pdf",
+  ".docx",
+  ".doc",
+  ".pptx",
+  ".ppt",
+  ".xlsx",
+  ".xls",
+  ".html",
+  ".htm",
+  ".csv",
+  ".epub",
+  ".msg",
+  ".eml",
+  ".md",
+  ".markdown",
+  ".txt",
+  ".text",
+  ".log",
+  ".rst",
+  ".json",
+  ".jsonl",
+  ".yaml",
+  ".yml",
+  ".xml",
+  ".srt",
+  ".vtt",
+  ".sql",
+  ".py",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".go",
+  ".rs",
+  ".java",
+  ".c",
+  ".cc",
+  ".cpp",
+  ".h",
+  ".hpp",
+  ".sh",
+  ".zsh",
+  ".toml",
+  ".ini",
+  ".cfg",
+  ".env",
+  ".conf",
+]);
+const WORKSPACE_EXCLUDED_DIRS = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  "node_modules",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+  ".cache",
+  ".venv",
+  "venv",
+  "__pycache__",
+]);
+
+function workspaceStorePath() {
+  return path.join(app.getPath("userData"), "workspaces.json");
+}
+
+function expandHome(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+function normalizeLocalWorkspaceDir(raw) {
+  const expanded = expandHome(raw);
+  if (!expanded) throw new Error("目录路径不能为空");
+  const resolved = path.resolve(expanded);
+  let stat;
+  try {
+    stat = fs.statSync(resolved);
+  } catch (e) {
+    throw new Error(`目录不存在：${resolved}`);
+  }
+  if (!stat.isDirectory()) throw new Error(`不是目录：${resolved}`);
+  return resolved;
+}
+
+function readLocalWorkspaceStore() {
+  const storePath = workspaceStorePath();
+  try {
+    if (!fs.existsSync(storePath)) {
+      return { workspaces: [], files: {}, lastScan: null };
+    }
+    const raw = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const workspaces = Array.isArray(raw.workspaces)
+      ? raw.workspaces.filter((d) => typeof d === "string" && d.trim())
+      : [];
+    return {
+      workspaces: Array.from(new Set(workspaces)),
+      files: raw.files && typeof raw.files === "object" ? raw.files : {},
+      lastScan: raw.lastScan && typeof raw.lastScan === "object" ? raw.lastScan : null,
+    };
+  } catch (e) {
+    log(`[workspace] read store failed: ${e?.message ?? e}`);
+    return { workspaces: [], files: {}, lastScan: null };
+  }
+}
+
+function writeLocalWorkspaceStore(store) {
+  const storePath = workspaceStorePath();
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  const payload = {
+    schema: 2,
+    workspaces: Array.from(new Set(store.workspaces || [])),
+    files: store.files || {},
+    lastScan: store.lastScan || null,
+    updatedAt: new Date().toISOString(),
+  };
+  const tmp = `${storePath}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf8");
+  fs.renameSync(tmp, storePath);
+}
+
+function localWorkspaceDirs() {
+  const store = readLocalWorkspaceStore();
+  return store.workspaces.filter((d) => typeof d === "string" && d.trim());
+}
+
+function localAuthorizedWorkspaceDirs() {
+  return localWorkspaceDirs().filter((d) => {
+    try {
+      return fs.statSync(d).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function appendApiPath(apiPath) {
+  const base = BACKEND_HOST.replace(/\/+$/, "");
+  return `${base}${apiPath.startsWith("/") ? apiPath : `/${apiPath}`}`;
+}
+
+async function fetchWithTimeout(url, init = {}, timeoutMs = 30_000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readJsonResponse(resp) {
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}: ${text.slice(0, 300)}`);
+  }
+  return text ? JSON.parse(text) : {};
+}
+
+async function listRemoteRagDocs() {
+  const resp = await fetchWithTimeout(appendApiPath("/rag/docs"), {}, 15_000);
+  const json = await readJsonResponse(resp);
+  return Array.isArray(json.docs) ? json.docs : [];
+}
+
+async function countRemoteWorkspaceDocs(fallback) {
+  try {
+    const docs = await listRemoteRagDocs();
+    return docs.filter((doc) => doc && doc.source === "workspace").length;
+  } catch (e) {
+    log(`[workspace] count remote docs failed: ${e?.message ?? e}`);
+    return fallback;
+  }
+}
+
+function shouldSkipWorkspaceDir(name) {
+  return name.startsWith(".") || WORKSPACE_EXCLUDED_DIRS.has(name);
+}
+
+function hasHiddenPathPart(root, target) {
+  const rel = path.relative(root, target);
+  if (!rel || rel.startsWith("..")) return false;
+  return rel.split(path.sep).some((part) => part.startsWith("."));
+}
+
+async function sha1Head(filePath, maxBytes = 1024 * 1024) {
+  const crypto = require("node:crypto");
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    const length = Math.min(maxBytes, stat.size);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, 0);
+    return crypto.createHash("sha1").update(buffer).digest("hex");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function collectWorkspaceFiles(root, result, out) {
+  let entries;
+  try {
+    entries = await fs.promises.readdir(root, { withFileTypes: true });
+  } catch (e) {
+    result.n_failed += 1;
+    result.errors.push(`读取目录失败 ${root}: ${e?.message ?? e}`);
+    return;
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    try {
+      if (entry.isDirectory()) {
+        if (shouldSkipWorkspaceDir(entry.name)) continue;
+        await collectWorkspaceFiles(fullPath, result, out);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (hasHiddenPathPart(root, fullPath)) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!WORKSPACE_SUPPORTED_EXTS.has(ext)) continue;
+      const stat = await fs.promises.stat(fullPath);
+      if (stat.size > WORKSPACE_MAX_BYTES) {
+        result.n_skipped += 1;
+        result.errors.push(
+          `跳过超大文件 ${entry.name}: ${(stat.size / 1024 / 1024).toFixed(1)}MB > ${WORKSPACE_MAX_FILE_MB}MB`,
+        );
+        continue;
+      }
+      result.n_total += 1;
+      out.push({
+        path: path.resolve(fullPath),
+        name: entry.name,
+        size: stat.size,
+        mtime: stat.mtimeMs,
+      });
+    } catch (e) {
+      result.n_failed += 1;
+      result.errors.push(`读取文件失败 ${fullPath}: ${e?.message ?? e}`);
+    }
+  }
+}
+
+async function uploadWorkspaceFile(fileInfo) {
+  const content = await fs.promises.readFile(fileInfo.path);
+  const form = new FormData();
+  const BlobCtor = globalThis.Blob || require("node:buffer").Blob;
+  form.append("file", new BlobCtor([content]), path.basename(fileInfo.path));
+  form.append("title", path.basename(fileInfo.path, path.extname(fileInfo.path)));
+  form.append("source", "workspace");
+  form.append("source_path", fileInfo.path);
+  const resp = await fetchWithTimeout(
+    appendApiPath("/rag/ingest"),
+    { method: "POST", body: form },
+    120_000,
+  );
+  return readJsonResponse(resp);
+}
+
+async function deleteRemoteRagDoc(docId) {
+  if (!docId) return;
+  const resp = await fetchWithTimeout(
+    appendApiPath(`/rag/docs/${encodeURIComponent(docId)}`),
+    { method: "DELETE" },
+    30_000,
+  );
+  await readJsonResponse(resp);
+}
+
+async function localWorkspaceStatus() {
+  const store = readLocalWorkspaceStore();
+  const authorized = store.workspaces.filter((d) => {
+    try {
+      return fs.statSync(d).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  const fallbackCount =
+    typeof store.lastScan?.n_indexed === "number"
+      ? store.lastScan.n_indexed
+      : Object.keys(store.files || {}).length;
+  return {
+    configured_dirs: store.workspaces,
+    authorized_dirs: authorized,
+    n_indexed: await countRemoteWorkspaceDocs(fallbackCount),
+    max_file_mb: WORKSPACE_MAX_FILE_MB,
+    scan_on_startup: false,
+  };
+}
+
+async function scanLocalWorkspaces() {
+  const started = Date.now();
+  const result = {
+    n_total: 0,
+    n_added: 0,
+    n_updated: 0,
+    n_removed: 0,
+    n_skipped: 0,
+    n_failed: 0,
+    duration_s: 0,
+    errors: [],
+  };
+  const store = readLocalWorkspaceStore();
+  const files = [];
+  for (const dir of localAuthorizedWorkspaceDirs()) {
+    await collectWorkspaceFiles(dir, result, files);
+  }
+
+  const nextFiles = { ...(store.files || {}) };
+  const currentPaths = new Set(files.map((f) => f.path));
+  for (const [sourcePath, meta] of Object.entries(store.files || {})) {
+    if (currentPaths.has(sourcePath)) continue;
+    try {
+      await deleteRemoteRagDoc(meta?.doc_id);
+      delete nextFiles[sourcePath];
+      result.n_removed += 1;
+    } catch (e) {
+      result.n_failed += 1;
+      result.errors.push(`删除旧索引失败 ${sourcePath}: ${e?.message ?? e}`);
+    }
+  }
+
+  for (const file of files) {
+    const prev = nextFiles[file.path];
+    if (prev && prev.size === file.size && prev.mtime === file.mtime) {
+      result.n_skipped += 1;
+      continue;
+    }
+
+    let sha1 = "";
+    try {
+      sha1 = await sha1Head(file.path);
+    } catch (e) {
+      result.errors.push(`读取摘要失败 ${file.name}: ${e?.message ?? e}`);
+    }
+    if (prev && prev.size === file.size && prev.sha1 && prev.sha1 === sha1) {
+      nextFiles[file.path] = {
+        ...prev,
+        mtime: file.mtime,
+        size: file.size,
+        sha1,
+      };
+      result.n_skipped += 1;
+      continue;
+    }
+
+    try {
+      if (prev?.doc_id) {
+        await deleteRemoteRagDoc(prev.doc_id).catch((e) => {
+          log(`[workspace] delete previous doc failed: ${e?.message ?? e}`);
+        });
+      }
+      const uploaded = await uploadWorkspaceFile(file);
+      nextFiles[file.path] = {
+        doc_id: uploaded.doc_id,
+        title: uploaded.title || file.name,
+        size: file.size,
+        mtime: file.mtime,
+        sha1,
+        ingested_at: Date.now(),
+      };
+      if (prev) result.n_updated += 1;
+      else result.n_added += 1;
+    } catch (e) {
+      result.n_failed += 1;
+      result.errors.push(`入库失败 ${file.name}: ${e?.message ?? e}`);
+    }
+  }
+
+  result.duration_s = Number(((Date.now() - started) / 1000).toFixed(3));
+  const nIndexed = Object.keys(nextFiles).length;
+  writeLocalWorkspaceStore({
+    ...store,
+    files: nextFiles,
+    lastScan: {
+      n_indexed: nIndexed,
+      scannedAt: new Date().toISOString(),
+      errors: result.errors.slice(0, 20),
+    },
+  });
+  return result;
+}
+
+async function clearLocalWorkspaceDocs() {
+  const store = readLocalWorkspaceStore();
+  let removed = 0;
+  try {
+    const docs = await listRemoteRagDocs();
+    for (const doc of docs) {
+      if (doc?.source !== "workspace") continue;
+      try {
+        await deleteRemoteRagDoc(doc.doc_id);
+        removed += 1;
+      } catch (e) {
+        log(`[workspace] delete remote workspace doc failed: ${e?.message ?? e}`);
+      }
+    }
+  } catch (e) {
+    log(`[workspace] list remote docs before clear failed: ${e?.message ?? e}`);
+    for (const meta of Object.values(store.files || {})) {
+      try {
+        await deleteRemoteRagDoc(meta?.doc_id);
+        removed += 1;
+      } catch (deleteError) {
+        log(`[workspace] delete stored doc failed: ${deleteError?.message ?? deleteError}`);
+      }
+    }
+  }
+  writeLocalWorkspaceStore({
+    ...store,
+    files: {},
+    lastScan: {
+      n_indexed: 0,
+      scannedAt: new Date().toISOString(),
+      errors: [],
+    },
+  });
+  return { n_removed: removed };
+}
+
 function compareVersions(a, b) {
   const aa = normalizeVersion(a).split(".").map((x) => parseInt(x, 10) || 0);
   const bb = normalizeVersion(b).split(".").map((x) => parseInt(x, 10) || 0);
@@ -1252,6 +1683,30 @@ ipcMain.handle("workspace:pick-directory", async (_event, opts = {}) => {
     throw e instanceof Error ? e : new Error(String(e));
   }
 });
+
+ipcMain.handle("workspace:local-status", async () => localWorkspaceStatus());
+
+ipcMain.handle("workspace:add-local-dir", async (_event, dir) => {
+  const normalized = normalizeLocalWorkspaceDir(dir);
+  const store = readLocalWorkspaceStore();
+  const exists = store.workspaces.includes(normalized);
+  const workspaces = exists ? store.workspaces : [...store.workspaces, normalized];
+  writeLocalWorkspaceStore({ ...store, workspaces });
+  return { added: !exists, path: normalized, configured_dirs: workspaces };
+});
+
+ipcMain.handle("workspace:remove-local-dir", async (_event, dir) => {
+  const normalized = path.resolve(expandHome(dir));
+  const store = readLocalWorkspaceStore();
+  const workspaces = store.workspaces.filter((d) => d !== normalized);
+  const removed = workspaces.length !== store.workspaces.length;
+  writeLocalWorkspaceStore({ ...store, workspaces });
+  return { removed, path: normalized, configured_dirs: workspaces };
+});
+
+ipcMain.handle("workspace:scan-local", async () => scanLocalWorkspaces());
+
+ipcMain.handle("workspace:clear-local-docs", async () => clearLocalWorkspaceDocs());
 
 ipcMain.handle("mic:open-system-prefs", async () => {
   if (process.platform !== "darwin") {

@@ -54,9 +54,12 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
     setScanning(true);
     try {
       const r = await workspaceScan();
-      message.success(
-        `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped} · 删除 ${r.n_removed} · 耗时 ${r.duration_s}s`,
-      );
+      const text = `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped} · 删除 ${r.n_removed} · 失败 ${r.n_failed} · 耗时 ${r.duration_s}s`;
+      if (r.n_failed > 0) {
+        message.warning(text);
+      } else {
+        message.success(text);
+      }
       await refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

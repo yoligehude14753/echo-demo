@@ -40,6 +40,25 @@ export interface AppUpdateStatus {
   error?: string;
 }
 
+export interface ElectronWorkspaceStatus {
+  configured_dirs: string[];
+  authorized_dirs: string[];
+  n_indexed: number;
+  max_file_mb: number;
+  scan_on_startup: boolean;
+}
+
+export interface ElectronWorkspaceScanResult {
+  n_total: number;
+  n_added: number;
+  n_updated: number;
+  n_removed: number;
+  n_skipped: number;
+  n_failed: number;
+  duration_s: number;
+  errors: string[];
+}
+
 interface ElectronEchoBridge {
   isElectron?: boolean;
   isPublicDemo?: boolean;
@@ -65,6 +84,17 @@ interface ElectronEchoBridge {
   // P4-fix-rag-chat：选工作区目录。Promise<string | null>，null=用户取消。
   // 浏览器/纯 dev 模式下 undefined（SettingsPanel 会用 prompt() 兜底）。
   pickDirectory?: (opts?: { defaultPath?: string }) => Promise<string | null>;
+  // 公网桌面包：后端在云端，不能直接读取本机目录；目录授权和文件扫描由
+  // Electron 主进程在本机完成，再把可索引文件上传到云端 RAG。
+  getLocalWorkspaceStatus?: () => Promise<ElectronWorkspaceStatus>;
+  addLocalWorkspaceDir?: (
+    dir: string,
+  ) => Promise<{ added: boolean; path: string; configured_dirs: string[] }>;
+  removeLocalWorkspaceDir?: (
+    dir: string,
+  ) => Promise<{ removed: boolean; path: string; configured_dirs: string[] }>;
+  scanLocalWorkspaces?: () => Promise<ElectronWorkspaceScanResult>;
+  clearLocalWorkspaceDocs?: () => Promise<{ n_removed: number }>;
 }
 
 declare global {

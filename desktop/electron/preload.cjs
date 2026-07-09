@@ -57,4 +57,10 @@ contextBridge.exposeInMainWorld("echo", {
   // 调系统 dialog.showOpenDialog 选目录；用户取消时 resolve(null)，
   // 选了一个目录 resolve(absolutePath)；调用失败 reject(Error)。
   pickDirectory: (opts) => ipcRenderer.invoke("workspace:pick-directory", opts ?? {}),
+  getLocalWorkspaceStatus: () => ipcRenderer.invoke("workspace:local-status"),
+  addLocalWorkspaceDir: (dir) => ipcRenderer.invoke("workspace:add-local-dir", dir),
+  removeLocalWorkspaceDir: (dir) =>
+    ipcRenderer.invoke("workspace:remove-local-dir", dir),
+  scanLocalWorkspaces: () => ipcRenderer.invoke("workspace:scan-local"),
+  clearLocalWorkspaceDocs: () => ipcRenderer.invoke("workspace:clear-local-docs"),
 });

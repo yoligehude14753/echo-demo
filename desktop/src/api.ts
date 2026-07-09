@@ -700,19 +700,37 @@ export interface WorkspaceScanResult {
   errors: string[];
 }
 
+function shouldUseLocalDesktopWorkspace(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.echo?.isElectron === true &&
+    window.echo?.isPublicDemo === true &&
+    typeof window.echo.getLocalWorkspaceStatus === "function"
+  );
+}
+
 export async function workspaceStatus(): Promise<WorkspaceStatus> {
+  if (shouldUseLocalDesktopWorkspace()) {
+    return window.echo!.getLocalWorkspaceStatus!();
+  }
   const u = await apiUrl("/workspace/status");
   const r = await fetch(u);
   return asJson<WorkspaceStatus>(r);
 }
 
 export async function workspaceScan(): Promise<WorkspaceScanResult> {
+  if (shouldUseLocalDesktopWorkspace() && window.echo?.scanLocalWorkspaces) {
+    return window.echo.scanLocalWorkspaces();
+  }
   const u = await apiUrl("/workspace/scan");
   const r = await fetch(u, { method: "POST" });
   return asJson<WorkspaceScanResult>(r);
 }
 
 export async function workspaceClear(): Promise<{ n_removed: number }> {
+  if (shouldUseLocalDesktopWorkspace() && window.echo?.clearLocalWorkspaceDocs) {
+    return window.echo.clearLocalWorkspaceDocs();
+  }
   const u = await apiUrl("/workspace/clear");
   const r = await fetch(u, { method: "POST" });
   return asJson(r);
@@ -731,6 +749,15 @@ export async function workspaceClear(): Promise<{ n_removed: number }> {
 export async function workspaceAddDir(
   path: string,
 ): Promise<{ added: boolean; path: string; configured_dirs: string[] }> {
+  if (shouldUseLocalDesktopWorkspace() && window.echo?.addLocalWorkspaceDir) {
+    const result = await window.echo.addLocalWorkspaceDir(path);
+    if (result.added && window.echo.scanLocalWorkspaces) {
+      void window.echo.scanLocalWorkspaces().catch((e) => {
+        console.warn("[workspace] background local scan failed", e);
+      });
+    }
+    return result;
+  }
   const u = await apiUrl("/workspace/add-dir");
   const r = await fetch(u, {
     method: "POST",
@@ -748,6 +775,9 @@ export async function workspaceAddDir(
 export async function workspaceRemoveDir(
   path: string,
 ): Promise<{ removed: boolean; path: string; configured_dirs: string[] }> {
+  if (shouldUseLocalDesktopWorkspace() && window.echo?.removeLocalWorkspaceDir) {
+    return window.echo.removeLocalWorkspaceDir(path);
+  }
   const u = await apiUrl("/workspace/remove-dir");
   const r = await fetch(u, {
     method: "POST",

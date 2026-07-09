@@ -1,32 +1,32 @@
 # EchoDesk · 数字分身 (Another Me)
 
 > **目标**：会议 + 办公场景的"数字分身"应用。公开安装包可直接使用 EchoDesk 服务；模型密钥不进入客户端包；私有部署仍可显式启用本机服务。
-> **当前源码版本**：v0.2.49（详见 [`CHANGELOG.md`](CHANGELOG.md)）
-> **公开下载**：见 [GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)；v0.2.49 macOS 资产已发布。
+> **当前源码版本**：v0.2.50（详见 [`CHANGELOG.md`](CHANGELOG.md)）
+> **公开下载**：见 [GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)；本轮已本机构建 v0.2.50 macOS 资产，发布后可下载。
 > **安装指南**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
 > **服务端模型配置**：公开安装包默认连接 EchoDesk 服务端，模型密钥不会进入客户端包。
 
 ## 立即下载
 
-当前源码版本是 `v0.2.49`。公开安装包下载页：
+当前源码版本是 `v0.2.50`。公开安装包下载页：
 <https://github.com/yoligehude14753/echo-demo/releases/latest>
 
 | 平台 | Release 资产命名 | 说明 |
 |---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.2.49-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.2.49-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows 安装器 | `EchoDesk.Setup.0.2.49.exe` | 普通 Windows 安装包 |
-| Windows 便携包 | `EchoDesk-0.2.49-win-x64.zip` | 解压后运行 `EchoDesk.exe`；受管/远程环境优先用这个 |
-| Linux AppImage | `EchoDesk-0.2.49.AppImage` | Linux x64 免安装运行 |
-| Linux deb | `echodesk-desktop_0.2.49_amd64.deb` | Ubuntu / Debian 安装包 |
-| Android 手机 / 平板 | `EchoDesk-0.2.49-android.apk` | 默认连接 EchoDesk 公共演示服务 |
-| Android TV / 智能电视 | `EchoDesk-0.2.49-smart-tv.apk` | 适配遥控器、电视桌面入口和开机自启 |
-| 智能电视一键安装 | `EchoDesk-0.2.49-smart-tv-oneclick.zip` | 内含 macOS / Windows ADB 安装脚本 |
-| 校验文件 | `SHA256SUMS-0.2.49.txt` | 校验下载完整性 |
+| macOS Apple Silicon | `EchoDesk-0.2.50-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.2.50-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows 安装器 | `EchoDesk.Setup.0.2.50.exe` | 需 Windows 构建 workflow 产出后才可下载 |
+| Windows 便携包 | `EchoDesk-0.2.50-win-x64.zip` | 需 Windows 构建 workflow 产出后才可下载 |
+| Linux AppImage | `EchoDesk-0.2.50.AppImage` | 需 Linux 构建产出后才可下载 |
+| Linux deb | `echodesk-desktop_0.2.50_amd64.deb` | 需 Linux 构建产出后才可下载 |
+| Android 手机 / 平板 | `EchoDesk-0.2.50-android.apk` | 需 Android 构建产出后才可下载 |
+| Android TV / 智能电视 | `EchoDesk-0.2.50-smart-tv.apk` | 需 TV 打包产出后才可下载 |
+| 智能电视一键安装 | `EchoDesk-0.2.50-smart-tv-oneclick.zip` | 需 TV 打包产出后才可下载 |
+| 校验文件 | `SHA256SUMS-0.2.50.txt` | 随已发布资产一起上传 |
 
 公开桌面包、Android 和 TV 客户端默认连接 `https://echodesk.yoliyoli.uk`，模型服务和密钥都在服务端。
-Windows 机器若出现 Device Guard / 组织策略拦截 `.exe` 安装器，请下载 `EchoDesk-0.2.49-win-x64.zip`，
+Windows 机器若出现 Device Guard / 组织策略拦截 `.exe` 安装器，请下载 `EchoDesk-0.2.50-win-x64.zip`，
 解压后直接运行 `EchoDesk.exe`；该形态已在 Windows 远程机通过启动和设置页点击 smoke。
 私有桌面部署可设置 `ECHO_FORCE_LOCAL_BACKEND=1` 恢复本机 Python 服务。
 更详细的安装、电视侧载和本机服务说明见 [`docs/INSTALL.md`](docs/INSTALL.md)。

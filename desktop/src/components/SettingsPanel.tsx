@@ -429,9 +429,12 @@ export default function SettingsPanel({
     setWsScanBusy(true);
     try {
       const r = await workspaceScan();
-      message.success(
-        `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped}`,
-      );
+      const text = `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped} · 失败 ${r.n_failed}`;
+      if (r.n_failed > 0) {
+        message.warning(text);
+      } else {
+        message.success(text);
+      }
       await refreshWorkspace();
     } catch (e) {
       message.error(`扫描失败：${(e as Error).message}`);
@@ -964,8 +967,8 @@ export default function SettingsPanel({
                   EchoDesk 会扫描这些目录下的可索引文件（PDF / Word / Excel / PPT /
                   Markdown / TXT 等），自动加入知识库，让"@查 / 提问"能覆盖整个文件夹。
                   <br />
-                  当前已索引 <span className="font-mono text-accent">{ws.n_indexed}</span> 个文件
-                  · 单文件上限 {ws.max_file_mb} MB
+                  当前已索引 <span className="font-mono text-accent">{ws.n_indexed}</span> 个文件；
+                  为避免超大文件拖慢索引，超过 {ws.max_file_mb} MB 的单文件会跳过。
                 </div>
                 {ws.configured_dirs.length === 0 ? (
                   <div className="text-[12px] text-ink-400 italic">

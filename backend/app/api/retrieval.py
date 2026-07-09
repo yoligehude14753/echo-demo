@@ -14,7 +14,7 @@ import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -64,13 +64,16 @@ class AskRequest(BaseModel):
 @router.post("/rag/ingest")
 async def rag_ingest(
     file: UploadFile = File(...),
-    title: str | None = None,
+    title: str | None = Form(None),
+    source: str = Form("upload"),
+    source_path: str | None = Form(None),
     rag: RagPort = Depends(get_rag),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     """通用文档入库。支持的扩展名见 `parsers.SUPPORTED_EXTS`。
 
-    上限：settings.upload_max_file_mb（默认 50 MB）。
+    上限：用户拖入使用 settings.upload_max_file_mb；工作区来源使用
+    settings.workspace_max_file_mb。
     """
     from app.adapters.rag.parsers import SUPPORTED_EXTS
 
@@ -84,12 +87,23 @@ async def rag_ingest(
                 f"supported: {', '.join(sorted(SUPPORTED_EXTS))}"
             ),
         )
-    max_bytes = int(settings.upload_max_file_mb * 1024 * 1024)
+    normalized_source = source if source in {"upload", "workspace"} else "upload"
+    limit_mb = (
+        settings.workspace_max_file_mb
+        if normalized_source == "workspace"
+        else settings.upload_max_file_mb
+    )
+    normalized_source_path = (
+        source_path.strip()
+        if normalized_source == "workspace" and source_path and source_path.strip()
+        else None
+    )
+    max_bytes = int(limit_mb * 1024 * 1024)
     content = await file.read()
     if len(content) > max_bytes:
         raise HTTPException(
             status_code=400,
-            detail=f"file too large: {len(content) / 1e6:.1f}MB > {settings.upload_max_file_mb}MB",
+            detail=f"file too large: {len(content) / 1e6:.1f}MB > {limit_mb}MB",
         )
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
@@ -98,7 +112,8 @@ async def rag_ingest(
         doc_id = await rag.ingest_file(
             tmp_path,
             doc_title=title or filename,
-            source="upload",
+            source=normalized_source,
+            source_path=normalized_source_path,
         )
     except RagError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

@@ -68,6 +68,7 @@ test.describe("EchoDesk 打包 App", () => {
     });
 
     try {
+      const appVersion = await app.evaluate(async ({ app }) => app.getVersion());
       // 第一个窗口 = 主 BrowserWindow
       const win: Page = await app.firstWindow({ timeout: 60_000 });
       // 等 React 渲染
@@ -101,6 +102,12 @@ test.describe("EchoDesk 打包 App", () => {
           { timeout: 10_000 },
         )
         .toBe("https://echodesk.yoliyoli.uk");
+      const backendHealth = await win.evaluate(async () => {
+        const base = await window.echo?.getBackendHost?.();
+        const resp = await fetch(`${base}/healthz/full`);
+        return (await resp.json()) as { backend?: { version?: string } };
+      });
+      expect(backendHealth.backend?.version).toBe(appVersion);
 
       // 3. WS 已握手。当前 UI 把旧的连接 pill 合并进顶部 StatusBar，
       //    `.app-connection-status` 会被视觉隐藏，但仍保留文本状态供 E2E 断言。
@@ -110,7 +117,9 @@ test.describe("EchoDesk 打包 App", () => {
       await expect(win.getByTestId("pill-backend")).toBeVisible({ timeout: 15_000 });
       await win.getByTestId("pill-backend").click();
       const backendPopover = win.locator(".ant-popover").filter({ hasText: "服务端" }).last();
-      await expect(backendPopover.getByText("0.2.49")).toBeVisible({ timeout: 15_000 });
+      await expect(backendPopover.getByText(appVersion, { exact: true })).toBeVisible({
+        timeout: 15_000,
+      });
       await win.keyboard.press("Escape");
 
       // 4. outputs 面板
