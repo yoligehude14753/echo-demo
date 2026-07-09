@@ -325,7 +325,7 @@ test("Android 横屏非 TV 包检查更新仍优先展示 android APK", async ({
   );
 });
 
-test("桌面端后台下载完成后会提示用户确认安装", async ({ page }) => {
+test("桌面端发现新版本后会在顶栏显示更新入口并可点击安装", async ({ page }) => {
   await page.addInitScript(() => {
     type UpdateStatus = {
       status: string;
@@ -351,7 +351,7 @@ test("桌面端后台下载完成后会提示用户确认安装", async ({ page 
       isPublicDemo: true,
       getUpdateStatus: async () => ({
         status: "idle",
-        currentVersion: "0.2.46",
+        currentVersion: "0.2.47",
         releaseUrl: "https://github.com/yoligehude14753/echo-demo/releases/latest",
       }),
       onUpdateStatus: (cb: (status: UpdateStatus) => void) => {
@@ -370,14 +370,15 @@ test("桌面端后台下载完成后会提示用户确认安装", async ({ page 
   });
   await installEchoMock(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("app-update-button")).toBeHidden();
 
   await page.evaluate((version) => {
     const state = window as unknown as Window & {
       __emitUpdateStatus?: (status: Record<string, unknown>) => void;
     };
     state.__emitUpdateStatus?.({
-      status: "downloaded",
-      currentVersion: "0.2.46",
+      status: "available",
+      currentVersion: "0.2.47",
       latestVersion: version,
       updateAvailable: true,
       canAutoInstall: true,
@@ -385,12 +386,9 @@ test("桌面端后台下载完成后会提示用户确认安装", async ({ page 
     });
   }, MOCK_UPDATE_VERSION);
 
-  await expect(
-    page.locator(".ant-modal-confirm-title").filter({
-      hasText: `EchoDesk v${MOCK_UPDATE_VERSION} 已下载`,
-    }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "安装并重启" }).click();
+  await expect(page.getByTestId("app-update-button")).toBeVisible();
+  await expect(page.getByTestId("app-update-button")).toContainText("更新");
+  await page.getByTestId("app-update-button").click();
   await expect
     .poll(() =>
       page.evaluate(

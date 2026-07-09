@@ -1,4 +1,4 @@
-import { Layout, Modal, Tooltip, message } from "antd";
+import { Layout, Tooltip, message } from "antd";
 import {
   AlertTriangle,
   MessageSquare,
@@ -7,7 +7,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import MeetingList from "@/components/MeetingList";
 import TranscriptStream from "@/components/TranscriptStream";
 import ArtifactPanel from "@/components/ArtifactPanel";
@@ -37,7 +37,7 @@ const { Header, Sider, Content } = Layout;
 export default function App(): JSX.Element {
   useEchoWS();
   useMeetingHistory();
-  useAppUpdatePrompt();
+  const appUpdateStatus = useAppUpdateStatus();
   const captureStatus = useEchoCapture();
   const tts = useTtsPlayer();
   const connected = useStore((s) => s.connected);
@@ -72,6 +72,9 @@ export default function App(): JSX.Element {
               v{__APP_VERSION__}
             </button>
           </Tooltip>
+        </div>
+        <div className="app-update-slot app-no-drag flex flex-1 min-w-0 items-center justify-end px-3">
+          <AppUpdateButton status={appUpdateStatus} />
         </div>
         <div className="app-header-status app-no-drag flex items-center gap-3 text-[11px] text-ink-500">
           <StatusBar
@@ -171,47 +174,14 @@ export default function App(): JSX.Element {
   );
 }
 
-function useAppUpdatePrompt(): void {
-  const promptedVersionRef = useRef<string | null>(null);
-  const modalRef = useRef<ReturnType<typeof Modal.confirm> | null>(null);
-
+function useAppUpdateStatus(): AppUpdateStatus | null {
+  const [status, setStatus] = useState<AppUpdateStatus | null>(null);
   useEffect(() => {
     let cancelled = false;
     const handleStatus = (status: AppUpdateStatus) => {
-      if (
-        cancelled ||
-        status.status !== "downloaded" ||
-        !status.updateAvailable ||
-        !status.canAutoInstall
-      ) {
-        return;
+      if (!cancelled) {
+        setStatus(status);
       }
-      const version = status.latestVersion || status.releaseName || "new";
-      if (promptedVersionRef.current === version) return;
-      promptedVersionRef.current = version;
-      modalRef.current = Modal.confirm({
-        title:
-          status.latestVersion ? `EchoDesk v${status.latestVersion} 已下载` : "EchoDesk 新版本已下载",
-        content: (
-          <div className="text-[13px] leading-relaxed">
-            更新包已在后台下载完成。点击“安装并重启”会关闭 EchoDesk 完成更新；本机历史和设置会保留。
-          </div>
-        ),
-        okText: "安装并重启",
-        cancelText: "稍后",
-        onOk: async () => {
-          try {
-            await installAppUpdate(status);
-          } catch (e) {
-            message.error(`安装更新失败：${(e as Error).message}`);
-            try {
-              await openUpdateTarget(status);
-            } catch {
-              /* ignore */
-            }
-          }
-        },
-      });
     };
 
     if (window.echo?.getUpdateStatus) {
@@ -221,10 +191,66 @@ function useAppUpdatePrompt(): void {
     return () => {
       cancelled = true;
       unsubscribe?.();
-      modalRef.current?.destroy();
-      modalRef.current = null;
     };
   }, []);
+  return status;
+}
+
+function shouldShowUpdateButton(status: AppUpdateStatus | null): status is AppUpdateStatus {
+  return !!status?.updateAvailable || status?.status === "downloading" || status?.status === "downloaded";
+}
+
+function updateButtonLabel(status: AppUpdateStatus): string {
+  if (status.status === "installing") return "正在安装";
+  if (status.status === "downloaded") return "安装并重启";
+  if (status.status === "downloading") return `下载中 ${status.percent ?? 0}%`;
+  if (status.canAutoInstall === false) return "下载更新";
+  return "更新";
+}
+
+function AppUpdateButton({ status }: { status: AppUpdateStatus | null }): JSX.Element | null {
+  if (!shouldShowUpdateButton(status)) return null;
+  const disabled = status.status === "downloading" || status.status === "installing";
+  const tooltip =
+    status.status === "downloaded"
+      ? "更新包已下载，点击后安装并重启"
+      : status.canAutoInstall === false
+        ? "当前平台需要打开下载页手动更新"
+        : status.latestVersion
+          ? `发现 EchoDesk v${status.latestVersion}`
+          : "发现 EchoDesk 新版本";
+
+  const onClick = async () => {
+    if (disabled) return;
+    try {
+      await installAppUpdate(status);
+      if (!status.canAutoInstall) {
+        message.info("已打开下载页面");
+      }
+    } catch (e) {
+      message.error(`更新失败：${(e as Error).message}`);
+      try {
+        await openUpdateTarget(status);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  return (
+    <Tooltip title={tooltip}>
+      <button
+        type="button"
+        onClick={() => void onClick()}
+        disabled={disabled}
+        className="inline-flex min-h-7 max-w-[150px] items-center justify-center rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[12px] font-medium text-accent shadow-[0_0_0_1px_rgba(16,163,127,0.08)] transition hover:border-accent/50 hover:bg-accent/15 disabled:cursor-default disabled:opacity-70"
+        data-testid="app-update-button"
+        aria-label={tooltip}
+      >
+        <span className="truncate">{updateButtonLabel(status)}</span>
+      </button>
+    </Tooltip>
+  );
 }
 
 // ── 顶栏 TTS 状态按钮 ──────────────────────────────────────────────

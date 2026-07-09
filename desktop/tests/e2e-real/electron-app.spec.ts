@@ -100,7 +100,7 @@ test.describe("EchoDesk 打包 App", () => {
       await expect(win.getByTestId("pill-backend")).toBeVisible({ timeout: 15_000 });
       await win.getByTestId("pill-backend").click();
       const backendPopover = win.locator(".ant-popover").filter({ hasText: "服务端" }).last();
-      await expect(backendPopover.getByText("0.2.46")).toBeVisible({ timeout: 15_000 });
+      await expect(backendPopover.getByText("0.2.47")).toBeVisible({ timeout: 15_000 });
       await win.keyboard.press("Escape");
 
       // 4. outputs 面板
