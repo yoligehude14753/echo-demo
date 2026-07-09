@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld("echo", {
   manualRestartBackend: () => ipcRenderer.invoke("backend:manual-restart"),
 
   // 更新检查：桌面打包版走 electron-updater；dev/浏览器/Android 由前端走 GitHub
-  // Release fallback。installUpdate 在不能静默安装的平台会打开 release 页面。
+  // Release fallback。桌面端后台下载完成后由 renderer 请求用户确认安装。
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   getUpdateStatus: () => ipcRenderer.invoke("updates:last-status"),
   installUpdate: () => ipcRenderer.invoke("updates:download-and-install"),

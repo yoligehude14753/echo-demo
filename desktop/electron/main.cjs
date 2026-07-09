@@ -42,6 +42,13 @@ const AUTO_UPDATE_CHECK_DELAY_MS = Math.max(
   0,
   parseInt(process.env.ECHODESK_AUTO_UPDATE_CHECK_DELAY_MS || "15000", 10) || 15000,
 );
+const AUTO_UPDATE_CHECK_INTERVAL_MS = Math.max(
+  15 * 60 * 1000,
+  parseInt(process.env.ECHODESK_AUTO_UPDATE_CHECK_INTERVAL_MS || "", 10) ||
+    4 * 60 * 60 * 1000,
+);
+const AUTO_UPDATE_DOWNLOAD_ENABLED =
+  process.env.ECHODESK_DISABLE_AUTO_UPDATE_DOWNLOAD !== "1";
 const FORCE_LOCAL_BACKEND = process.env.ECHO_FORCE_LOCAL_BACKEND === "1";
 const PUBLIC_DEMO_MODE = process.env.ECHO_PUBLIC_DEMO === "1";
 const BACKEND_HOST = PUBLIC_DEMO_MODE ? PUBLIC_BACKEND_HOST : LOCAL_BACKEND_HOST;
@@ -89,6 +96,10 @@ let lastUpdateStatus = {
   currentVersion: app.getVersion(),
   releaseUrl: RELEASES_URL,
 };
+let updateCheckTimer = null;
+let updateCheckInFlight = false;
+let updateDownloadPromise = null;
+let downloadedUpdateVersion = null;
 
 // 主进程未捕获异常不弹 fatal dialog；UI 应该自己感知 backend 状态
 process.on("uncaughtException", (err) => {
@@ -445,12 +456,18 @@ async function checkForUpdatesWithFallback() {
     delete fallbackWithoutError.error;
     const merged = {
       ...fallbackWithoutError,
-      status: updateAvailable ? "available" : "current",
+      status:
+        updateAvailable && latestVersion === downloadedUpdateVersion
+          ? "downloaded"
+          : updateAvailable
+            ? "available"
+            : "current",
       latestVersion,
       updateAvailable,
       canAutoInstall: updateAvailable,
     };
     emitUpdateStatus(merged);
+    maybeDownloadUpdateInBackground(merged, "check");
     return merged;
   } catch (e) {
     const merged = {
@@ -464,13 +481,70 @@ async function checkForUpdatesWithFallback() {
   }
 }
 
+function maybeDownloadUpdateInBackground(status, reason) {
+  if (
+    !AUTO_UPDATE_DOWNLOAD_ENABLED ||
+    !autoUpdater ||
+    IS_DEV ||
+    !status?.updateAvailable ||
+    !status?.canAutoInstall ||
+    normalizeVersion(status?.latestVersion) === downloadedUpdateVersion ||
+    lastUpdateStatus.status === "downloaded" ||
+    lastUpdateStatus.status === "installing" ||
+    lastUpdateStatus.status === "downloading" ||
+    updateDownloadPromise
+  ) {
+    return;
+  }
+  const downloadPromise = (async () => {
+    emitUpdateStatus({
+      status: "downloading",
+      percent: lastUpdateStatus.percent ?? 0,
+      canAutoInstall: true,
+      autoDownloaded: true,
+      downloadReason: reason,
+    });
+    await autoUpdater.downloadUpdate();
+  })();
+  updateDownloadPromise = downloadPromise;
+  downloadPromise
+    .catch((e) => {
+      emitUpdateStatus({
+        status: "error",
+        error: e?.message || String(e),
+        canAutoInstall: false,
+      });
+    })
+    .finally(() => {
+      if (updateDownloadPromise === downloadPromise) {
+        updateDownloadPromise = null;
+      }
+    });
+}
+
+async function runScheduledUpdateCheck(reason) {
+  if (updateCheckInFlight || shuttingDown || quittingForReal) return;
+  updateCheckInFlight = true;
+  try {
+    const status = await checkForUpdatesWithFallback();
+    maybeDownloadUpdateInBackground(status, reason);
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
 function scheduleStartupUpdateCheck() {
   if (!autoUpdater || IS_DEV || process.env.ECHODESK_DISABLE_AUTO_UPDATE_CHECK === "1") {
     return;
   }
   setTimeout(() => {
     if (shuttingDown || quittingForReal) return;
-    void checkForUpdatesWithFallback();
+    void runScheduledUpdateCheck("startup");
+    if (!updateCheckTimer) {
+      updateCheckTimer = setInterval(() => {
+        void runScheduledUpdateCheck("interval");
+      }, AUTO_UPDATE_CHECK_INTERVAL_MS);
+    }
   }, AUTO_UPDATE_CHECK_DELAY_MS);
 }
 
@@ -484,16 +558,18 @@ if (autoUpdater) {
   autoUpdater.on("checking-for-update", () =>
     emitUpdateStatus({ status: "checking", canAutoInstall: !IS_DEV }),
   );
-  autoUpdater.on("update-available", (info) =>
-    emitUpdateStatus({
+  autoUpdater.on("update-available", (info) => {
+    const status = {
       status: "available",
       latestVersion: normalizeVersion(info.version),
       updateAvailable: true,
       releaseName: info.releaseName || `EchoDesk v${info.version}`,
       releaseUrl: RELEASES_URL,
       canAutoInstall: !IS_DEV,
-    }),
-  );
+    };
+    emitUpdateStatus(status);
+    maybeDownloadUpdateInBackground(status, "event");
+  });
   autoUpdater.on("update-not-available", (info) =>
     emitUpdateStatus({
       status: "current",
@@ -509,14 +585,15 @@ if (autoUpdater) {
       canAutoInstall: true,
     }),
   );
-  autoUpdater.on("update-downloaded", (info) =>
+  autoUpdater.on("update-downloaded", (info) => {
+    downloadedUpdateVersion = normalizeVersion(info.version);
     emitUpdateStatus({
       status: "downloaded",
-      latestVersion: normalizeVersion(info.version),
+      latestVersion: downloadedUpdateVersion,
       updateAvailable: true,
       canAutoInstall: true,
-    }),
-  );
+    });
+  });
   autoUpdater.on("error", (err) =>
     emitUpdateStatus({
       status: "error",
@@ -1073,9 +1150,14 @@ ipcMain.handle("updates:download-and-install", async () => {
     await shell.openExternal(RELEASES_URL);
     return { ok: false, reason: "manual-release-page", releaseUrl: RELEASES_URL };
   }
-  emitUpdateStatus({ status: "downloading", percent: 0, canAutoInstall: true });
   try {
-    await autoUpdater.downloadUpdate();
+    if (lastUpdateStatus.status !== "downloaded") {
+      emitUpdateStatus({ status: "downloading", percent: 0, canAutoInstall: true });
+      await (updateDownloadPromise || autoUpdater.downloadUpdate());
+    }
+    if (lastUpdateStatus.status !== "downloaded") {
+      throw new Error("update package is not ready yet");
+    }
     emitUpdateStatus({ status: "installing", canAutoInstall: true });
     autoUpdater.quitAndInstall(false, true);
     return { ok: true };

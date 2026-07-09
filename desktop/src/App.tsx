@@ -1,4 +1,4 @@
-import { Layout, Tooltip } from "antd";
+import { Layout, Modal, Tooltip, message } from "antd";
 import {
   AlertTriangle,
   MessageSquare,
@@ -7,7 +7,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import MeetingList from "@/components/MeetingList";
 import TranscriptStream from "@/components/TranscriptStream";
 import ArtifactPanel from "@/components/ArtifactPanel";
@@ -26,12 +26,18 @@ import { useEchoWS } from "@/ws";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 import { useOnboarding } from "@/hooks/useOnboarding";
 import { useMeetingHistory } from "@/hooks/useMeetingHistory";
+import {
+  type AppUpdateStatus,
+  installAppUpdate,
+  openUpdateTarget,
+} from "@/runtime";
 
 const { Header, Sider, Content } = Layout;
 
 export default function App(): JSX.Element {
   useEchoWS();
   useMeetingHistory();
+  useAppUpdatePrompt();
   const captureStatus = useEchoCapture();
   const tts = useTtsPlayer();
   const connected = useStore((s) => s.connected);
@@ -163,6 +169,62 @@ export default function App(): JSX.Element {
       </Layout>
     </Layout>
   );
+}
+
+function useAppUpdatePrompt(): void {
+  const promptedVersionRef = useRef<string | null>(null);
+  const modalRef = useRef<ReturnType<typeof Modal.confirm> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const handleStatus = (status: AppUpdateStatus) => {
+      if (
+        cancelled ||
+        status.status !== "downloaded" ||
+        !status.updateAvailable ||
+        !status.canAutoInstall
+      ) {
+        return;
+      }
+      const version = status.latestVersion || status.releaseName || "new";
+      if (promptedVersionRef.current === version) return;
+      promptedVersionRef.current = version;
+      modalRef.current = Modal.confirm({
+        title:
+          status.latestVersion ? `EchoDesk v${status.latestVersion} 已下载` : "EchoDesk 新版本已下载",
+        content: (
+          <div className="text-[13px] leading-relaxed">
+            更新包已在后台下载完成。点击“安装并重启”会关闭 EchoDesk 完成更新；本机历史和设置会保留。
+          </div>
+        ),
+        okText: "安装并重启",
+        cancelText: "稍后",
+        onOk: async () => {
+          try {
+            await installAppUpdate(status);
+          } catch (e) {
+            message.error(`安装更新失败：${(e as Error).message}`);
+            try {
+              await openUpdateTarget(status);
+            } catch {
+              /* ignore */
+            }
+          }
+        },
+      });
+    };
+
+    if (window.echo?.getUpdateStatus) {
+      void window.echo.getUpdateStatus().then(handleStatus).catch(() => undefined);
+    }
+    const unsubscribe = window.echo?.onUpdateStatus?.(handleStatus);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      modalRef.current?.destroy();
+      modalRef.current = null;
+    };
+  }, []);
 }
 
 // ── 顶栏 TTS 状态按钮 ──────────────────────────────────────────────

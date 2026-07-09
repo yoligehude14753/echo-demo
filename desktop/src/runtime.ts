@@ -35,6 +35,8 @@ export interface AppUpdateStatus {
   assetUrl?: string | null;
   canAutoInstall?: boolean;
   percent?: number;
+  autoDownloaded?: boolean;
+  downloadReason?: string;
   error?: string;
 }
 

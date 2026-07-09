@@ -324,3 +324,80 @@ test("Android 横屏非 TV 包检查更新仍优先展示 android APK", async ({
     `EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
   );
 });
+
+test("桌面端后台下载完成后会提示用户确认安装", async ({ page }) => {
+  await page.addInitScript(() => {
+    type UpdateStatus = {
+      status: string;
+      currentVersion: string;
+      latestVersion?: string;
+      updateAvailable?: boolean;
+      releaseUrl?: string;
+      canAutoInstall?: boolean;
+    };
+    const listeners: Array<(status: UpdateStatus) => void> = [];
+    const state = window as unknown as Window & {
+      __emitUpdateStatus?: (status: UpdateStatus) => void;
+      __installUpdateCalls?: number;
+      echo?: Record<string, unknown>;
+    };
+    state.__installUpdateCalls = 0;
+    state.__emitUpdateStatus = (status: UpdateStatus) => {
+      for (const listener of listeners) listener(status);
+    };
+    state.echo = {
+      ...(state.echo ?? {}),
+      isElectron: true,
+      isPublicDemo: true,
+      getUpdateStatus: async () => ({
+        status: "idle",
+        currentVersion: "0.2.46",
+        releaseUrl: "https://github.com/yoligehude14753/echo-demo/releases/latest",
+      }),
+      onUpdateStatus: (cb: (status: UpdateStatus) => void) => {
+        listeners.push(cb);
+        return () => {
+          const index = listeners.indexOf(cb);
+          if (index >= 0) listeners.splice(index, 1);
+        };
+      },
+      installUpdate: async () => {
+        state.__installUpdateCalls = (state.__installUpdateCalls ?? 0) + 1;
+        return { ok: true };
+      },
+      openExternal: async () => ({ ok: true }),
+    };
+  });
+  await installEchoMock(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await page.evaluate((version) => {
+    const state = window as unknown as Window & {
+      __emitUpdateStatus?: (status: Record<string, unknown>) => void;
+    };
+    state.__emitUpdateStatus?.({
+      status: "downloaded",
+      currentVersion: "0.2.46",
+      latestVersion: version,
+      updateAvailable: true,
+      canAutoInstall: true,
+      releaseUrl: `https://github.com/yoligehude14753/echo-demo/releases/tag/v${version}`,
+    });
+  }, MOCK_UPDATE_VERSION);
+
+  await expect(
+    page.locator(".ant-modal-confirm-title").filter({
+      hasText: `EchoDesk v${MOCK_UPDATE_VERSION} 已下载`,
+    }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "安装并重启" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as Window & { __installUpdateCalls?: number })
+            .__installUpdateCalls ?? 0,
+      ),
+    )
+    .toBe(1);
+});

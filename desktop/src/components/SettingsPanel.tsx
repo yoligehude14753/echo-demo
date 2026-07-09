@@ -184,6 +184,13 @@ function updateStatusLabel(status: AppUpdateStatus | null): string {
   return "已检查";
 }
 
+function updateInstallButtonLabel(status: AppUpdateStatus | null): string {
+  if (status?.status === "downloaded" && status.canAutoInstall) return "安装并重启";
+  if (status?.status === "downloading") return "下载中";
+  if (status?.canAutoInstall) return "下载并安装";
+  return "下载最新版本";
+}
+
 export default function SettingsPanel({
   open,
   onClose,
@@ -905,11 +912,15 @@ export default function SettingsPanel({
                 size="small"
                 icon={<Download className="w-3.5 h-3.5" />}
                 loading={updateInstallBusy}
-                disabled={!updateInfo}
+                disabled={
+                  !updateInfo ||
+                  updateInfo.status === "downloading" ||
+                  updateInfo.status === "installing"
+                }
                 onClick={() => void onInstallUpdate()}
                 data-testid="install-update"
               >
-                {updateInfo?.canAutoInstall ? "下载并安装" : "下载最新版本"}
+                {updateInstallButtonLabel(updateInfo)}
               </Button>
               <Button
                 size="small"
@@ -922,9 +933,9 @@ export default function SettingsPanel({
               </Button>
             </div>
             <div className="text-[11px] text-ink-500 leading-relaxed">
-              桌面端启动后会自动检查新版本；点击下载并安装后才会退出覆盖安装，
-              本机数据目录会保留。Android / TV 侧载更新默认保留 app 数据，
-              只有 TV 一键安装脚本的首次安装模式会清理旧缓存。
+              桌面端会在后台定时检查更新；可自动安装时会先下载，下载完成后请确认安装并重启。
+              本机数据目录会保留。若当前平台不能一键安装，会打开 Release 下载页。Android /
+              TV 侧载更新默认保留 app 数据，只有 TV 一键安装脚本的首次安装模式会清理旧缓存。
             </div>
           </div>
         </section>
