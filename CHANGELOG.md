@@ -8,6 +8,17 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.2.49] – 2026-07-09
+
+桌面端发布包后端连接热修：修复从 Finder / Dock 正常启动时仍误连本机 8772，导致设置页和采集链路连续 `Failed to fetch` 的问题。
+
+### 修复
+
+- macOS 打包版在没有任何环境变量时也默认使用 EchoDesk 公共后端 `https://echodesk.yoliyoli.uk`。
+- 保留私有/离线部署开关：显式 `ECHO_FORCE_LOCAL_BACKEND=1` 时仍可改回本机后端模式。
+- 真实打包 App E2E 移除 `ECHO_PUBLIC_DEMO=1` 测试注入，并断言正常启动时 `getBackendHost()` 直接返回公网后端，防止同类问题再次被测试掩盖。
+- 版本号同步到 `0.2.49`；Android / TV `versionCode=249`、`versionName=0.2.49`。
+
 ## [0.2.48] – 2026-07-09
 
 桌面端采集状态热修：避免公网后端已恢复时，采集上传失败提示仍无限悬挂。

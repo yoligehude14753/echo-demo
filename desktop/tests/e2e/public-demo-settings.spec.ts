@@ -351,7 +351,7 @@ test("桌面端发现新版本后会在顶栏显示更新入口并可点击安�
       isPublicDemo: true,
       getUpdateStatus: async () => ({
         status: "idle",
-        currentVersion: "0.2.48",
+        currentVersion: "0.2.49",
         releaseUrl: "https://github.com/yoligehude14753/echo-demo/releases/latest",
       }),
       onUpdateStatus: (cb: (status: UpdateStatus) => void) => {
@@ -378,7 +378,7 @@ test("桌面端发现新版本后会在顶栏显示更新入口并可点击安�
     };
     state.__emitUpdateStatus?.({
       status: "available",
-      currentVersion: "0.2.48",
+      currentVersion: "0.2.49",
       latestVersion: version,
       updateAvailable: true,
       canAutoInstall: true,

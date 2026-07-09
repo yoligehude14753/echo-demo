@@ -51,16 +51,19 @@ test.describe("EchoDesk 打包 App", () => {
 
   test("packaged app: 启动不白屏 + public backend + 核心交互可点击", async () => {
     test.setTimeout(180_000);
+    const env = {
+      ...process.env,
+      ECHO_PUBLIC_BACKEND_BASE:
+        process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echodesk.yoliyoli.uk",
+    };
+    delete env.ECHO_PUBLIC_DEMO;
+    delete env.ECHO_FORCE_LOCAL_BACKEND;
+    delete env.ECHO_BACKEND_PORT;
 
     const app = await electron.launch({
       executablePath: APP_BIN!,
       cwd: path.dirname(APP_BIN!),
-      env: {
-        ...process.env,
-        ECHO_PUBLIC_DEMO: "1",
-        ECHO_PUBLIC_BACKEND_BASE:
-          process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echodesk.yoliyoli.uk",
-      },
+      env,
       timeout: 60_000,
     });
 
@@ -91,6 +94,13 @@ test.describe("EchoDesk 打包 App", () => {
           { timeout: 10_000 },
         )
         .toBe(true);
+      await expect
+        .poll(
+          async () =>
+            win.evaluate(async () => window.echo?.getBackendHost?.()),
+          { timeout: 10_000 },
+        )
+        .toBe("https://echodesk.yoliyoli.uk");
 
       // 3. WS 已握手。当前 UI 把旧的连接 pill 合并进顶部 StatusBar，
       //    `.app-connection-status` 会被视觉隐藏，但仍保留文本状态供 E2E 断言。
@@ -100,7 +110,7 @@ test.describe("EchoDesk 打包 App", () => {
       await expect(win.getByTestId("pill-backend")).toBeVisible({ timeout: 15_000 });
       await win.getByTestId("pill-backend").click();
       const backendPopover = win.locator(".ant-popover").filter({ hasText: "服务端" }).last();
-      await expect(backendPopover.getByText("0.2.48")).toBeVisible({ timeout: 15_000 });
+      await expect(backendPopover.getByText("0.2.49")).toBeVisible({ timeout: 15_000 });
       await win.keyboard.press("Escape");
 
       // 4. outputs 面板
