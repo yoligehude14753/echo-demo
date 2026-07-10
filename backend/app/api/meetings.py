@@ -7,13 +7,11 @@ P4-M_meeting_history 新增（2026-05-28）：
 - ``GET /meetings``                       前端启动期 hydrate 历史会议列表
 - ``GET /meetings/{id}/transcript``       拉指定会议的转写段（``/segments`` 别名）
 - ``GET /meetings/{id}/minutes``          反序列化 ``meetings.minutes_json``
-- ``GET /meetings/{id}/artifacts``        per-meeting 产物（当前空，留扩展点）
+- ``GET /meetings/{id}/artifacts``        per-meeting 产物
 
-artifacts 的产品决策（PR body 详述）：现 schema ``artifacts`` 无 meeting_id 列，
-也没有 meeting_artifacts 关联表。前端 ``store.meetings[*].artifacts`` 是基于 WS
-事件 ``artifact.ready.meeting_id`` 维护的 best-effort 视图。这个 endpoint 当前
-返回空列表，**调用约定**保留以便后续接入数据库 join；前端在 currentMeetingId
-被选中时仍以 store 内的 in-memory 列表为准。
+0.3 使用 ``artifact_links`` 将 ``artifacts`` 与会议关联。启动时还会扫描早期
+``skill_build`` 中已有的 output 文件和 meta.json，把历史文件补录到这两个表；
+因此前端切换到历史会议时也能获得持久化的 outputs。
 """
 
 from __future__ import annotations

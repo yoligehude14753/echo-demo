@@ -93,7 +93,7 @@ export default function ArtifactPanel(): JSX.Element {
     let alive = true;
     void (async (): Promise<void> => {
       const [restoredResult, tasksResult] = await Promise.allSettled([
-        listArtifacts(120),
+        listArtifacts(500),
         listAgentTasks(50),
       ]);
       if (!alive) return;

@@ -258,10 +258,11 @@ class ArtifactRepository:
 0.3 migration 原则：
 
 1. 新建表，不破坏旧表。
-2. 不强行猜旧 artifact 与 meeting 的关联。
-3. 对能从 `minutes_json.todos[*].artifact_id` 得到的关系，写入 `artifact_links(source='todo')`。
-4. 对旧全局 artifacts，仅保留 artifact metadata，不强造 meeting link。
-5. migration 必须幂等。
+2. 启动时扫描旧 `skill_build/{artifact_id}/output.*`，把可识别类型的真实文件补录进 `artifacts`。
+3. 旧目录含 `meta.json.meeting_id` 且会议存在时，写入 `artifact_links(source='legacy_skill_build_recovery')`。
+4. 没有 `meta.json.meeting_id` 时，才回退读取 `minutes_json.todos[*].artifact_id` 补会议 / todo 关系。
+5. 对旧全局 artifacts，仅保留 artifact metadata，不强造 meeting link。
+6. migration 必须幂等，重复启动不重复插入 metadata 或 link。
 
 ## 8. Contract Snapshot
 

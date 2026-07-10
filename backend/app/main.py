@@ -179,6 +179,26 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
     repo = get_repository(settings)
     await repo.init()
     try:
+        from app.api.deps import get_artifact_repository as _get_artifact_repo
+        from app.artifacts.recovery import recover_skill_build_artifacts
+
+        recovery = await recover_skill_build_artifacts(
+            settings=settings,
+            repository=repo,
+            artifact_repo=_get_artifact_repo(settings),
+        )
+        if recovery.discovered:
+            logger.info(
+                "artifact recovery: discovered=%d recovered=%d linked=%d existing=%d skipped=%d",
+                recovery.discovered,
+                recovery.recovered,
+                recovery.linked,
+                recovery.already_recorded,
+                recovery.skipped,
+            )
+    except Exception as e:
+        logger.warning("artifact recovery failed: %s", e)
+    try:
         registry = get_speaker_registry(settings, repo)
         await registry.hydrate()
         n_speakers = len(registry.known_speaker_ids())

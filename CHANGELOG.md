@@ -15,6 +15,7 @@ EchoDesk 0.3 正式版：完成 Workflow Core、历史恢复、本机安装与 A
 ### 新增与修复
 
 - 统一 Artifact、Todo、Agent Runner 的 workflow run/event 状态源，支持失败恢复、重试、取消、超时和产物归档。
+- 启动时自动扫描旧 `skill_build` 产物，把 `output.*`、`meta.json.meeting_id` 和 `minutes_json.todos[*].artifact_id` 补录进 `artifacts` / `artifact_links`，恢复历史 outputs。
 - 历史会议列表首屏直接显示持久化段数与人数；短时崩溃可续接，超过 24 小时的陈旧手动会议自动结束。
 - backend 测试和安装 smoke 使用隔离目录与 SQLite，不读取或修改真实 `~/.echodesk` 用户数据。
 - Desktop Pro 主模型默认使用 `deepseek-v4-flash`；界面展示模型名，不主动展示供应商文案。

@@ -256,13 +256,12 @@ export async function getMeetingArtifacts(
     `/meetings/${encodeURIComponent(meetingId)}/artifacts`,
   );
   const r = await fetch(u, { cache: "no-store" });
-  // 当前后端实现总是返回空数组（详见 meetings.py 注释）；调用约定保留以便
-  // 后续接入 DB join 时只换实现，前端不动。会议不存在仍返回 404。
+  // 后端通过 artifact_links 返回持久化关联；会议不存在仍返回 404。
   if (r.status === 404) return [];
   return asJson<GeneratedArtifact[]>(r);
 }
 
-export async function listArtifacts(limit = 100): Promise<GeneratedArtifact[]> {
+export async function listArtifacts(limit = 500): Promise<GeneratedArtifact[]> {
   const u = await apiUrl(`/artifacts?limit=${limit}`);
   const r = await fetch(u, { cache: "no-store" });
   if (r.status === 404) return [];

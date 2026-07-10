@@ -1,0 +1,41 @@
+event_id: "E-20260710T1802-007"
+event_type: "supersede"
+timestamp: "2026-07-10T18:02:00+08:00"
+author: "agent/codex-artifact-recovery"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-011"
+      claim: "EchoDesk recovered 153 historical skill_build output files into artifacts, including 16 verified meeting links, after identifying an omitted 0.3 metadata migration."
+      category: "observation"
+      volatility: "medium"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-10T18:02:00+08:00"
+      observed_by: "agent/codex-artifact-recovery"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "backend/app/artifacts/recovery.py"
+        - "backend/app/main.py"
+        - "runtime:~/.echodesk/echodesk.db"
+        - "runtime:http://127.0.0.1:8772/artifacts?limit=500"
+        - "runtime:http://127.0.0.1:8772/meetings/auto-1782801554/artifacts"
+        - "runtime:/Users/yoligehude/.echodesk/logs/backend.log"
+      evidence: "The real user DB now contains 153 artifacts and 16 artifact_links. The installed 0.3.0 app returned 153 artifacts from /artifacts?limit=500, returned 3 artifacts for meeting auto-1782801554 including pptx-297d768314, and logged an idempotent startup recovery scan with discovered=153 recovered=0 existing=153 skipped=47."
+      supersedes:
+        - "F-ECHO-009"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "artifact"
+        - "migration"
+        - "history"
+        - "recovery"
+  - action: "supersede"
+    old_fact: "F-ECHO-009"
+    new_fact: "F-ECHO-011"
+    reason: "F-ECHO-009 only checked empty metadata tables and missed existing files under ~/.echodesk/skill_build plus legacy meeting/todo metadata; the installed recovery now verifies those files and backfills artifact metadata and links."
+git_commit: null

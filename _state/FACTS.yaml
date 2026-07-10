@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-10T09:35:43.720681+00:00'
+generated_at: '2026-07-10T10:02:04.010124+00:00'
 generated_by: replay.py
-fact_count: 10
+fact_count: 11
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -213,7 +213,7 @@ facts:
   category: observation
   volatility: medium
   evidence_strength: code
-  status: confirmed
+  status: superseded
   confidence: 0.99
   observed_at: '2026-07-10T17:30:00+08:00'
   observed_by: agent/codex-artifact-audit
@@ -228,7 +228,7 @@ facts:
     the artifact schema or contain only meetings/messages/tasks. Electron local-storage snapshots with the old app state contained
     artifacts: []. No generated document files were found in the current or legacy EchoDesk storage directories.'
   supersedes: []
-  superseded_by: null
+  superseded_by: F-ECHO-011
   pinned: false
   tags:
   - artifact
@@ -259,3 +259,34 @@ facts:
   - release
   - update
   - github
+- id: F-ECHO-011
+  claim: EchoDesk recovered 153 historical skill_build output files into artifacts, including 16 verified meeting links, after
+    identifying an omitted 0.3 metadata migration.
+  category: observation
+  volatility: medium
+  evidence_strength: runtime
+  status: confirmed
+  confidence: 0.99
+  observed_at: '2026-07-10T18:02:00+08:00'
+  observed_by: agent/codex-artifact-recovery
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/artifacts/recovery.py
+  - backend/app/main.py
+  - runtime:~/.echodesk/echodesk.db
+  - runtime:http://127.0.0.1:8772/artifacts?limit=500
+  - runtime:http://127.0.0.1:8772/meetings/auto-1782801554/artifacts
+  - runtime:/Users/yoligehude/.echodesk/logs/backend.log
+  evidence: The real user DB now contains 153 artifacts and 16 artifact_links. The installed 0.3.0 app returned 153 artifacts
+    from /artifacts?limit=500, returned 3 artifacts for meeting auto-1782801554 including pptx-297d768314, and logged an idempotent
+    startup recovery scan with discovered=153 recovered=0 existing=153 skipped=47.
+  supersedes:
+  - F-ECHO-009
+  superseded_by: null
+  pinned: false
+  tags:
+  - artifact
+  - migration
+  - history
+  - recovery
