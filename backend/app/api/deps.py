@@ -11,12 +11,16 @@ from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import OpenAICompatibleLLM
 from app.adapters.repo import make_repository
 from app.agents.service import aclose_agent_task_service
+from app.artifacts.repository import ArtifactRepository, reset_artifact_repository_for_test
+from app.artifacts.repository import get_artifact_repository as _make_artifact_repository
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
 from app.use_cases.auto_meeting_detector import AutoMeetingDetector
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
+from app.workflows.service import WorkflowService, reset_workflow_service_for_test
+from app.workflows.service import get_workflow_service as _make_workflow_service
 
 _llm_singleton: OpenAICompatibleLLM | None = None
 _event_bus_singleton: InMemoryEventBus | None = None
@@ -25,6 +29,8 @@ _diarizer_singleton: DiarizerPort | None = None
 _speaker_registry_singleton: SpeakerRegistry | None = None
 _auto_detector_singleton: AutoMeetingDetector | None = None
 _meeting_state_singleton: MeetingState | None = None
+_workflow_service_singleton: WorkflowService | None = None
+_artifact_repository_singleton: ArtifactRepository | None = None
 
 
 def require_admin_access(
@@ -150,6 +156,27 @@ def get_meeting_state(
     return _meeting_state_singleton
 
 
+def get_workflow_service(
+    settings: Settings = Depends(get_settings),
+    event_bus: InMemoryEventBus = Depends(get_event_bus),
+) -> WorkflowService:
+    """Workflow 0.3 状态机单例。"""
+    global _workflow_service_singleton  # noqa: PLW0603
+    if _workflow_service_singleton is None:
+        _workflow_service_singleton = _make_workflow_service(settings, event_bus)
+    return _workflow_service_singleton
+
+
+def get_artifact_repository(
+    settings: Settings = Depends(get_settings),
+) -> ArtifactRepository:
+    """Artifact 0.3 metadata/link repository 单例。"""
+    global _artifact_repository_singleton  # noqa: PLW0603
+    if _artifact_repository_singleton is None:
+        _artifact_repository_singleton = _make_artifact_repository(settings)
+    return _artifact_repository_singleton
+
+
 async def aclose_llm_singleton() -> None:
     global _llm_singleton  # noqa: PLW0603
     if _llm_singleton is not None:
@@ -180,6 +207,7 @@ def reset_deps_for_test() -> None:
     global _llm_singleton, _event_bus_singleton, _repo_singleton  # noqa: PLW0603
     global _diarizer_singleton, _speaker_registry_singleton  # noqa: PLW0603
     global _auto_detector_singleton, _meeting_state_singleton  # noqa: PLW0603
+    global _workflow_service_singleton, _artifact_repository_singleton  # noqa: PLW0603
     _llm_singleton = None
     _event_bus_singleton = None
     _repo_singleton = None
@@ -187,3 +215,7 @@ def reset_deps_for_test() -> None:
     _speaker_registry_singleton = None
     _auto_detector_singleton = None
     _meeting_state_singleton = None
+    _workflow_service_singleton = None
+    _artifact_repository_singleton = None
+    reset_workflow_service_for_test()
+    reset_artifact_repository_for_test()

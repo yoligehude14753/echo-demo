@@ -307,7 +307,15 @@ export function isDefaultPublicBackend(base: string | null | undefined): boolean
 
 function isPublicDesktopDemo(): boolean {
   if (typeof window === "undefined") return false;
-  if (window.echo?.isPublicDemo === true) return true;
+  // Packaged Electron asks the main process for the authoritative runtime mode.
+  // Keep the file:// heuristic only for older preload bridges that did not expose
+  // isPublicDemo; otherwise an explicit local mode would be misclassified as public.
+  if (
+    window.echo?.isElectron === true &&
+    typeof window.echo.isPublicDemo === "boolean"
+  ) {
+    return window.echo.isPublicDemo;
+  }
   return (
     window.echo?.isElectron === true &&
     window.location.protocol === "file:" &&

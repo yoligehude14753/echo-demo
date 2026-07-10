@@ -109,7 +109,7 @@ class OpenAICompatibleLLM:
             http_client=self._http,
         )
         self._fast = AsyncOpenAI(
-            api_key=settings.llm_local_api_key or "EMPTY",
+            api_key=settings.llm_fast_api_key,
             base_url=settings.llm_fast_base_url,
             http_client=self._http,
         )

@@ -6,6 +6,7 @@ import type {
   MeetingMinutes,
   MeetingStateSnapshot,
   TranscriptSegment,
+  WorkflowRunDTO,
 } from "@/types";
 import {
   DEFAULT_ANDROID_BACKEND_BASE,
@@ -42,11 +43,12 @@ function probeTimeoutMs(): number {
 }
 
 async function fetchProbe(url: string, init: RequestInit = {}): Promise<Response> {
-  if (typeof AbortController === "undefined") return fetch(url, init);
+  const requestInit: RequestInit = { cache: "no-store", ...init };
+  if (typeof AbortController === "undefined") return fetch(url, requestInit);
   const ctl = new AbortController();
   const timer = window.setTimeout(() => ctl.abort(), probeTimeoutMs());
   try {
-    return await fetch(url, { ...init, signal: ctl.signal });
+    return await fetch(url, { ...requestInit, signal: ctl.signal });
   } finally {
     window.clearTimeout(timer);
   }
@@ -121,7 +123,7 @@ export interface CaptureStats {
 
 export async function getCaptureStats(): Promise<CaptureStats> {
   const u = await apiUrl("/capture/stats");
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<CaptureStats>(r);
 }
 
@@ -172,7 +174,7 @@ export async function retryMinutesGeneration(
 
 export async function getCurrentMeeting(): Promise<MeetingStateSnapshot> {
   const u = await apiUrl("/meetings/current");
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<MeetingStateSnapshot>(r);
 }
 
@@ -223,7 +225,7 @@ export interface MeetingSummary {
 
 export async function listMeetings(limit = 50): Promise<MeetingSummary[]> {
   const u = await apiUrl(`/meetings?limit=${limit}`);
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<MeetingSummary[]>(r);
 }
 
@@ -233,7 +235,7 @@ export async function getMeetingTranscript(
   const u = await apiUrl(
     `/meetings/${encodeURIComponent(meetingId)}/transcript`,
   );
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<TranscriptSegment[]>(r);
 }
 
@@ -242,7 +244,7 @@ export async function getMeetingMinutes(
   meetingId: string,
 ): Promise<MeetingMinutes | null> {
   const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/minutes`);
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   if (r.status === 404) return null;
   return asJson<MeetingMinutes>(r);
 }
@@ -253,7 +255,7 @@ export async function getMeetingArtifacts(
   const u = await apiUrl(
     `/meetings/${encodeURIComponent(meetingId)}/artifacts`,
   );
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   // 当前后端实现总是返回空数组（详见 meetings.py 注释）；调用约定保留以便
   // 后续接入 DB join 时只换实现，前端不动。会议不存在仍返回 404。
   if (r.status === 404) return [];
@@ -262,7 +264,7 @@ export async function getMeetingArtifacts(
 
 export async function listArtifacts(limit = 100): Promise<GeneratedArtifact[]> {
   const u = await apiUrl(`/artifacts?limit=${limit}`);
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   if (r.status === 404) return [];
   return asJson<GeneratedArtifact[]>(r);
 }
@@ -326,7 +328,7 @@ export async function listRecentAmbient(
   limit = 50,
 ): Promise<AmbientSegment[]> {
   const u = await apiUrl(`/capture/recent?limit=${limit}`);
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<AmbientSegment[]>(r);
 }
 
@@ -353,6 +355,7 @@ export async function generateArtifact(req: {
    *  生成成功后会回写 ``meetings.minutes_json.todos[id].status=done``。 */
   meeting_id?: string;
   todo_id?: string;
+  retry_of_run_id?: string;
 }): Promise<GeneratedArtifact> {
   const u = await apiUrl("/artifacts/generate");
   const r = await fetch(u, {
@@ -361,6 +364,50 @@ export async function generateArtifact(req: {
     body: JSON.stringify(req),
   });
   return asJson<GeneratedArtifact>(r);
+}
+
+export async function listWorkflowRuns(filters: {
+  meeting_id?: string;
+  todo_id?: string;
+  agent_task_id?: string;
+  state?: string;
+  limit?: number;
+} = {}): Promise<WorkflowRunDTO[]> {
+  const params = new URLSearchParams();
+  if (filters.meeting_id) params.set("meeting_id", filters.meeting_id);
+  if (filters.todo_id) params.set("todo_id", filters.todo_id);
+  if (filters.agent_task_id) params.set("agent_task_id", filters.agent_task_id);
+  if (filters.state) params.set("state", filters.state);
+  params.set("limit", String(filters.limit ?? 100));
+  const u = await apiUrl(`/workflows/runs?${params.toString()}`);
+  const r = await fetch(u, { cache: "no-store" });
+  return asJson<WorkflowRunDTO[]>(r);
+}
+
+export async function retryWorkflowRun(
+  runId: string,
+  reason?: string,
+): Promise<WorkflowRunDTO> {
+  const u = await apiUrl(`/workflows/runs/${encodeURIComponent(runId)}/retry`);
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  return asJson<WorkflowRunDTO>(r);
+}
+
+export async function cancelWorkflowRun(
+  runId: string,
+  reason?: string,
+): Promise<WorkflowRunDTO> {
+  const u = await apiUrl(`/workflows/runs/${encodeURIComponent(runId)}/cancel`);
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  return asJson<WorkflowRunDTO>(r);
 }
 
 const AGENT_DEVICE_ID_KEY = "echodesk.agentDeviceId";
@@ -400,7 +447,7 @@ export async function listAgentTasks(limit = 50): Promise<AgentTaskCard[]> {
   const u = await apiUrl(
     `/agents/tasks?device_id=${encodeURIComponent(agentDeviceId())}&limit=${limit}`,
   );
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<AgentTaskCard[]>(r);
 }
 
@@ -416,7 +463,7 @@ export async function listAgentTaskEvents(
   const u = await apiUrl(
     `/agents/tasks/${encodeURIComponent(taskId)}/events?after_seq=${afterSeq}`,
   );
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<{
     task_id: string;
     events: AgentTaskEvent[];
@@ -669,7 +716,7 @@ export async function ingestFile(
 
 export async function listRagDocs(): Promise<RagDocsResponse> {
   const u = await apiUrl("/rag/docs");
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<RagDocsResponse>(r);
 }
 
@@ -714,7 +761,7 @@ export async function workspaceStatus(): Promise<WorkspaceStatus> {
     return window.echo!.getLocalWorkspaceStatus!();
   }
   const u = await apiUrl("/workspace/status");
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson<WorkspaceStatus>(r);
 }
 
@@ -884,7 +931,7 @@ export async function listSpeakers(): Promise<
   }>
 > {
   const u = await apiUrl("/speakers");
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: "no-store" });
   return asJson(r);
 }
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,7 @@ async def test_submit_without_grant_records_permission_event_and_broadcasts(tmp_
     )
 
     assert rec.state.value == "waiting_permission"
+    assert rec.workflow_run_id is not None
     events, snapshot, last_seq = await service.list_events(rec.task_id)
     assert last_seq == 1
     assert events[0].event == "task.permission_required"
@@ -79,11 +81,13 @@ async def test_submit_without_grant_records_permission_event_and_broadcasts(tmp_
 
     agen = bus.subscribe()
     try:
-        published = await agen.__anext__()
+        published = [await agen.__anext__() for _ in range(bus.max_seq)]
     finally:
         await agen.aclose()
-    assert published.type == "agent.task.event"
-    assert published.payload["event"] == "task.permission_required"
+    agent_events = [event for event in published if event.type == "agent.task.event"]
+    workflow_events = [event for event in published if event.type == "workflow.event"]
+    assert agent_events[-1].payload["event"] == "task.permission_required"
+    assert workflow_events
 
 
 @pytest.mark.unit
@@ -119,6 +123,157 @@ async def test_record_task_event_dedupes_by_raw_hash_and_replays_after_seq(tmp_p
     assert last_seq == 2
     assert snapshot["text_buffer"] == "hello"
     assert events[0].snapshot["text_buffer"] == "hello"
+
+
+@pytest.mark.unit
+async def test_agent_events_project_to_workflow_run(tmp_path: Path) -> None:
+    service, _bus = await _make_service(tmp_path)
+    fake_backend = _FakeBackend()
+    service.backend = fake_backend  # type: ignore[assignment]
+    service.start_bridge_for_task = lambda _rec: None  # type: ignore[method-assign]
+    await service.create_grant(device_id="desktop-test")
+
+    rec = await service.submit_task(AgentIntent(text="写一个文件", device_id="desktop-test"))
+    assert rec.workflow_run_id is not None
+    await service.record_task_event(
+        EchoTaskEvent(
+            task_id=rec.task_id,
+            runner_task_id=rec.runner_task_id,
+            title=rec.title,
+            event="task.started",
+            state="running",
+            message="任务开始执行",
+        )
+    )
+    await service.record_task_event(
+        EchoTaskEvent(
+            task_id=rec.task_id,
+            runner_task_id=rec.runner_task_id,
+            title=rec.title,
+            event="task.completed",
+            state="succeeded",
+            message="完成",
+        )
+    )
+
+    run = await service.workflow.get_run(rec.workflow_run_id)
+    assert run is not None
+    assert run.state == "succeeded"
+    assert run.output["agent_task_id"] == rec.task_id
+    workflow_events = await service.workflow.list_events(rec.workflow_run_id)
+    assert "agent.task.completed" in [event.event_type for event in workflow_events]
+
+
+@pytest.mark.unit
+async def test_agent_timeout_projects_to_timeout_workflow_run(tmp_path: Path) -> None:
+    service, _bus = await _make_service(tmp_path)
+    fake_backend = _FakeBackend()
+    service.backend = fake_backend  # type: ignore[assignment]
+    service.start_bridge_for_task = lambda _rec: None  # type: ignore[method-assign]
+    await service.create_grant(device_id="desktop-test")
+
+    rec = await service.submit_task(
+        AgentIntent(text="执行一个限时任务", device_id="desktop-test", timeout_s=0.05)
+    )
+    assert rec.workflow_run_id is not None
+    await service.record_task_event(
+        EchoTaskEvent(
+            task_id=rec.task_id,
+            runner_task_id=rec.runner_task_id,
+            title=rec.title,
+            event="task.timeout",
+            state="timeout",
+            message="任务超时",
+        )
+    )
+
+    stored = await service.get_task(rec.task_id)
+    run = await service.workflow.get_run(rec.workflow_run_id)
+    assert stored is not None
+    assert stored.state.value == "timeout"
+    assert run is not None
+    assert run.state == "timeout"
+    assert run.error == "任务超时"
+
+
+@pytest.mark.unit
+async def test_agent_artifact_event_imports_unified_artifact(tmp_path: Path) -> None:
+    async def handle_http(
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        await reader.read(4096)
+        body = b"%PDF-1.4\nagent"
+        writer.write(
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/pdf\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handle_http, "127.0.0.1", 0)
+    assert server.sockets
+    port = server.sockets[0].getsockname()[1]
+    service, _bus = await _make_service(tmp_path)
+    fake_backend = _FakeBackend()
+    fake_backend.base_url = f"http://127.0.0.1:{port}"
+    service.backend = fake_backend  # type: ignore[assignment]
+    service.start_bridge_for_task = lambda _rec: None  # type: ignore[method-assign]
+    await service.create_grant(device_id="desktop-test")
+    try:
+        rec = await service.submit_task(AgentIntent(text="生成报告", device_id="desktop-test"))
+        assert rec.workflow_run_id is not None
+
+        await service.record_task_event(
+            EchoTaskEvent(
+                task_id=rec.task_id,
+                runner_task_id=rec.runner_task_id,
+                title=rec.title,
+                event="task.completed",
+                state="succeeded",
+                message="任务完成",
+            )
+        )
+        await service.record_task_event(
+            EchoTaskEvent(
+                task_id=rec.task_id,
+                runner_task_id=rec.runner_task_id,
+                title=rec.title,
+                event="task.artifact_updated",
+                state="running",
+                message="产物已更新",
+                artifacts=[
+                    {
+                        "name": "report.pdf",
+                        "relpath": "out/report.pdf",
+                        "kind": "pdf",
+                        "url": f"/agents/tasks/{rec.task_id}/artifacts/out/report.pdf",
+                    }
+                ],
+            )
+        )
+
+        artifacts = await service.artifact_repo.list_artifacts(limit=10)
+        assert len(artifacts) == 1
+        assert artifacts[0].metadata["source"] == "agent"
+        assert artifacts[0].metadata["agent_task_id"] == rec.task_id
+        assert Path(artifacts[0].file_path).read_bytes().startswith(b"%PDF")
+        links = await service.artifact_repo.list_links_for_artifact(artifacts[0].artifact_id)
+        assert links[0].source == "agent"
+        assert links[0].run_id == rec.workflow_run_id
+        stored = await service.get_task(rec.task_id)
+        run = await service.workflow.get_run(rec.workflow_run_id)
+        assert stored is not None
+        assert stored.state.value == "succeeded"
+        assert stored.artifacts[0]["relpath"] == "out/report.pdf"
+        assert run is not None
+        assert run.output["artifacts"][0]["relpath"] == "out/report.pdf"
+    finally:
+        server.close()
+        await server.wait_closed()
 
 
 @pytest.mark.unit

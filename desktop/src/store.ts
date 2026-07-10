@@ -8,6 +8,7 @@ import type {
   MeetingMinutes,
   TodoItem,
   TranscriptSegment,
+  WorkflowRunDTO,
 } from "@/types";
 import type { MeetingSummary } from "@/api";
 import {
@@ -38,6 +39,7 @@ export interface LocalAmbientSegment {
 export interface CommandBarPrefillMeta {
   meeting_id?: string;
   todo_id?: string;
+  retry_of_run_id?: string;
 }
 export type CommandBarPrefillHandler = (
   text: string,
@@ -155,6 +157,55 @@ function emptyMeeting(id: string, title?: string): MeetingCard {
     segments: [],
     speakers: new Set<string>(),
     artifacts: [],
+  };
+}
+
+export function projectTodoStatus(raw: unknown): TodoItem["status"] | null {
+  if (raw === "succeeded" || raw === "done") return "done";
+  if (raw === "running" || raw === "pending" || raw === "cancel_requested") {
+    return "running";
+  }
+  if (raw === "failed" || raw === "timeout" || raw === "cancel_failed") {
+    return "failed";
+  }
+  if (raw === "waiting_permission") return "waiting_permission";
+  if (raw === "cancelled") return "cancelled";
+  return null;
+}
+
+export function projectMinutesWithWorkflowRuns(
+  minutes: MeetingMinutes | null | undefined,
+  workflowRuns: WorkflowRunDTO[],
+): MeetingMinutes | null | undefined {
+  if (!minutes || workflowRuns.length === 0) return minutes;
+  const latestByTodo = new Map<string, WorkflowRunDTO>();
+  workflowRuns
+    .slice()
+    .sort((a, b) => a.updated_at.localeCompare(b.updated_at))
+    .forEach((run) => {
+      if (run.todo_id) latestByTodo.set(run.todo_id, run);
+    });
+  return {
+    ...minutes,
+    todos: minutes.todos.map((todo) => {
+      const run = latestByTodo.get(todo.id);
+      const status = projectTodoStatus(run?.state);
+      if (!run || !status) return todo;
+      const artifactId =
+        typeof run.output?.artifact_id === "string"
+          ? run.output.artifact_id
+          : undefined;
+      return {
+        ...todo,
+        status,
+        workflow_run_id: run.run_id,
+        artifact_id: artifactId ?? todo.artifact_id ?? null,
+        done_at:
+          status === "done"
+            ? (todo.done_at ?? run.finished_at ?? new Date().toISOString())
+            : todo.done_at,
+      };
+    }),
   };
 }
 
@@ -342,6 +393,8 @@ export const useStore = create<Store>((set, get) => ({
           state: uiState,
           started_at: cur.started_at ?? sum.started_at,
           ended_at: cur.ended_at ?? sum.ended_at ?? undefined,
+          minutes_status:
+            cur.minutes_status ?? (sum.has_minutes ? "ok" : undefined),
         };
       }
       return {
@@ -405,7 +458,7 @@ export const useStore = create<Store>((set, get) => ({
         last_seq: event.seq,
         submitted_at: prev?.submitted_at ?? event.ts,
         finished_at:
-          ["succeeded", "failed", "cancelled", "timeout"].includes(event.state)
+          ["succeeded", "failed", "cancelled", "cancel_failed", "timeout"].includes(event.state)
             ? event.ts
             : (prev?.finished_at ?? null),
         timeout_s: prev?.timeout_s ?? 1800,
@@ -596,6 +649,39 @@ export const useStore = create<Store>((set, get) => ({
         });
         break;
       }
+      case "meeting.todo.updated": {
+        if (!mid) break;
+        const p = (e.payload ?? {}) as {
+          todo_id?: string;
+          status?: TodoItem["status"];
+          state?: string;
+          run_id?: string;
+          artifact_id?: string;
+          done_at?: string;
+        };
+        const cur = get().meetings[mid];
+        if (!cur?.minutes || !p.todo_id) break;
+        const projected = projectTodoStatus(p.status ?? p.state);
+        if (!projected) break;
+        const next: TodoItem[] = cur.minutes.todos.map((t) =>
+          t.id === p.todo_id
+            ? {
+                ...t,
+                status: projected,
+                workflow_run_id: p.run_id ?? t.workflow_run_id ?? null,
+                done_at:
+                  projected === "done"
+                    ? (p.done_at ?? t.done_at ?? new Date().toISOString())
+                    : t.done_at,
+                artifact_id: p.artifact_id ?? t.artifact_id ?? null,
+              }
+            : t,
+        );
+        get().upsertMeeting(mid, {
+          minutes: { ...cur.minutes, todos: next },
+        });
+        break;
+      }
       case "minutes.failed": {
         if (!mid) break;
         const p = (e.payload ?? {}) as { error?: string };
@@ -609,12 +695,13 @@ export const useStore = create<Store>((set, get) => ({
       case "artifact.generating": {
         // 暂存 brief，方便 artifact.failed 回填用户原始命令；
         // 失败/成功后会被清除（见 artifact.failed / artifact.ready）。
-        const p = (e.payload ?? {}) as { artifact_type?: string; brief?: string };
+        const p = (e.payload ?? {}) as { artifact_type?: string; brief?: string; run_id?: string };
         if (p.artifact_type && typeof p.brief === "string" && p.brief) {
           set((s) => ({
             pendingArtifactBriefs: {
               ...s.pendingArtifactBriefs,
               [p.artifact_type as string]: p.brief as string,
+              ...(p.run_id ? { [p.run_id]: p.brief as string } : {}),
             },
           }));
         }
@@ -633,25 +720,30 @@ export const useStore = create<Store>((set, get) => ({
           }
         }
         // 配对的 brief 已经无用，清掉避免污染下一次失败回填。
-        if (a?.artifact_type) {
+        if (a?.artifact_type || a?.run_id) {
           set((s) => {
-            if (!(a.artifact_type in s.pendingArtifactBriefs)) return s;
             const next = { ...s.pendingArtifactBriefs };
-            delete next[a.artifact_type];
+            if (a.artifact_type) delete next[a.artifact_type];
+            if (a.run_id) delete next[a.run_id];
             return { pendingArtifactBriefs: next };
           });
         }
         break;
       }
       case "artifact.failed": {
-        const p = (e.payload ?? {}) as { artifact_type?: string };
+        const p = (e.payload ?? {}) as { artifact_type?: string; run_id?: string };
         const briefs = get().pendingArtifactBriefs;
-        const intentText = p.artifact_type ? briefs[p.artifact_type] : undefined;
+        const intentText =
+          (p.run_id ? briefs[p.run_id] : undefined) ??
+          (p.artifact_type ? briefs[p.artifact_type] : undefined);
         const failed = buildFailedArtifact(e, intentText);
         set((s) => {
           const nextBriefs = { ...s.pendingArtifactBriefs };
           if (p.artifact_type && p.artifact_type in nextBriefs) {
             delete nextBriefs[p.artifact_type];
+          }
+          if (p.run_id && p.run_id in nextBriefs) {
+            delete nextBriefs[p.run_id];
           }
           return {
             failedArtifacts: [failed, ...s.failedArtifacts].slice(
@@ -660,6 +752,36 @@ export const useStore = create<Store>((set, get) => ({
             ),
             pendingArtifactBriefs: nextBriefs,
           };
+        });
+        break;
+      }
+      case "workflow.snapshot": {
+        const run = e.payload as unknown as WorkflowRunDTO;
+        if (!run.meeting_id || !run.todo_id) break;
+        const cur = get().meetings[run.meeting_id];
+        if (!cur?.minutes) break;
+        const projected = projectTodoStatus(run.state);
+        if (!projected) break;
+        const artifactId =
+          typeof run.output?.artifact_id === "string"
+            ? run.output.artifact_id
+            : undefined;
+        const next: TodoItem[] = cur.minutes.todos.map((t) =>
+          t.id === run.todo_id
+            ? {
+                ...t,
+                status: projected,
+                workflow_run_id: run.run_id,
+                artifact_id: artifactId ?? t.artifact_id ?? null,
+                done_at:
+                  projected === "done"
+                    ? (t.done_at ?? run.finished_at ?? new Date().toISOString())
+                    : t.done_at,
+              }
+            : t,
+        );
+        get().upsertMeeting(run.meeting_id, {
+          minutes: { ...cur.minutes, todos: next },
         });
         break;
       }

@@ -6,12 +6,16 @@ import asyncio
 import hashlib
 import json
 import logging
+import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 import aiosqlite
+import httpx
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.agents.agentos import AgentOSBackend
@@ -23,8 +27,12 @@ from app.agents.events import (
     utc_now_iso,
 )
 from app.agents.stream_bridge import EchoTaskStreamBridge
+from app.artifacts.repository import ArtifactRepository
 from app.config import Settings
+from app.schemas.artifact import GeneratedArtifact
 from app.schemas.events import EchoEvent
+from app.schemas.workflow import WorkflowRunCreate
+from app.workflows.service import WorkflowService
 
 _log = logging.getLogger("echodesk.agents")
 
@@ -53,6 +61,7 @@ class AgentTaskRecord:
     envelope: dict[str, Any] = field(default_factory=dict)
     grant_id: str | None = None
     permission_profile: str | None = None
+    workflow_run_id: str | None = None
     last_seq: int = 0
     submitted_at: str = field(default_factory=utc_now_iso)
     finished_at: str | None = None
@@ -93,6 +102,43 @@ def _state(raw: str | None) -> AgentTaskState:
         return AgentTaskState.PENDING
 
 
+def _context_str(context: dict[str, Any], key: str) -> str | None:
+    value = context.get(key)
+    return str(value) if value not in (None, "") else None
+
+
+def _workflow_source(intent: AgentIntent) -> str:
+    origin = _context_str(intent.context, "origin")
+    if origin in {"command", "todo", "retry"}:
+        return origin
+    return "todo" if _context_str(intent.context, "todo_id") else "command"
+
+
+def _encode_agentos_artifact_path(relpath: str) -> str:
+    path = PurePosixPath(relpath)
+    if path.is_absolute():
+        return ""
+    parts = [part for part in path.parts if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        return ""
+    return "/".join(quote(part, safe="") for part in parts)
+
+
+def _cache_relpath(task_id: str, relpath: str) -> Path | None:
+    path = PurePosixPath(relpath)
+    if path.is_absolute():
+        return None
+    parts = [part for part in path.parts if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        return None
+    return Path("agent_artifacts") / task_id / Path(*parts)
+
+
+def _agent_artifact_id(task_id: str, relpath: str) -> str:
+    digest = hashlib.sha1(f"{task_id}:{relpath}".encode()).hexdigest()[:24]
+    return f"agent-{digest}"
+
+
 def _row_to_record(row: aiosqlite.Row) -> AgentTaskRecord:
     return AgentTaskRecord(
         task_id=row["task_id"],
@@ -113,6 +159,7 @@ def _row_to_record(row: aiosqlite.Row) -> AgentTaskRecord:
         envelope=_json(row["envelope_json"], {}),
         grant_id=row["grant_id"],
         permission_profile=row["permission_profile"],
+        workflow_run_id=row["workflow_run_id"],
         last_seq=int(row["last_seq"] or 0),
         submitted_at=row["submitted_at"],
         finished_at=row["finished_at"],
@@ -139,6 +186,8 @@ class AgentTaskService:
         self.settings = settings
         self.event_bus = event_bus
         self.backend = AgentOSBackend(settings)
+        self.workflow = WorkflowService(settings, event_bus)
+        self.artifact_repo = ArtifactRepository(settings)
         self._bridge_tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
 
@@ -227,9 +276,30 @@ class AgentTaskService:
     async def submit_task(self, intent: AgentIntent) -> AgentTaskRecord:
         intent.echo_task_id = intent.echo_task_id or new_echo_task_id()
         intent.title = intent.title or _title_from_text(intent.text)
+        run = await self.workflow.create_run(
+            WorkflowRunCreate(
+                kind="agent_task",
+                source=_workflow_source(intent),
+                title=intent.title,
+                intent_text=intent.text,
+                meeting_id=_context_str(intent.context, "meeting_id"),
+                todo_id=_context_str(intent.context, "todo_id"),
+                agent_task_id=intent.echo_task_id,
+                input={
+                    "device_id": intent.device_id,
+                    "conversation_id": intent.conversation_id,
+                    "message_id": intent.message_id,
+                    "task_kind": intent.task_kind,
+                    "context": intent.context,
+                    "output_contract": intent.output_contract,
+                    "runner": RUNNER_CLAUDE_CODE,
+                },
+                timeout_s=intent.timeout_s,
+            )
+        )
         grant = await self.get_active_grant(device_id=intent.device_id)
         if grant is None:
-            return await self.record_permission_required(intent)
+            return await self.record_permission_required(intent, workflow_run_id=run.run_id)
         intent.grant_id = grant.grant_id
         intent.permission_profile = grant.permission_profile
         result = await self.backend.submit(intent)
@@ -242,6 +312,7 @@ class AgentTaskService:
                     provider=RUNNER_CLAUDE_CODE,
                 ),
                 state=AgentTaskState.FAILED,
+                workflow_run_id=run.run_id,
             )
             await self.record_task_event(
                 EchoTaskEvent(
@@ -261,6 +332,7 @@ class AgentTaskService:
             intent=intent,
             result=result,
             state=AgentTaskState.PENDING,
+            workflow_run_id=run.run_id,
         )
         await self.record_task_event(
             EchoTaskEvent(
@@ -277,7 +349,12 @@ class AgentTaskService:
         self.start_bridge_for_task(rec)
         return await self.get_task(rec.task_id) or rec
 
-    async def record_permission_required(self, intent: AgentIntent) -> AgentTaskRecord:
+    async def record_permission_required(
+        self,
+        intent: AgentIntent,
+        *,
+        workflow_run_id: str | None,
+    ) -> AgentTaskRecord:
         rec = await self._insert_task(
             intent=intent,
             result=AgentSubmitResult(
@@ -286,6 +363,7 @@ class AgentTaskService:
                 provider=RUNNER_CLAUDE_CODE,
             ),
             state=AgentTaskState.WAITING_PERMISSION,
+            workflow_run_id=workflow_run_id,
         )
         await self.record_task_event(
             EchoTaskEvent(
@@ -386,6 +464,7 @@ class AgentTaskService:
         intent: AgentIntent,
         result: AgentSubmitResult,
         state: AgentTaskState,
+        workflow_run_id: str | None,
     ) -> AgentTaskRecord:
         now = utc_now_iso()
         task_id = intent.echo_task_id or result.task_id or new_echo_task_id()
@@ -417,9 +496,10 @@ class AgentTaskService:
                    (task_id, runner_task_id, device_id, conversation_id, message_id,
                     title, intent_text, route, task_kind, state, progress_text,
                     final_text, error, artifacts_json, snapshot_json, envelope_json,
-                    grant_id, permission_profile, last_seq, submitted_at, finished_at, timeout_s)
+                   grant_id, permission_profile, workflow_run_id, last_seq, submitted_at,
+                   finished_at, timeout_s)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, '[]', ?, ?,
-                           ?, ?, 0, ?, NULL, ?)""",
+                           ?, ?, ?, 0, ?, NULL, ?)""",
                 (
                     task_id,
                     result.runner_task_id,
@@ -436,6 +516,7 @@ class AgentTaskService:
                     json.dumps(envelope, ensure_ascii=False),
                     intent.grant_id,
                     intent.permission_profile,
+                    workflow_run_id,
                     now,
                     intent.timeout_s,
                 ),
@@ -474,6 +555,9 @@ class AgentTaskService:
                     return None
             seq = rec.last_seq + 1
             stored = event.model_copy(update={"seq": seq})
+            incoming_state = _state(stored.state)
+            if rec.state.is_terminal and not incoming_state.is_terminal:
+                stored = stored.model_copy(update={"state": rec.state.value})
             snapshot = reduce_snapshot(rec.snapshot, stored)
             stored = stored.model_copy(update={"snapshot": snapshot})
             state = _state(stored.state)
@@ -522,7 +606,165 @@ class AgentTaskService:
                 payload=stored.model_dump(mode="json"),
             )
         )
+        await self._project_workflow_event(rec, stored)
         return stored
+
+    async def _project_workflow_event(
+        self,
+        rec: AgentTaskRecord,
+        event: EchoTaskEvent,
+    ) -> None:
+        if not rec.workflow_run_id:
+            return
+        payload = event.model_dump(mode="json")
+        visibility = event.visibility if event.visibility in {"user", "debug", "hidden"} else "debug"
+        state = event.state
+        if state == AgentTaskState.RUNNING.value:
+            run = await self.workflow.get_run(rec.workflow_run_id)
+            if run is not None and run.state == "pending":
+                await self.workflow.start_run(rec.workflow_run_id)
+        await self.workflow.record_event(
+            rec.workflow_run_id,
+            f"agent.{event.event}",
+            message=event.message,
+            payload=payload,
+            visibility=visibility,  # type: ignore[arg-type]
+        )
+        if event.event == "task.artifact_updated" and event.artifacts:
+            await self._import_agent_artifacts(rec, event.artifacts)
+        if state == AgentTaskState.SUCCEEDED.value:
+            await self.workflow.complete_run(
+                rec.workflow_run_id,
+                output={
+                    "agent_task_id": rec.task_id,
+                    "runner_task_id": event.runner_task_id or rec.runner_task_id,
+                    "artifacts": event.artifacts or rec.artifacts,
+                },
+                message=event.message or "任务完成",
+            )
+        elif state == AgentTaskState.FAILED.value:
+            await self.workflow.fail_run(
+                rec.workflow_run_id,
+                error=event.message or "任务失败",
+                payload={"agent_task_id": rec.task_id},
+            )
+        elif state == AgentTaskState.TIMEOUT.value:
+            await self.workflow.timeout_run(
+                rec.workflow_run_id,
+                error=event.message or "任务超时",
+            )
+        elif state == AgentTaskState.CANCELLED.value:
+            await self.workflow.mark_cancelled(
+                rec.workflow_run_id,
+                message=event.message or "任务已取消",
+            )
+        elif state == AgentTaskState.CANCEL_FAILED.value:
+            await self.workflow.mark_cancel_failed(
+                rec.workflow_run_id,
+                error=event.message or "取消失败",
+            )
+
+    async def _import_agent_artifacts(
+        self,
+        rec: AgentTaskRecord,
+        artifacts: list[dict[str, Any]],
+    ) -> None:
+        if not rec.workflow_run_id or not rec.runner_task_id:
+            return
+        run = await self.workflow.get_run(rec.workflow_run_id)
+        if run is None:
+            return
+        for item in artifacts:
+            relpath = str(item.get("relpath") or item.get("name") or "").strip()
+            encoded = _encode_agentos_artifact_path(relpath)
+            cache_rel = _cache_relpath(rec.task_id, relpath)
+            if not encoded or cache_rel is None:
+                await self.workflow.record_event(
+                    rec.workflow_run_id,
+                    "agent.artifact_import_failed",
+                    message="Agent 产物路径不合法",
+                    payload={"relpath": relpath},
+                    visibility="debug",
+                )
+                continue
+            artifact_id = _agent_artifact_id(rec.task_id, relpath)
+            cache_path = (self.settings.storage_dir / cache_rel).expanduser().resolve()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            upstream_url = (
+                f"{self.backend.base_url}/api/v1/tasks/"
+                f"{quote(rec.runner_task_id, safe='')}/artifacts/{encoded}"
+            )
+            try:
+                async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+                    resp = await client.get(upstream_url)
+                    resp.raise_for_status()
+                cache_path.write_bytes(resp.content)
+            except httpx.HTTPError as exc:
+                await self.workflow.record_event(
+                    rec.workflow_run_id,
+                    "agent.artifact_import_failed",
+                    message="Agent 产物导入失败",
+                    payload={"relpath": relpath, "error": str(exc)[:300]},
+                    visibility="debug",
+                )
+                continue
+            mime = resp.headers.get("content-type") or mimetypes.guess_type(cache_path.name)[0]
+            artifact = GeneratedArtifact(
+                artifact_id=artifact_id,
+                artifact_type=str(item.get("kind") or "agent"),
+                title=str(item.get("name") or relpath or artifact_id),
+                file_path=str(cache_path),
+                mime_type=mime or "application/octet-stream",
+                size_bytes=cache_path.stat().st_size,
+                generation_latency_ms=0,
+                model=RUNNER_CLAUDE_CODE,
+                metadata={
+                    "source": "agent",
+                    "agent_task_id": rec.task_id,
+                    "runner_task_id": rec.runner_task_id,
+                    "relpath": relpath,
+                    "legacy_url": str(item.get("url") or ""),
+                },
+            )
+            saved = await self.artifact_repo.save_artifact(artifact, run_id=rec.workflow_run_id)
+            link = await self.artifact_repo.link_artifact(
+                artifact_id=saved.artifact_id,
+                source="agent",
+                meeting_id=run.meeting_id,
+                todo_id=run.todo_id,
+                run_id=rec.workflow_run_id,
+            )
+            await self.workflow.record_event(
+                rec.workflow_run_id,
+                "agent.artifact_imported",
+                message="Agent 产物已归档",
+                payload={
+                    "artifact_id": saved.artifact_id,
+                    "relpath": relpath,
+                    "link_id": link.link_id,
+                },
+                visibility="debug",
+            )
+            await self.event_bus.publish(
+                EchoEvent(
+                    type="artifact.ready",
+                    meeting_id=run.meeting_id,
+                    payload={
+                        **saved.model_dump(mode="json"),
+                        "run_id": rec.workflow_run_id,
+                        "agent_task_id": rec.task_id,
+                        "links": [
+                            {
+                                "link_id": link.link_id,
+                                "source": link.source,
+                                "meeting_id": link.meeting_id,
+                                "todo_id": link.todo_id,
+                                "run_id": link.run_id,
+                            }
+                        ],
+                    },
+                )
+            )
 
     async def get_task(self, task_id: str) -> AgentTaskRecord | None:
         async with self._conn() as conn:
@@ -572,21 +814,51 @@ class AgentTaskService:
             return None
         if rec.state.is_terminal:
             return rec
-        if rec.runner_task_id:
-            await self.backend.cancel(rec.runner_task_id)
+        if rec.workflow_run_id:
+            await self.workflow.request_cancel(rec.workflow_run_id, reason="用户请求取消 Agent 任务")
         await self.record_task_event(
             EchoTaskEvent(
                 task_id=rec.task_id,
                 runner_task_id=rec.runner_task_id,
                 title=rec.title,
-                event="task.cancelled",
-                state="cancelled",
-                message="任务已取消",
+                event="task.cancel_requested",
+                state="cancel_requested",
+                message="正在取消任务",
             )
         )
-        task = self._bridge_tasks.pop(rec.task_id, None)
-        if task:
-            task.cancel()
+        cancelled = True
+        if rec.runner_task_id:
+            try:
+                cancelled = await self.backend.cancel(rec.runner_task_id)
+            except Exception as exc:
+                cancelled = False
+                _log.warning("agent cancel failed task=%s: %s", rec.task_id, exc)
+        if cancelled:
+            await self.record_task_event(
+                EchoTaskEvent(
+                    task_id=rec.task_id,
+                    runner_task_id=rec.runner_task_id,
+                    title=rec.title,
+                    event="task.cancelled",
+                    state="cancelled",
+                    message="任务已取消",
+                )
+            )
+        else:
+            await self.record_task_event(
+                EchoTaskEvent(
+                    task_id=rec.task_id,
+                    runner_task_id=rec.runner_task_id,
+                    title=rec.title,
+                    event="task.cancel_failed",
+                    state="cancel_failed",
+                    message="取消失败，请检查 Agent Runner 状态",
+                )
+            )
+        if cancelled:
+            task = self._bridge_tasks.pop(rec.task_id, None)
+            if task:
+                task.cancel()
         return await self.get_task(task_id)
 
     def start_bridge_for_task(self, rec: AgentTaskRecord) -> None:

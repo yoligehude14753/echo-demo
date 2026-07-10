@@ -65,7 +65,7 @@ async def test_real_tts_synthesize(settings: Settings) -> None:
 
 @pytest.mark.asyncio
 async def test_real_fast_llm_fallback() -> None:
-    """Fast 通道默认跟随 Yunwu M2.7，可完整流式。"""
+    """Fast 通道使用当前配置模型，可完整流式。"""
     from app.adapters.llm import OpenAICompatibleLLM
     from app.schemas.llm import ChatMessage
 
@@ -75,7 +75,7 @@ async def test_real_fast_llm_fallback() -> None:
         chunks: list[str] = []
         async for c in llm.chat_stream(
             [ChatMessage(role="user", content="一句话回答:1+1=?")],
-            model="MiniMax-M2.7",
+            model=s.llm_fast_model,
             max_tokens=200,
             timeout_s=60.0,
         ):

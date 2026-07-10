@@ -1,5 +1,5 @@
 import { type MouseEvent, useEffect, useState } from "react";
-import { Modal } from "antd";
+import { message, Modal } from "antd";
 import {
   AlertCircle,
   CheckCircle2,
@@ -19,9 +19,11 @@ import {
 import {
   artifactDownloadUrl,
   cancelAgentTask,
+  generateArtifact,
   grantAgentRunnerAndResume,
   listAgentTasks,
   listArtifacts,
+  type ArtifactKind,
 } from "@/api";
 import { apiUrl } from "@/runtime";
 import { useStore } from "@/store";
@@ -78,6 +80,7 @@ export default function ArtifactPanel(): JSX.Element {
   const clearArtifacts = useStore((s) => s.clearArtifacts);
   const removeArtifact = useStore((s) => s.removeArtifact);
   const addArtifact = useStore((s) => s.addArtifact);
+  const connected = useStore((s) => s.connected);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const meeting = useStore((s) =>
     currentMeetingId ? s.meetings[currentMeetingId] : undefined,
@@ -86,6 +89,7 @@ export default function ArtifactPanel(): JSX.Element {
     useState<GeneratedArtifact | null>(null);
 
   useEffect(() => {
+    if (!connected) return;
     let alive = true;
     void (async (): Promise<void> => {
       const [restoredResult, tasksResult] = await Promise.allSettled([
@@ -113,7 +117,7 @@ export default function ArtifactPanel(): JSX.Element {
     return () => {
       alive = false;
     };
-  }, [addArtifact, upsertAgentTask]);
+  }, [addArtifact, connected, upsertAgentTask]);
 
   // outputs 是全局工作产物，不应因为用户正在查看某个历史会议而消失。
   // 会议关联产物只作为补充来源合并进列表；全局新生成产物始终可见。
@@ -291,6 +295,8 @@ function statusLabel(state: string): string {
       return "失败";
     case "cancelled":
       return "已取消";
+    case "cancel_failed":
+      return "取消失败";
     case "timeout":
       return "已超时";
     default:
@@ -308,9 +314,9 @@ function AgentTaskCardView({
   const [busy, setBusy] = useState(false);
   const snapshot = task.snapshot ?? {};
   const artifacts = Array.isArray(snapshot.artifacts) ? snapshot.artifacts : task.artifacts;
-  const terminal = ["succeeded", "failed", "cancelled", "timeout"].includes(task.state);
+  const terminal = ["succeeded", "failed", "cancelled", "cancel_failed", "timeout"].includes(task.state);
   const needsGrant = task.state === "waiting_permission";
-  const failed = task.state === "failed" || task.state === "timeout";
+  const failed = task.state === "failed" || task.state === "timeout" || task.state === "cancel_failed";
   const Icon = task.state === "succeeded" ? CheckCircle2 : failed ? AlertCircle : Clock3;
 
   async function grantAndStart(e: MouseEvent): Promise<void> {
@@ -461,16 +467,15 @@ interface FailedArtifactCardProps {
 }
 
 /**
- * 失败产物卡片：红色描边 + 错误原因 + 重试/关闭。
- *
- * 重试按钮当前是占位（P2.2 范围内只落事件 → 渲染卡片）；真正的重试链路要等
- * P2.5 设置面板实现后再接入。先 console.log 出来，避免给用户假象。
+ * 失败产物卡片：红色描边 + 错误原因 + 真实重试/关闭。
  */
 function FailedArtifactCard({
   failed,
   onDismiss,
 }: FailedArtifactCardProps): JSX.Element {
   const [now, setNow] = useState(() => Date.now());
+  const [retrying, setRetrying] = useState(false);
+  const addArtifact = useStore((s) => s.addArtifact);
 
   useEffect(() => {
     // 让相对时间每分钟自动刷一次（同一面板里多张卡片共用一个 tick 也 OK）。
@@ -481,11 +486,29 @@ function FailedArtifactCard({
   const relative = formatRelativeTime(failed.failed_at, now);
   const typeBadgeClass =
     typeBadge[failed.artifact_type] ?? "bg-paper-200 text-ink-700";
+  const canRetry = Boolean(failed.intent_text && failed.artifact_type !== "unknown");
 
-  function onRetry(e: React.MouseEvent): void {
+  async function onRetry(e: React.MouseEvent): Promise<void> {
     e.stopPropagation();
-    // P2.2 占位：等 P2.5 设置面板的 retry mechanism 后再接真实链路。
-    console.log("TODO: retry artifact", failed);
+    if (!canRetry || retrying || !failed.intent_text) return;
+    setRetrying(true);
+    try {
+      const artifact = await generateArtifact({
+        artifact_type: failed.artifact_type as ArtifactKind,
+        brief: failed.intent_text,
+        meeting_id: failed.meeting_id ?? undefined,
+        todo_id: failed.todo_id ?? undefined,
+        retry_of_run_id: failed.run_id ?? undefined,
+      });
+      addArtifact(artifact);
+      onDismiss();
+      message.success(`已重新生成：${artifact.title || artifact.artifact_id}`);
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err);
+      message.error(`重试失败：${text}`);
+    } finally {
+      setRetrying(false);
+    }
   }
 
   return (
@@ -546,10 +569,12 @@ function FailedArtifactCard({
         <button
           type="button"
           onClick={onRetry}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] text-err border border-err/30 hover:bg-err/10 transition-colors"
+          disabled={!canRetry || retrying}
+          title={canRetry ? "重新生成" : "缺少原始指令，无法重试"}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] text-err border border-err/30 hover:bg-err/10 transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
         >
           <RotateCcw className="w-3 h-3" />
-          <span>重试</span>
+          <span>{retrying ? "重试中" : "重试"}</span>
         </button>
       </div>
     </div>

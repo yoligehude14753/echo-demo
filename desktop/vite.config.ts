@@ -15,6 +15,11 @@ export default defineConfig({
       targets: ["Chrome >= 49", "Android >= 5"],
       modernPolyfills: true,
       renderLegacyChunks: true,
+      // Electron loads the app over file://. plugin-legacy intentionally treats
+      // file:// as non-modern and otherwise boots both modern and legacy entries,
+      // producing duplicate React stores, WebSockets, and microphone capture.
+      // A single legacy entry works for both the desktop shell and old TV WebViews.
+      renderModernChunks: false,
     }),
   ],
   base: "./", // 让 Electron file:// 加载 dist/index.html 时能找到资源

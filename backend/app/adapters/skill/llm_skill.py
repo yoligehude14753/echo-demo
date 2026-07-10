@@ -369,10 +369,24 @@ class SkillExecutor:
     ) -> GeneratedArtifact:
         sys_prompt = get_skill_prompt(kind, legacy=self._use_legacy_html_pptx)
         llm_out = await self._call_llm(llm, sys_prompt, brief, extra_instructions)
+        generation_latency_ms = llm_out.latency_ms
         code = _strip_code_fence(llm_out.content, text_mode=kind in _TEXT_KINDS)
 
         ext = _CANONICAL_EXT[kind]
         result = await self._exec_for_kind(kind, code, build_dir, ext)
+        retry_count = 0
+        if (not result.success or result.output_path is None) and kind in {"markdown", "txt"}:
+            retry_count = 1
+            repair_instructions = (
+                f"{extra_instructions or ''}\n\n"
+                f"上一次 {kind} 输出未通过产物校验：{result.stderr[:200]}。"
+                "请完整重写整篇文档，不要解释失败原因；严格遵守 system 中的格式和"
+                "最低长度要求，确保正文信息充分。"
+            ).strip()
+            llm_out = await self._call_llm(llm, sys_prompt, brief, repair_instructions)
+            generation_latency_ms += llm_out.latency_ms
+            code = _strip_code_fence(llm_out.content, text_mode=True)
+            result = await self._exec_for_kind(kind, code, build_dir, ext)
         if not result.success or result.output_path is None:
             raise SkillError(f"skill {kind} execution failed: {result.stderr[:400]}")
         output_path = result.output_path
@@ -383,6 +397,7 @@ class SkillExecutor:
             "model": llm_out.model,
             "exec_elapsed_s": f"{result.elapsed_s:.2f}",
             "code_size": str(len(code)),
+            "retry_count": str(retry_count),
         }
         if self._use_legacy_html_pptx and kind in {"html", "pptx"}:
             metadata["legacy_pipeline"] = "true"
@@ -417,7 +432,7 @@ class SkillExecutor:
             file_path=str(output_path),
             mime_type=_mime_for(ext),
             size_bytes=output_path.stat().st_size,
-            generation_latency_ms=llm_out.latency_ms + result.elapsed_s * 1000.0,
+            generation_latency_ms=generation_latency_ms + result.elapsed_s * 1000.0,
             model=llm_out.model,
             metadata=metadata,
         )

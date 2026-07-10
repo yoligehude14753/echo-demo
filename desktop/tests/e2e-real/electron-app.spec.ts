@@ -6,7 +6,7 @@
  *   - Windows/Linux: 通过 ECHODESK_APP_BIN 指定 exe/AppImage/解包二进制
  * 让 Electron 自己 spawn 后端，验证：
  *   1. 主窗口启动不白屏（首个 BrowserWindow 加载完毕）
- *   2. public demo 桌面包默认走云端 backend，不要求本机 Python
+ *   2. 显式 public demo 模式走云端 backend，不要求本机 Python
  *   3. WS 与 backend 真握手成功（"已连接"）
  *   4. Settings / Workspace / CommandBar 核心点击路径可用
  *
@@ -49,14 +49,14 @@ function requireRect(rect: RectInfo | null, name: string): RectInfo {
 test.describe("EchoDesk 打包 App", () => {
   test.skip(!APP_BIN || !existsSync(APP_BIN), "未设置或找不到 ECHODESK_APP_BIN，跳过打包 App 测试");
 
-  test("packaged app: 启动不白屏 + public backend + 核心交互可点击", async () => {
+  test("packaged app: 启动不白屏 + 显式 public backend + 核心交互可点击", async () => {
     test.setTimeout(180_000);
     const env = {
       ...process.env,
+      ECHO_PUBLIC_DEMO: "1",
       ECHO_PUBLIC_BACKEND_BASE:
         process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echodesk.yoliyoli.uk",
     };
-    delete env.ECHO_PUBLIC_DEMO;
     delete env.ECHO_FORCE_LOCAL_BACKEND;
     delete env.ECHO_BACKEND_PORT;
 
@@ -83,7 +83,7 @@ test.describe("EchoDesk 打包 App", () => {
       // 1. 品牌名出现 → 没白屏
       await expect(win.locator("text=EchoDesk").first()).toBeVisible({ timeout: 60_000 });
 
-      // 2. release 桌面包默认是 public demo，不应要求本机 Python/backend。
+      // 2. 显式 public demo 不应要求本机 Python/backend。
       await expect
         .poll(
           async () =>

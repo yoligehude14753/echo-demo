@@ -110,3 +110,26 @@ def test_adapter_keeps_unknown_and_input_delta_debug_only() -> None:
     assert event.event == "task.runner_status"
     assert event.visibility == "debug"
     assert event.message == "unknown event: input_json_delta"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("kind", "payload"),
+    [
+        ("task_state", {"status": "failed", "error": "timeout: "}),
+        ("result", {"is_error": True, "result_text": "deadline exceeded after 50ms"}),
+    ],
+)
+def test_adapter_promotes_explicit_runner_timeout_to_timeout_event(
+    kind: str,
+    payload: dict[str, object],
+) -> None:
+    event = ClaudeCodeRunnerAdapter().translate(
+        {"kind": kind, "task_id": "runner_1", "payload": payload},
+        context=_ctx(),
+    )
+
+    assert event is not None
+    assert event.event == "task.timeout"
+    assert event.state == "timeout"
+    assert event.message

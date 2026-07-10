@@ -9,12 +9,19 @@ from pydantic import BaseModel, Field
 
 Visibility = Literal["user", "debug", "hidden"]
 
-TERMINAL_STATES = {"succeeded", "failed", "cancelled", "timeout"}
-TERMINAL_EVENTS = {"task.completed", "task.failed", "task.cancelled", "task.timeout"}
+TERMINAL_STATES = {"succeeded", "failed", "cancelled", "cancel_failed", "timeout"}
+TERMINAL_EVENTS = {
+    "task.completed",
+    "task.failed",
+    "task.cancelled",
+    "task.cancel_failed",
+    "task.timeout",
+}
 FAILURE_PROGRESS_TEXT = {
     "task.failed": "任务失败",
     "task.timeout": "任务超时",
     "task.cancelled": "任务已取消",
+    "task.cancel_failed": "取消失败",
 }
 
 

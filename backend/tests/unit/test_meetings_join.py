@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from app.adapters.repo.migrator import run_migrations
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.api.deps import (
     aclose_repository,
@@ -23,9 +24,11 @@ from app.api.deps import (
     reset_deps_for_test,
 )
 from app.api.meetings import reset_meeting_pipeline
+from app.artifacts.repository import ArtifactRepository
 from app.config import Settings, get_settings
 from app.main import create_app
 from app.ports.repository import RepositoryPort
+from app.schemas.artifact import GeneratedArtifact
 from app.schemas.meeting import TranscriptSegment
 from fastapi.testclient import TestClient
 
@@ -33,7 +36,10 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 async def repo(tmp_path: Path) -> SQLiteRepository:
     """每个测试一份干净 sqlite。"""
-    r = SQLiteRepository(tmp_path / "echo.db")
+    db_path = tmp_path / "echo.db"
+    result = await run_migrations(db_path)
+    assert result.errors == []
+    r = SQLiteRepository(db_path)
     await r.init()
     try:
         yield r
@@ -53,6 +59,7 @@ def client(tmp_path: Path, repo: SQLiteRepository) -> TestClient:
     reset_meeting_pipeline()
     app = create_app()
     settings = Settings(
+        db_path=tmp_path / "echo.db",
         storage_dir=tmp_path / "storage",
         skill_executor_build_dir=tmp_path / "skill_build",
     )
@@ -86,6 +93,51 @@ async def _seed_meeting(
         )
     elif ended_at is not None:
         await repo.update_meeting_state(meeting_id, state="ended", ended_at=ended_at)
+
+
+def _settings(tmp_path: Path) -> Settings:
+    return Settings(
+        db_path=tmp_path / "echo.db",
+        storage_dir=tmp_path / "storage",
+        skill_executor_build_dir=tmp_path / "skill_build",
+    )
+
+
+async def _seed_artifact_link(
+    tmp_path: Path,
+    *,
+    artifact_id: str,
+    meeting_id: str,
+    artifact_type: str = "pdf",
+    title: str = "会议产物",
+    body: bytes = b"artifact",
+    todo_id: str | None = None,
+) -> GeneratedArtifact:
+    ext = "pdf" if artifact_type == "pdf" else artifact_type
+    build_dir = tmp_path / "skill_build" / artifact_id
+    build_dir.mkdir(parents=True, exist_ok=True)
+    output = build_dir / f"output.{ext}"
+    output.write_bytes(body)
+    artifact = GeneratedArtifact(
+        artifact_id=artifact_id,
+        artifact_type=artifact_type,
+        title=title,
+        file_path=str(output),
+        mime_type="application/pdf" if ext == "pdf" else "text/plain",
+        size_bytes=output.stat().st_size,
+        generation_latency_ms=1.0,
+        model="test-model",
+        metadata={"kind": artifact_type},
+    )
+    artifact_repo = ArtifactRepository(_settings(tmp_path))
+    await artifact_repo.save_artifact(artifact)
+    await artifact_repo.link_artifact(
+        artifact_id=artifact.artifact_id,
+        source="todo" if todo_id else "meeting",
+        meeting_id=meeting_id,
+        todo_id=todo_id,
+    )
+    return artifact
 
 
 @pytest.mark.unit
@@ -139,6 +191,7 @@ async def test_list_meetings_aggregates_counts(client: TestClient, repo: SQLiteR
 
     r = client.get("/meetings")
     assert r.status_code == 200, r.text
+    assert r.headers["cache-control"] == "no-store"
     data = r.json()
     assert isinstance(data, list)
     assert len(data) == 2
@@ -257,12 +310,12 @@ def test_get_minutes_404_on_missing_meeting(client: TestClient) -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_get_artifacts_returns_empty_list(client: TestClient, repo: SQLiteRepository) -> None:
-    """当前 schema 没有 meeting<->artifact 关联，endpoint 始终返回空。
-
-    PR body 详细解释了这个产品/工程权衡。本 case 锁住"endpoint 不抛错且返回
-    list[]"的契约——前端 getMeetingArtifacts 实现依赖这一点。
-    """
+async def test_get_artifacts_returns_db_linked_artifacts(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+) -> None:
+    """0.3 起会议产物以 artifact_links 为事实源。"""
     t0 = datetime(2026, 5, 28, 9, 0, tzinfo=UTC)
     await _seed_meeting(
         repo,
@@ -271,9 +324,18 @@ async def test_get_artifacts_returns_empty_list(client: TestClient, repo: SQLite
         started_at=t0,
         segments=[TranscriptSegment(text="x", start_ms=0, end_ms=500)],
     )
+    artifact = await _seed_artifact_link(
+        tmp_path,
+        artifact_id="artifact-mtg-001",
+        meeting_id="mtg-art",
+        title="会议 PDF",
+        todo_id="todo-1",
+    )
     r = client.get("/meetings/mtg-art/artifacts")
     assert r.status_code == 200, r.text
-    assert r.json() == []
+    data = r.json()
+    assert [item["artifact_id"] for item in data] == [artifact.artifact_id]
+    assert data[0]["title"] == "会议 PDF"
 
 
 @pytest.mark.unit
@@ -290,13 +352,6 @@ async def test_share_page_includes_minutes_and_artifacts(
     tmp_path: Path,
 ) -> None:
     artifact_id = "artifact-share-001"
-    build_dir = tmp_path / "skill_build" / artifact_id
-    build_dir.mkdir(parents=True)
-    (build_dir / "output.pdf").write_bytes(b"%PDF-1.4\nmock")
-    (build_dir / "meta.json").write_text(
-        json.dumps({"title": "扫码会议输出", "artifact_type": "pdf"}),
-        encoding="utf-8",
-    )
     await _seed_meeting(
         repo,
         "mtg-share",
@@ -310,9 +365,17 @@ async def test_share_page_includes_minutes_and_artifacts(
             "summary": "这是一段可以扫码保存的纪要。",
             "sections": [{"heading": "重点", "bullets": ["扫码保存", "下载产物"]}],
             "decisions": ["保留分享链接"],
-            "todos": [{"id": "todo-1", "text": "生成 PDF", "artifact_id": artifact_id}],
+            "todos": [{"id": "todo-1", "text": "生成 PDF"}],
             "action_items": [],
         },
+    )
+    await _seed_artifact_link(
+        tmp_path,
+        artifact_id=artifact_id,
+        meeting_id="mtg-share",
+        title="扫码会议输出",
+        body=b"%PDF-1.4\nmock",
+        todo_id="todo-1",
     )
 
     r = client.get("/meetings/mtg-share/share")
@@ -370,9 +433,18 @@ async def test_clear_meeting_outputs_clears_minutes_and_deletes_artifacts(
     tmp_path: Path,
 ) -> None:
     artifact_id = "artifact-delete-001"
+    linked_artifact = await _seed_artifact_link(
+        tmp_path,
+        artifact_id=artifact_id,
+        meeting_id="mtg-clear",
+        artifact_type="txt",
+        title="待清理产物",
+        body=b"delete me",
+    )
     build_dir = tmp_path / "skill_build" / artifact_id
-    build_dir.mkdir(parents=True)
-    (build_dir / "output.txt").write_text("delete me", encoding="utf-8")
+    rogue_dir = tmp_path / "skill_build" / "rogue-from-client"
+    rogue_dir.mkdir(parents=True)
+    (rogue_dir / "output.txt").write_text("do not delete", encoding="utf-8")
     await _seed_meeting(
         repo,
         "mtg-clear",
@@ -394,12 +466,16 @@ async def test_clear_meeting_outputs_clears_minutes_and_deletes_artifacts(
     r = client.request(
         "DELETE",
         "/meetings/mtg-clear/outputs",
-        json={"artifact_ids": [artifact_id], "clear_minutes": True},
+        json={"artifact_ids": [artifact_id, "rogue-from-client"], "clear_minutes": True},
     )
 
     assert r.status_code == 200
     assert r.json()["artifacts_deleted"] == 1
+    assert r.json()["artifact_ids"] == [linked_artifact.artifact_id]
     assert not build_dir.exists()
+    assert rogue_dir.exists()
+    artifact_repo = ArtifactRepository(_settings(tmp_path))
+    assert await artifact_repo.get_artifact(artifact_id) is None
     rec = await repo.get_meeting("mtg-clear")
     assert rec is not None
     assert rec.state == "ended"

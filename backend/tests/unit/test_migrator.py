@@ -143,8 +143,17 @@ async def test_real_migrations_dir_applies_on_fresh_db(tmp_path: Path) -> None:
     result = await run_migrations(db, migrations_dir=_DEFAULT_MIGRATIONS_DIR)
 
     assert result.errors == []
-    assert result.current_version >= 2
+    assert result.current_version >= 11
     # 001_initial.sql 至少应建出这些核心表
-    for tbl in ("meetings", "meeting_segments", "ambient_segments", "speakers"):
+    for tbl in (
+        "meetings",
+        "meeting_segments",
+        "ambient_segments",
+        "speakers",
+        "workflow_runs",
+        "workflow_events",
+        "artifacts",
+        "artifact_links",
+    ):
         assert await _has_table(db, tbl), f"missing table {tbl}"
     assert await _has_table(db, "schema_version")

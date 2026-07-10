@@ -8,6 +8,38 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.3.0-alpha.1] – 2026-07-10
+
+0.3 Workflow Core 首个可交付 alpha：把 Artifact、Todo 和 Claude Code Agent 纳入统一 workflow/run/event 事实源。
+
+### 新增
+
+- 新增 `workflow_runs`、`workflow_events`、`artifacts`、`artifact_links` 数据表与 `/workflows/runs*` REST API。
+- 产物生成会创建 workflow run，成功/失败都会写事件；`/artifacts` 和 `/meetings/{id}/artifacts` 改为从 DB 返回。
+- Todo 执行状态由 `workflow.snapshot` / `meeting.todo.updated` 投影，支持 running、failed、waiting_permission 和 done。
+- Agent task 保留 Claude Code / AgentOS full access 主路径，同时映射到 workflow run；Agent 事件写入 `workflow_events`，Agent 产物会导入统一 artifacts。
+- outputs 失败卡片接真实重试，不再停留在 console/TODO；重试会创建新的 artifact workflow，并保留父 run 关联。
+- 新增 REST route、WS event、Electron IPC、script matrix 和 workflow HTTP scenario 门禁测试。
+
+### 变更
+
+- Desktop Pro 桌面包改为 local-first 默认模式：双击后使用本机 backend/SQLite；public demo 改为显式 `ECHO_PUBLIC_DEMO=1`，旧 `ECHO_FORCE_LOCAL_BACKEND=1` 继续兼容。
+- 会议分享页和清理 outputs 以 `artifact_links` 为唯一事实源，不再依赖前端内存传入的 artifact id。
+- 旧 `/agents/tasks/{id}/artifacts/{path}` 代理继续保留兼容，归档成功后统一展示在 outputs artifacts 区。
+- 主 LLM 默认固定为 Yunwu `deepseek-v4-flash`；fast 通道仍可独立配置，不随主模型强制切换。
+- 版本号推进到 `0.3.0-alpha.1`；Android / TV `versionCode=300`、`versionName=0.3.0-alpha.1`。
+
+### 修复
+
+- 修复打包版 Electron 同时挂载 modern/legacy bundle，导致双 React、双 WebSocket 和双麦克风采集的问题。
+- 修复 GET 缓存与 backend 启动竞态导致会议、Todo、outputs 和 Agent task 重启后未恢复的问题。
+- AgentOS 明确返回 timeout 时投影为 Agent/workflow `timeout`，不再显示为普通失败。
+- 短会议只要纪要已完成就保留在历史列表；正常 WebSocket 断开不再打印异常栈。
+- fast LLM 连接本地模型网关时会回退使用共享 gateway token，不再固定发送无效的 `Bearer EMPTY`。
+- 旧 `~/.echodesk/config.json` 中的历史 `app_version` 不再覆盖当前安装版本。
+- Markdown/TXT 模型输出首次未通过长度或格式校验时会自动完整重写一次，二次失败仍保留明确错误。
+- AgentOS 在 `result` 后补发产物事件时继续消费并归档，不再出现任务已完成但统一 artifacts 缺失。
+
 ## [0.2.50] – 2026-07-09
 
 桌面端工作区知识库热修：修复公网桌面包改连云端后，设置页误读远端工作区配置，导致本机知识库目录显示为 0 的问题。

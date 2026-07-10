@@ -17,6 +17,7 @@ import {
   artifactDownloadUrl,
   generateArtifact,
   getMeetingMinutes,
+  listWorkflowRuns,
   retryMinutesGeneration,
   type ArtifactKind,
 } from "@/api";
@@ -48,7 +49,7 @@ function remapAssignee(
   }
   return raw; // displayMap 里没这人，原样
 }
-import { useStore } from "@/store";
+import { projectMinutesWithWorkflowRuns, useStore } from "@/store";
 import type { MeetingMinutes, TodoItem } from "@/types";
 
 function isFinalizedLike(state: string | undefined): boolean {
@@ -127,12 +128,17 @@ export default function MinutesView(): JSX.Element {
     if (!isFinalizedLike(meeting?.state)) return;
     if (fetchedRef.current.has(currentId)) return;
     fetchedRef.current.add(currentId);
-    getMeetingMinutes(currentId)
-      .then((m) => {
+    Promise.all([
+      getMeetingMinutes(currentId),
+      listWorkflowRuns({ meeting_id: currentId, limit: 100 }).catch(() => []),
+    ])
+      .then(([m, workflowRuns]) => {
         if (!m) return; // 真的 404 → 让 generating 状态自然展示
+        const restoredMinutes = projectMinutesWithWorkflowRuns(m, workflowRuns);
+        if (!restoredMinutes) return;
         upsertMeeting(currentId, {
-          minutes: m,
-          title: m.title,
+          minutes: restoredMinutes,
+          title: restoredMinutes.title,
           state: "ended",
           minutes_status: "ok",
           minutes_error: null,
@@ -577,6 +583,21 @@ function MinutesTodoList({
   const [autoRunning, setAutoRunning] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
+    setAutoRunning((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const todoId of Object.keys(next)) {
+        const todo = todos.find((item) => item.id === todoId);
+        if (!todo || !["pending", "running"].includes(todo.status)) {
+          delete next[todoId];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [todos]);
+
+  useEffect(() => {
     const candidates = todos
       .map((todo) => ({ todo, job: inferAutoExecutableTodo(todo, minutes) }))
       .filter(
@@ -611,13 +632,11 @@ function MinutesTodoList({
           if (!cancelled) message.error(`自动执行会议待办失败：${msg}`);
         } finally {
           inFlightRef.current.delete(todo.id);
-          if (!cancelled) {
-            setAutoRunning((prev) => {
-              const next = { ...prev };
-              delete next[todo.id];
-              return next;
-            });
-          }
+          setAutoRunning((prev) => {
+            const next = { ...prev };
+            delete next[todo.id];
+            return next;
+          });
         }
       }
     })();
@@ -650,10 +669,11 @@ function MinutesTodoList({
             todo={t}
             displayAssignee={remapAssignee(t.assignee, speakerMap)}
             autoRunning={autoRunning[t.id] === true}
-            onExecute={(text) =>
+            onExecute={(text, retryOfRunId) =>
               prefillCommandBar(text, {
                 meeting_id: meetingId,
                 todo_id: t.id,
+                retry_of_run_id: retryOfRunId,
               })
             }
           />
@@ -672,12 +692,15 @@ function TodoRow({
   todo: TodoItem;
   displayAssignee: string | null;
   autoRunning: boolean;
-  onExecute: (text: string) => void;
+  onExecute: (text: string, retryOfRunId?: string) => void;
 }): JSX.Element {
   const done = todo.status === "done";
   const cancelled = todo.status === "cancelled";
+  const failed = todo.status === "failed";
+  const waitingPermission = todo.status === "waiting_permission";
+  const running = autoRunning || todo.status === "running";
   const canExecute =
-    todo.status === "pending" &&
+    (todo.status === "pending" || failed) &&
     todo.kind === "actionable" &&
     typeof todo.suggested_command === "string" &&
     todo.suggested_command.length > 0;
@@ -686,6 +709,7 @@ function TodoRow({
       data-testid="minutes-todo-row"
       data-todo-id={todo.id}
       data-todo-status={todo.status}
+      data-workflow-run-id={todo.workflow_run_id ?? ""}
       className={`flex items-start gap-2 px-2 py-1.5 rounded-md border border-paper-200 bg-paper-50 ${
         done ? "opacity-70" : ""
       }`}
@@ -696,10 +720,14 @@ function TodoRow({
             className="w-4 h-4 text-emerald-600"
             aria-label="已完成"
           />
+        ) : failed ? (
+          <AlertCircle className="w-4 h-4 text-err" aria-label="执行失败" />
+        ) : running ? (
+          <Loader2 className="w-4 h-4 text-accent animate-spin" aria-label="执行中" />
         ) : (
           <Circle
             className={`w-4 h-4 ${cancelled ? "text-ink-300" : "text-ink-400"}`}
-            aria-label={cancelled ? "已取消" : "待办"}
+            aria-label={cancelled ? "已取消" : waitingPermission ? "等待授权" : "待办"}
           />
         )}
       </div>
@@ -721,8 +749,22 @@ function TodoRow({
             </Tag>
           )}
           {todo.kind === "actionable" && !done && (
-            <span className="text-[10.5px] text-accent">
-              {autoRunning ? "自动执行中" : "可执行"}
+            <span
+              className={`text-[10.5px] ${
+                failed
+                  ? "text-err"
+                  : waitingPermission
+                    ? "text-amber-700"
+                    : "text-accent"
+              }`}
+            >
+              {failed
+                ? "失败，可重试"
+                : waitingPermission
+                  ? "等待授权"
+                  : running
+                    ? "执行中"
+                    : "可执行"}
             </span>
           )}
           {done && todo.artifact_id && (
@@ -746,12 +788,17 @@ function TodoRow({
             size="small"
             icon={<Play className="w-3 h-3" />}
             data-testid="minutes-todo-execute-btn"
-            loading={autoRunning}
-            disabled={autoRunning}
-            onClick={() => onExecute(todo.suggested_command as string)}
+            loading={running}
+            disabled={running || waitingPermission}
+            onClick={() =>
+              onExecute(
+                todo.suggested_command as string,
+                failed ? (todo.workflow_run_id ?? undefined) : undefined,
+              )
+            }
             className="!shrink-0 !text-accent"
           >
-            {autoRunning ? "执行中" : "执行"}
+            {running ? "执行中" : failed ? "重试" : "执行"}
           </Button>
         </Tooltip>
       )}

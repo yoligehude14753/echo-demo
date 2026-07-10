@@ -16,8 +16,9 @@ function fail(message) {
 
 const pkg = JSON.parse(fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"));
 const version = String(pkg.version || "").trim();
-if (!/^\d+\.\d+\.\d+$/.test(version)) {
-  fail(`desktop/package.json version must be semver x.y.z, got "${version}"`);
+const semverMatch = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/);
+if (!semverMatch) {
+  fail(`desktop/package.json version must be semver, got "${version}"`);
 }
 
 const backendInit = read("backend/app/__init__.py");
@@ -36,7 +37,9 @@ if (!/app_version:\s*str\s*=\s*__version__/.test(backendConfig)) {
   fail("Settings.app_version must default to __version__");
 }
 
-const [, minor, patch] = version.split(".").map((part) => Number.parseInt(part, 10));
+const [, , minorRaw, patchRaw] = semverMatch;
+const minor = Number.parseInt(minorRaw, 10);
+const patch = Number.parseInt(patchRaw, 10);
 const expectedAndroidCode = minor * 100 + patch;
 const androidGradle = read("desktop/android/app/build.gradle");
 const versionCodeMatch = androidGradle.match(/versionCode\s+(\d+)/);

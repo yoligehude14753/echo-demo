@@ -1,52 +1,55 @@
 # EchoDesk · 数字分身 (Another Me)
 
-> **目标**：会议 + 办公场景的"数字分身"应用。公开安装包可直接使用 EchoDesk 服务；模型密钥不进入客户端包；私有部署仍可显式启用本机服务。
-> **当前源码版本**：v0.2.50（详见 [`CHANGELOG.md`](CHANGELOG.md)）
-> **公开下载**：见 [GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)；本轮已本机构建 v0.2.50 macOS 资产，发布后可下载。
+> **目标**：会议 + 办公场景的"数字分身"应用。0.3 Desktop Pro 默认使用本机 backend 与 SQLite；public demo 作为显式部署模式保留。
+> **当前源码版本**：v0.3.0-alpha.1（详见 [`CHANGELOG.md`](CHANGELOG.md)）
+> **公开下载**：见 [GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)；本轮已本机构建 v0.3.0-alpha.1 macOS 资产，发布后可下载。
 > **安装指南**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
-> **服务端模型配置**：公开安装包默认连接 EchoDesk 服务端，模型密钥不会进入客户端包。
-> **主线治理基准**：见 [`docs/GOVERNANCE_v0.2.50.md`](docs/GOVERNANCE_v0.2.50.md)。当前主线以 `v0.2.50` 为准，不继承旧 `0.2.7` 实验线。
-> **0.3 开发前准备**：见 [`docs/0.3/README.md`](docs/0.3/README.md)。0.3 将以统一 Workflow Core 收束会议、知识库、Artifact、Todo、Claude Code Agent、分享导出和诊断恢复。
+> **模型配置**：Desktop Pro 从本机 `~/.echodesk/config.json` 读取；public demo 的模型密钥留在服务端，不进入客户端包。
+> **主线治理基准**：见 [`docs/GOVERNANCE_v0.2.50.md`](docs/GOVERNANCE_v0.2.50.md)。0.3.0-alpha.1 以 `v0.2.50` 为历史治理基线推进 Workflow Core，不继承旧 `0.2.7` 实验线。
+> **0.3 工作流核心**：见 [`docs/0.3/README.md`](docs/0.3/README.md)。0.3 以统一 Workflow Core 收束会议、Artifact、Todo、Claude Code Agent、分享导出和诊断恢复。
 
 ## 立即下载
 
-当前源码版本是 `v0.2.50`。公开安装包下载页：
+当前源码版本是 `v0.3.0-alpha.1`。公开安装包下载页：
 <https://github.com/yoligehude14753/echo-demo/releases/latest>
 
 | 平台 | Release 资产命名 | 说明 |
 |---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.2.50-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.2.50-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows 安装器 | `EchoDesk.Setup.0.2.50.exe` | 需 Windows 构建 workflow 产出后才可下载 |
-| Windows 便携包 | `EchoDesk-0.2.50-win-x64.zip` | 需 Windows 构建 workflow 产出后才可下载 |
-| Linux AppImage | `EchoDesk-0.2.50.AppImage` | 需 Linux 构建产出后才可下载 |
-| Linux deb | `echodesk-desktop_0.2.50_amd64.deb` | 需 Linux 构建产出后才可下载 |
-| Android 手机 / 平板 | `EchoDesk-0.2.50-android.apk` | 需 Android 构建产出后才可下载 |
-| Android TV / 智能电视 | `EchoDesk-0.2.50-smart-tv.apk` | 需 TV 打包产出后才可下载 |
-| 智能电视一键安装 | `EchoDesk-0.2.50-smart-tv-oneclick.zip` | 需 TV 打包产出后才可下载 |
-| 校验文件 | `SHA256SUMS-0.2.50.txt` | 随已发布资产一起上传 |
+| macOS Apple Silicon | `EchoDesk-0.3.0-alpha.1-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.3.0-alpha.1-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows 安装器 | `EchoDesk.Setup.0.3.0-alpha.1.exe` | 需 Windows 构建 workflow 产出后才可下载 |
+| Windows 便携包 | `EchoDesk-0.3.0-alpha.1-win-x64.zip` | 需 Windows 构建 workflow 产出后才可下载 |
+| Linux AppImage | `EchoDesk-0.3.0-alpha.1.AppImage` | 需 Linux 构建产出后才可下载 |
+| Linux deb | `echodesk-desktop_0.3.0-alpha.1_amd64.deb` | 需 Linux 构建产出后才可下载 |
+| Android 手机 / 平板 | `EchoDesk-0.3.0-alpha.1-android.apk` | 需 Android 构建产出后才可下载 |
+| Android TV / 智能电视 | `EchoDesk-0.3.0-alpha.1-smart-tv.apk` | 需 TV 打包产出后才可下载 |
+| 智能电视一键安装 | `EchoDesk-0.3.0-alpha.1-smart-tv-oneclick.zip` | 需 TV 打包产出后才可下载 |
+| 校验文件 | `SHA256SUMS-0.3.0-alpha.1.txt` | 随已发布资产一起上传 |
 
-公开桌面包、Android 和 TV 客户端默认连接 `https://echodesk.yoliyoli.uk`，模型服务和密钥都在服务端。
-Windows 机器若出现 Device Guard / 组织策略拦截 `.exe` 安装器，请下载 `EchoDesk-0.2.50-win-x64.zip`，
+Desktop Pro 桌面包默认启动本机 backend；安装前先运行 `scripts/install-backend.sh`。Android、TV
+及显式 public demo 客户端连接 `https://echodesk.yoliyoli.uk`，模型服务和密钥留在服务端。
+Windows 机器若出现 Device Guard / 组织策略拦截 `.exe` 安装器，请下载 `EchoDesk-0.3.0-alpha.1-win-x64.zip`，
 解压后直接运行 `EchoDesk.exe`；该形态已在 Windows 远程机通过启动和设置页点击 smoke。
-私有桌面部署可设置 `ECHO_FORCE_LOCAL_BACKEND=1` 恢复本机 Python 服务。
+public demo 桌面启动入口需显式设置 `ECHO_PUBLIC_DEMO=1`；旧部署仍可用
+`ECHO_FORCE_LOCAL_BACKEND=1` 强制覆盖为本机模式。
 更详细的安装、电视侧载和本机服务说明见 [`docs/INSTALL.md`](docs/INSTALL.md)。
 TV / 公共演示模式默认不拉取共享历史，新装设备只显示本机本次会议；若电视系统不向
 三方 app 提供有效麦克风输入，EchoDesk 会提示接入 USB / 蓝牙会议麦克风。
 TV APK 使用独立包名 `com.echodesk.tv`，不会再和 Android 手机 / 平板包 `com.echodesk.app`
 覆盖或共享本地 WebView 数据。
 
-## 状态摘要 (2026-06-28)
+## 状态摘要 (2026-07-10)
 
 | 阶段 | 范围 | 状态 |
 |---|---|---|
 | Phase 1 (0.1.0) | 持续监听 + 会议 + 多类指令 + 一键产物 + 一键 install | ✅ released |
 | Phase 2 (0.2.0) | 状态可视化 + artifact.failed + 模型服务降级 + DB migration + 管理 API + 诊断打包 | ✅ released |
 | Phase 3 (0.2.35) | 首次启动引导 + 服务端模型配置 + 知识库面板 + 智能电视一键安装/自启 + 会后扫码保存 + 公共演示服务 + 检查更新 | ✅ demo hotfix |
+| EchoDesk 0.3 alpha | Workflow Core + Artifact/Todo/Claude Agent 闭环 + local-first Desktop Pro | ✅ 本机验收完成 |
 | Phase 4 | Keychain 集成 + Universal Binary | 计划中 |
 
-测试：本地服务 WS unit 通过；desktop typecheck/lint/build 通过；TV / 分享 / 工作区 / 设置相关 e2e 模拟点击通过。当前工作区本轮只重建并安装了 macOS `.app`；Windows / Linux / Android / TV 全量 release 资产需要单独跑对应发布 workflow。
+测试：backend 确定性门禁 527 passed，0.3 workflow/contract 专项 19 passed，desktop scenarios 25 passed；已安装 macOS `.app` + 已安装 backend 使用真实 SQLite、Claude Code bridge 和 AgentOS 跑通失败/重启/重试/取消/超时/产物恢复 E2E。Windows / Linux / Android / TV 全量 release 资产仍需单独跑对应发布 workflow。
 
 ## 架构
 

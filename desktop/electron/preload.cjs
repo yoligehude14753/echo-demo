@@ -3,9 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("echo", {
   isElectron: true,
-  isPublicDemo:
-    process.env.ECHO_PUBLIC_DEMO === "1" ||
-    (!process.env.ELECTRON_DEV && process.env.ECHO_FORCE_LOCAL_BACKEND !== "1"),
+  isPublicDemo: ipcRenderer.sendSync("echo:is-public-demo") === true,
   getBackendHost: () => ipcRenderer.invoke("echo:backend-host"),
   getShareBackendHost: () => ipcRenderer.invoke("echo:share-backend-host"),
   loadLocalLegacyHistory: () =>

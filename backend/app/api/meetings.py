@@ -35,12 +35,14 @@ from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from app.adapters.rag.bm25 import BM25Rag
 from app.adapters.stt import make_stt
 from app.api.deps import (
+    get_artifact_repository,
     get_diarizer_singleton,
     get_event_bus,
     get_llm_singleton,
     get_meeting_state,
     get_repository,
 )
+from app.artifacts.repository import ArtifactRepository
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
@@ -195,6 +197,49 @@ def _artifact_download_info(settings: Settings, artifact_id: str) -> dict[str, o
         "size_bytes": size_bytes,
         "download_url": f"/artifacts/{quote(artifact_id)}/download",
     }
+
+
+def _artifact_file_path(settings: Settings, artifact: GeneratedArtifact) -> Path | None:
+    path = Path(artifact.file_path).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    resolved = path.resolve()
+    allowed_roots = [
+        Path(settings.skill_executor_build_dir).expanduser().resolve(),
+        Path(settings.storage_dir).expanduser().resolve(),
+    ]
+    if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+        return None
+    return resolved
+
+
+def _artifact_download_info_from_record(
+    settings: Settings,
+    artifact: GeneratedArtifact,
+) -> dict[str, object] | None:
+    path = _artifact_file_path(settings, artifact)
+    if path is None or not path.exists():
+        return None
+    return {
+        "artifact_id": artifact.artifact_id,
+        "title": artifact.title or artifact.artifact_id,
+        "artifact_type": artifact.artifact_type,
+        "size_bytes": artifact.size_bytes,
+        "download_url": f"/artifacts/{quote(artifact.artifact_id)}/download",
+    }
+
+
+def _delete_artifact_file(settings: Settings, artifact: GeneratedArtifact) -> bool:
+    path = _artifact_file_path(settings, artifact)
+    if path is None or not path.exists():
+        return False
+    base = Path(settings.skill_executor_build_dir).expanduser().resolve()
+    build_dir = (base / artifact.artifact_id).resolve()
+    if path == build_dir or build_dir in path.parents:
+        shutil.rmtree(build_dir)
+    else:
+        path.unlink()
+    return True
 
 
 def _format_bytes(size: int) -> str:
@@ -381,6 +426,7 @@ def _share_html(
 
 @router.get("/current")
 async def get_current_meeting(
+    response: Response,
     state: Annotated[MeetingState, Depends(get_meeting_state)],
     repository: Annotated[RepositoryPort, Depends(get_repository)],
 ) -> dict[str, object]:
@@ -390,6 +436,7 @@ async def get_current_meeting(
     in_meeting → minutes_status=null（会议没结束没纪要可言）
     idle      → 返回最新 meeting 的 minutes_status（若用户刚结束一个会议，UI 据此决定显示什么）
     """
+    response.headers["Cache-Control"] = "no-store"
     cur = state.current
     if cur is not None:
         return {
@@ -544,26 +591,13 @@ async def download_minutes_markdown(
 async def get_meeting_artifacts(
     meeting_id: str,
     repository: Annotated[RepositoryPort, Depends(get_repository)],
+    artifact_repo: Annotated[ArtifactRepository, Depends(get_artifact_repository)],
 ) -> list[GeneratedArtifact]:
-    """单会议产物（右下 outputs 面板用）。
-
-    **当前实现**：返回空列表。原因：
-    1. ``artifacts`` schema 没 meeting_id 列，也没有 ``meeting_artifacts`` 关
-       联表。POST /artifacts/generate 不接受 meeting_id 参数。
-    2. 前端 ``store.meetings[*].artifacts`` 是 best-effort 视图（基于 WS
-       artifact.ready.meeting_id 字段维护，会话内有效）。
-    3. 真正的"持久化 per-meeting outputs"需要在 ArtifactRequest / events /
-       schema migration 三处一起改，超出 M_meeting_history 这个 PR 的范围。
-
-    保留这个 endpoint 让前端调用约定稳定（``getMeetingArtifacts(id)`` 是 4 个
-    detail endpoint 之一）；后续 PR 接 DB join 时只换实现，前端不动。
-
-    会议不存在时仍返回 404（让前端能区分"无产物"与"无会议"）。
-    """
+    """单会议产物（右下 outputs 面板用），以 artifact_links 为事实源。"""
     meeting = await repository.get_meeting(meeting_id)
     if meeting is None:
         raise HTTPException(status_code=404, detail="meeting not found")
-    return []
+    return await artifact_repo.list_meeting_artifacts(meeting_id)
 
 
 @router.get("/{meeting_id}/share", response_class=HTMLResponse)
@@ -571,16 +605,15 @@ async def share_meeting(
     meeting_id: str,
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     settings: Annotated[Settings, Depends(get_settings)],
+    artifact_repo: Annotated[ArtifactRepository, Depends(get_artifact_repository)],
     artifact_ids: str | None = Query(None),
 ) -> HTMLResponse:
     """手机扫码保存会议资料页。
 
-    产物来源有两类：
-    - 已落入 minutes_json.todos[*].artifact_id 的产物；
-    - 前端当前会话内知道、但后端尚未持久化 meeting_id 关联的产物 id（artifact_ids query）。
-
-    页面只提供保存/下载，不提供删除；删除必须回到大屏 UI 上确认执行。
+    产物来源以后端 artifact_links 为准。``artifact_ids`` query 只保留兼容旧链接，
+    不再参与新事实源判断。
     """
+    _ = artifact_ids
     meeting = await repository.get_meeting(meeting_id)
     if meeting is None:
         raise HTTPException(status_code=404, detail="meeting not found")
@@ -601,17 +634,10 @@ async def share_meeting(
         except json.JSONDecodeError:
             summary = "会议纪要数据损坏，请回到 EchoDesk 重新生成。"
 
-    ids: list[str] = []
-    for artifact_id in [
-        *_artifact_ids_from_minutes(meeting.minutes_json),
-        *_split_artifact_ids(artifact_ids),
-    ]:
-        if artifact_id not in ids:
-            ids.append(artifact_id)
     artifacts = [
         info
-        for artifact_id in ids
-        if (info := _artifact_download_info(settings, artifact_id)) is not None
+        for artifact in await artifact_repo.list_meeting_artifacts(meeting_id)
+        if (info := _artifact_download_info_from_record(settings, artifact)) is not None
     ]
     return HTMLResponse(
         _share_html(
@@ -634,34 +660,30 @@ async def clear_meeting_outputs(
     body: ClearMeetingOutputsRequest,
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     settings: Annotated[Settings, Depends(get_settings)],
+    artifact_repo: Annotated[ArtifactRepository, Depends(get_artifact_repository)],
 ) -> ClearMeetingOutputsResponse:
     """清理会议纪要与产物文件。
 
-    当前 artifacts 还没有 meeting_id 持久关联，因此前端会把本会议内存里的
-    artifact_ids 一并传进来；后端再合并 minutes todo 里已关联的 artifact_id。
+    0.3 起 artifact_links 是唯一事实源。请求体里的 ``artifact_ids`` 保留为
+    旧客户端兼容字段，但不会被用于扩大删除范围。
     """
+    _ = body.artifact_ids
     meeting = await repository.get_meeting(meeting_id)
     if meeting is None:
         raise HTTPException(status_code=404, detail="meeting not found")
 
-    artifact_ids: list[str] = []
-    for artifact_id in [*_artifact_ids_from_minutes(meeting.minutes_json), *body.artifact_ids]:
-        if (
-            isinstance(artifact_id, str)
-            and _ARTIFACT_ID_RE.fullmatch(artifact_id)
-            and artifact_id not in artifact_ids
-        ):
-            artifact_ids.append(artifact_id)
-
+    artifacts = await artifact_repo.unlink_meeting(meeting_id)
+    artifact_ids = [artifact.artifact_id for artifact in artifacts]
     deleted = 0
     missing: list[str] = []
-    for artifact_id in artifact_ids:
-        build_dir = _artifact_build_dir(settings, artifact_id)
-        if build_dir is None or not build_dir.exists():
-            missing.append(artifact_id)
+    for artifact in artifacts:
+        if await artifact_repo.count_links(artifact.artifact_id) > 0:
             continue
-        shutil.rmtree(build_dir)
-        deleted += 1
+        if _delete_artifact_file(settings, artifact):
+            deleted += 1
+        else:
+            missing.append(artifact.artifact_id)
+        await artifact_repo.delete_artifact_metadata(artifact.artifact_id)
 
     if body.clear_minutes:
         await repository.clear_meeting_outputs(meeting_id, clear_minutes=True)

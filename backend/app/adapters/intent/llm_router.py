@@ -61,7 +61,7 @@ _SYS_PROMPT = """你是 EchoDesk 桌面助手的意图路由器。
   "开始会议""结束会议"这类话归类为 chat。
 
 严格输出 JSON：
-{"kind": "<上述 12 选 1>", "confidence": 0.0~1.0, "rationale": "中文 ≤ 30 字"}
+{"kind": "<上述 13 选 1>", "confidence": 0.0~1.0, "rationale": "中文 ≤ 30 字"}
 
 不要 markdown 围栏，不要解释。"""
 

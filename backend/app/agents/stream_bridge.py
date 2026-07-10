@@ -86,6 +86,7 @@ class EchoTaskStreamBridge:
         backoff = 1.0
         terminal = False
         while not terminal:
+            result_terminal_seen = False
             try:
                 async with websockets.connect(
                     self.ws_url,
@@ -105,8 +106,16 @@ class EchoTaskStreamBridge:
                         if stored and (
                             stored.event in TERMINAL_EVENTS or stored.state in TERMINAL_STATES
                         ):
+                            # AgentOS emits `result` before its final workspace scan, then sends
+                            # `artifact_change` and `task_state`. Keep consuming this connection
+                            # so freshly generated files are not lost from EchoDesk's archive.
+                            if raw.get("kind") == "result":
+                                result_terminal_seen = True
+                                continue
                             terminal = True
                             return
+                    if result_terminal_seen:
+                        return
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

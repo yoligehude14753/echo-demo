@@ -2,7 +2,7 @@
 
 覆盖：
 - 关键字快速命中（不调 LLM）
-- 非 @ 前缀 → chat
+- 非 @ 前缀 → LLM 区分 chat / agent_task
 - 关键字未命中 → 走 mock LLM（含合法 JSON / 非法 JSON 兜底）
 - LLM 失败 → chat 兜底
 """
@@ -162,14 +162,15 @@ def test_keyword_route_hits_txt_via_plaintext_alias() -> None:
 
 @pytest.mark.unit
 def test_supported_intents_complete() -> None:
-    # 12 类（P4-fix-rag-chat 起：新增 chat_no_rag 显式逃生路径）
-    assert len(SUPPORTED_INTENTS) == 12
+    # 13 类（0.3 新增 agent_task，保留 chat_no_rag 显式逃生路径）
+    assert len(SUPPORTED_INTENTS) == 13
     assert "start_meeting" not in SUPPORTED_INTENTS
     assert "end_meeting" not in SUPPORTED_INTENTS
     assert "summarize_meeting" in SUPPORTED_INTENTS
     assert "generate_markdown" in SUPPORTED_INTENTS
     assert "generate_pdf" in SUPPORTED_INTENTS
     assert "generate_txt" in SUPPORTED_INTENTS
+    assert "agent_task" in SUPPORTED_INTENTS
     assert "chat_no_rag" in SUPPORTED_INTENTS
     assert "chat" in SUPPORTED_INTENTS
 
@@ -177,32 +178,28 @@ def test_supported_intents_complete() -> None:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_route_no_at_returns_chat(tmp_path: Path) -> None:
-    llm = _MockLLM(content="should not be called")
+    llm = _MockLLM(content='{"kind":"chat","confidence":0.81,"rationale":"普通对话"}')
     router = LLMIntentRouter(_settings(tmp_path), llm)
     r = await router.route("帮我写个周报", current_meeting_id=None)
     assert r.kind == "chat"
-    assert llm.calls == []  # 完全跳过 LLM
+    assert r.confidence == 0.81
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_route_no_at_returns_none_confidence(tmp_path: Path) -> None:
-    """P4-fix（2026-05-28）：'无 @ 前缀' 是纯规则匹配路径，没有跑分类器。
-
-    历史 bug：硬编码 confidence=1.0 → 前端显示 "置信度 100%"，给用户虚假置信感。
-    回归断言：这条路径必须返回 confidence is None，前端按 null 显示 "规则匹配"，
-    而不是把规则命中冒充成模型 100% 确信的分类结果。
-    """
-    llm = _MockLLM(content="should not be called")
-    router = LLMIntentRouter(_settings(tmp_path), llm)
-    r = await router.route("帮我写个周报", current_meeting_id=None)
-    assert r.kind == "chat"
-    assert r.confidence is None, (
-        "无 @ 前缀 chat 路径不应硬编码 confidence=1.0；"
-        f"实际返回 {r.confidence!r}（这条路径根本没跑分类器，confidence 没语义）"
+async def test_route_no_at_can_select_agent_task(tmp_path: Path) -> None:
+    """0.3：无 @ 的复杂执行请求也必须能进入正式 Agent workflow。"""
+    llm = _MockLLM(
+        content='{"kind":"agent_task","confidence":0.92,"rationale":"需要多步文件操作"}'
     )
-    assert "规则" in r.rationale or "前缀" in r.rationale
-    assert llm.calls == []
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+    text = "使用浏览器完成一个多步骤操作"
+    r = await router.route(text, current_meeting_id=None)
+    assert r.kind == "agent_task"
+    assert r.confidence == 0.92
+    assert r.params["text"] == text
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.unit
@@ -366,13 +363,13 @@ async def test_route_question_word_intro_defaults_to_rag(tmp_path: Path) -> None
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_route_greeting_remains_chat(tmp_path: Path) -> None:
-    """'你好' 这种纯寒暄不含问句词 / RAG 信号 → 仍然走 chat（无 @ 前缀路径）。"""
-    llm = _MockLLM(content="should not be called")
+    """'你好' 这种纯寒暄由 LLM 保持为 chat。"""
+    llm = _MockLLM(content='{"kind":"chat","confidence":0.96,"rationale":"寒暄"}')
     router = LLMIntentRouter(_settings(tmp_path), llm)
     r = await router.route("你好", current_meeting_id=None)
     assert r.kind == "chat"
-    assert r.confidence is None  # 规则匹配路径
-    assert llm.calls == []
+    assert r.confidence == 0.96
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.unit
@@ -383,11 +380,11 @@ async def test_route_time_query_remains_chat(tmp_path: Path) -> None:
     注：实际场景下用户问"现在几点"通常想要联网，但当前 keyword_route 没有
     "几点"映射，保留旧行为（chat）以免误归 search_rag 浪费 RAG 检索。
     """
-    llm = _MockLLM(content="should not be called")
+    llm = _MockLLM(content='{"kind":"chat","confidence":0.8,"rationale":"普通问答"}')
     router = LLMIntentRouter(_settings(tmp_path), llm)
     r = await router.route("现在几点", current_meeting_id=None)
     assert r.kind == "chat"
-    assert llm.calls == []
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.unit

@@ -138,15 +138,12 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
             )
         )
 
-    fast_key = (
-        settings.yunwu_open_key
-        if settings.llm_fast_base_url.rstrip("/") == settings.llm_main_base_url.rstrip("/")
-        else settings.llm_local_api_key
-    )
     probes.append(
         (
             "fast_model",
-            asyncio.ensure_future(_probe_openai_models(settings.llm_fast_base_url, fast_key)),
+            asyncio.ensure_future(
+                _probe_openai_models(settings.llm_fast_base_url, settings.llm_fast_api_key)
+            ),
         )
     )
 

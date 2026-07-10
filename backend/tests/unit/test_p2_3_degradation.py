@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -35,6 +36,9 @@ async def test_artifacts_emits_failed_on_llm_error() -> None:
     bus = _FakeBus()
     fake_llm = AsyncMock()
     fake_skill = AsyncMock()
+    fake_workflow = AsyncMock()
+    fake_workflow.create_run.return_value = SimpleNamespace(run_id="run-degraded-test")
+    fake_repo = AsyncMock()
 
     async def boom(*_: Any, **__: Any) -> Any:
         raise LLMError("Yunwu connect timeout")
@@ -53,6 +57,8 @@ async def test_artifacts_emits_failed_on_llm_error() -> None:
                 llm=fake_llm,
                 runner=fake_skill,
                 event_bus=bus,  # type: ignore[arg-type]
+                workflow_service=fake_workflow,
+                artifact_repo=fake_repo,
             )
         assert ei.value.status_code == 502, "LLM 不可达应映射到 502（gateway 类）"
     finally:
@@ -65,6 +71,8 @@ async def test_artifacts_emits_failed_on_llm_error() -> None:
     assert payload["artifact_type"] == "html"
     assert payload["reason"] == "remote_llm", "前端用 reason 字段区分 LLM 失败 vs Skill 失败"
     assert "Yunwu" in payload["error"] or "timeout" in payload["error"]
+    fake_workflow.start_run.assert_awaited_once_with("run-degraded-test")
+    fake_workflow.fail_run.assert_awaited_once()
 
 
 @pytest.mark.asyncio

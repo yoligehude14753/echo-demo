@@ -34,16 +34,22 @@ async def test_bridge_translates_agentos_ws_events_and_stops_on_terminal() -> No
             "payload": {"text": "第一段", "stream": True},
         },
         {
-            "kind": "artifact_change",
+            "kind": "result",
             "task_id": "runner_1",
             "ts": "2026-07-08T00:00:02+00:00",
+            "payload": {"is_error": False, "result_text": "完成", "duration_ms": 3000},
+        },
+        {
+            "kind": "artifact_change",
+            "task_id": "runner_1",
+            "ts": "2026-07-08T00:00:03+00:00",
             "payload": {"artifacts": [{"name": "report.pdf", "relpath": "out/report.pdf"}]},
         },
         {
-            "kind": "result",
+            "kind": "task_state",
             "task_id": "runner_1",
-            "ts": "2026-07-08T00:00:03+00:00",
-            "payload": {"is_error": False, "result_text": "完成", "duration_ms": 3000},
+            "ts": "2026-07-08T00:00:04+00:00",
+            "payload": {"status": "succeeded", "duration_ms": 3000},
         },
     ]
 
@@ -87,12 +93,14 @@ async def test_bridge_translates_agentos_ws_events_and_stops_on_terminal() -> No
     assert [event.event for event in recorded] == [
         "task.started",
         "task.text_delta",
+        "task.completed",
         "task.artifact_updated",
         "task.completed",
     ]
     assert recorded[-1].state == "succeeded"
-    assert recorded[-1].message == "完成"
-    assert recorded[2].artifacts[0]["url"].endswith(
+    assert recorded[2].message == "完成"
+    assert recorded[-1].message == "任务完成"
+    assert recorded[3].artifacts[0]["url"].endswith(
         "/agents/tasks/echo_task_1/artifacts/out/report.pdf"
     )
-    assert "runner_1" not in recorded[2].artifacts[0]["url"]
+    assert "runner_1" not in recorded[3].artifacts[0]["url"]

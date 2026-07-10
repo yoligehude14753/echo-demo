@@ -41,7 +41,7 @@ export default function MeetingList(): JSX.Element {
   const items = Object.values(meetings)
     .filter((m) => {
       if (m.state !== "ended") return true; // in_meeting / finalized 都留
-      if (m.minutes) return true; // 有纪要的留
+      if (m.minutes || m.minutes_status === "ok") return true; // 有纪要的留
       if (!m.started_at || !m.ended_at) return true; // 时间字段不全的留（保守）
       const dur = Date.parse(m.ended_at) - Date.parse(m.started_at);
       return dur >= SHORT_THRESHOLD_MS;

@@ -51,14 +51,14 @@ const AUTO_UPDATE_DOWNLOAD_ENABLED =
   process.env.ECHODESK_DISABLE_AUTO_UPDATE_DOWNLOAD !== "1";
 const FORCE_LOCAL_BACKEND = process.env.ECHO_FORCE_LOCAL_BACKEND === "1";
 const PUBLIC_DEMO_MODE =
-  process.env.ECHO_PUBLIC_DEMO === "1" || (!IS_DEV && !FORCE_LOCAL_BACKEND);
+  process.env.ECHO_PUBLIC_DEMO === "1" && !FORCE_LOCAL_BACKEND;
 const BACKEND_HOST = PUBLIC_DEMO_MODE ? PUBLIC_BACKEND_HOST : LOCAL_BACKEND_HOST;
 const BACKEND_BIND_HOST = process.env.ECHO_BACKEND_BIND_HOST || "127.0.0.1";
 
-// 公开发布包默认走 public backend：key 与模型服务留在服务端，新用户不需要本机 Python。
-// 私有/离线部署可以显式 ECHO_FORCE_LOCAL_BACKEND=1 恢复本地 backend spawn。
+// 0.3 Desktop Pro 默认 local-first。public demo 仍保留，但必须由发布入口显式设置
+// ECHO_PUBLIC_DEMO=1；ECHO_FORCE_LOCAL_BACKEND=1 作为旧部署兼容开关并拥有更高优先级。
 const SPAWN_BACKEND =
-  FORCE_LOCAL_BACKEND && !PUBLIC_DEMO_MODE && process.env.ECHO_SPAWN_BACKEND !== "0";
+  !PUBLIC_DEMO_MODE && process.env.ECHO_SPAWN_BACKEND !== "0";
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
 // node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
@@ -1543,6 +1543,9 @@ function createWindow() {
 
 ipcMain.handle("echo:backend-host", () => BACKEND_HOST);
 ipcMain.handle("echo:share-backend-host", () => shareBackendHost());
+ipcMain.on("echo:is-public-demo", (event) => {
+  event.returnValue = PUBLIC_DEMO_MODE;
+});
 
 ipcMain.handle("echo:load-local-legacy-history", async () => {
   if (process.platform !== "darwin") return null;

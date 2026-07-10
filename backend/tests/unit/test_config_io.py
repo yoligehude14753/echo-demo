@@ -96,6 +96,16 @@ class TestJsonConfigSource:
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.port == 9999
 
+    def test_stale_user_app_version_cannot_override_code_version(
+        self, isolated_user_dir: Path
+    ) -> None:
+        write_user_config_json({"app_version": "0.2.43"})
+        from app import __version__
+        from app.config import Settings
+
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.app_version == __version__
+
     def test_env_beats_user_json(
         self, isolated_user_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -151,6 +161,16 @@ class TestJsonConfigSource:
 
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.port == 8769  # P1.1 canonical default
+
+    def test_default_main_model_uses_yunwu_deepseek_v4_flash(
+        self, isolated_user_dir: Path
+    ) -> None:
+        from app.config import Settings
+
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.llm_main_provider == "yunwu"
+        assert s.llm_main_model == "deepseek-v4-flash"
+        assert s.llm_main_base_url == "https://yunwu.ai/v1"
 
     def test_echo_lan_full_api_env_alias(
         self, isolated_user_dir: Path, monkeypatch: pytest.MonkeyPatch

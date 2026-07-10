@@ -6,11 +6,14 @@ export type BusinessEventType =
   | "meeting.segment"
   | "meeting.ended"
   | "meeting.todo.completed"
+  | "meeting.todo.updated"
   | "minutes.ready"
   | "minutes.failed"
   | "artifact.generating"
   | "artifact.ready"
   | "artifact.failed"
+  | "workflow.event"
+  | "workflow.snapshot"
   | "rag.query"
   | "rag.answer.delta"
   | "rag.answer.done"
@@ -56,7 +59,13 @@ export interface MinutesSection {
 
 // M_minutes_refactor：会议待办（替代以前的 action_items 纯字符串列表）
 export type TodoKind = "actionable" | "info";
-export type TodoStatus = "pending" | "done" | "cancelled";
+export type TodoStatus =
+  | "pending"
+  | "running"
+  | "failed"
+  | "waiting_permission"
+  | "done"
+  | "cancelled";
 
 export interface TodoItem {
   id: string;
@@ -66,6 +75,7 @@ export interface TodoItem {
   status: TodoStatus;
   done_at?: string | null;
   artifact_id?: string | null;
+  workflow_run_id?: string | null;
   suggested_command?: string | null;
 }
 
@@ -105,6 +115,49 @@ export interface GeneratedArtifact {
   generation_latency_ms: number;
   model: string;
   metadata: Record<string, string>;
+  run_id?: string | null;
+  links?: Array<Record<string, unknown>>;
+}
+
+export type WorkflowState =
+  | "pending"
+  | "running"
+  | "cancel_requested"
+  | "succeeded"
+  | "failed"
+  | "timeout"
+  | "cancelled"
+  | "cancel_failed";
+
+export interface WorkflowRunDTO {
+  run_id: string;
+  kind: string;
+  source: string;
+  state: WorkflowState;
+  title?: string | null;
+  intent_text: string;
+  meeting_id?: string | null;
+  todo_id?: string | null;
+  agent_task_id?: string | null;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  error?: string | null;
+  timeout_s?: number | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at: string;
+}
+
+export interface WorkflowEventDTO {
+  run_id: string;
+  seq: number;
+  event_type: string;
+  state: WorkflowState;
+  visibility: "user" | "debug" | "hidden";
+  message?: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
 }
 
 export type IntentKind =
@@ -220,6 +273,7 @@ export interface AgentTaskCard {
   error?: string | null;
   artifacts: Array<Record<string, unknown>>;
   snapshot: Record<string, unknown>;
+  workflow_run_id?: string | null;
   last_seq: number;
   submitted_at: string;
   finished_at?: string | null;

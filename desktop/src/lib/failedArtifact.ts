@@ -27,6 +27,8 @@ export interface FailedArtifact {
   /** ISO 时间戳，优先用 event.ts，缺失则 fallback 到 Date.now()。 */
   failed_at: string;
   meeting_id?: string | null;
+  todo_id?: string | null;
+  run_id?: string | null;
 }
 
 const FALLBACK_REASON = "未知错误";
@@ -34,6 +36,8 @@ const FALLBACK_REASON = "未知错误";
 interface ArtifactFailedPayload {
   artifact_type?: string;
   error?: string;
+  todo_id?: string | null;
+  run_id?: string | null;
 }
 
 /**
@@ -62,6 +66,14 @@ export function buildFailedArtifact(
     reason,
     failed_at: failedAt,
     meeting_id: event.meeting_id ?? null,
+    todo_id:
+      typeof payload.todo_id === "string" && payload.todo_id
+        ? payload.todo_id
+        : null,
+    run_id:
+      typeof payload.run_id === "string" && payload.run_id
+        ? payload.run_id
+        : null,
   };
 }
 

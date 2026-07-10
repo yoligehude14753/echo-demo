@@ -384,6 +384,7 @@ export default function CommandBar(): JSX.Element {
           ].join("\n"),
           meeting_id: meta?.meeting_id ?? currentMeetingId ?? undefined,
           todo_id: meta?.todo_id,
+          retry_of_run_id: meta?.retry_of_run_id,
         })
           .then((art) => {
             addArtifact(art);

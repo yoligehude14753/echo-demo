@@ -25,13 +25,15 @@ import {
   getMeetingMinutes,
   getMeetingTranscript,
   listMeetings,
+  listWorkflowRuns,
 } from "@/api";
 import { shouldHideSharedPublicHistory } from "@/runtime";
-import { useStore } from "@/store";
+import { projectMinutesWithWorkflowRuns, useStore } from "@/store";
 
 export function useMeetingHistory(): void {
   const hydrateMeetings = useStore((s) => s.hydrateMeetings);
   const upsertMeeting = useStore((s) => s.upsertMeeting);
+  const applyEvent = useStore((s) => s.applyEvent);
   const markDetailLoaded = useStore((s) => s.markMeetingDetailLoaded);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   // 用 ref 避开 selector 依赖闭包：currentMeetingId 频繁变化但我们只需当下读 1 次
@@ -92,13 +94,18 @@ export function useMeetingHistory(): void {
     let alive = true;
     void (async (): Promise<void> => {
       try {
-        const [segs, minutes, arts] = await Promise.all([
+        const [segs, minutes, arts, workflowRuns] = await Promise.all([
           getMeetingTranscript(currentMeetingId).catch(() => []),
           getMeetingMinutes(currentMeetingId).catch(() => null),
           getMeetingArtifacts(currentMeetingId).catch(() => []),
+          listWorkflowRuns({ meeting_id: currentMeetingId, limit: 100 }).catch(() => []),
         ]);
         if (!alive) return;
         const cur = meetingsRef.current[currentMeetingId];
+        const restoredMinutes = projectMinutesWithWorkflowRuns(
+          cur?.minutes ?? minutes,
+          workflowRuns,
+        );
         // 合并策略：DB 段更多就用 DB；事件流段更多（in-progress）就保留事件流。
         // 避免 detail fetch 在会议进行中覆盖掉新到的 ws segment。
         const mergedSegments =
@@ -110,10 +117,22 @@ export function useMeetingHistory(): void {
         upsertMeeting(currentMeetingId, {
           segments: mergedSegments,
           speakers,
-          minutes: cur?.minutes ?? minutes ?? undefined,
+          minutes: restoredMinutes ?? undefined,
           // backend 当前总返回 []，未来接 DB join 后这里就生效；in-memory artifacts 不会被空数组覆盖。
           artifacts: arts.length > 0 ? arts : (cur?.artifacts ?? []),
         });
+        workflowRuns
+          .slice()
+          .sort((a, b) => a.updated_at.localeCompare(b.updated_at))
+          .forEach((run) => {
+            applyEvent({
+              type: "workflow.snapshot",
+              seq: 0,
+              ts: run.updated_at,
+              meeting_id: run.meeting_id,
+              payload: run as unknown as Record<string, unknown>,
+            });
+          });
         markDetailLoaded(currentMeetingId);
       } catch (e) {
         console.warn("[meeting-history] load detail failed:", e);
@@ -122,5 +141,5 @@ export function useMeetingHistory(): void {
     return () => {
       alive = false;
     };
-  }, [currentMeetingId, upsertMeeting, markDetailLoaded]);
+  }, [applyEvent, currentMeetingId, upsertMeeting, markDetailLoaded]);
 }

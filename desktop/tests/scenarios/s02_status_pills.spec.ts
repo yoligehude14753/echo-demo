@@ -1,13 +1,13 @@
 /**
- * 场景 2：顶栏诊断 pill 巡检（点开 4 个 pill 看明细）
+ * 场景 2：顶栏诊断 pill 巡检（点开 3 个 pill 看明细）
  *
  * 覆盖功能：
- *  - P2.1 状态可视化：backend / 模型服务 / 智能引擎 / 麦克风 4 个 pill
+ *  - P2.1 状态可视化：服务端 / AI 引擎 / 麦克风 3 个 pill
  *  - 每个 pill popover 显示版本 / 探针 / 权限态
  *  - P3.5 mic denied 时显示「打开系统设置」深链按钮
  *
  * 视频里观察点：
- *  - 4 个 pill 颜色（绿/橙/红）随状态变化
+ *  - 3 个 pill 颜色（绿/橙/红）随状态变化
  *  - 点击 pill → popover 弹出 → 内容真实
  *  - mic denied 子场景：popover 里出现红色文案 + 深链按钮可点
  */
@@ -46,39 +46,38 @@ async function probePill(
     });
 }
 
-test("S02 · 顶栏 4 个 pill 巡检（P2.1 全绿态）", async ({ page }) => {
+test("S02 · 顶栏 3 个 pill 巡检（P2.1 全绿态）", async ({ page }) => {
   await installScenarioMock(page, {
     micPermission: "granted",
     healthOverride: "all-ok",
   });
 
-  await test.step("打开主界面，顶栏 4 个 pill 渲染", async () => {
+  await test.step("打开主界面，顶栏 3 个 pill 渲染", async () => {
     await page.goto("/");
     await expect(page.getByTestId("status-bar")).toBeVisible();
-    for (const id of ["pill-backend", "pill-model-service", "pill-main-model", "pill-mic"]) {
+    for (const id of ["pill-backend", "pill-ai-engine", "pill-mic"]) {
       await expect(page.getByTestId(id)).toBeVisible();
     }
   });
 
   await test.step("backend pill popover：supervisor + version 0.2.0 + port 8769", async () => {
     await probePill(page, "pill-backend", async (po) => {
-      await expect(po.getByText(/version/i).first()).toBeVisible({ timeout: 3_000 });
+      await expect(po.getByText("版本").first()).toBeVisible({ timeout: 3_000 });
       await expect(po.getByText("0.2.0").first()).toBeVisible();
       await expect(po.getByText("8769").first()).toBeVisible();
     });
   });
 
-  await test.step("模型服务 pill popover：3 个探针（语音识别 / 语音合成 / 快速智能引擎）", async () => {
-    await probePill(page, "pill-model-service", async (po) => {
+  await test.step("AI 引擎 pill popover：语音识别 / 语音合成探针", async () => {
+    await probePill(page, "pill-ai-engine", async (po) => {
       await expect(po.getByText("语音识别")).toBeVisible({ timeout: 3_000 });
       await expect(po.getByText("语音合成连接")).toBeVisible();
-      await expect(po.getByText("快速智能引擎")).toBeVisible();
     });
   });
 
-  await test.step("智能引擎 pill popover：主模型 + 联网检索", async () => {
-    await probePill(page, "pill-main-model", async (po) => {
-      await expect(po.getByText("主模型")).toBeVisible({ timeout: 3_000 });
+  await test.step("AI 引擎 pill popover：LLM 主模型 + 联网检索", async () => {
+    await probePill(page, "pill-ai-engine", async (po) => {
+      await expect(po.getByText("LLM 主模型")).toBeVisible({ timeout: 3_000 });
       await expect(po.getByText("联网检索")).toBeVisible();
     });
   });

@@ -12,9 +12,11 @@ class AgentTaskState(StrEnum):
     WAITING_PERMISSION = "waiting_permission"
     PENDING = "pending"
     RUNNING = "running"
+    CANCEL_REQUESTED = "cancel_requested"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    CANCEL_FAILED = "cancel_failed"
     TIMEOUT = "timeout"
 
     @property
@@ -23,6 +25,7 @@ class AgentTaskState(StrEnum):
             AgentTaskState.SUCCEEDED,
             AgentTaskState.FAILED,
             AgentTaskState.CANCELLED,
+            AgentTaskState.CANCEL_FAILED,
             AgentTaskState.TIMEOUT,
         }
 

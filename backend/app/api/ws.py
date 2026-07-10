@@ -83,31 +83,36 @@ async def ws_echo(
     if client_version and "no-replay" in client_version:
         last_seq = bus.max_seq
 
-    # 客户端 last_seq 比 history 还早，提示重订阅
-    if last_seq > 0 and last_seq < bus.oldest_history_seq:
+    # 客户端可能在 hello 到达后立刻 reload/退出；握手响应也要按正常断开处理，
+    # 避免 uvicorn 把浏览器的 1001 going-away 打成 ASGI exception。
+    try:
+        # 客户端 last_seq 比 history 还早，提示重订阅
+        if last_seq > 0 and last_seq < bus.oldest_history_seq:
+            await websocket.send_text(
+                EchoEvent(
+                    type="server_resync",
+                    payload={
+                        "reason": "history expired",
+                        "oldest_seq": bus.oldest_history_seq,
+                        "max_seq": bus.max_seq,
+                        "client_last_seq": last_seq,
+                    },
+                ).model_dump_json()
+            )
+            last_seq = 0  # 重新全量
+
         await websocket.send_text(
             EchoEvent(
-                type="server_resync",
+                type="server_hello",
                 payload={
-                    "reason": "history expired",
-                    "oldest_seq": bus.oldest_history_seq,
                     "max_seq": bus.max_seq,
-                    "client_last_seq": last_seq,
+                    "version": WS_PROTOCOL_VERSION,
+                    "client_version": client_version,
                 },
             ).model_dump_json()
         )
-        last_seq = 0  # 重新全量
-
-    await websocket.send_text(
-        EchoEvent(
-            type="server_hello",
-            payload={
-                "max_seq": bus.max_seq,
-                "version": WS_PROTOCOL_VERSION,
-                "client_version": client_version,
-            },
-        ).model_dump_json()
-    )
+    except (RuntimeError, WebSocketDisconnect):
+        return
 
     async def _sender() -> None:
         async for evt in bus.subscribe(since_seq=last_seq):
@@ -147,13 +152,16 @@ async def ws_echo(
         asyncio.create_task(_receiver(), name="ws-receiver"),
     ]
     try:
-        _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()
+        for task in done:
+            with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+                task.result()
     except WebSocketDisconnect:
         pass
     finally:
         for t in tasks:
             t.cancel()
-        with contextlib.suppress(RuntimeError):
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect):
             await websocket.close()

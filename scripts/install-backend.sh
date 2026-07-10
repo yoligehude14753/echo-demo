@@ -152,6 +152,7 @@ step4_sync_backend() {
     # 但留 .venv（不在 source 里）和 logs 等不在 backend 目录的东西
     rsync -a --delete \
         --exclude='.venv' \
+        --exclude='.env' \
         --exclude='__pycache__' \
         --exclude='*.pyc' \
         --exclude='.pytest_cache' \
@@ -247,7 +248,7 @@ DEFAULT_CONFIG=$(cat <<'JSON'
   "tts_provider": "qwen3_tts",
   "tts_qwen3_url": "http://100.76.3.59:8094",
   "llm_main_provider": "yunwu",
-  "llm_main_model": "MiniMax-M2.7",
+  "llm_main_model": "deepseek-v4-flash",
   "llm_main_base_url": "https://yunwu.ai/v1",
   "llm_fast_provider": "yunwu",
   "llm_fast_model": "MiniMax-M2.7",

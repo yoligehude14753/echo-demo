@@ -46,7 +46,7 @@
 │  └── Repository    (save_meeting / load_doc / ...)                   │
 │                                                                      │
 │  Layer 1: Adapters (外部依赖具体实现)                                  │
-│  ├── adapters/llm/yunwu_m27.py             (Yunwu M2.7 主通道)        │
+│  ├── adapters/llm/openai_compatible.py      (Yunwu DS V4 Flash 主通道) │
 │  ├── adapters/llm/heyi_qwen17.py           (heyi-bj Qwen3-1.7B fast)  │
 │  ├── adapters/stt/heyi_firered.py          (heyi-bj FireRedASR2-AED)  │
 │  ├── adapters/tts/heyi_tts.py              (heyi-bj)                  │
@@ -70,7 +70,7 @@
 │                          External Services                           │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
 │  │   Yunwu     │  │   heyi-bj   │  │   Inspiro   │  │   Tavily    │  │
-│  │  M2.7 API   │  │  STT/TTS    │  │ Web Search  │  │  fallback   │  │
+│  │ DS V4 Flash │  │  STT/TTS    │  │ Web Search  │  │  fallback   │  │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -124,7 +124,7 @@
 [纪要存在] + [用户 @ 指令"生成 PPT 给老板看"]
            → intent_router → artifact.gen
            → SkillPort.gen_ppt(notes, theme=midnight_executive)
-             → call Yunwu M2.7 生成 pptxgenjs JS code
+             → call Yunwu deepseek-v4-flash 生成 pptxgenjs JS code
              → Node 子进程执行
              → 拿到 .pptx
              → LibreOffice headless 验证可打开

@@ -28,7 +28,7 @@ test("S07 · LLM 失败 → 「生成失败 · 重试」→ 重试成功 → 渲
 
   await test.step("打开主界面，等连接 OK", async () => {
     await page.goto("/");
-    await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
   });
 
   await test.step("会议开始 → 结束 → 后端 LLM 失败 (publish minutes.failed)", async () => {

@@ -49,6 +49,7 @@ from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
 from app.api.speakers import router as speakers_router
 from app.api.tts import router as tts_router
+from app.api.workflows import router as workflows_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
@@ -243,6 +244,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
         logger.warning("meeting-state hydrate failed: %s", e)
 
     try:
+        from app.api.deps import (
+            get_event_bus as _get_bus,
+        )
+        from app.api.deps import (
+            get_workflow_service as _get_workflow,
+        )
+
+        restored = await _get_workflow(settings, _get_bus()).restore_unfinished()
+        if restored:
+            logger.info("workflow runs restored: %d", restored)
+    except Exception as e:
+        logger.warning("workflow restore failed: %s", e)
+
+    try:
         from app.agents.service import get_agent_task_service
         from app.api.deps import get_event_bus as _get_bus
 
@@ -339,7 +354,11 @@ def create_app() -> FastAPI:
                 and any(p.fullmatch(request.url.path) for p in _LAN_SAFE_GET_PATTERNS)
             )
         ):
-            return await call_next(request)
+            response = await call_next(request)
+            content_type = response.headers.get("content-type", "")
+            if request.method in {"GET", "HEAD"} and "application/json" in content_type:
+                response.headers["Cache-Control"] = "no-store"
+            return response
         return PlainTextResponse("EchoDesk LAN share only", status_code=403)
 
     @app.get("/healthz", tags=["meta"])
@@ -364,6 +383,7 @@ def create_app() -> FastAPI:
     app.include_router(retrieval_router)
     app.include_router(workspace_router)
     app.include_router(artifacts_router)
+    app.include_router(workflows_router)
     app.include_router(meetings_router)
     app.include_router(speakers_router)
     app.include_router(intent_router)

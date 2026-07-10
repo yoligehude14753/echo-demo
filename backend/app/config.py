@@ -14,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -70,9 +70,15 @@ class Settings(BaseSettings):
     public_http_url: str = "http://localhost:8769"
     app_version: str = __version__
 
-    # ── LLM 主通道（Yunwu / MiniMax-M2.7） ────────────────────────
+    @field_validator("app_version", mode="after")
+    @classmethod
+    def _use_code_version(cls, _configured_version: str) -> str:
+        """Product version is immutable build metadata, not user configuration."""
+        return __version__
+
+    # ── LLM 主通道（Yunwu / DeepSeek V4 Flash） ───────────────────
     llm_main_provider: str = "yunwu"
-    llm_main_model: str = "MiniMax-M2.7"
+    llm_main_model: str = "deepseek-v4-flash"
     llm_main_base_url: str = "https://yunwu.ai/v1"
     yunwu_open_key: str = ""
     llm_fallback_1: str = "GLM-4.6"
@@ -103,6 +109,15 @@ class Settings(BaseSettings):
             "MODEL_GATEWAY_API_KEY",
         ),
     )
+
+    @property
+    def llm_fast_api_key(self) -> str:
+        if self.llm_fast_base_url.rstrip("/") == self.llm_main_base_url.rstrip("/"):
+            return self.yunwu_open_key or "EMPTY"
+        local_key = self.llm_local_api_key.strip()
+        if local_key and local_key.upper() != "EMPTY":
+            return local_key
+        return self.heyi_gateway_token or "EMPTY"
 
     # ── STT ───────────────────────────────────────────────────────
     # 当前**唯一** = firered（@ eight :8090，判别式无幻觉、中文强）；

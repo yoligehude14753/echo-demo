@@ -57,6 +57,7 @@ class AgentTaskDTO(BaseModel):
     error: str | None = None
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     snapshot: dict[str, Any] = Field(default_factory=dict)
+    workflow_run_id: str | None = None
     last_seq: int = 0
     submitted_at: str
     finished_at: str | None = None
@@ -80,6 +81,7 @@ class AgentTaskDTO(BaseModel):
             error=rec.error,
             artifacts=rec.artifacts,
             snapshot=rec.snapshot,
+            workflow_run_id=rec.workflow_run_id,
             last_seq=rec.last_seq,
             submitted_at=rec.submitted_at,
             finished_at=rec.finished_at,

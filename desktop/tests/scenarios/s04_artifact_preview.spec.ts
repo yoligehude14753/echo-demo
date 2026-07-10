@@ -105,7 +105,7 @@ test("S04a · markdown artifact → Modal 渲染 react-markdown", async ({ page 
   await routeDownload(page, id, md, "text/markdown; charset=utf-8");
 
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   await publishWithTitle(mock, "markdown", 1, id, "测试 Markdown", "/tmp/md.md");
   await openArtifactCard(page, id);
@@ -123,7 +123,7 @@ test("S04b · txt artifact → <pre> 渲染原文", async ({ page }) => {
   await routeDownload(page, id, txt, "text/plain; charset=utf-8");
 
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   await publishWithTitle(mock, "txt", 1, id, "测试 TXT", "/tmp/x.txt");
   await openArtifactCard(page, id);
@@ -141,7 +141,7 @@ test("S04c · pdf artifact → iframe 指向 download URL", async ({ page }) => 
   await routeDownload(page, id, "%PDF-1.4\n%%EOF\n", "application/pdf");
 
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   await publishWithTitle(mock, "pdf", 1, id, "测试 PDF", "/tmp/x.pdf");
   await openArtifactCard(page, id);
@@ -162,7 +162,7 @@ test("S04d · docx artifact → mammoth 解析后 iframe 显示", async ({ page 
   );
 
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   await publishWithTitle(mock, "word", 1, id, "测试 Word", "/tmp/x.docx");
   await openArtifactCard(page, id);
@@ -186,7 +186,7 @@ test("S04e · xlsx artifact → SheetJS 解析 + tab 切换", async ({ page }) =
   );
 
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   await publishWithTitle(mock, "xlsx", 1, id, "测试 Excel", "/tmp/x.xlsx");
   await openArtifactCard(page, id);
@@ -228,7 +228,7 @@ test("S04f · pptx artifact → 不开 Modal，走 openArtifactInSystem", async 
   const expectedPath = "/tmp/sample.pptx";
 
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   await publishWithTitle(mock, "pptx", 1, id, "测试 PPTX", expectedPath);
   await openArtifactCard(page, id);
@@ -250,7 +250,7 @@ test("S04f · pptx artifact → 不开 Modal，走 openArtifactInSystem", async 
 test("S04g · 顶栏「清空 outputs」按钮 → confirm 后清空", async ({ page }) => {
   const mock = await installScenarioMock(page);
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   await publishWithTitle(mock, "markdown", 1, "a-1", "卡片 A", "/tmp/a.md");
   await publishWithTitle(mock, "txt", 2, "a-2", "卡片 B", "/tmp/b.txt");
@@ -268,7 +268,7 @@ test("S04g · 顶栏「清空 outputs」按钮 → confirm 后清空", async ({ 
 test("S04h · 单条 hover「×」按钮 → 仅删该条", async ({ page }) => {
   const mock = await installScenarioMock(page);
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   await publishWithTitle(mock, "markdown", 1, "keep-1", "保留卡片", "/tmp/k.md");
   await publishWithTitle(mock, "txt", 2, "del-1", "待删卡片", "/tmp/d.txt");
@@ -289,7 +289,7 @@ test("S04h · 单条 hover「×」按钮 → 仅删该条", async ({ page }) => 
 test("S04i · 列表展示 title 主、artifact_id 副 / fallback", async ({ page }) => {
   const mock = await installScenarioMock(page);
   await page.goto("/");
-  await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
 
   // 有 title 的卡片
   await publishWithTitle(

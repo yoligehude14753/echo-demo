@@ -75,6 +75,8 @@ class ArtifactRequest(BaseModel):
     # → status="done" + artifact_id，并发 ``meeting.todo.completed`` 事件。
     meeting_id: str | None = None
     todo_id: str | None = None
+    # 0.3：失败卡片重试时保留父 workflow run，便于追踪 retry 链。
+    retry_of_run_id: str | None = None
 
 
 class GeneratedArtifact(BaseModel):

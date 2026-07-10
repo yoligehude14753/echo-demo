@@ -39,6 +39,35 @@ def test_reasoning_model_detection() -> None:
     assert not _is_reasoning("Kimi-K2.6")
 
 
+@pytest.mark.unit
+def test_fast_api_key_uses_gateway_token_when_local_key_is_placeholder() -> None:
+    settings = Settings(
+        llm_main_base_url="https://main.example/v1",
+        llm_fast_base_url="https://fast.example/v1",
+        llm_local_api_key="EMPTY",
+        heyi_gateway_token="gateway-token",
+    )
+    assert settings.llm_fast_api_key == "gateway-token"
+
+
+@pytest.mark.unit
+def test_fast_api_key_prefers_dedicated_key_and_main_endpoint_key() -> None:
+    dedicated = Settings(
+        llm_main_base_url="https://main.example/v1",
+        llm_fast_base_url="https://fast.example/v1",
+        llm_local_api_key="dedicated-token",
+        heyi_gateway_token="gateway-token",
+    )
+    shared = Settings(
+        llm_main_base_url="https://shared.example/v1",
+        llm_fast_base_url="https://shared.example/v1/",
+        yunwu_open_key="main-token",
+        heyi_gateway_token="gateway-token",
+    )
+    assert dedicated.llm_fast_api_key == "dedicated-token"
+    assert shared.llm_fast_api_key == "main-token"
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_pick_routes_to_main_or_fast(settings: Settings) -> None:

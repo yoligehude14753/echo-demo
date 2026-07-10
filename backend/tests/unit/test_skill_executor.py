@@ -37,6 +37,18 @@ class FakeLLM:
         yield  # pragma: no cover
 
 
+class SequenceFakeLLM(FakeLLM):
+    def __init__(self, contents: list[str]) -> None:
+        super().__init__(contents[0])
+        self.contents = contents
+        self.calls: list[list[ChatMessage]] = []
+
+    async def chat(self, messages: list[ChatMessage], **kwargs: Any) -> LLMResponse:
+        self.calls.append(list(messages))
+        self.content = self.contents[min(len(self.calls) - 1, len(self.contents) - 1)]
+        return await super().chat(messages, **kwargs)
+
+
 def _settings(tmp_path: Path, *, use_legacy_html_pptx: bool = True) -> Settings:
     """通用测试 Settings；默认 ``use_legacy_html_pptx=True``，保持本文件历史
     用例（直写 Tailwind HTML / pptxgenjs js）仍走旧流水线。
@@ -501,6 +513,21 @@ async def test_txt_too_short_raises(tmp_path: Path) -> None:
     llm = FakeLLM("太短")
     with pytest.raises(SkillError, match="too short"):
         await skill.generate(llm=llm, artifact_type="txt", brief="x")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_txt_short_output_is_repaired_once(tmp_path: Path) -> None:
+    repaired = "ECHODESK_TODO_E2E_OK\n\n" + "完整验收正文。" * 80
+    llm = SequenceFakeLLM(["太短", repaired])
+    skill = SkillExecutor(_settings(tmp_path))
+
+    artifact = await skill.generate(llm=llm, artifact_type="txt", brief="生成验收报告")
+
+    assert len(llm.calls) == 2
+    assert "too short" in llm.calls[1][1].content
+    assert artifact.metadata["retry_count"] == "1"
+    assert Path(artifact.file_path).read_text(encoding="utf-8") == repaired
 
 
 @pytest.mark.asyncio

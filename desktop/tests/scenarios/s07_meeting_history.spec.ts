@@ -25,8 +25,9 @@ const SUMMARY_A = {
   title: "Q3 销售复盘",
   state: "finalized",
   started_at: T0,
-  ended_at: "2026-05-28T01:30:00+00:00",
-  finalized_at: "2026-05-28T01:35:00+00:00",
+  // 已有纪要的短会议也必须保留；不能被“<10s 空会议”规则误删。
+  ended_at: "2026-05-28T01:00:05+00:00",
+  finalized_at: "2026-05-28T01:00:06+00:00",
   n_segments: 3,
   n_speakers: 2,
   has_minutes: true,
@@ -120,7 +121,7 @@ const ARTIFACT_B = {
   metadata: { kind: "markdown" },
 };
 
-test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async ({ page }) => {
+test("S07 · 左侧会议列表点击 A/B → 转写与纪要切换，outputs 保持全局", async ({ page }) => {
   // 1. /meetings 列表
   await page.route(/\/(api\/)?meetings(\?|$)/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -203,7 +204,7 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
 
   await test.step("打开主界面，等连接 OK + 列表渲染 3 项（待机时段 + A + B）", async () => {
     await page.goto("/");
-    await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
     // 待机时段始终在
     await expect(page.getByTestId("meeting-item-ambient")).toBeVisible();
     // 两条历史会议（按 started_at DESC，B 在前）
@@ -235,7 +236,7 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     });
   });
 
-  await test.step("点击会议 A → 中间转写流切到 A 的段；右上纪要显示 A；右下产物显示 A", async () => {
+  await test.step("点击会议 A → 转写与纪要切到 A，outputs 保持全局", async () => {
     await page.locator(`[data-meeting-id="${MEETING_A_ID}"]`).click();
     // 转写流切到 history 模式（meeting-history vs ambient）
     await expect(page.getByTestId("transcript-scroller")).toHaveAttribute(
@@ -256,20 +257,20 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     ).toBeVisible();
     await expect(page.getByText(/Q3 达成 95%/)).toBeVisible();
 
-    // outputs 切到 meeting scope；A 的产物可见，B 的不可见
+    // outputs 是全局工作产物面板；会议切换不隐藏其他会议产物。
     await expect(page.getByTestId("artifact-list")).toHaveAttribute(
       "data-scope",
-      "meeting",
+      "global",
     );
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_A.artifact_id}"]`),
     ).toBeVisible();
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_B.artifact_id}"]`),
-    ).toHaveCount(0);
+    ).toBeVisible();
   });
 
-  await test.step("点击会议 B → 转写流 / 纪要 / outputs 都切到 B", async () => {
+  await test.step("点击会议 B → 转写与纪要切到 B，outputs 保持全局", async () => {
     await page.locator(`[data-meeting-id="${MEETING_B_ID}"]`).click();
     await expect(page.getByTestId("transcript-scroller")).toHaveAttribute(
       "data-mode",
@@ -285,13 +286,13 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     // A 的纪要标题不应再出现
     await expect(page.getByText(/Q3 达成 95%/)).toHaveCount(0);
 
-    // outputs 切到 B 的产物
+    // outputs 仍为全局，A/B 两条产物都保留。
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_B.artifact_id}"]`),
     ).toBeVisible();
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_A.artifact_id}"]`),
-    ).toHaveCount(0);
+    ).toBeVisible();
   });
 
   await test.step("再切回 A → 状态仍完整（验证无 stale 缓存）", async () => {
@@ -306,7 +307,7 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     await expect(page.getByText("B-第一段：版本对齐")).toHaveCount(0);
   });
 
-  await test.step("点击「待机时段」→ 转写流切回 ambient + 纪要/产物清空", async () => {
+  await test.step("点击「待机时段」→ 转写流切回 ambient，outputs 仍保持全局", async () => {
     await page.getByTestId("meeting-item-ambient").click();
     // ambient lane（capture/recent 返回 []）→ 显示"等待环境音转写…"占位
     await expect(page.getByText("等待环境音转写…")).toBeVisible();
