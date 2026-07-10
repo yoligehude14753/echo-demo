@@ -1,0 +1,32 @@
+event_id: "E-20260710T1735-006"
+event_type: "add"
+timestamp: "2026-07-10T17:35:00+08:00"
+author: "agent/codex-release-audit"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-010"
+      claim: "EchoDesk v0.3.0 is not published on the configured GitHub Releases feed; the latest public release is v0.2.50, blocking public update verification."
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-10T17:35:00+08:00"
+      observed_by: "agent/codex-release-audit"
+      valid_until: "2026-07-10T19:35:00+08:00"
+      ttl_hours: 2
+      source:
+        - "runtime:gh release view v0.3.0 --repo yoligehude14753/echo-demo"
+        - "runtime:gh release view --repo yoligehude14753/echo-demo"
+        - "desktop/electron/main.cjs"
+      evidence: "The v0.3.0 release query returned release not found. The latest-release query returned v0.2.50 with its macOS assets and latest-mac.yml. The installed updater is configured for the same GitHub owner/repository feed."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "release"
+        - "update"
+        - "github"
+git_commit: null
