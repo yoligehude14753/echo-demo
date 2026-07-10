@@ -76,12 +76,14 @@ class MeetingState:
         repository: RepositoryPort | None = None,
         event_bus: EventBusPort | None = None,
         max_meeting_duration_s: float = 1800.0,
+        recovery_max_age_s: float = 24 * 60 * 60,
     ) -> None:
         self._pipeline = pipeline
         self._detector = detector
         self._repo = repository
         self._event_bus = event_bus
         self._max_meeting_duration_s = max_meeting_duration_s
+        self._recovery_max_age_s = recovery_max_age_s
         self._current: CurrentMeeting | None = None
         self._lock = asyncio.Lock()
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -138,8 +140,9 @@ class MeetingState:
         sqlite 里残留的 auto-* in_meeting 行会让顶栏继续显示"会议中"，
         但 detector 已经丢了内存状态，永远不会再 emit silence_timeout。
 
-        2026-07 扩展：同样清理历史桌面端遗留的 m-local-*。这些会议不是当前
-        进程可接管的手动会议，若跨天仍是 in_meeting，也应按陈旧状态结束。
+        2026-07 扩展：同样清理历史桌面端遗留的 m-local-*；所有普通手动会议
+        超过 recovery_max_age_s（默认 24h）也视为陈旧。短时崩溃重启仍可续接，
+        但跨天状态不能继续让顶栏无限累计。
         """
         if self._repo is None:
             return
@@ -163,7 +166,11 @@ class MeetingState:
         if kept_started_at.tzinfo is None:
             kept_started_at = kept_started_at.replace(tzinfo=UTC)
         age_s = (now - kept_started_at).total_seconds()
-        if _should_force_end_on_hydrate(keep.id) and age_s > self._max_meeting_duration_s:
+        uses_system_limit = _should_force_end_on_hydrate(keep.id)
+        expiry_s = (
+            self._max_meeting_duration_s if uses_system_limit else self._recovery_max_age_s
+        )
+        if age_s > expiry_s:
             try:
                 await self._repo.update_meeting_state(keep.id, state="ended", ended_at=now)
             except Exception as e:
@@ -172,7 +179,7 @@ class MeetingState:
                 "hydrate: stale meeting force-ended %s (age=%.1fs > max=%.1fs)",
                 keep.id,
                 age_s,
-                self._max_meeting_duration_s,
+                expiry_s,
             )
             self._current = None
             return

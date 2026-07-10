@@ -6,7 +6,7 @@ detector 进程崩溃 / 进程被杀重启时，sqlite 里残留的 auto-* in_me
 emit silence_timeout。修复办法：hydrate 时如果保留的最新会议是 auto-* 且
 started_at 超过 max_meeting_duration_s，就强制 force-end 并把 _current=None。
 
-手动会议不受此影响（用户能主动看到顶栏并点击结束）。
+手动会议允许在 24h 内跨重启续接；超过恢复上限必须结束，避免永久累计。
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ def _make_state(
     repo: SQLiteRepository,
     *,
     max_meeting_duration_s: float = 1800.0,
+    recovery_max_age_s: float = 24 * 60 * 60,
 ) -> MeetingState:
     return MeetingState(
         pipeline=_PipelineStub(),  # type: ignore[arg-type]
@@ -51,6 +52,7 @@ def _make_state(
         repository=repo,
         event_bus=None,
         max_meeting_duration_s=max_meeting_duration_s,
+        recovery_max_age_s=recovery_max_age_s,
     )
 
 
@@ -111,10 +113,10 @@ async def test_hydrate_keeps_fresh_auto_meeting(tmp_path: Path) -> None:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_hydrate_keeps_old_manual_meeting(tmp_path: Path) -> None:
-    """老的 manual 会议（不以 auto- 开头）任意年龄都不应被新规则误清。
+    """24h 恢复窗口内的 manual 会议跨重启后继续保持 current。
 
-    手动会议是用户显式创建的，顶栏对用户可见、可点击结束；
-    所以不需要 max_duration 兜底。
+    10h 会议虽然很长，但仍可能是用户主动持续的工作，不应按 auto 的 30min
+    上限误杀。
     """
     repo = await _make_repo(tmp_path)
     try:
@@ -136,5 +138,37 @@ async def test_hydrate_keeps_old_manual_meeting(tmp_path: Path) -> None:
         rec = await repo.get_meeting("m-deadbeef00")
         assert rec is not None
         assert rec.state == "in_meeting"
+    finally:
+        await repo.aclose()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_hydrate_force_ends_manual_meeting_older_than_recovery_limit(
+    tmp_path: Path,
+) -> None:
+    """跨天仍 in_meeting 的普通手动会议必须结束，不能累计成数千分钟。"""
+    repo = await _make_repo(tmp_path)
+    try:
+        stale_started = datetime.now(UTC) - timedelta(hours=48)
+        await repo.create_meeting(
+            "deploy-smoke-20260708172627",
+            started_at=stale_started,
+            auto_started=False,
+            title="残留部署测试会议",
+        )
+
+        state = _make_state(
+            repo,
+            max_meeting_duration_s=1800.0,
+            recovery_max_age_s=24 * 60 * 60,
+        )
+        await state.hydrate()
+
+        assert state.current is None
+        rec = await repo.get_meeting("deploy-smoke-20260708172627")
+        assert rec is not None
+        assert rec.state == "ended"
+        assert rec.ended_at is not None
     finally:
         await repo.aclose()

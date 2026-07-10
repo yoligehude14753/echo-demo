@@ -156,6 +156,8 @@ function emptyMeeting(id: string, title?: string): MeetingCard {
     state: "idle",
     segments: [],
     speakers: new Set<string>(),
+    summary_segment_count: 0,
+    summary_speaker_count: 0,
     artifacts: [],
   };
 }
@@ -395,6 +397,14 @@ export const useStore = create<Store>((set, get) => ({
           ended_at: cur.ended_at ?? sum.ended_at ?? undefined,
           minutes_status:
             cur.minutes_status ?? (sum.has_minutes ? "ok" : undefined),
+          summary_segment_count: Math.max(
+            cur.summary_segment_count ?? 0,
+            sum.n_segments,
+          ),
+          summary_speaker_count: Math.max(
+            cur.summary_speaker_count ?? 0,
+            sum.n_speakers,
+          ),
         };
       }
       return {
@@ -540,6 +550,14 @@ export const useStore = create<Store>((set, get) => ({
               cur.started_at ?? opts?.startedAt ?? new Date().toISOString(),
             segments: mergedSegments,
             speakers,
+            summary_segment_count: Math.max(
+              cur.summary_segment_count ?? 0,
+              mergedSegments.length,
+            ),
+            summary_speaker_count: Math.max(
+              cur.summary_speaker_count ?? 0,
+              speakers.size,
+            ),
           },
         },
       };
@@ -590,6 +608,14 @@ export const useStore = create<Store>((set, get) => ({
         get().upsertMeeting(mid, {
           segments: mergedSegments,
           speakers,
+          summary_segment_count: Math.max(
+            cur.summary_segment_count ?? 0,
+            mergedSegments.length,
+          ),
+          summary_speaker_count: Math.max(
+            cur.summary_speaker_count ?? 0,
+            speakers.size,
+          ),
           state: "in_meeting",
         });
         break;
@@ -863,6 +889,10 @@ function hydrateLocalCaptureSnapshot(): void {
           : persisted.ended_at,
       segments,
       speakers: new Set(persisted.speakers ?? []),
+      summary_segment_count:
+        persisted.summary_segment_count ?? segments.length,
+      summary_speaker_count:
+        persisted.summary_speaker_count ?? new Set(persisted.speakers ?? []).size,
       artifacts: persisted.artifacts ?? [],
     };
   }
@@ -920,6 +950,10 @@ function snapshotToMeetings(
           : persisted.ended_at,
       segments,
       speakers: new Set(persisted.speakers ?? []),
+      summary_segment_count:
+        persisted.summary_segment_count ?? segments.length,
+      summary_speaker_count:
+        persisted.summary_speaker_count ?? new Set(persisted.speakers ?? []).size,
       artifacts: persisted.artifacts ?? [],
     };
   }

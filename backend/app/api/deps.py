@@ -152,6 +152,7 @@ def get_meeting_state(
             repository=repository,
             event_bus=event_bus,
             max_meeting_duration_s=settings.automeet_max_meeting_duration_s,
+            recovery_max_age_s=settings.meeting_recovery_max_age_s,
         )
     return _meeting_state_singleton
 

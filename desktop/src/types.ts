@@ -222,6 +222,9 @@ export interface MeetingCard {
   state: MeetingState;
   segments: TranscriptSegment[];
   speakers: Set<string>;
+  /** GET /meetings 返回的持久化汇总；详情尚未加载时供列表首屏展示。 */
+  summary_segment_count: number;
+  summary_speaker_count: number;
   minutes?: MeetingMinutes;
   /**
    * 纪要生成状态（仅 state="ended" / "in_meeting" 时有意义；

@@ -31,6 +31,7 @@ const label: Record<MeetingCard["state"], string> = {
  */
 export default function MeetingList(): JSX.Element {
   const meetings = useStore((s) => s.meetings);
+  const meetingDetailLoaded = useStore((s) => s.meetingDetailLoaded);
   const currentId = useStore((s) => s.currentMeetingId);
   const select = useStore((s) => s.selectMeeting);
 
@@ -108,6 +109,14 @@ export default function MeetingList(): JSX.Element {
       <div className="h-px bg-paper-300 my-1" aria-hidden="true" />
       {items.map((m) => {
         const active = currentId === m.meeting_id;
+        const detailLoaded = meetingDetailLoaded[m.meeting_id] === true;
+        const segmentCount = detailLoaded
+          ? m.segments.length
+          : Math.max(m.summary_segment_count ?? 0, m.segments.length);
+        const segmentSpeakerCount = countDisplaySpeakers(m.segments);
+        const speakerCount = detailLoaded
+          ? segmentSpeakerCount
+          : Math.max(m.summary_speaker_count ?? 0, segmentSpeakerCount);
         // M_minutes_refactor：左侧列表显示语义化标题（如「直播带货话术 + AI 编程营销
         // 讨论」），优先级 display_title > title > meeting_id；保证旧会议、未 finalize
         // 会议都有兜底文案。
@@ -140,11 +149,11 @@ export default function MeetingList(): JSX.Element {
             <div className="mt-1 text-[11px] text-ink-400 flex items-center gap-2 pl-3.5">
               <span>{label[m.state]}</span>
               <span>·</span>
-              <span>{m.segments.length} 段</span>
+              <span>{segmentCount} 段</span>
               <span>·</span>
               {/* 与 TranscriptStream 同源：基于 remap 后的 displayIdx
                   数 distinct，避免"显示到说话人 47 但列表写 86 人" */}
-              <span>{countDisplaySpeakers(m.segments)} 人</span>
+              <span>{speakerCount} 人</span>
             </div>
           </button>
         );

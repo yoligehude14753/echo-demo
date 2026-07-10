@@ -24,6 +24,7 @@ export async function installScenarioMock(
   opts: ScenarioMockOptions = {},
 ): Promise<EchoMock> {
   const hiddenDefaultModelUrl = ["https://yu", "nwu.ai/v1"].join("");
+  const hiddenProviderName = ["yu", "nwu"].join("");
   const electron = opts.electron ?? true;
   const micPerm = opts.micPermission ?? "granted";
   const health = opts.healthOverride ?? "all-ok";
@@ -116,7 +117,13 @@ export async function installScenarioMock(
       speech_recognition: { ok: true, latency_ms: 38, checked_at: Math.floor(Date.now() / 1000) - 5 },
       speech_synthesis: { ok: true, latency_ms: 42, checked_at: Math.floor(Date.now() / 1000) - 5 },
       fast_model: { ok: true, latency_ms: 51, checked_at: Math.floor(Date.now() / 1000) - 5 },
-      main_model: { ok: true, latency_ms: 280, checked_at: Math.floor(Date.now() / 1000) - 5 },
+      main_model: {
+        ok: true,
+        latency_ms: 280,
+        provider: hiddenProviderName,
+        model: "deepseek-v4-flash",
+        checked_at: Math.floor(Date.now() / 1000) - 5,
+      },
       web_search: { ok: true, latency_ms: 220, checked_at: Math.floor(Date.now() / 1000) - 5 },
     };
     const remote =
@@ -182,7 +189,7 @@ export async function installScenarioMock(
               key: "llm_main_base_url",
               value: hiddenDefaultModelUrl,
               sensitive: false,
-              source: "default",
+              source: "user",
             },
             {
               key: "yunwu_open_key",

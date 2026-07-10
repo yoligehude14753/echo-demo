@@ -8,6 +8,31 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.3.0] – 2026-07-10
+
+EchoDesk 0.3 正式版：完成 Workflow Core、历史恢复、本机安装与 AgentOS 工作流闭环。
+
+### 新增与修复
+
+- 统一 Artifact、Todo、Agent Runner 的 workflow run/event 状态源，支持失败恢复、重试、取消、超时和产物归档。
+- 历史会议列表首屏直接显示持久化段数与人数；短时崩溃可续接，超过 24 小时的陈旧手动会议自动结束。
+- backend 测试和安装 smoke 使用隔离目录与 SQLite，不读取或修改真实 `~/.echodesk` 用户数据。
+- Desktop Pro 主模型默认使用 `deepseek-v4-flash`；界面展示模型名，不主动展示供应商文案。
+- backend 安装器可一并安装本地 AgentOS / Claude Code runner，并根据主模型配置启用本机服务。
+- backend、desktop、Android / TV 及安装资产版本统一为 `0.3.0`。
+
+## [0.3.0-alpha.2] – 2026-07-10
+
+0.3 首轮真实历史数据验收热修：修复首屏统计为零、跨天会议持续计时，以及测试可能读取用户数据的问题。
+
+### 修复
+
+- 历史会议列表首屏直接显示后端 summary 的段数和人数，不再要求逐条点击后才加载数值。
+- 手动会议跨重启最多保留 24 小时续接窗口；超过上限的陈旧 `in_meeting` 状态自动结束，避免顶栏累计数千分钟。
+- backend 非集成测试自动隔离用户目录、SQLite、存储目录和本机 `.env`；安装 smoke 改用真正的临时 DB，不再 hydrate 或修改 `~/.echodesk`。
+- 修复本机残留部署会议的数据状态，同时保留原转写和补生成纪要。
+- 版本号推进到 `0.3.0-alpha.2`；Android / TV `versionCode=300`、`versionName=0.3.0-alpha.2`。
+
 ## [0.3.0-alpha.1] – 2026-07-10
 
 0.3 Workflow Core 首个可交付 alpha：把 Artifact、Todo 和 Claude Code Agent 纳入统一 workflow/run/event 事实源。

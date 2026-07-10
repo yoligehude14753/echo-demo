@@ -320,6 +320,9 @@ class Settings(BaseSettings):
     # 防止持续环境音 / 单人独白让会议永不结束（2026-05 「会议中 9h+」bug 的结构性修复）。
     # hydrate 也会用这个值清理跨重启遗留的过期 auto-meeting。
     automeet_max_meeting_duration_s: float = 1800.0
+    # 手动会议允许短时崩溃/重启后续接，但跨天仍 in_meeting 已无法判断用户意图，
+    # 必须自动结束，避免顶栏永久累计成数千分钟。
+    meeting_recovery_max_age_s: float = 24 * 60 * 60
 
     # ── RAG ───────────────────────────────────────────────────────
     rag_index_dir: Path = Field(default=Path("~/.echodesk/rag_index").expanduser())

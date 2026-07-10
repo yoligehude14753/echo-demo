@@ -198,12 +198,8 @@ function ProbeMetaRow({
   probe: ProbeResultDTO | undefined;
   fallback?: string;
 }): JSX.Element {
-  const provider = probe?.provider?.trim();
   const model = probe?.model?.trim();
-  const value =
-    provider || model
-      ? [provider, model].filter(Boolean).join(" · ")
-      : (fallback ?? "—");
+  const value = model || fallback || "—";
   return (
     <div className="flex items-center justify-between text-[11px]">
       <span className="text-ink-500">{name}</span>
@@ -357,7 +353,7 @@ function AiEnginePopover({
         <Sparkles className="w-3.5 h-3.5" />
         AI 引擎
       </div>
-      <ProbeMetaRow name="LLM 主模型" probe={mainModel} fallback="yunwu · deepseek-v4-flash" />
+      <ProbeMetaRow name="LLM 主模型" probe={mainModel} fallback="deepseek-v4-flash" />
       <ProbeRow name="LLM 连通性" probe={mainModel} />
       <ProbeRow name="联网检索" probe={webSearch} />
       <div className="my-2 h-px bg-paper-300" />

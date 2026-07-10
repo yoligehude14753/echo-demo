@@ -58,7 +58,7 @@ test("S03 · 设置面板：模型服务配置 + 数据目录 + 回放引导（P
     // sensitive 字段 placeholder 显示脱敏值
     await expect(form.locator("input[id='yunwu_open_key']")).toBeVisible();
     // 「user.json」标签应该出现在 yunwu_open_key 行（source=user）
-    await expect(page.getByText("user.json")).toBeVisible();
+    await expect(page.getByText("user.json").first()).toBeVisible();
   });
 
   await test.step("修改 llm_main_base_url 并保存", async () => {

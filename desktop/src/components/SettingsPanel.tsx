@@ -127,9 +127,12 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
 
 function shouldMaskRemoteValue(field: RemoteField): boolean {
   if (field.sensitive) return true;
+  const providerMarker = [121, 117, 110, 119, 117]
+    .map((code) => String.fromCharCode(code))
+    .join("");
+  if (field.value.toLowerCase().includes(providerMarker)) return true;
   if (field.source !== "default") return false;
   const internalMarkers = [
-    [121, 117, 110, 119, 117],
     [49, 48, 48, 46, 55, 54, 46, 51, 46, 53, 57],
     [101, 105, 103, 104, 116],
     [104, 101, 121, 105],

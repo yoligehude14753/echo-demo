@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import get_args
 
@@ -99,3 +101,28 @@ def test_desktop_script_matrix_snapshot() -> None:
         "app:dist:win",
         "app:dist:linux",
     } <= scripts
+
+
+@pytest.mark.arch
+def test_agentos_runtime_install_contract() -> None:
+    install_backend = REPO_ROOT / "scripts/install-backend.sh"
+    install_agentos = REPO_ROOT / "scripts/install-agentos.sh"
+    run_agentos = REPO_ROOT / "scripts/run-agentos.sh"
+    for script in (install_backend, install_agentos, run_agentos):
+        assert os.access(script, os.X_OK), f"script must be executable: {script}"
+        subprocess.run(["bash", "-n", str(script)], check=True)
+
+    install_backend_text = install_backend.read_text(encoding="utf-8")
+    install_agentos_text = install_agentos.read_text(encoding="utf-8")
+    run_agentos_text = run_agentos.read_text(encoding="utf-8")
+    assert "step9_install_agentos" in install_backend_text
+    assert 'config["agent_os_enabled"] = enabled' in install_agentos_text
+    assert 'AGENTOS_VENV="$DEST_ROOT/.venv"' in install_agentos_text
+    assert 'python-multipart' in install_agentos_text
+    assert 'MAIN_PROVIDER="$(read_config llm_main_provider yunwu)"' in run_agentos_text
+    assert 'MAIN_MODEL="$(read_config llm_main_model deepseek-v4-flash)"' in run_agentos_text
+    assert 'AGENTOS_DATA_DIR="${ECHODESK_AGENTOS_DATA_DIR:-$ECHODESK_HOME/agentos}"' in (
+        run_agentos_text
+    )
+    assert '$ECHODESK_HOME/source/agentos/.venv/bin/python' in run_agentos_text
+    assert "$HOME/.agentos" not in run_agentos_text

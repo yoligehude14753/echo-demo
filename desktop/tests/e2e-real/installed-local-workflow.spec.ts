@@ -1,6 +1,6 @@
 import { expect, test, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,10 @@ const REPO_ROOT = path.resolve(TEST_FILE_DIR, "../../..");
 const BACKEND_ROOT =
   process.env.ECHODESK_BACKEND_ROOT ?? path.join(REPO_ROOT, "backend");
 const PYTHON_BIN = path.join(BACKEND_ROOT, ".venv/bin/python");
+const AGENTOS_ROOT =
+  process.env.ECHODESK_AGENTOS_ROOT ?? path.resolve(REPO_ROOT, "../agentos");
+const YUNWU_CONFIG_PATH =
+  process.env.ECHODESK_REAL_CONFIG ?? path.join(os.homedir(), ".echodesk/config.json");
 const TEST_ROOT = path.join(os.tmpdir(), "echodesk-0.3-installed-e2e");
 const DB_PATH = path.join(TEST_ROOT, "echodesk.db");
 const STORAGE_DIR = path.join(TEST_ROOT, "storage");
@@ -21,12 +25,46 @@ const USER_DIR = path.join(TEST_ROOT, "user");
 const ELECTRON_USER_DATA = path.join(TEST_ROOT, "electron-user-data");
 const SCREENSHOT_DIR = path.join(REPO_ROOT, "desktop/test-results/installed-local");
 const BACKEND_PORT = 8769;
+const AGENTOS_PROXY_PORT = 14127;
+const AGENTOS_SERVER_PORT = 14128;
 const TODO_ID = "todo-installed-local-e2e";
 const DEVICE_ID = "desktop-installed-local-e2e";
 const TODO_COMMAND =
-  "@生成 TXT 依据以下已提供事实写一份不少于 700 字符的纯文本验收报告，第一行必须包含 ECHODESK_TODO_E2E_OK。已验证事实：EchoDesk 版本为 0.3.0-alpha.1；本地 backend 使用隔离 SQLite；首次 Todo run 因 1 秒超时进入 failed 并写入 workflow_events；应用完全退出并重启后，会议、Todo failed 状态和原 run_id 均从数据库恢复；重试请求携带 retry_of 指向原 run；成功产物必须进入 artifacts 和 artifact_links，并能通过会议 artifacts API 下载。请按执行摘要、状态转换、持久化证据、结论与下一步四节展开，以上内容就是完整事实材料，不要回答资料不足。";
+  "@生成 TXT 依据以下已提供事实写一份不少于 700 字符的纯文本验收报告，第一行必须包含 ECHODESK_TODO_E2E_OK。已验证事实：EchoDesk 版本为 0.3.0；本地 backend 使用隔离 SQLite；首次 Todo run 因 1 秒超时进入 failed 并写入 workflow_events；应用完全退出并重启后，会议、Todo failed 状态和原 run_id 均从数据库恢复；重试请求携带 retry_of 指向原 run；成功产物必须进入 artifacts 和 artifact_links，并能通过会议 artifacts API 下载。请按执行摘要、状态转换、持久化证据、结论与下一步四节展开，以上内容就是完整事实材料，不要回答资料不足。";
 
 type JsonMap = Record<string, unknown>;
+
+type YunwuConfig = {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+};
+
+type AgentServices = {
+  proxy: ChildProcess;
+  server: ChildProcess;
+};
+
+const activeApps = new Set<ElectronApplication>();
+let activeAgentServices: AgentServices | null = null;
+
+function loadYunwuConfig(): YunwuConfig {
+  if (!existsSync(YUNWU_CONFIG_PATH)) {
+    throw new Error(`real main-model config missing: ${YUNWU_CONFIG_PATH}`);
+  }
+  const config = JSON.parse(readFileSync(YUNWU_CONFIG_PATH, "utf8")) as JsonMap;
+  const apiKey = String(config.yunwu_open_key ?? "").trim();
+  if (!apiKey) throw new Error(`main-model API key missing in ${YUNWU_CONFIG_PATH}`);
+  const model = String(config.llm_main_model ?? "").trim();
+  const baseUrl = String(config.llm_main_base_url ?? "").trim().replace(/\/$/, "");
+  if (model !== "deepseek-v4-flash") {
+    throw new Error(`real E2E requires deepseek-v4-flash, got ${model || "<empty>"}`);
+  }
+  if (baseUrl !== "https://yunwu.ai/v1") {
+    throw new Error(`real E2E main-model endpoint mismatch: ${baseUrl || "<empty>"}`);
+  }
+  return { apiKey, model, baseUrl };
+}
 
 async function isPortOpen(port: number): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
@@ -43,10 +81,115 @@ async function isPortOpen(port: number): Promise<boolean> {
   });
 }
 
-async function waitForPort(open: boolean, timeout = 45_000): Promise<void> {
+async function waitForPortState(
+  port: number,
+  open: boolean,
+  timeout = 45_000,
+): Promise<void> {
   await expect
-    .poll(() => isPortOpen(BACKEND_PORT), { timeout, intervals: [250, 500, 1000] })
+    .poll(() => isPortOpen(port), { timeout, intervals: [250, 500, 1000] })
     .toBe(open);
+}
+
+async function waitForPort(open: boolean, timeout = 45_000): Promise<void> {
+  await waitForPortState(BACKEND_PORT, open, timeout);
+}
+
+function pipeProcessOutput(child: ChildProcess, label: string): void {
+  child.stdout?.on("data", (chunk) => process.stdout.write(`[${label}] ${String(chunk)}`));
+  child.stderr?.on("data", (chunk) => process.stderr.write(`[${label}] ${String(chunk)}`));
+}
+
+async function stopProcess(process: ChildProcess | undefined): Promise<void> {
+  if (!process || process.exitCode !== null || process.signalCode !== null) return;
+  process.kill("SIGTERM");
+  try {
+    await expect
+      .poll(() => process.exitCode !== null || process.signalCode !== null, {
+        timeout: 10_000,
+        intervals: [100, 250, 500],
+      })
+      .toBe(true);
+  } catch {
+    process.kill("SIGKILL");
+  }
+}
+
+async function startRealAgentServices(config: YunwuConfig): Promise<AgentServices> {
+  await waitForPortState(AGENTOS_PROXY_PORT, false, 5_000);
+  await waitForPortState(AGENTOS_SERVER_PORT, false, 5_000);
+
+  const agentRoot = path.join(TEST_ROOT, "agentos");
+  const workspaces = path.join(agentRoot, "workspaces");
+  mkdirSync(workspaces, { recursive: true });
+  const commonEnv = {
+    ...process.env,
+    PYTHONPATH: AGENTOS_ROOT,
+    HTTP_PROXY: "",
+    HTTPS_PROXY: "",
+    ALL_PROXY: "",
+    NO_PROXY: "*",
+  };
+  const proxy = spawn(PYTHON_BIN, ["-m", "agentos.proxy.anthropic_to_openai"], {
+    cwd: AGENTOS_ROOT,
+    env: {
+      ...commonEnv,
+      PORT: String(AGENTOS_PROXY_PORT),
+      AGENTOS_PROXY_AUTOCONFIG_ECHO: "false",
+      AGENTOS_PROXY_UPSTREAM_BASE_URL: config.baseUrl,
+      AGENTOS_PROXY_UPSTREAM_MODEL: config.model,
+      AGENTOS_PROXY_UPSTREAM_API_KEY: config.apiKey,
+      AGENTOS_PROXY_REASONING_TOKEN_BUDGET: "0",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  pipeProcessOutput(proxy, "agentos-proxy");
+  await waitForPortState(AGENTOS_PROXY_PORT, true, 30_000);
+
+  const server = spawn(
+    PYTHON_BIN,
+    [
+      "-m",
+      "agentos.server",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(AGENTOS_SERVER_PORT),
+      "--workspaces",
+      workspaces,
+      "--proxy-url",
+      `http://127.0.0.1:${AGENTOS_PROXY_PORT}`,
+      "--log-level",
+      "info",
+    ],
+    {
+      cwd: AGENTOS_ROOT,
+      env: commonEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  pipeProcessOutput(server, "agentos-server");
+  try {
+    await waitForPortState(AGENTOS_SERVER_PORT, true, 30_000);
+    const response = await fetch(`http://127.0.0.1:${AGENTOS_SERVER_PORT}/api/v1/health`);
+    if (!response.ok) throw new Error(`AgentOS health failed: ${response.status}`);
+  } catch (error) {
+    await stopProcess(server);
+    await stopProcess(proxy);
+    throw error;
+  }
+  const services = { proxy, server };
+  activeAgentServices = services;
+  return services;
+}
+
+async function stopRealAgentServices(services: AgentServices | null): Promise<void> {
+  if (!services) return;
+  await stopProcess(services.server);
+  await stopProcess(services.proxy);
+  await waitForPortState(AGENTOS_SERVER_PORT, false, 15_000);
+  await waitForPortState(AGENTOS_PROXY_PORT, false, 15_000);
+  if (activeAgentServices === services) activeAgentServices = null;
 }
 
 async function api<T extends JsonMap | JsonMap[]>(
@@ -77,7 +220,7 @@ async function api<T extends JsonMap | JsonMap[]>(
   return result as T;
 }
 
-async function launchInstalled(skillTimeoutSeconds: number): Promise<{
+async function launchInstalled(skillTimeoutSeconds: number, yunwu: YunwuConfig): Promise<{
   app: ElectronApplication;
   win: Page;
 }> {
@@ -95,11 +238,11 @@ async function launchInstalled(skillTimeoutSeconds: number): Promise<{
     SKILL_EXECUTOR_BUILD_DIR: SKILL_DIR,
     SKILL_EXECUTOR_TIMEOUT_S: String(skillTimeoutSeconds),
     LLM_MAIN_PROVIDER: "yunwu",
-    LLM_MAIN_MODEL: "claude-sonnet-4-6",
-    LLM_MAIN_BASE_URL: "http://127.0.0.1:4190/v1",
-    YUNWU_OPEN_KEY: "local-claude-direct-e2e",
+    LLM_MAIN_MODEL: yunwu.model,
+    LLM_MAIN_BASE_URL: yunwu.baseUrl,
+    YUNWU_OPEN_KEY: yunwu.apiKey,
     AGENT_OS_ENABLED: "true",
-    AGENT_OS_URL: "http://127.0.0.1:4128",
+    AGENT_OS_URL: `http://127.0.0.1:${AGENTOS_SERVER_PORT}`,
     AGENT_TASK_TIMEOUT_S: "300",
   };
   delete env.ECHO_PUBLIC_DEMO;
@@ -112,6 +255,7 @@ async function launchInstalled(skillTimeoutSeconds: number): Promise<{
     env,
     timeout: 60_000,
   });
+  activeApps.add(app);
   const child = app.process();
   child.stdout?.on("data", (chunk) => process.stdout.write(`[installed-app] ${String(chunk)}`));
   child.stderr?.on("data", (chunk) => process.stderr.write(`[installed-app] ${String(chunk)}`));
@@ -187,13 +331,17 @@ async function closeInstalled(app: ElectronApplication): Promise<void> {
   } catch {
     // The Playwright transport can close before evaluate resolves when quit succeeds.
   }
-  await expect
-    .poll(() => child.exitCode !== null || child.signalCode !== null, {
-      timeout: 30_000,
-      intervals: [100, 250, 500],
-    })
-    .toBe(true);
-  await waitForPort(false, 30_000);
+  try {
+    await expect
+      .poll(() => child.exitCode !== null || child.signalCode !== null, {
+        timeout: 30_000,
+        intervals: [100, 250, 500],
+      })
+      .toBe(true);
+    await waitForPort(false, 30_000);
+  } finally {
+    activeApps.delete(app);
+  }
 }
 
 function sqlQuote(value: string): string {
@@ -258,15 +406,33 @@ async function selectMeeting(win: Page, meetingId: string): Promise<ReturnType<P
 test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
   test.skip(!existsSync(APP_BIN), `installed app missing: ${APP_BIN}`);
   test.skip(!existsSync(PYTHON_BIN), `backend python missing: ${PYTHON_BIN}`);
+  test.skip(
+    !existsSync(path.join(AGENTOS_ROOT, "agentos/server/__main__.py")),
+    `AgentOS source missing: ${AGENTOS_ROOT}`,
+  );
 
-  test("installed app: failure → restart restore → retry success → AgentOS", async () => {
+  test.afterEach(async () => {
+    for (const app of [...activeApps]) {
+      try {
+        await closeInstalled(app);
+      } catch {
+        app.process().kill("SIGKILL");
+        activeApps.delete(app);
+      }
+    }
+    await stopRealAgentServices(activeAgentServices);
+  });
+
+  test("installed app: failure → restart → DS v4 retry → real AgentOS", async () => {
     test.setTimeout(900_000);
     rmSync(TEST_ROOT, { recursive: true, force: true });
     mkdirSync(SCREENSHOT_DIR, { recursive: true });
+    const yunwu = loadYunwuConfig();
+    const agentServices = await startRealAgentServices(yunwu);
 
-    let first = await launchInstalled(180);
+    let first = await launchInstalled(180, yunwu);
     const appVersion = await first.app.evaluate(async ({ app }) => app.getVersion());
-    expect(appVersion).toBe("0.3.0-alpha.1");
+    expect(appVersion).toBe("0.3.0");
     expect(
       await first.win.evaluate(
         () => (window as unknown as { echo?: { isPublicDemo?: boolean } }).echo?.isPublicDemo,
@@ -283,7 +449,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
       .toBe("http://127.0.0.1:8769");
 
     const health = await api<JsonMap>(first.win, "/healthz/full");
-    expect((health.backend as JsonMap).version).toBe("0.3.0-alpha.1");
+    expect((health.backend as JsonMap).version).toBe("0.3.0");
     const meetingBar = first.win.getByTestId("meeting-status-bar");
     await expect(meetingBar).toBeEnabled({ timeout: 30_000 });
     await meetingBar.click();
@@ -304,7 +470,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     await closeInstalled(first.app);
     seedFinalizedMinutes(meetingId);
 
-    const failing = await launchInstalled(1);
+    const failing = await launchInstalled(1, yunwu);
     const restoredMeetings = await api<JsonMap[]>(failing.win, "/meetings?limit=50");
     expect(restoredMeetings.some((meeting) => meeting.meeting_id === meetingId)).toBe(true);
     let row = await selectMeeting(failing.win, meetingId);
@@ -337,7 +503,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     });
     await closeInstalled(failing.app);
 
-    const working = await launchInstalled(180);
+    const working = await launchInstalled(180, yunwu);
     row = await selectMeeting(working.win, meetingId);
     await expect(row).toHaveAttribute("data-todo-status", "failed", { timeout: 30_000 });
     await expect(row).toHaveAttribute("data-workflow-run-id", failedRunId);
@@ -442,7 +608,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     });
     await closeInstalled(working.app);
 
-    first = await launchInstalled(180);
+    first = await launchInstalled(180, yunwu);
     row = await selectMeeting(first.win, meetingId);
     await expect(row).toHaveAttribute("data-todo-status", "done", { timeout: 30_000 });
     await expect(first.win.locator(`[data-task-id="${agentTaskId}"]`)).toContainText("已完成");
@@ -453,5 +619,6 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
       fullPage: true,
     });
     await closeInstalled(first.app);
+    await stopRealAgentServices(agentServices);
   });
 });

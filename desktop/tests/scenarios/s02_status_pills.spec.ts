@@ -78,6 +78,9 @@ test("S02 · 顶栏 3 个 pill 巡检（P2.1 全绿态）", async ({ page }) => 
   await test.step("AI 引擎 pill popover：LLM 主模型 + 联网检索", async () => {
     await probePill(page, "pill-ai-engine", async (po) => {
       await expect(po.getByText("LLM 主模型")).toBeVisible({ timeout: 3_000 });
+      await expect(po.getByText("deepseek-v4-flash")).toBeVisible();
+      const hiddenProviderName = ["yu", "nwu"].join("");
+      await expect(po).not.toContainText(hiddenProviderName);
       await expect(po.getByText("联网检索")).toBeVisible();
     });
   });

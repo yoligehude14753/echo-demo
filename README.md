@@ -1,35 +1,35 @@
 # EchoDesk · 数字分身 (Another Me)
 
 > **目标**：会议 + 办公场景的"数字分身"应用。0.3 Desktop Pro 默认使用本机 backend 与 SQLite；public demo 作为显式部署模式保留。
-> **当前源码版本**：v0.3.0-alpha.1（详见 [`CHANGELOG.md`](CHANGELOG.md)）
-> **公开下载**：见 [GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)；本轮已本机构建 v0.3.0-alpha.1 macOS 资产，发布后可下载。
+> **当前源码版本**：v0.3.0（详见 [`CHANGELOG.md`](CHANGELOG.md)）
+> **公开下载**：见 [GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)；本轮已本机构建 v0.3.0 macOS 资产，发布后可下载。
 > **安装指南**：见 [`docs/INSTALL.md`](docs/INSTALL.md)
 > **DEMO 复跑**：见 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)
 > **模型配置**：Desktop Pro 从本机 `~/.echodesk/config.json` 读取；public demo 的模型密钥留在服务端，不进入客户端包。
-> **主线治理基准**：见 [`docs/GOVERNANCE_v0.2.50.md`](docs/GOVERNANCE_v0.2.50.md)。0.3.0-alpha.1 以 `v0.2.50` 为历史治理基线推进 Workflow Core，不继承旧 `0.2.7` 实验线。
+> **主线治理基准**：见 [`docs/GOVERNANCE_v0.2.50.md`](docs/GOVERNANCE_v0.2.50.md)。0.3.0 以 `v0.2.50` 为历史治理基线推进 Workflow Core，不继承旧 `0.2.7` 实验线。
 > **0.3 工作流核心**：见 [`docs/0.3/README.md`](docs/0.3/README.md)。0.3 以统一 Workflow Core 收束会议、Artifact、Todo、Claude Code Agent、分享导出和诊断恢复。
 
 ## 立即下载
 
-当前源码版本是 `v0.3.0-alpha.1`。公开安装包下载页：
+当前源码版本是 `v0.3.0`。公开安装包下载页：
 <https://github.com/yoligehude14753/echo-demo/releases/latest>
 
 | 平台 | Release 资产命名 | 说明 |
 |---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.3.0-alpha.1-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.3.0-alpha.1-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows 安装器 | `EchoDesk.Setup.0.3.0-alpha.1.exe` | 需 Windows 构建 workflow 产出后才可下载 |
-| Windows 便携包 | `EchoDesk-0.3.0-alpha.1-win-x64.zip` | 需 Windows 构建 workflow 产出后才可下载 |
-| Linux AppImage | `EchoDesk-0.3.0-alpha.1.AppImage` | 需 Linux 构建产出后才可下载 |
-| Linux deb | `echodesk-desktop_0.3.0-alpha.1_amd64.deb` | 需 Linux 构建产出后才可下载 |
-| Android 手机 / 平板 | `EchoDesk-0.3.0-alpha.1-android.apk` | 需 Android 构建产出后才可下载 |
-| Android TV / 智能电视 | `EchoDesk-0.3.0-alpha.1-smart-tv.apk` | 需 TV 打包产出后才可下载 |
-| 智能电视一键安装 | `EchoDesk-0.3.0-alpha.1-smart-tv-oneclick.zip` | 需 TV 打包产出后才可下载 |
-| 校验文件 | `SHA256SUMS-0.3.0-alpha.1.txt` | 随已发布资产一起上传 |
+| macOS Apple Silicon | `EchoDesk-0.3.0-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.3.0-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows 安装器 | `EchoDesk.Setup.0.3.0.exe` | 需 Windows 构建 workflow 产出后才可下载 |
+| Windows 便携包 | `EchoDesk-0.3.0-win-x64.zip` | 需 Windows 构建 workflow 产出后才可下载 |
+| Linux AppImage | `EchoDesk-0.3.0.AppImage` | 需 Linux 构建产出后才可下载 |
+| Linux deb | `echodesk-desktop_0.3.0_amd64.deb` | 需 Linux 构建产出后才可下载 |
+| Android 手机 / 平板 | `EchoDesk-0.3.0-android.apk` | 需 Android 构建产出后才可下载 |
+| Android TV / 智能电视 | `EchoDesk-0.3.0-smart-tv.apk` | 需 TV 打包产出后才可下载 |
+| 智能电视一键安装 | `EchoDesk-0.3.0-smart-tv-oneclick.zip` | 需 TV 打包产出后才可下载 |
+| 校验文件 | `SHA256SUMS-0.3.0.txt` | 随已发布资产一起上传 |
 
 Desktop Pro 桌面包默认启动本机 backend；安装前先运行 `scripts/install-backend.sh`。Android、TV
 及显式 public demo 客户端连接 `https://echodesk.yoliyoli.uk`，模型服务和密钥留在服务端。
-Windows 机器若出现 Device Guard / 组织策略拦截 `.exe` 安装器，请下载 `EchoDesk-0.3.0-alpha.1-win-x64.zip`，
+Windows 机器若出现 Device Guard / 组织策略拦截 `.exe` 安装器，请下载 `EchoDesk-0.3.0-win-x64.zip`，
 解压后直接运行 `EchoDesk.exe`；该形态已在 Windows 远程机通过启动和设置页点击 smoke。
 public demo 桌面启动入口需显式设置 `ECHO_PUBLIC_DEMO=1`；旧部署仍可用
 `ECHO_FORCE_LOCAL_BACKEND=1` 强制覆盖为本机模式。

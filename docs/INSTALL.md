@@ -1,22 +1,22 @@
 # EchoDesk 安装指南
 
-当前源码版本：`v0.3.0-alpha.1`
+当前源码版本：`v0.3.0`
 公开下载页：<https://github.com/yoligehude14753/echo-demo/releases/latest>
 
-> 本轮已本机构建 v0.3.0-alpha.1 macOS 资产；发布到 GitHub Release 后可下载。其它平台需要对应构建产物上传后才算发布。
+> 本轮已本机构建 v0.3.0 macOS 资产；发布到 GitHub Release 后可下载。其它平台需要对应构建产物上传后才算发布。
 
 | 平台 | Release 资产命名 | 说明 |
 |---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.3.0-alpha.1-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.3.0-alpha.1-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows 安装器 | `EchoDesk.Setup.0.3.0-alpha.1.exe` | 需 Windows 构建 workflow 产出后才可下载 |
-| Windows 便携包 | `EchoDesk-0.3.0-alpha.1-win-x64.zip` | 需 Windows 构建 workflow 产出后才可下载 |
-| Linux AppImage | `EchoDesk-0.3.0-alpha.1.AppImage` | 需 Linux 构建产出后才可下载 |
-| Linux deb | `echodesk-desktop_0.3.0-alpha.1_amd64.deb` | 需 Linux 构建产出后才可下载 |
-| Android 手机 / 平板 | `EchoDesk-0.3.0-alpha.1-android.apk` | 需 Android 构建产出后才可下载 |
-| Android TV / 智能电视 | `EchoDesk-0.3.0-alpha.1-smart-tv.apk` | 需 TV 打包产出后才可下载 |
-| 智能电视一键安装 | `EchoDesk-0.3.0-alpha.1-smart-tv-oneclick.zip` | 需 TV 打包产出后才可下载 |
-| 校验文件 | `SHA256SUMS-0.3.0-alpha.1.txt` | 随已发布资产一起上传 |
+| macOS Apple Silicon | `EchoDesk-0.3.0-arm64.dmg` | 桌面版安装包 |
+| macOS 备用 zip | `EchoDesk-0.3.0-arm64-mac.zip` | dmg 打不开时使用 |
+| Windows 安装器 | `EchoDesk.Setup.0.3.0.exe` | 需 Windows 构建 workflow 产出后才可下载 |
+| Windows 便携包 | `EchoDesk-0.3.0-win-x64.zip` | 需 Windows 构建 workflow 产出后才可下载 |
+| Linux AppImage | `EchoDesk-0.3.0.AppImage` | 需 Linux 构建产出后才可下载 |
+| Linux deb | `echodesk-desktop_0.3.0_amd64.deb` | 需 Linux 构建产出后才可下载 |
+| Android 手机 / 平板 | `EchoDesk-0.3.0-android.apk` | 需 Android 构建产出后才可下载 |
+| Android TV / 智能电视 | `EchoDesk-0.3.0-smart-tv.apk` | 需 TV 打包产出后才可下载 |
+| 智能电视一键安装 | `EchoDesk-0.3.0-smart-tv-oneclick.zip` | 需 TV 打包产出后才可下载 |
+| 校验文件 | `SHA256SUMS-0.3.0.txt` | 随已发布资产一起上传 |
 
 EchoDesk 0.3 是 Desktop Pro / local-first 工作流。macOS / Windows / Linux 桌面端默认启动
 本机 backend，业务数据写入本机 SQLite。Android / TV 和显式 public demo 模式连接
@@ -50,7 +50,7 @@ public demo 发布入口需要显式设置 `ECHO_PUBLIC_DEMO=1`。`ECHO_FORCE_LO
 
 公开发布后优先从 GitHub Releases 下载当前 demo 包：
 
-- macOS: `EchoDesk-0.3.0-alpha.1-arm64.dmg`
+- macOS: `EchoDesk-0.3.0-arm64.dmg`
 - Windows / Linux / Android / TV: 对应构建产物上传后，会出现在同一个 Release 页面。
 - 电视浏览器短安装页：`https://yoligehude14753.github.io/echo-demo/`
 
@@ -78,8 +78,8 @@ npm run app:dist:mac
 产物：
 
 ```text
-desktop/release/EchoDesk-0.3.0-alpha.1-arm64.dmg
-desktop/release/EchoDesk-0.3.0-alpha.1-arm64-mac.zip
+desktop/release/EchoDesk-0.3.0-arm64.dmg
+desktop/release/EchoDesk-0.3.0-arm64-mac.zip
 desktop/release/mac-arm64/EchoDesk.app
 ```
 
@@ -91,7 +91,7 @@ npm run app:dist:win
 ```
 
 如果 Windows 机器出现 Device Guard / 组织策略拦截 `.exe` 安装器，请改用
-`EchoDesk-0.3.0-alpha.1-win-x64.zip`。解压后直接运行 `EchoDesk.exe`，本机数据仍保存在
+`EchoDesk-0.3.0-win-x64.zip`。解压后直接运行 `EchoDesk.exe`，本机数据仍保存在
 Windows 用户目录；后续升级只需要下载新版 zip 并替换解压目录。
 
 Linux x64 可构建 AppImage + deb：
@@ -104,8 +104,8 @@ npm run app:dist:linux
 产物：
 
 ```text
-desktop/release/EchoDesk-0.3.0-alpha.1.AppImage
-desktop/release/echodesk-desktop_0.3.0-alpha.1_amd64.deb
+desktop/release/EchoDesk-0.3.0.AppImage
+desktop/release/echodesk-desktop_0.3.0_amd64.deb
 ```
 
 Android 当前用 Capacitor 打非 debuggable 的 release APK：
@@ -120,10 +120,10 @@ npm run app:package:tv
 
 ```text
 desktop/android/app/build/outputs/apk/release/app-release-unsigned.apk
-desktop/release/EchoDesk-0.3.0-alpha.1-android.apk
-desktop/release/EchoDesk-0.3.0-alpha.1-android-tv.apk
-desktop/release/EchoDesk-0.3.0-alpha.1-smart-tv.apk
-desktop/release/EchoDesk-0.3.0-alpha.1-smart-tv-oneclick.zip
+desktop/release/EchoDesk-0.3.0-android.apk
+desktop/release/EchoDesk-0.3.0-android-tv.apk
+desktop/release/EchoDesk-0.3.0-smart-tv.apk
+desktop/release/EchoDesk-0.3.0-smart-tv-oneclick.zip
 ```
 
 Android / TV APK 是前端客户端，不会在手机或电视里启动 Electron 的本机 Python 服务。
@@ -149,11 +149,11 @@ ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --p
 ### 智能电视安装
 
 图里这种有「我的应用」入口的会议室电视，如果底层是 Android TV / Google TV /
-国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.3.0-alpha.1-smart-tv.apk`。
+国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.3.0-smart-tv.apk`。
 
 推荐路径：
 
-1. 下载 `EchoDesk-0.3.0-alpha.1-smart-tv-oneclick.zip`。
+1. 下载 `EchoDesk-0.3.0-smart-tv-oneclick.zip`。
 2. 电视打开开发者模式和 ADB 网络调试。
 3. 电脑和电视在同一个局域网。
 4. macOS 执行 `./install-tv-macos.sh 电视IP`；Windows 执行
