@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-10T09:27:33.469154+00:00'
+generated_at: '2026-07-10T09:32:45.900582+00:00'
 generated_by: replay.py
-fact_count: 8
+fact_count: 9
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -207,3 +207,30 @@ facts:
   - llm
   - agentos
   - runtime
+- id: F-ECHO-009
+  claim: The current EchoDesk 0.3 user database and audited legacy databases/local storage contain no persisted historical
+    artifact records or files available for migration.
+  category: observation
+  volatility: medium
+  evidence_strength: code
+  status: confirmed
+  confidence: 0.99
+  observed_at: '2026-07-10T17:30:00+08:00'
+  observed_by: agent/codex-artifact-audit
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - runtime:~/.echodesk/echodesk.db
+  - runtime:~/.echo/echo.db
+  - runtime:~/.echo-demo/echo.db
+  - runtime:~/Library/Application Support/echodesk-desktop/Local Storage/leveldb
+  evidence: 'The current artifacts table and artifact_links table each returned zero rows. Legacy SQLite databases predate
+    the artifact schema or contain only meetings/messages/tasks. Electron local-storage snapshots with the old app state contained
+    artifacts: []. No generated document files were found in the current or legacy EchoDesk storage directories.'
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - artifact
+  - migration
+  - history
