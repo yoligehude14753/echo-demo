@@ -169,6 +169,18 @@ test("Android Gradle and package scripts separate development from public releas
   ]) {
     assert.equal(existsSync(path.join(desktopRoot, relative)), true, relative);
   }
+  const verificationMetadata = readFileSync(
+    path.join(desktopRoot, "android/gradle/verification-metadata.xml"),
+    "utf8",
+  );
+  assert.match(
+    verificationMetadata,
+    /guava-parent-33\.3\.1-jre\.pom[\s\S]*55441db27e8869dfefe053059bdf478bdc7e95585642bf391f0023345fd56287/,
+  );
+  assert.match(
+    verificationMetadata,
+    /junit-bom-5\.10\.2\.module[\s\S]*de23b114b3e4119a8fe6eb17bed5a3852816698bace67071579d6d927ebb080a/,
+  );
   assert.equal(
     pkg.scripts["app:build:android:development"],
     "node scripts/build-android-debug.cjs",
