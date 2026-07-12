@@ -138,12 +138,16 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   expect(fetchLog.some((r) => /\/(api\/)?meetings\?/.test(r.url))).toBe(true);
   expect(fetchLog.some((r) => /\/(api\/)?capture\/recent/.test(r.url))).toBe(false);
 
-  const workspaceTag = page.getByTestId("workspace-dirs-tag");
-  await workspaceTag.focus();
-  await expect(workspaceTag).toBeFocused();
+  await expect(page.getByTestId("workspace-dirs-tag")).toHaveCount(0);
+  const workspaceManage = page.getByTestId("workspace-config-btn");
+  await workspaceManage.focus();
+  await expect(workspaceManage).toBeFocused();
   await page.keyboard.press("Enter");
   const workspaceModal = page.locator(".ant-modal-content").filter({ hasText: "管理知识库" });
   await expect(workspaceModal).toBeVisible();
+  await expect(workspaceModal.getByTestId("workspace-scan-btn")).toHaveCount(0);
+  await expect(workspaceModal.getByTestId("workspace-open-settings")).toHaveCount(0);
+  await expect(workspaceModal).not.toContainText("目录配置");
   await workspaceModal.locator(".ant-modal-close").focus();
   await page.keyboard.press("Enter");
   await expect(workspaceModal).toBeHidden();

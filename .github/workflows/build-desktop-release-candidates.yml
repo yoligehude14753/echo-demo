@@ -1,0 +1,766 @@
+name: Build formal desktop release candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Exact 40-character SHA at the tip of main to build"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-desktop-release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  authorize-main:
+    name: release authorization / exact-SHA CI workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: require exact main SHA and successful required check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "yoligehude14753/echo-demo" || {
+            echo "formal desktop candidates are restricted to the canonical repository" >&2
+            exit 1
+          }
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "formal desktop candidates must be dispatched from main" >&2
+            exit 1
+          }
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "release_sha must be an exact lowercase 40-character commit SHA" >&2
+            exit 1
+          }
+          test "${RELEASE_SHA}" = "${GITHUB_SHA}" || {
+            echo "release_sha is not the exact main commit that dispatched this run" >&2
+            exit 1
+          }
+
+          runs_payload="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha=${RELEASE_SHA}&per_page=100")"
+          selected_run="$(jq -c \
+            --arg sha "${RELEASE_SHA}" \
+            --arg repo "${GITHUB_REPOSITORY}" '
+            [
+              .workflow_runs[]
+              | select(
+                  .head_sha == $sha
+                  and .head_branch == "main"
+                  and .event == "push"
+                  and .status == "completed"
+                  and .conclusion == "success"
+                  and .repository.full_name == $repo
+                  and .path == ".github/workflows/ci.yml"
+                )
+            ]
+            | sort_by(.id)
+            | last // empty
+          ' <<<"${runs_payload}")"
+          test -n "${selected_run}" || {
+            echo "successful exact-SHA push/main ci.yml workflow run was not found" >&2
+            exit 1
+          }
+
+          run_id="$(jq -r '.id' <<<"${selected_run}")"
+          jobs_payload="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100")"
+          selected_check="$(jq -c '
+            [
+              .jobs[]
+              | select(
+                  .name == "check"
+                  and .status == "completed"
+                  and .conclusion == "success"
+                )
+            ]
+            | sort_by(.id)
+            | last // empty
+          ' <<<"${jobs_payload}")"
+          test -n "${selected_check}" || {
+            echo "selected ci.yml workflow run has no completed/success check job" >&2
+            exit 1
+          }
+          check_id="$(jq -r '.id' <<<"${selected_check}")"
+          echo "Exact-SHA CI workflow passed: run_id=${run_id} check_id=${check_id}"
+
+  macos-signed-candidate:
+    name: macOS signed candidate
+    needs: authorize-main
+    runs-on: macos-latest
+    environment: desktop-release-macos
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require main and the exact dispatched SHA
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "yoligehude14753/echo-demo" || {
+            echo "formal desktop candidates are restricted to the canonical repository" >&2
+            exit 1
+          }
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "formal desktop candidates must be dispatched from main" >&2
+            exit 1
+          }
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "release_sha must be an exact lowercase 40-character commit SHA" >&2
+            exit 1
+          }
+          actual="$(git rev-parse HEAD)"
+          test "${actual}" = "${RELEASE_SHA}" || {
+            echo "checked out ${actual}, expected ${RELEASE_SHA}" >&2
+            exit 1
+          }
+          test "${actual}" = "${GITHUB_SHA}" || {
+            echo "release_sha is not the exact main commit that dispatched this run" >&2
+            exit 1
+          }
+
+      - name: Require protected macOS release credentials
+        shell: bash
+        env:
+          MAC_CERTIFICATE_P12_BASE64: ${{ secrets.ECHODESK_MAC_CERTIFICATE_P12_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.ECHODESK_MAC_CERTIFICATE_PASSWORD }}
+          MAC_DEVELOPER_ID_APPLICATION: ${{ secrets.ECHODESK_MAC_DEVELOPER_ID_APPLICATION }}
+          MAC_NOTARY_APPLE_ID: ${{ secrets.ECHODESK_MAC_NOTARY_APPLE_ID }}
+          MAC_NOTARY_APP_PASSWORD: ${{ secrets.ECHODESK_MAC_NOTARY_APP_PASSWORD }}
+          MAC_TEAM_ID: ${{ secrets.ECHODESK_MAC_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          required=(
+            MAC_CERTIFICATE_P12_BASE64
+            MAC_CERTIFICATE_PASSWORD
+            MAC_DEVELOPER_ID_APPLICATION
+            MAC_NOTARY_APPLE_ID
+            MAC_NOTARY_APP_PASSWORD
+            MAC_TEAM_ID
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then missing+=("${name}"); fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error title=Blocked: macOS release credentials missing::%s\n' \
+              "$(IFS=,; echo "${missing[*]}")"
+            exit 78
+          fi
+          case "${MAC_DEVELOPER_ID_APPLICATION}" in
+            *" (${MAC_TEAM_ID})") ;;
+            *)
+              echo "::error title=Blocked: macOS identity mismatch::Developer ID identity does not end with the configured Team ID"
+              exit 78
+              ;;
+          esac
+
+      - name: Require a native arm64 hosted runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64" || {
+            echo "formal macOS candidates require a native arm64 hosted runner" >&2
+            exit 1
+          }
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            backend/app/adapters/skill/assets/ppt_ib_deck/package-lock.json
+
+      - name: Install locked build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv backend/.venv
+          backend/.venv/bin/python -m pip install --require-hashes \
+            -r backend/packaging/requirements-build.lock
+          npm ci --prefix backend/app/adapters/skill/assets/ppt_ib_deck
+          npm ci --prefix desktop
+
+      - name: Run source release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-npm-lock-registries.cjs
+          python scripts/check-ci-action-pins.py
+          python scripts/check-python-locks.py
+          npm --prefix desktop run test:electron
+          npm --prefix desktop run version:check
+
+      - name: Import Developer ID identity and notary credentials
+        shell: bash
+        env:
+          MAC_CERTIFICATE_P12_BASE64: ${{ secrets.ECHODESK_MAC_CERTIFICATE_P12_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.ECHODESK_MAC_CERTIFICATE_PASSWORD }}
+          MAC_NOTARY_APPLE_ID: ${{ secrets.ECHODESK_MAC_NOTARY_APPLE_ID }}
+          MAC_NOTARY_APP_PASSWORD: ${{ secrets.ECHODESK_MAC_NOTARY_APP_PASSWORD }}
+          MAC_TEAM_ID: ${{ secrets.ECHODESK_MAC_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          certificate_path="${RUNNER_TEMP}/echodesk-release.p12"
+          keychain_path="${RUNNER_TEMP}/echodesk-release.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          profile="echodesk-notary-${GITHUB_RUN_ID}"
+          echo "::add-mask::${keychain_password}"
+          printf '%s' "${MAC_CERTIFICATE_P12_BASE64}" | base64 --decode > "${certificate_path}"
+          chmod 600 "${certificate_path}"
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security import "${certificate_path}" \
+            -k "${keychain_path}" \
+            -P "${MAC_CERTIFICATE_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "${keychain_password}" \
+            "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}"
+          security default-keychain -d user -s "${keychain_path}"
+          xcrun notarytool store-credentials "${profile}" \
+            --apple-id "${MAC_NOTARY_APPLE_ID}" \
+            --team-id "${MAC_TEAM_ID}" \
+            --password "${MAC_NOTARY_APP_PASSWORD}" \
+            --keychain "${keychain_path}"
+          rm -f "${certificate_path}"
+          printf 'APPLE_KEYCHAIN=%s\n' "${keychain_path}" >> "${GITHUB_ENV}"
+          printf 'APPLE_KEYCHAIN_PROFILE=%s\n' "${profile}" >> "${GITHUB_ENV}"
+
+      - name: Build, sign, notarize, and verify macOS candidate
+        working-directory: desktop
+        env:
+          CSC_NAME: ${{ secrets.ECHODESK_MAC_DEVELOPER_ID_APPLICATION }}
+          ECHODESK_ADHOC_SIGN: "0"
+        run: npm run app:dist:mac
+
+      - name: Installed smoke from the signed read-only DMG
+        working-directory: desktop
+        run: npm run smoke:mac:dmg
+
+      - name: Verify and smoke the final signed macOS updater ZIP
+        shell: bash
+        env:
+          MAC_EXPECTED_IDENTITY: ${{ secrets.ECHODESK_MAC_DEVELOPER_ID_APPLICATION }}
+          MAC_EXPECTED_TEAM_ID: ${{ secrets.ECHODESK_MAC_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./desktop/package.json').version")"
+          archive="$GITHUB_WORKSPACE/desktop/release/EchoDesk-${version}-arm64-mac.zip"
+          extract_root="$RUNNER_TEMP/echodesk-macos-updater-zip-${version}"
+          smoke_root="$RUNNER_TEMP/echodesk-macos-updater-zip-smoke-${version}"
+          rm -rf "$extract_root" "$smoke_root"
+          cleanup_zip_smoke() {
+            rm -rf "$extract_root" "$smoke_root"
+          }
+          trap cleanup_zip_smoke EXIT
+          mkdir -p "$extract_root"
+          ditto -x -k "$archive" "$extract_root"
+          app="$extract_root/EchoDesk.app"
+          app_bin="$app/Contents/MacOS/EchoDesk"
+          backend="$app/Contents/Resources/backend/echodesk-backend"
+          test -x "$app_bin"
+          test -x "$backend"
+          for artifact in "$app" "$backend"; do
+            codesign --verify --deep --strict --verbose=2 "$artifact"
+            metadata="$(codesign --display --verbose=4 "$artifact" 2>&1)"
+            grep -Fx "Authority=${MAC_EXPECTED_IDENTITY}" <<<"$metadata" >/dev/null
+            grep -Fx "TeamIdentifier=${MAC_EXPECTED_TEAM_ID}" <<<"$metadata" >/dev/null
+          done
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          (
+            cd desktop
+            ECHODESK_APP_BIN="$app_bin" \
+            ECHODESK_EXPECTED_BACKEND_BIN="$backend" \
+            ECHODESK_EXPECTED_VERSION="$version" \
+            ECHODESK_SMOKE_PORT=18770 \
+            ECHODESK_SMOKE_ROOT="$smoke_root" \
+            ECHODESK_SMOKE_HOME="$smoke_root/home" \
+            ECHO_FORCE_LOCAL_BACKEND=1 \
+            ECHODESK_NODE_RUNTIME="$app_bin" \
+            ECHODESK_NODE_RUNTIME_IS_ELECTRON=1 \
+              node node_modules/@playwright/test/cli.js test \
+                --config=playwright.real.config.ts \
+                tests/e2e-real/packaged-local-smoke.spec.ts \
+                --reporter=line \
+                --workers=1
+          )
+
+      - name: Require complete macOS updater assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./desktop/package.json').version")"
+          required=(
+            "desktop/release/EchoDesk-${version}-arm64.dmg"
+            "desktop/release/EchoDesk-${version}-arm64.dmg.blockmap"
+            "desktop/release/EchoDesk-${version}-arm64-mac.zip"
+            "desktop/release/EchoDesk-${version}-arm64-mac.zip.blockmap"
+            "desktop/release/latest-mac.yml"
+          )
+          for asset in "${required[@]}"; do
+            test -s "${asset}" || {
+              echo "incomplete formal macOS updater asset contract: ${asset}" >&2
+              exit 1
+            }
+          done
+          grep -F "version: ${version}" desktop/release/latest-mac.yml >/dev/null || {
+            echo "latest-mac.yml does not describe ${version}" >&2
+            exit 1
+          }
+          node desktop/scripts/verify-release-update-metadata.cjs mac
+          scan_roots=(desktop/dist backend/dist desktop/release)
+          for scan_root in "${scan_roots[@]}"; do
+            test -d "${scan_root}" || {
+              echo "formal macOS scan root is missing: ${scan_root}" >&2
+              exit 1
+            }
+          done
+          found="$(find "${scan_roots[@]}" \
+            \( -name '*.map' -o -name '.env' -o -name '*.p12' -o -name '*.pem' -o -name '*.key' \) \
+            ! -path '*/certifi/cacert.pem' -print)"
+          test -z "${found}" || {
+            echo "forbidden file in formal macOS candidate: ${found}" >&2
+            exit 1
+          }
+
+      - name: Generate CycloneDX SBOM and SHA-256 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/generate-release-sbom.py desktop/release/EchoDesk-SBOM.cdx.json
+          version="$(node -p "require('./desktop/package.json').version")"
+          cd desktop/release
+          shasum -a 256 \
+            "EchoDesk-${version}-arm64.dmg" \
+            "EchoDesk-${version}-arm64.dmg.blockmap" \
+            "EchoDesk-${version}-arm64-mac.zip" \
+            "EchoDesk-${version}-arm64-mac.zip.blockmap" \
+            latest-mac.yml \
+            EchoDesk-SBOM.cdx.json > SHA256SUMS-macOS.txt
+          shasum -a 256 -c SHA256SUMS-macOS.txt
+          expected=(
+            "EchoDesk-${version}-arm64.dmg"
+            "EchoDesk-${version}-arm64.dmg.blockmap"
+            "EchoDesk-${version}-arm64-mac.zip"
+            "EchoDesk-${version}-arm64-mac.zip.blockmap"
+            latest-mac.yml
+            EchoDesk-SBOM.cdx.json
+            SHA256SUMS-macOS.txt
+          )
+          candidates=()
+          for file in \
+            EchoDesk-*-arm64.dmg \
+            EchoDesk-*-arm64.dmg.blockmap \
+            EchoDesk-*-arm64-mac.zip \
+            EchoDesk-*-arm64-mac.zip.blockmap \
+            latest-mac.yml EchoDesk-SBOM.cdx.json SHA256SUMS-macOS.txt; do
+            test -f "${file}" && candidates+=("${file}")
+          done
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
+            <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort)
+          printf 'ECHODESK_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"
+
+      - name: Attest signed macOS candidate provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64.dmg
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64.dmg.blockmap
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64-mac.zip
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64-mac.zip.blockmap
+            desktop/release/latest-mac.yml
+            desktop/release/SHA256SUMS-macOS.txt
+            desktop/release/EchoDesk-SBOM.cdx.json
+
+      - name: Upload signed macOS candidate without publishing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-macos-signed-candidate-${{ github.sha }}
+          path: |
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64.dmg
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64.dmg.blockmap
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64-mac.zip
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64-mac.zip.blockmap
+            desktop/release/latest-mac.yml
+            desktop/release/SHA256SUMS-macOS.txt
+            desktop/release/EchoDesk-SBOM.cdx.json
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload macOS installed smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-macos-signed-smoke-evidence-${{ github.sha }}
+          path: desktop/test-results
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove ephemeral macOS signing material
+        if: always()
+        shell: bash
+        run: |
+          certificate_path="${RUNNER_TEMP}/echodesk-release.p12"
+          keychain_path="${RUNNER_TEMP}/echodesk-release.keychain-db"
+          rm -f "${certificate_path}"
+          if security list-keychains -d user | grep -Fq "${keychain_path}"; then
+            security delete-keychain "${keychain_path}"
+          fi
+
+  windows-signed-candidate:
+    name: Windows signed candidate
+    needs: authorize-main
+    runs-on: windows-latest
+    environment: desktop-release-windows
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require main and the exact dispatched SHA
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "yoligehude14753/echo-demo" || {
+            echo "formal desktop candidates are restricted to the canonical repository" >&2
+            exit 1
+          }
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "formal desktop candidates must be dispatched from main" >&2
+            exit 1
+          }
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "release_sha must be an exact lowercase 40-character commit SHA" >&2
+            exit 1
+          }
+          actual="$(git rev-parse HEAD)"
+          test "${actual}" = "${RELEASE_SHA}" || {
+            echo "checked out ${actual}, expected ${RELEASE_SHA}" >&2
+            exit 1
+          }
+          test "${actual}" = "${GITHUB_SHA}" || {
+            echo "release_sha is not the exact main commit that dispatched this run" >&2
+            exit 1
+          }
+
+      - name: Require protected Windows release credentials
+        shell: bash
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+          WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
+        run: |
+          set -euo pipefail
+          required=(
+            WINDOWS_CERTIFICATE_PFX_BASE64
+            WINDOWS_CERTIFICATE_PASSWORD
+            WINDOWS_CERTIFICATE_SHA1
+            WINDOWS_EXPECTED_PUBLISHER
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then missing+=("${name}"); fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error title=Blocked: Windows release credentials missing::%s\n' \
+              "$(IFS=,; echo "${missing[*]}")"
+            exit 78
+          fi
+          normalized="$(printf '%s' "${WINDOWS_CERTIFICATE_SHA1}" | tr -d ' :[:space:]')"
+          [[ "${normalized}" =~ ^[0-9A-Fa-f]{40}$ ]] || {
+            echo "::error title=Blocked: Windows certificate thumbprint invalid::Expected 40 hexadecimal characters"
+            exit 78
+          }
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            backend/app/adapters/skill/assets/ppt_ib_deck/package-lock.json
+
+      - name: Install locked build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv backend/.venv
+          backend/.venv/Scripts/python -m pip install --require-hashes \
+            -r backend/packaging/requirements-build.lock
+          npm ci --prefix backend/app/adapters/skill/assets/ppt_ib_deck
+          npm ci --prefix desktop
+
+      - name: Run source release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-npm-lock-registries.cjs
+          python scripts/check-ci-action-pins.py
+          python scripts/check-python-locks.py
+          npm --prefix desktop run test:electron
+          npm --prefix desktop run version:check
+
+      - name: Import the Authenticode certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $certificatePath = Join-Path $env:RUNNER_TEMP "echodesk-release.pfx"
+          try {
+            [IO.File]::WriteAllBytes(
+              $certificatePath,
+              [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64)
+            )
+            $password = ConvertTo-SecureString `
+              -String $env:WINDOWS_CERTIFICATE_PASSWORD `
+              -AsPlainText `
+              -Force
+            $imported = @(
+              Import-PfxCertificate `
+                -FilePath $certificatePath `
+                -CertStoreLocation "Cert:\CurrentUser\My" `
+                -Password $password
+            )
+            $expected = ($env:WINDOWS_CERTIFICATE_SHA1 -replace '[\s:]', '').ToUpperInvariant()
+            $matching = @($imported | Where-Object {
+              $_.Thumbprint.ToUpperInvariant() -eq $expected
+            })
+            if ($matching.Count -ne 1 -or -not $matching[0].HasPrivateKey) {
+              throw "Imported PFX does not contain exactly one matching code-signing certificate with a private key"
+            }
+          }
+          finally {
+            Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Build, sign, timestamp, and verify Windows candidate
+        working-directory: desktop
+        env:
+          ECHODESK_WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+          ECHODESK_WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
+        run: npm run app:dist:win
+
+      - name: Installed smoke from the signed NSIS candidate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+          WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
+        run: |
+          $thumbprint = ($env:WINDOWS_CERTIFICATE_SHA1 -replace '[\s:]', '').ToUpperInvariant()
+          ./desktop/scripts/windows-installed-smoke.ps1 `
+            -ExpectedAuthenticodeThumbprint $thumbprint `
+            -ExpectedAuthenticodePublisher $env:WINDOWS_EXPECTED_PUBLISHER
+
+      - name: Portable ZIP smoke from the signed candidate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+          WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = node -p "require('./desktop/package.json').version"
+          $archive = (Resolve-Path "desktop/release/EchoDesk-$version-win-x64.zip").Path
+          $destination = Join-Path $env:RUNNER_TEMP "echodesk-windows-portable-$version"
+          if (Test-Path $destination) {
+            Remove-Item $destination -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $app = Join-Path $destination "EchoDesk.exe"
+          $backend = Join-Path $destination "resources/backend/echodesk-backend.exe"
+          if (-not (Test-Path $app -PathType Leaf)) {
+            throw "expanded signed Windows ZIP does not contain root EchoDesk.exe"
+          }
+          if (-not (Test-Path $backend -PathType Leaf)) {
+            throw "expanded signed Windows ZIP does not contain its bundled backend"
+          }
+          $thumbprint = ($env:WINDOWS_CERTIFICATE_SHA1 -replace '[\s:]', '').ToUpperInvariant()
+          foreach ($artifact in @($app, $backend)) {
+            ./desktop/scripts/verify-windows-authenticode.ps1 `
+              -Mode Verify `
+              -Thumbprint $thumbprint `
+              -ExpectedPublisher $env:WINDOWS_EXPECTED_PUBLISHER `
+              -ArtifactPath $artifact
+          }
+          ./desktop/scripts/windows-installed-smoke.ps1 `
+            -ApplicationDirectory $destination `
+            -Port 18770 `
+            -ExpectedVersion $version `
+            -EvidenceDirectory (Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence/portable")
+
+      - name: Require complete Windows updater assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./desktop/package.json').version")"
+          required=(
+            "desktop/release/EchoDesk.Setup.${version}.exe"
+            "desktop/release/EchoDesk.Setup.${version}.exe.blockmap"
+            "desktop/release/EchoDesk-${version}-win-x64.zip"
+            "desktop/release/latest.yml"
+          )
+          for asset in "${required[@]}"; do
+            test -s "${asset}" || {
+              echo "incomplete formal Windows updater asset contract: ${asset}" >&2
+              exit 1
+            }
+          done
+          grep -F "version: ${version}" desktop/release/latest.yml >/dev/null || {
+            echo "latest.yml does not describe ${version}" >&2
+            exit 1
+          }
+          node desktop/scripts/verify-release-update-metadata.cjs windows
+          scan_roots=(desktop/dist backend/dist desktop/release)
+          for scan_root in "${scan_roots[@]}"; do
+            test -d "${scan_root}" || {
+              echo "formal Windows scan root is missing: ${scan_root}" >&2
+              exit 1
+            }
+          done
+          found="$(find "${scan_roots[@]}" \
+            \( -name '*.map' -o -name '.env' -o -name '*.pfx' -o -name '*.pem' -o -name '*.key' \) \
+            ! -path '*/certifi/cacert.pem' -print)"
+          test -z "${found}" || {
+            echo "forbidden file in formal Windows candidate: ${found}" >&2
+            exit 1
+          }
+
+      - name: Generate CycloneDX SBOM and SHA-256 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/generate-release-sbom.py desktop/release/EchoDesk-SBOM.cdx.json
+          version="$(node -p "require('./desktop/package.json').version")"
+          cd desktop/release
+          sha256sum \
+            "EchoDesk.Setup.${version}.exe" \
+            "EchoDesk.Setup.${version}.exe.blockmap" \
+            "EchoDesk-${version}-win-x64.zip" \
+            latest.yml \
+            EchoDesk-SBOM.cdx.json > SHA256SUMS-Windows.txt
+          sha256sum --check --strict SHA256SUMS-Windows.txt
+          expected=(
+            "EchoDesk.Setup.${version}.exe"
+            "EchoDesk.Setup.${version}.exe.blockmap"
+            "EchoDesk-${version}-win-x64.zip"
+            latest.yml
+            EchoDesk-SBOM.cdx.json
+            SHA256SUMS-Windows.txt
+          )
+          candidates=()
+          for file in \
+            EchoDesk.Setup.*.exe \
+            EchoDesk.Setup.*.exe.blockmap \
+            EchoDesk-*-win-x64.zip \
+            latest.yml EchoDesk-SBOM.cdx.json SHA256SUMS-Windows.txt; do
+            test -f "${file}" && candidates+=("${file}")
+          done
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
+            <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort)
+          printf 'ECHODESK_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"
+
+      - name: Attest signed Windows candidate provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe.blockmap
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-win-x64.zip
+            desktop/release/latest.yml
+            desktop/release/SHA256SUMS-Windows.txt
+            desktop/release/EchoDesk-SBOM.cdx.json
+
+      - name: Upload signed Windows candidate without publishing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-windows-signed-candidate-${{ github.sha }}
+          path: |
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe.blockmap
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-win-x64.zip
+            desktop/release/latest.yml
+            desktop/release/SHA256SUMS-Windows.txt
+            desktop/release/EchoDesk-SBOM.cdx.json
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload Windows installed smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-windows-signed-smoke-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/echodesk-windows-smoke-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove the ephemeral Windows signing certificate
+        if: always()
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+        run: |
+          $thumbprint = ($env:WINDOWS_CERTIFICATE_SHA1 -replace '[\s:]', '').ToUpperInvariant()
+          if ($thumbprint -match '^[0-9A-F]{40}$') {
+            Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item (Join-Path $env:RUNNER_TEMP "echodesk-release.pfx") `
+            -Force `
+            -ErrorAction SilentlyContinue

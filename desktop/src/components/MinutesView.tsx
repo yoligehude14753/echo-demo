@@ -21,6 +21,9 @@ import {
 } from "@/api";
 import { buildSpeakerDisplayMap } from "@/lib/speakerDisplay";
 import MeetingShareModal from "@/components/MeetingShareModal";
+import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
+import { backendBaseSnapshot } from "@/runtime";
 
 // 把 LLM 返回的 assignee（"说话人 18" / "说话人18" / 已被用户改名的 "李雷"）
 // remap 成 transcript 视图里同一个 displayIdx，避免 minutes 写"说话人 21"但
@@ -118,6 +121,12 @@ function friendlyMinutesError(raw: string | null | undefined): {
  * 显示「纪要尚未生成 / 结束会议后由智能引擎自动产出」，用户没有任何重试入口。
  */
 export default function MinutesView(): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const currentId = useStore((s) => s.currentMeetingId);
   const meeting = useStore((s) =>
     currentId ? s.meetings[currentId] : undefined,
@@ -133,17 +142,33 @@ export default function MinutesView(): JSX.Element {
   // 切回老会议时 store 没拿到 minutes，永远卡在「正在生成…」假象。
   const fetchedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
+    fetchedRef.current.clear();
+    setRetrying(false);
+    setShareOpen(false);
+  }, [backendOriginRevision]);
+
+  useEffect(() => {
     if (!currentId) return;
     if (meeting?.minutes) return;
     if (meeting?.minutes_status === "generation_failed") return;
     if (!isFinalizedLike(meeting?.state)) return;
     if (fetchedRef.current.has(currentId)) return;
     fetchedRef.current.add(currentId);
+    let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive && isCurrent(originGeneration) && !controller.signal.aborted;
     Promise.all([
-      getMeetingMinutes(currentId),
-      listWorkflowRuns({ meeting_id: currentId, limit: 100 }).catch(() => []),
+      getMeetingMinutes(currentId, { signal: controller.signal }),
+      listWorkflowRuns(
+        { meeting_id: currentId, limit: 100 },
+        { signal: controller.signal },
+      ).catch(() => []),
     ])
       .then(([m, workflowRuns]) => {
+        if (!canCommit()) return;
         if (!m) return; // 真的 404 → 让 generating 状态自然展示
         const restoredMinutes = projectMinutesWithWorkflowRuns(m, workflowRuns);
         if (!restoredMinutes) return;
@@ -156,22 +181,45 @@ export default function MinutesView(): JSX.Element {
         });
       })
       .catch(() => {
+        if (!canCommit()) return;
         // 网络错不能永久占用 fetchedRef；后续重新选择或状态变化必须可重试。
         fetchedRef.current.delete(currentId);
       });
-  }, [currentId, meeting?.minutes, meeting?.minutes_status, meeting?.state, upsertMeeting]);
+    return () => {
+      alive = false;
+      unregisterController();
+    };
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    currentId,
+    isCurrent,
+    meeting?.minutes,
+    meeting?.minutes_status,
+    meeting?.state,
+    registerAbortController,
+    upsertMeeting,
+  ]);
 
   const onRetry = async (): Promise<void> => {
     if (!currentId || !meeting) return;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
     setRetrying(true);
     try {
-      await retryMinutesGeneration(currentId, meeting.title || currentId);
+      await retryMinutesGeneration(currentId, meeting.title || currentId, {
+        signal: controller.signal,
+      });
+      if (!isCurrent(originGeneration) || controller.signal.aborted) return;
       message.success("已重新提交，等待 LLM 返回…");
     } catch (e) {
+      if (!isCurrent(originGeneration) || controller.signal.aborted) return;
       console.error("[minutes] retry failed", e);
       message.error("重试失败，请稍后再试");
     } finally {
-      setRetrying(false);
+      unregisterController();
+      if (isCurrent(originGeneration)) setRetrying(false);
     }
   };
 
@@ -526,7 +574,11 @@ function inferAutoExecutableTodo(
 }
 
 function autoExecStorageKey(meetingId: string, todoId: string): string {
-  return `echodesk:auto-exec:v1:${meetingId}:${todoId}`;
+  const backendScope =
+    typeof window === "undefined"
+      ? "server"
+      : backendBaseSnapshot() || window.location.origin;
+  return `echodesk:auto-exec:v1:${encodeURIComponent(backendScope)}:${meetingId}:${todoId}`;
 }
 
 function wasAutoExecAttempted(meetingId: string, todoId: string): boolean {
@@ -562,11 +614,22 @@ function MinutesTodoList({
   minutes: MeetingMinutes;
   todos: TodoItem[];
 }): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const prefillCommandBar = useStore((s) => s.prefillCommandBar);
   const addArtifact = useStore((s) => s.addArtifact);
   const speakerMap = useMeetingSpeakerMap(meetingId);
   const inFlightRef = useRef<Set<string>>(new Set());
   const [autoRunning, setAutoRunning] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    inFlightRef.current.clear();
+    setAutoRunning({});
+  }, [backendOriginRevision]);
 
   useEffect(() => {
     setAutoRunning((prev) => {
@@ -596,43 +659,70 @@ function MinutesTodoList({
     if (candidates.length === 0) return;
 
     let cancelled = false;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      !cancelled &&
+      isCurrent(originGeneration) &&
+      !controller.signal.aborted;
     void (async () => {
-      for (const { todo, job } of candidates) {
-        if (cancelled) return;
-        inFlightRef.current.add(todo.id);
-        markAutoExecAttempted(meetingId, todo.id);
-        setAutoRunning((prev) => ({ ...prev, [todo.id]: true }));
-        try {
-          const artifact = await generateArtifact({
-            artifact_type: job.artifact_type,
-            brief: job.brief,
-            extra_instructions: job.extra_instructions,
-            meeting_id: meetingId,
-            todo_id: todo.id,
-          });
-          if (cancelled) return;
-          addArtifact(artifact);
-          message.success(
-            `已完成会议待办：${artifact.title?.trim() || "未命名工作产物"}`,
-          );
-        } catch (e) {
-          console.error("[minutes] automatic todo failed", e);
-          if (!cancelled) message.error("会议待办执行失败，可在纪要中重试");
-        } finally {
-          inFlightRef.current.delete(todo.id);
-          setAutoRunning((prev) => {
-            const next = { ...prev };
-            delete next[todo.id];
-            return next;
-          });
+      try {
+        for (const { todo, job } of candidates) {
+          if (!canCommit()) return;
+          inFlightRef.current.add(todo.id);
+          markAutoExecAttempted(meetingId, todo.id);
+          setAutoRunning((prev) => ({ ...prev, [todo.id]: true }));
+          try {
+            const artifact = await generateArtifact(
+              {
+                artifact_type: job.artifact_type,
+                brief: job.brief,
+                extra_instructions: job.extra_instructions,
+                meeting_id: meetingId,
+                todo_id: todo.id,
+              },
+              { signal: controller.signal },
+            );
+            if (!canCommit()) return;
+            addArtifact(artifact);
+            message.success(
+              `已完成会议待办：${artifact.title?.trim() || "未命名工作产物"}`,
+            );
+          } catch (e) {
+            if (!canCommit()) return;
+            console.error("[minutes] automatic todo failed", e);
+            message.error("会议待办执行失败，可在纪要中重试");
+          } finally {
+            inFlightRef.current.delete(todo.id);
+            if (canCommit()) {
+              setAutoRunning((prev) => {
+                const next = { ...prev };
+                delete next[todo.id];
+                return next;
+              });
+            }
+          }
         }
+      } finally {
+        unregisterController();
       }
     })();
 
     return () => {
       cancelled = true;
+      unregisterController();
     };
-  }, [addArtifact, meetingId, minutes, todos]);
+  }, [
+    addArtifact,
+    backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    meetingId,
+    minutes,
+    registerAbortController,
+    todos,
+  ]);
 
   if (todos.length === 0) {
     return (
@@ -756,16 +846,14 @@ function TodoRow({
             </span>
           )}
           {done && todo.artifact_id && (
-            <a
-              href={artifactDownloadUrl(todo.artifact_id)}
-              target="_blank"
-              rel="noreferrer"
-              data-testid="minutes-todo-artifact-link"
+            <AuthenticatedDownloadLink
+              url={artifactDownloadUrl(todo.artifact_id)}
+              testId="minutes-todo-artifact-link"
               className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-800 underline-offset-2 hover:underline"
             >
               <Download className="w-3 h-3" />
               已生成 · 下载
-            </a>
+            </AuthenticatedDownloadLink>
           )}
         </div>
       </div>

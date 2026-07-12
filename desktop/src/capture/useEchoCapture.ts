@@ -17,6 +17,7 @@ import type {
   CaptureStatus,
 } from "@/domain/session";
 import { useStore } from "@/store";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 const STATS_POLL_MS = 5_000;
 const CAPTURE_INIT_WATCHDOG_MS = 18_000;
@@ -44,6 +45,12 @@ export interface EchoCaptureOptions {
 }
 
 export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const meetingState = useStore((s) =>
     s.currentMeetingId ? s.meetings[s.currentMeetingId]?.state : undefined,
@@ -98,6 +105,15 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
       setErrorMessage(null);
       return;
     }
+    const originGeneration = captureGeneration();
+    const statsController = new AbortController();
+    const unregisterController = registerAbortController(statsController);
+    setStats(null);
+    setAmbientChunks(0);
+    setAmbientStored(0);
+    setMeetingChunks(0);
+    setChunksDroppedCircuit(0);
+    setSttCircuitOpenUntil(null);
     audioCapture.start();
 
     const offStatus = audioCapture.onStatus((state, err) => {
@@ -157,8 +173,12 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
     let cancelled = false;
     const fetchStats = async () => {
       try {
-        const next = await getCaptureStats();
-        if (!cancelled) {
+        const next = await getCaptureStats({ signal: statsController.signal });
+        if (
+          !cancelled &&
+          isCurrent(originGeneration) &&
+          !statsController.signal.aborted
+        ) {
           setStats(next);
           message.destroy(FALLBACK_TOAST_KEY);
         }
@@ -171,12 +191,19 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
 
     return () => {
       cancelled = true;
+      unregisterController();
       window.clearInterval(statsTimer);
       offStatus();
       offRouter();
       audioCapture.stop();
     };
-  }, [enabled]);
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    enabled,
+    isCurrent,
+    registerAbortController,
+  ]);
 
   const meetingOverlayId =
     captureState === "capturing" &&

@@ -289,6 +289,190 @@ test("Capture 上传单飞且队列有界，过载时明确背压", async ({ pag
   expect(requests).toBeLessThanOrEqual(5);
 });
 
+test("切换 backend origin 会丢弃旧 Capture 响应和排队音频", async ({
+  page,
+}) => {
+  const backendA = "http://127.0.0.1:18881";
+  const backendB = "http://127.0.0.1:18882";
+  await page.addInitScript((base) => {
+    window.localStorage.setItem("echodesk.mobileBackendBase", base);
+    window.localStorage.setItem("echodesk.mobileBackendBase.userSet", "1");
+    const navigatorWithMedia = window.navigator as unknown as {
+      mediaDevices?: { getUserMedia: () => Promise<MediaStream> };
+    };
+    if (navigatorWithMedia.mediaDevices) {
+      navigatorWithMedia.mediaDevices.getUserMedia = async () => {
+        const context = new AudioContext();
+        const destination = context.createMediaStreamDestination();
+        const oscillator = context.createOscillator();
+        oscillator.frequency.value = 0;
+        oscillator.connect(destination);
+        oscillator.start();
+        return destination.stream;
+      };
+    }
+    Object.defineProperty(window.navigator, "permissions", {
+      configurable: true,
+      value: {
+        query: async () => ({
+          state: "granted",
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }),
+      },
+    });
+  }, backendA);
+  await installEchoMock(page);
+  await page.goto("/");
+
+  await page.evaluate(
+    ({ originA, originB }) => {
+      type FenceState = {
+        aCompleted: number;
+        aRequests: number;
+        bRequests: number;
+        releaseA: (() => void) | null;
+      };
+      type FenceWindow = Window & { __captureOriginFence?: FenceState };
+      const target = window as FenceWindow;
+      const originalFetch = window.fetch.bind(window);
+      const state: FenceState = {
+        aCompleted: 0,
+        aRequests: 0,
+        bRequests: 0,
+        releaseA: null,
+      };
+      target.__captureOriginFence = state;
+      const captureResponse = (text: string, audioRef: string) =>
+        new Response(
+          JSON.stringify({
+            ambient_stored: true,
+            ambient_text: text,
+            audio_ref: audioRef,
+            meeting_segments: [],
+            stt_status: "ok",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        if (url === `${originA}/capture/chunk`) {
+          state.aRequests += 1;
+          const response = await new Promise<Response>((resolve) => {
+            // 故意忽略 init.signal，证明 router generation fence 独立成立。
+            state.releaseA = () =>
+              resolve(captureResponse("A 的延迟响应不得写入", "stale-a"));
+          });
+          state.aCompleted += 1;
+          return response;
+        }
+        if (url === `${originB}/capture/chunk`) {
+          state.bRequests += 1;
+          return captureResponse("B 的当前响应", `fresh-b-${state.bRequests}`);
+        }
+        return originalFetch(input, init);
+      };
+    },
+    { originA: backendA, originB: backendB },
+  );
+
+  await page.evaluate(() => window.__echoAudioCapture?.__emitChunkForTest());
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __captureOriginFence?: { aRequests: number };
+            }
+          ).__captureOriginFence?.aRequests ?? 0,
+      ),
+    )
+    .toBe(1);
+
+  // 第一段仍在 A 请求中，第二段属于 A generation，只能留在旧队列。
+  await page.evaluate(() => window.__echoAudioCapture?.__emitChunkForTest());
+  await page.evaluate(async (nextBase) => {
+    const runtime = await import("/src/runtime.ts");
+    runtime.setStoredBackendBase(nextBase);
+    (
+      window as unknown as {
+        __captureOriginFence?: { releaseA: (() => void) | null };
+      }
+    ).__captureOriginFence?.releaseA?.();
+  }, backendB);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __captureOriginFence?: { aCompleted: number };
+            }
+          ).__captureOriginFence?.aCompleted ?? 0,
+      ),
+    )
+    .toBe(1);
+
+  const afterSwitch = await page.evaluate(async () => {
+    const { useStore } = await import("/src/store.ts");
+    const fence = (
+      window as unknown as {
+        __captureOriginFence?: { aRequests: number; bRequests: number };
+      }
+    ).__captureOriginFence;
+    return {
+      aRequests: fence?.aRequests ?? 0,
+      bRequests: fence?.bRequests ?? 0,
+      ambientTexts: useStore
+        .getState()
+        .ambientSegments.map((segment) => segment.text),
+    };
+  });
+  expect(afterSwitch).toEqual({
+    aRequests: 1,
+    bRequests: 0,
+    ambientTexts: [],
+  });
+  await expect(page.getByTestId("capture-status")).toContainText(
+    "已采集 0 · 已保存 0",
+  );
+
+  // B generation 的新音频仍应正常上传，不能被 A 的旧 drain 阻塞。
+  await page.evaluate(() => window.__echoAudioCapture?.__emitChunkForTest());
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __captureOriginFence?: { bRequests: number };
+            }
+          ).__captureOriginFence?.bRequests ?? 0,
+      ),
+    )
+    .toBe(1);
+  await expect
+    .poll(async () => {
+      return page.evaluate(async () => {
+        const { useStore } = await import("/src/store.ts");
+        return useStore
+          .getState()
+          .ambientSegments.map((segment) => segment.text);
+      });
+    })
+    .toEqual(["B 的当前响应"]);
+  await expect(page.getByTestId("capture-status")).toContainText(
+    "已采集 1 · 已保存 1",
+  );
+});
+
 declare global {
   interface Window {
     __resolveLateStream?: () => void;

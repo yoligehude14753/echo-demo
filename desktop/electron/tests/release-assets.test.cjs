@@ -22,8 +22,9 @@ test("desktop update checks select only a platform-compatible package", () => {
     asset("EchoDesk-0.3.1-android.apk"),
     asset("EchoDesk-0.3.1-arm64-mac.zip"),
     asset("EchoDesk-0.3.1-arm64.dmg"),
-    asset("EchoDesk-Setup.0.3.1.exe"),
-    asset("EchoDesk-0.3.1.AppImage"),
+    asset("EchoDesk.Setup.0.3.1.exe"),
+    asset("EchoDesk-0.3.1-linux-x86_64.AppImage"),
+    asset("EchoDesk-0.3.1-linux-amd64.deb"),
   ];
 
   assert.equal(
@@ -32,11 +33,11 @@ test("desktop update checks select only a platform-compatible package", () => {
   );
   assert.equal(
     preferredReleaseAsset(assets, "win32")?.name,
-    "EchoDesk-Setup.0.3.1.exe",
+    "EchoDesk.Setup.0.3.1.exe",
   );
   assert.equal(
     preferredReleaseAsset(assets, "linux")?.name,
-    "EchoDesk-0.3.1.AppImage",
+    "EchoDesk-0.3.1-linux-x86_64.AppImage",
   );
   assert.equal(preferredReleaseAsset(assets, "freebsd"), null);
 });

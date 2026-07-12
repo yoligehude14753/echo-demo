@@ -12,9 +12,10 @@
  *   - License / Repo
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal, Spin } from "antd";
 import { AudioWaveform, Github, FileText, FolderOpen, Info } from "lucide-react";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { apiUrl, isPublicRuntime } from "@/runtime";
 import { apiTransport } from "@/session";
 
@@ -35,10 +36,26 @@ interface DataDirDTO {
 }
 
 export default function AboutModal({ open, onClose }: Props): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const [backendVer, setBackendVer] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const handledOriginRevision = useRef(backendOriginRevision);
   const publicRuntime = isPublicRuntime();
+
+  useEffect(() => {
+    if (handledOriginRevision.current === backendOriginRevision) return;
+    handledOriginRevision.current = backendOriginRevision;
+    setBackendVer(null);
+    setDataDir(null);
+    setLoading(false);
+    onClose();
+  }, [backendOriginRevision, onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -48,40 +65,60 @@ export default function AboutModal({ open, onClose }: Props): JSX.Element {
       setLoading(false);
       return;
     }
-    let cancelled = false;
+    let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive && isCurrent(originGeneration) && !controller.signal.aborted;
     setLoading(true);
     (async () => {
       try {
         const [healthRes, dirRes] = await Promise.allSettled([
-          apiTransport(await apiUrl("/healthz/full"), {}, {
-            timeoutMs: 12_000,
-            throwHttpErrors: false,
-          }),
-          apiTransport(await apiUrl("/admin/data-dir"), {}, {
-            timeoutMs: 12_000,
-            throwHttpErrors: false,
-          }),
+          apiTransport(
+            await apiUrl("/healthz/full"),
+            { signal: controller.signal },
+            {
+              timeoutMs: 12_000,
+              throwHttpErrors: false,
+            },
+          ),
+          apiTransport(
+            await apiUrl("/admin/data-dir"),
+            { signal: controller.signal },
+            {
+              timeoutMs: 12_000,
+              throwHttpErrors: false,
+            },
+          ),
         ]);
-        if (cancelled) return;
+        if (!canCommit()) return;
 
         if (healthRes.status === "fulfilled" && healthRes.value.ok) {
           const j = (await healthRes.value.json()) as HealthFullDTO;
-          setBackendVer(j.backend?.version ?? "unknown");
+          if (canCommit()) setBackendVer(j.backend?.version ?? "unknown");
         } else {
-          setBackendVer("unreachable");
+          if (canCommit()) setBackendVer("unreachable");
         }
         if (dirRes.status === "fulfilled" && dirRes.value.ok) {
           const j = (await dirRes.value.json()) as DataDirDTO;
-          setDataDir(j.path);
+          if (canCommit()) setDataDir(j.path);
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (canCommit()) setLoading(false);
       }
     })();
     return () => {
-      cancelled = true;
+      alive = false;
+      unregisterController();
     };
-  }, [open, publicRuntime]);
+  }, [
+    captureGeneration,
+    isCurrent,
+    open,
+    publicRuntime,
+    registerAbortController,
+  ]);
 
   return (
     <Modal

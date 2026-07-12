@@ -8,6 +8,8 @@ const APP_SCHEME = "echodesk";
 const APP_HOST = "app";
 const APP_ORIGIN = `${APP_SCHEME}://${APP_HOST}`;
 const APP_ENTRY_URL = `${APP_ORIGIN}/index.html`;
+const VITE_LEGACY_BOOTSTRAP_HASH =
+  "'sha256-tQjf8gvb2ROOMapIxFvFAYBeUJ0v1HCbOcSmDNXGtDo='";
 
 const CONTENT_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -107,17 +109,73 @@ async function resolveAppAssetPath(distRoot, rawUrl) {
   return resolved;
 }
 
-function responseHeaders(filePath, size) {
+function productionContentSecurityPolicy(rawBackendBase = null) {
+  const backendSources = [];
+  if (rawBackendBase) {
+    try {
+      const backend = new URL(String(rawBackendBase));
+      if (
+        ["http:", "https:"].includes(backend.protocol) &&
+        !backend.username &&
+        !backend.password &&
+        backend.pathname === "/" &&
+        !backend.search &&
+        !backend.hash
+      ) {
+        backendSources.push(backend.origin);
+        const websocket = new URL(backend.origin);
+        websocket.protocol = backend.protocol === "https:" ? "wss:" : "ws:";
+        backendSources.push(websocket.origin);
+      }
+    } catch {
+      // Invalid backend configuration is rejected elsewhere and grants no CSP source.
+    }
+  }
+  const httpBackendSources = backendSources.filter(
+    (source) => source.startsWith("http://") || source.startsWith("https://"),
+  );
+  return [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    `script-src 'self' ${VITE_LEGACY_BOOTSTRAP_HASH}`,
+    "style-src 'self' 'unsafe-inline'",
+    `connect-src 'self' ${backendSources.join(" ")}`.trim(),
+    `img-src 'self' data: blob: ${httpBackendSources.join(" ")}`.trim(),
+    "font-src 'self' data:",
+    `media-src 'self' blob: ${httpBackendSources.join(" ")}`.trim(),
+    `frame-src 'self' blob: ${httpBackendSources.join(" ")}`.trim(),
+    "worker-src 'self' blob:",
+    "form-action 'none'",
+  ].join("; ");
+}
+
+function responseHeaders(filePath, size, backendBase = null) {
   const extension = path.extname(filePath).toLowerCase();
-  return {
+  const headers = {
     "Cache-Control": extension === ".html" ? "no-store" : "public, max-age=31536000, immutable",
     "Content-Length": String(size),
     "Content-Type": CONTENT_TYPES.get(extension) ?? "application/octet-stream",
     "X-Content-Type-Options": "nosniff",
   };
+  if (extension === ".html") {
+    headers["Content-Security-Policy"] =
+      productionContentSecurityPolicy(backendBase);
+    headers["Cross-Origin-Opener-Policy"] = "same-origin";
+    headers["Permissions-Policy"] =
+      "camera=(), geolocation=(), microphone=(self)";
+    headers["Referrer-Policy"] = "no-referrer";
+    headers["X-Frame-Options"] = "DENY";
+  }
+  return headers;
 }
 
-function createAppProtocolHandler({ distRoot, fileFetcher = null }) {
+function createAppProtocolHandler({
+  distRoot,
+  fileFetcher = null,
+  backendBase = null,
+}) {
   const root = path.resolve(distRoot);
   return async function handleAppProtocol(request) {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -140,7 +198,7 @@ function createAppProtocolHandler({ distRoot, fileFetcher = null }) {
 
     try {
       const stat = await fs.promises.stat(filePath);
-      const headers = responseHeaders(filePath, stat.size);
+      const headers = responseHeaders(filePath, stat.size, backendBase);
       if (request.method === "HEAD") {
         return new Response(null, { status: 200, headers });
       }
@@ -172,11 +230,19 @@ function createAppProtocolHandler({ distRoot, fileFetcher = null }) {
   };
 }
 
-function installAppProtocol(protocol, distRoot, fileFetcher) {
+function installAppProtocol(
+  protocol,
+  distRoot,
+  fileFetcher,
+  { backendBase = null } = {},
+) {
   if (typeof fileFetcher !== "function") {
     throw new TypeError("Electron net.fetch is required for the app protocol");
   }
-  protocol.handle(APP_SCHEME, createAppProtocolHandler({ distRoot, fileFetcher }));
+  protocol.handle(
+    APP_SCHEME,
+    createAppProtocolHandler({ distRoot, fileFetcher, backendBase }),
+  );
 }
 
 module.exports = {
@@ -187,6 +253,7 @@ module.exports = {
   createAppProtocolHandler,
   installAppProtocol,
   parseAppAssetUrl,
+  productionContentSecurityPolicy,
   registerAppScheme,
   resolveAppAssetPath,
 };

@@ -142,10 +142,10 @@ test("S04b · txt artifact → <pre> 渲染原文", async ({ page }) => {
   await expect(pre).toContainText("line three");
 });
 
-test("S04c · pdf artifact → iframe 指向 download URL", async ({ page }) => {
+test("S04c · pdf artifact → authenticated fetch 后仅渲染 blob URL", async ({ page }) => {
   const mock = await installScenarioMock(page);
   const id = "pdf-fixture-001";
-  // 最小 PDF magic bytes 即可（不会真渲染，只检查 iframe src 合规）
+  // 最小 PDF magic bytes 即可（不会真渲染，只检查 iframe 不暴露裸下载 URL）
   await routeDownload(page, id, "%PDF-1.4\n%%EOF\n", "application/pdf");
 
   await page.goto("/");
@@ -156,7 +156,8 @@ test("S04c · pdf artifact → iframe 指向 download URL", async ({ page }) => 
 
   const frame = page.getByTestId("preview-iframe-pdf");
   await expect(frame).toBeVisible({ timeout: 5_000 });
-  await expect(frame).toHaveAttribute("src", new RegExp(`/${id}/download`));
+  await expect(frame).toHaveAttribute("src", /^blob:/);
+  expect(await frame.getAttribute("src")).not.toContain(id);
 });
 
 test("S04d · docx artifact → mammoth 解析后 iframe 显示", async ({ page }) => {

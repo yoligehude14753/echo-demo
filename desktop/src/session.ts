@@ -1,7 +1,9 @@
 import {
+  BACKEND_ORIGIN_EVENT,
   apiUrl,
   backendBase,
   backendWsUrl,
+  compareVersions,
   shouldHideSharedPublicHistory,
 } from "@/runtime";
 import {
@@ -12,6 +14,12 @@ import {
 
 const BOOTSTRAP_TIMEOUT_MS = 4_000;
 const DEFAULT_API_TIMEOUT_MS = 180_000;
+const DEFAULT_API_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_IDENTITY_RESPONSE_BYTES = 1024 * 1024;
+const MAX_HTTP_ERROR_DETAIL_BYTES = 4 * 1024;
+const PUBLIC_CLIENT_VERSION_HEADER = "X-EchoDesk-Client-Version";
+const PUBLIC_MINIMUM_CLIENT_VERSION_HEADER =
+  "X-EchoDesk-Minimum-Client-Version";
 export const SESSION_IDENTITY_EVENT = "echodesk:session-identity";
 
 export type SessionIdentityPhase =
@@ -19,6 +27,7 @@ export type SessionIdentityPhase =
   | "establishing"
   | "ready"
   | "renewing"
+  | "upgrade-required"
   | "identity-lost"
   | "error";
 
@@ -31,13 +40,39 @@ export interface BackendBootstrap {
   schema_version: number;
   api_version: string;
   backend_version?: string;
+  minimum_client_version?: string;
   session_required: boolean;
   capabilities: Record<string, unknown>;
 }
 
-export type BackendCompatibility = "unknown" | "compatible" | "legacy" | "unreachable";
+export type BackendCompatibility =
+  | "unknown"
+  | "compatible"
+  | "legacy"
+  | "upgrade-required"
+  | "unreachable";
 
-export type ApiTransportErrorKind = "timeout" | "aborted" | "network" | "http";
+export class ClientUpgradeRequiredError extends Error {
+  constructor(public readonly minimumVersion: string | null) {
+    super(
+      minimumVersion
+        ? `需要 EchoDesk ${minimumVersion} 或更高版本才能连接公共服务`
+        : "当前 EchoDesk 版本过低，请升级后再连接公共服务",
+    );
+    this.name = "ClientUpgradeRequiredError";
+  }
+}
+
+export type ApiTransportErrorKind =
+  | "timeout"
+  | "aborted"
+  | "stale-origin"
+  | "redirect-forbidden"
+  | "response-too-large"
+  | "replay-required"
+  | "stream-branch-forbidden"
+  | "network"
+  | "http";
 
 export class ApiTransportError extends Error {
   constructor(
@@ -55,6 +90,8 @@ export class ApiTransportError extends Error {
 
 export interface ApiTransportOptions {
   timeoutMs?: number;
+  /** Maximum decoded response bytes exposed to callers, including streams. */
+  maxResponseBytes?: number;
   /**
    * API helpers that intentionally branch on 404/403 can opt out and inspect the
    * Response themselves. Transport/network failures are always normalized.
@@ -83,10 +120,25 @@ let activeBackendOrigin: string | null = null;
 let compatibility: BackendCompatibility = "unknown";
 let identityStatus: SessionIdentityStatus = { phase: "idle", message: null };
 let rendererIdentityTail: Promise<void> = Promise.resolve();
+let clientUpgradeRequired: {
+  origin: string;
+  error: ClientUpgradeRequiredError;
+} | null = null;
+let transportOriginEpoch = 0;
+const activeTransportControllers = new Set<AbortController>();
+
+if (typeof window !== "undefined") {
+  window.addEventListener(BACKEND_ORIGIN_EVENT, () => {
+    transportOriginEpoch += 1;
+    for (const controller of activeTransportControllers) controller.abort();
+    activeTransportControllers.clear();
+  });
+}
 
 interface IssuedSessionResponse {
   token?: string | null;
   expires_at?: string | null;
+  backend_origin?: string | null;
   credential_expires_at?: string | null;
   principal?: Record<string, unknown>;
 }
@@ -98,6 +150,13 @@ class DeviceSessionRequestError extends Error {
   ) {
     super(`${endpoint} ${status}`);
     this.name = "DeviceSessionRequestError";
+  }
+}
+
+class BackendRedirectForbiddenError extends Error {
+  constructor(public readonly endpoint: string) {
+    super(`backend redirect forbidden: ${endpoint}`);
+    this.name = "BackendRedirectForbiddenError";
   }
 }
 
@@ -151,6 +210,13 @@ export function isIdentityLostError(
 }
 
 function userVisibleIdentityError(error: unknown): string {
+  if (error instanceof ClientUpgradeRequiredError) return error.message;
+  if (
+    error instanceof IdentityCredentialStoreError &&
+    error.kind === "invalid-origin"
+  ) {
+    return error.message;
+  }
   const code =
     typeof error === "object" && error !== null && "code" in error
       ? String((error as { code?: unknown }).code ?? "")
@@ -182,6 +248,8 @@ function publishCompatibility(next: BackendCompatibility): void {
   }
   if (next === "legacy") {
     console.warn("[backend] 旧后端不支持 EchoDesk 0.3 bootstrap/session 能力，已降级");
+  } else if (next === "upgrade-required") {
+    console.warn("[backend] 当前客户端低于服务端最低版本，已停止身份与业务请求");
   }
 }
 
@@ -189,20 +257,195 @@ function publishCompatibilityForOrigin(
   origin: string,
   next: BackendCompatibility,
 ): void {
-  if (activeBackendOrigin === origin) publishCompatibility(next);
+  if (activeBackendOrigin !== origin) return;
+  if (
+    next !== "upgrade-required" &&
+    clientUpgradeRequired?.origin === origin
+  ) {
+    return;
+  }
+  publishCompatibility(next);
 }
 
 export function backendCompatibility(): BackendCompatibility {
   return compatibility;
 }
 
+function normalizedMinimumVersion(raw: string | null | undefined): string | null {
+  const value = String(raw ?? "").trim();
+  return /^(?:v)?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(value) &&
+    value.length <= 64
+    ? value.replace(/^v/, "")
+    : null;
+}
+
+export function markClientUpgradeRequired(
+  minimumVersion: string | null = null,
+  origin: string | null = activeBackendOrigin,
+): ClientUpgradeRequiredError {
+  const error = new ClientUpgradeRequiredError(
+    normalizedMinimumVersion(minimumVersion),
+  );
+  if (origin && activeBackendOrigin === origin) {
+    clientUpgradeRequired = { origin, error };
+    currentSession = null;
+    publishCompatibility("upgrade-required");
+    publishIdentityStatus("upgrade-required", error.message);
+  }
+  return error;
+}
+
+function upgradeErrorFromResponse(
+  response: Response,
+  origin: string | null = activeBackendOrigin,
+): ClientUpgradeRequiredError | null {
+  if (response.status !== 426) return null;
+  return markClientUpgradeRequired(
+    response.headers.get(PUBLIC_MINIMUM_CLIENT_VERSION_HEADER),
+    origin,
+  );
+}
+
+function throwIfClientUpgradeRequired(origin: string): void {
+  if (clientUpgradeRequired?.origin === origin) {
+    throw clientUpgradeRequired.error;
+  }
+}
+
+const REDIRECT_RESPONSE_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+function isRedirectResponse(response: Response): boolean {
+  return (
+    response.type === "opaqueredirect" ||
+    REDIRECT_RESPONSE_STATUSES.has(response.status)
+  );
+}
+
+async function readBoundedResponseBody(
+  response: Response,
+  signal: AbortSignal,
+): Promise<ArrayBuffer | null> {
+  if (!response.body) return null;
+  const declared = Number(response.headers.get("Content-Length"));
+  if (Number.isFinite(declared) && declared > MAX_IDENTITY_RESPONSE_BYTES) {
+    await response.body.cancel("identity response exceeds size limit");
+    throw new Error("identity response exceeds size limit");
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const read = (): Promise<ReadableStreamReadResult<Uint8Array>> =>
+    new Promise((resolve, reject) => {
+      const onAbort = () => {
+        void reader.cancel(signal.reason).catch(() => {});
+        reject(
+          signal.reason ?? new DOMException("identity request aborted", "AbortError"),
+        );
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+      void reader.read().then(resolve, reject).finally(() => {
+        signal.removeEventListener("abort", onAbort);
+      });
+    });
+
+  try {
+    let complete = false;
+    while (!complete) {
+      const { done, value } = await read();
+      if (done) {
+        complete = true;
+        continue;
+      }
+      total += value.byteLength;
+      if (total > MAX_IDENTITY_RESPONSE_BYTES) {
+        await reader.cancel("identity response exceeds size limit");
+        throw new Error("identity response exceeds size limit");
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (total === 0) return null;
+  const buffer = new ArrayBuffer(total);
+  const body = new Uint8Array(buffer);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return buffer;
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), BOOTSTRAP_TIMEOUT_MS);
+  const externalSignal = init.signal;
+  const abortFromCaller = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) abortFromCaller();
+  else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timer = window.setTimeout(
+    () => controller.abort(new DOMException("identity request timed out", "TimeoutError")),
+    BOOTSTRAP_TIMEOUT_MS,
+  );
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, {
+      ...withClientVersion(init),
+      redirect: "error",
+      signal: controller.signal,
+    });
+    if (isRedirectResponse(response)) {
+      await response.body?.cancel("backend redirect forbidden").catch(() => {});
+      throw new BackendRedirectForbiddenError(url);
+    }
+    if (response.url) {
+      let responseOrigin = "";
+      try {
+        responseOrigin = new URL(response.url).origin;
+      } catch {
+        responseOrigin = "";
+      }
+      if (responseOrigin !== new URL(url, window.location.href).origin) {
+        await response.body?.cancel("backend response origin changed").catch(() => {});
+        throw new BackendRedirectForbiddenError(url);
+      }
+    }
+    const body = await readBoundedResponseBody(response, controller.signal);
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   } finally {
     window.clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
+async function parseBoundedJsonResponse<T>(
+  response: Response,
+  label: "bootstrap" | "identity" | "credential rotation",
+): Promise<T> {
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    throw new Error(`${label} response could not be read`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // SyntaxError.message may quote the invalid server body. Never preserve it
+    // as message/cause because bootstrap failures are logged by the renderer.
+    throw new Error(`${label} response is invalid JSON`);
   }
 }
 
@@ -211,7 +454,7 @@ async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
     const response = await fetchWithTimeout(
       await backendUrlForOrigin("/bootstrap", origin),
       {
-      cache: "no-store",
+        cache: "no-store",
       },
     );
     if (response.status === 404) {
@@ -219,7 +462,10 @@ async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
       return null;
     }
     if (!response.ok) throw new Error(`bootstrap ${response.status}`);
-    const body = (await response.json()) as Partial<BackendBootstrap>;
+    const body = await parseBoundedJsonResponse<Partial<BackendBootstrap>>(
+      response,
+      "bootstrap",
+    );
     if (
       body.schema_version !== 1 ||
       body.api_version !== "0.3" ||
@@ -229,9 +475,18 @@ async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
       publishCompatibilityForOrigin(origin, "legacy");
       return null;
     }
+    const minimumVersion = body.minimum_client_version?.trim();
+    if (
+      minimumVersion &&
+      compareVersions(__APP_VERSION__, minimumVersion) < 0
+    ) {
+      throw markClientUpgradeRequired(minimumVersion, origin);
+    }
+    throwIfClientUpgradeRequired(origin);
     publishCompatibilityForOrigin(origin, "compatible");
     return body as BackendBootstrap;
   } catch (error) {
+    if (error instanceof ClientUpgradeRequiredError) throw error;
     publishCompatibilityForOrigin(origin, "unreachable");
     console.warn("[backend] bootstrap unavailable", error);
     return null;
@@ -259,10 +514,35 @@ function acceptSession(
   body: IssuedSessionResponse | null,
   origin: string,
 ): string | null {
+  throwIfClientUpgradeRequired(origin);
   const token = body?.token?.trim() || null;
   if (!token) {
     if (activeBackendOrigin === origin) currentSession = null;
     return null;
+  }
+  if (window.echo?.isElectron === true) {
+    let sessionOrigin: string | null = null;
+    try {
+      const candidate = new URL(String(body?.backend_origin ?? ""));
+      if (
+        candidate.protocol === "https:" &&
+        !candidate.username &&
+        !candidate.password &&
+        candidate.pathname === "/" &&
+        !candidate.search &&
+        !candidate.hash
+      ) {
+        sessionOrigin = candidate.origin;
+      }
+    } catch {
+      sessionOrigin = null;
+    }
+    if (sessionOrigin !== origin) {
+      throw new IdentityCredentialStoreError(
+        "设备会话所属服务与当前后端不一致；已拒绝接收跨服务会话凭证",
+        "invalid-origin",
+      );
+    }
   }
   const tenantId = body?.principal?.tenant_id;
   const ownerId = body?.principal?.owner_id;
@@ -314,6 +594,7 @@ function selectBackendOrigin(origin: string): void {
   if (activeBackendOrigin === origin) return;
   activeBackendOrigin = origin;
   currentSession = null;
+  clientUpgradeRequired = null;
   compatibility = "unknown";
   if (typeof document !== "undefined") {
     document.documentElement.dataset.backendCompatibility = "unknown";
@@ -356,12 +637,14 @@ async function postDeviceSession(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  const upgradeError = upgradeErrorFromResponse(response, origin);
+  if (upgradeError) throw upgradeError;
   if (response.status === 404) {
     publishCompatibilityForOrigin(origin, "legacy");
     throw new DeviceSessionRequestError(endpoint, response.status);
   }
   if (!response.ok) throw new DeviceSessionRequestError(endpoint, response.status);
-  return (await response.json()) as IssuedSessionResponse;
+  return parseBoundedJsonResponse<IssuedSessionResponse>(response, "identity");
 }
 
 async function withRendererIdentityLock<T>(
@@ -498,6 +781,26 @@ function electronErrorIsIdentityLost(error: unknown): boolean {
   return code === "IDENTITY_LOST" || message.includes("refusing to enroll");
 }
 
+function electronUpgradeRequiredVersion(error: unknown): string | null | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code =
+    "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  const message =
+    error instanceof Error
+      ? error.message
+      : "message" in error
+        ? String((error as { message?: unknown }).message ?? "")
+        : "";
+  if (code !== "CLIENT_UPGRADE_REQUIRED" && !message.includes("CLIENT_UPGRADE_REQUIRED")) {
+    return undefined;
+  }
+  const explicit =
+    "minimumVersion" in error
+      ? String((error as { minimumVersion?: unknown }).minimumVersion ?? "")
+      : message.match(/minimum=([^\s;]+)/)?.[1];
+  return normalizedMinimumVersion(explicit) ?? null;
+}
+
 async function electronDeviceSession(force: boolean, origin: string): Promise<string> {
   const request = force
     ? window.echo?.renewPublicSession
@@ -509,6 +812,10 @@ async function electronDeviceSession(force: boolean, origin: string): Promise<st
     return token;
   } catch (error) {
     if (isIdentityLostError(error)) throw error;
+    const minimumVersion = electronUpgradeRequiredVersion(error);
+    if (minimumVersion !== undefined) {
+      throw markClientUpgradeRequired(minimumVersion, origin);
+    }
     if (electronErrorIsIdentityLost(error)) throw identityLost(origin, error);
     throw error;
   }
@@ -554,6 +861,7 @@ async function rendererReconnectSession(origin: string): Promise<string> {
 export async function reconnectServerIdentity(): Promise<string> {
   const origin = await configuredBackendOrigin();
   selectBackendOrigin(origin);
+  throwIfClientUpgradeRequired(origin);
   currentSession = null;
   publishIdentityStatus("renewing");
   try {
@@ -561,7 +869,11 @@ export async function reconnectServerIdentity(): Promise<string> {
       ? await electronDeviceSession(true, origin)
       : await rendererReconnectSession(origin);
   } catch (error) {
-    if (!isIdentityLostError(error) && activeBackendOrigin === origin) {
+    if (
+      !(error instanceof ClientUpgradeRequiredError) &&
+      !isIdentityLostError(error) &&
+      activeBackendOrigin === origin
+    ) {
       publishIdentityStatus(
         "identity-lost",
         "暂时无法重新连接原设备身份，请检查网络后重试",
@@ -587,7 +899,16 @@ export async function rotateServerCredential(): Promise<CredentialRotationResult
   if (window.echo?.isElectron === true) {
     const rotate = window.echo.rotatePublicCredential;
     if (!rotate) throw new Error("Electron credential rotation bridge is unavailable");
-    return rotate(token);
+    try {
+      return await rotate(token);
+    } catch (error) {
+      const minimumVersion = electronUpgradeRequiredVersion(error);
+      if (minimumVersion !== undefined) {
+        throw markClientUpgradeRequired(minimumVersion, origin);
+      }
+      if (electronErrorIsIdentityLost(error)) throw identityLost(origin, error);
+      throw error;
+    }
   }
 
   return withRendererIdentityLock(async () => {
@@ -608,6 +929,9 @@ export async function rotateServerCredential(): Promise<CredentialRotationResult
       },
     );
 
+    const upgradeError = upgradeErrorFromResponse(response, origin);
+    if (upgradeError) throw upgradeError;
+
     if (!response.ok) {
       const outcome = classifyCredentialRotationStatus(response.status);
       if (outcome === "identity-lost") {
@@ -627,7 +951,10 @@ export async function rotateServerCredential(): Promise<CredentialRotationResult
         response.status,
       );
     }
-    const body = (await response.json()) as Partial<CredentialRotationResult>;
+    const body = await parseBoundedJsonResponse<Partial<CredentialRotationResult>>(
+      response,
+      "credential rotation",
+    );
     await identityCredentialStore.commitRotation(origin, rotation.rotation_id);
     return {
       credential_id:
@@ -643,6 +970,7 @@ export async function rotateServerCredential(): Promise<CredentialRotationResult
 export async function ensureServerSession(force = false): Promise<string | null> {
   const origin = await configuredBackendOrigin();
   selectBackendOrigin(origin);
+  throwIfClientUpgradeRequired(origin);
   if (force) {
     currentSession = null;
     if (forcedRenewPromise && forcedRenewPromiseOrigin === origin) {
@@ -654,11 +982,14 @@ export async function ensureServerSession(force = false): Promise<string | null>
       if (establishing) {
         try {
           await establishing;
-        } catch {
+        } catch (error) {
+          if (error instanceof ClientUpgradeRequiredError) throw error;
           // A failed initial operation does not prevent the explicit renewal attempt.
         }
       }
+      throwIfClientUpgradeRequired(origin);
       const bootstrap = await bootstrapBackendForOrigin(origin);
+      throwIfClientUpgradeRequired(origin);
       const requiresSession =
         bootstrap?.session_required ?? shouldHideSharedPublicHistory();
       if (!requiresSession) {
@@ -673,7 +1004,9 @@ export async function ensureServerSession(force = false): Promise<string | null>
     try {
       return await pending;
     } catch (error) {
-      if (isIdentityLostError(error)) {
+      if (error instanceof ClientUpgradeRequiredError) {
+        // markClientUpgradeRequired already published the terminal compatibility state.
+      } else if (isIdentityLostError(error)) {
         publishIdentityStatusForOrigin(origin, "identity-lost", error.message);
       } else if (activeBackendOrigin === origin) {
         publishIdentityStatusForOrigin(
@@ -698,6 +1031,7 @@ export async function ensureServerSession(force = false): Promise<string | null>
   if (sessionPromise && sessionPromiseOrigin === origin) return sessionPromise;
   const pending = (async () => {
     const bootstrap = await bootstrapBackendForOrigin(origin);
+    throwIfClientUpgradeRequired(origin);
     const requiresSession = bootstrap?.session_required ?? shouldHideSharedPublicHistory();
     if (!requiresSession) {
       publishIdentityStatusForOrigin(origin, "idle");
@@ -711,7 +1045,9 @@ export async function ensureServerSession(force = false): Promise<string | null>
   try {
     return await pending;
   } catch (error) {
-    if (isIdentityLostError(error)) {
+    if (error instanceof ClientUpgradeRequiredError) {
+      // markClientUpgradeRequired already published the terminal compatibility state.
+    } else if (isIdentityLostError(error)) {
       publishIdentityStatusForOrigin(origin, "identity-lost", error.message);
     } else if (activeBackendOrigin === origin) {
       publishIdentityStatusForOrigin(
@@ -729,28 +1065,101 @@ export async function ensureServerSession(force = false): Promise<string | null>
   }
 }
 
-function withAuthorization(init: RequestInit, token: string | null): RequestInit {
-  if (!token) return init;
+function mergedRequestHeaders(
+  input: RequestInfo | URL,
+  init: RequestInit,
+): Headers {
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  return headers;
+}
+
+function withAuthorization(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  token: string | null,
+): RequestInit {
+  const headers = mergedRequestHeaders(input, init);
+  headers.set(PUBLIC_CLIENT_VERSION_HEADER, __APP_VERSION__);
+  headers.delete("Authorization");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return { ...init, headers };
+}
+
+function withoutAuthorization(
+  input: RequestInfo | URL,
+  init: RequestInit,
+): RequestInit {
+  const headers = mergedRequestHeaders(input, init);
+  headers.set(PUBLIC_CLIENT_VERSION_HEADER, __APP_VERSION__);
+  headers.delete("Authorization");
+  return { ...init, headers };
+}
+
+function withoutBackendAuthorization(
+  input: RequestInfo | URL,
+  init: RequestInit,
+): RequestInit {
+  const headers = mergedRequestHeaders(input, init);
+  headers.delete("Authorization");
+  return { ...init, headers, redirect: "error" };
+}
+
+function withClientVersion(init: RequestInit): RequestInit {
   const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${token}`);
+  headers.set(PUBLIC_CLIENT_VERSION_HEADER, __APP_VERSION__);
   return { ...init, headers };
 }
 
 export async function authenticatedFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
+  expectedBackendOrigin?: string,
 ): Promise<Response> {
-  const requestOrigin = await backendRequestOrigin(input);
+  const requestOrigin =
+    expectedBackendOrigin ?? (await backendRequestOrigin(input));
   if (!requestOrigin) {
-    return fetch(input, init);
+    return fetch(input, withoutBackendAuthorization(input, init));
+  }
+  const actualOrigin = new URL(requestUrl(input), window.location.href).origin;
+  if (actualOrigin !== requestOrigin) {
+    throw new Error("后端地址已切换，已拒绝访问旧服务地址");
   }
   const token = await ensureServerSession();
   assertSessionTokenOrigin(token, requestOrigin);
-  let response = await fetch(input, withAuthorization(init, token));
+  let response = await fetch(
+    input,
+    withAuthorization(input, { ...init, redirect: "error" }, token),
+  );
+  const upgradeError = upgradeErrorFromResponse(response, requestOrigin);
+  if (upgradeError) {
+    await response.body?.cancel().catch(() => {});
+    throw upgradeError;
+  }
   if (response.status !== 401 || !token) return response;
+  await response.body?.cancel().catch(() => {});
   const refreshed = await ensureServerSession(true);
   assertSessionTokenOrigin(refreshed, requestOrigin);
-  response = await fetch(input, withAuthorization(init, refreshed));
+  const oneShotBody =
+    (input instanceof Request && input.body !== null) ||
+    init.body instanceof ReadableStream;
+  if (oneShotBody) {
+    throw new ApiTransportError(
+      "会话凭证已更新；一次性请求体未自动重放，请重试操作",
+      "replay-required",
+      requestUrl(input),
+      401,
+    );
+  }
+  response = await fetch(
+    input,
+    withAuthorization(input, { ...init, redirect: "error" }, refreshed),
+  );
+  const renewedUpgradeError = upgradeErrorFromResponse(response, requestOrigin);
+  if (renewedUpgradeError) {
+    await response.body?.cancel().catch(() => {});
+    throw renewedUpgradeError;
+  }
   return response;
 }
 
@@ -793,11 +1202,148 @@ function isAbortError(error: unknown): boolean {
 }
 
 async function httpErrorDetail(response: Response): Promise<string> {
-  try {
-    return (await response.clone().text()).slice(0, 500);
-  } catch {
-    return "";
+  // Server-controlled error bodies can contain provider diagnostics, local
+  // paths, or secrets. They are never surfaced through renderer errors.
+  await response.body
+    ?.cancel(`HTTP error body discarded at ${MAX_HTTP_ERROR_DETAIL_BYTES} byte policy`)
+    .catch(() => {});
+  return "";
+}
+
+function responseWithTransportLease(
+  response: Response,
+  signal: AbortSignal,
+  abortError: () => ApiTransportError,
+  branchError: () => ApiTransportError,
+  responseTooLargeError: () => ApiTransportError,
+  maxResponseBytes: number,
+  release: () => void,
+): Response {
+  if (response.status === 204 || response.status === 205 || response.status === 304) {
+    void response.body?.cancel("response status forbids a body").catch(() => {});
+    release();
+    return new Response(null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   }
+  if (!response.body) {
+    release();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  let settled = false;
+  let receivedBytes = 0;
+  let terminalError: ApiTransportError | null = null;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+  const finish = () => {
+    signal.removeEventListener("abort", onAbort);
+    try {
+      reader.releaseLock();
+    } catch {
+      // cancel/read may still own the lock; release() is independently idempotent.
+    }
+    release();
+  };
+  const onAbort = () => {
+    if (settled) return;
+    settled = true;
+    const error = abortError();
+    try {
+      streamController?.error(error);
+    } catch {
+      // A concurrently completed consumer already owns the terminal state.
+    }
+    void reader.cancel(error).catch(() => {}).finally(finish);
+  };
+
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamController = controller;
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    },
+    async pull(controller) {
+      if (settled) return;
+      try {
+        const chunk = await reader.read();
+        if (settled) return;
+        if (chunk.done) {
+          settled = true;
+          controller.close();
+          finish();
+          return;
+        }
+        receivedBytes += chunk.value.byteLength;
+        if (receivedBytes > maxResponseBytes) {
+          settled = true;
+          const error = responseTooLargeError();
+          terminalError = error;
+          controller.error(error);
+          void reader.cancel(error).catch(() => {}).finally(finish);
+          return;
+        }
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        if (settled) return;
+        settled = true;
+        controller.error(signal.aborted ? abortError() : error);
+        finish();
+      }
+    },
+    async cancel(reason) {
+      if (settled) return;
+      settled = true;
+      try {
+        await reader.cancel(reason);
+      } finally {
+        finish();
+      }
+    },
+  });
+
+  const leased = new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  Object.defineProperty(leased, "clone", {
+    value: () => {
+      throw branchError();
+    },
+  });
+  if (leased.body) {
+    Object.defineProperty(leased.body, "tee", {
+      value: () => {
+        throw branchError();
+      },
+    });
+  }
+  const normalizeRead = async <T>(operation: () => Promise<T>): Promise<T> => {
+    try {
+      return await operation();
+    } catch (error) {
+      if (signal.aborted) throw abortError();
+      if (terminalError) throw terminalError;
+      throw error;
+    }
+  };
+  const readArrayBuffer = leased.arrayBuffer.bind(leased);
+  const readBlob = leased.blob.bind(leased);
+  const readFormData = leased.formData.bind(leased);
+  const readJson = leased.json.bind(leased);
+  const readText = leased.text.bind(leased);
+  Object.defineProperties(leased, {
+    arrayBuffer: { value: () => normalizeRead(readArrayBuffer) },
+    blob: { value: () => normalizeRead(readBlob) },
+    formData: { value: () => normalizeRead(readFormData) },
+    json: { value: () => normalizeRead(readJson) },
+    text: { value: () => normalizeRead(readText) },
+  });
+  return leased;
 }
 
 /**
@@ -813,59 +1359,191 @@ export async function apiTransport(
 ): Promise<Response> {
   const url = requestUrl(input);
   const timeoutMs = options.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+  const maxResponseBytes =
+    options.maxResponseBytes ?? DEFAULT_API_MAX_RESPONSE_BYTES;
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1) {
+    throw new TypeError("apiTransport maxResponseBytes must be a positive safe integer");
+  }
+  const leaseEpoch = transportOriginEpoch;
   const controller = new AbortController();
-  const externalSignal = init.signal;
+  activeTransportControllers.add(controller);
+  const externalSignal =
+    init.signal ?? (input instanceof Request ? input.signal : undefined);
   let timedOut = false;
+  let leaseTransferred = false;
+  let released = false;
+  let timer = 0;
   const abortFromCaller = () => controller.abort(externalSignal?.reason);
   if (externalSignal?.aborted) abortFromCaller();
   else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timer = window.setTimeout(() => {
+  const releaseLease = () => {
+    if (released) return;
+    released = true;
+    window.clearTimeout(timer);
+    activeTransportControllers.delete(controller);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
+  };
+  const abortTransportError = (): ApiTransportError => {
+    if (leaseEpoch !== transportOriginEpoch) {
+      return new ApiTransportError(
+        "后端地址已切换，已取消旧服务请求",
+        "stale-origin",
+        url,
+      );
+    }
+    if (timedOut) {
+      return new ApiTransportError(
+        `请求超时（${Math.ceil(timeoutMs / 1000)} 秒）`,
+        "timeout",
+        url,
+      );
+    }
+    return new ApiTransportError("请求已取消", "aborted", url);
+  };
+  timer = window.setTimeout(() => {
     timedOut = true;
     controller.abort(new DOMException("API request timed out", "TimeoutError"));
   }, Math.max(1, timeoutMs));
 
   try {
-    const transport = options.anonymous === true ? fetch : authenticatedFetch;
-    const response = await transport(input, {
-      ...init,
-      credentials: options.anonymous === true ? "omit" : init.credentials,
-      signal: controller.signal,
-    });
-    if (options.throwHttpErrors !== false && !response.ok) {
-      const detail = await httpErrorDetail(response);
+    const leaseOrigin = await configuredBackendOrigin();
+    const actualOrigin = new URL(url, window.location.href).origin;
+    if (
+      leaseEpoch !== transportOriginEpoch ||
+      controller.signal.aborted ||
+      actualOrigin !== leaseOrigin
+    ) {
       throw new ApiTransportError(
-        `HTTP ${response.status}${detail ? `: ${detail}` : ""}`,
-        "http",
+        "后端地址已切换，已取消旧服务请求",
+        "stale-origin",
         url,
-        response.status,
-        detail || null,
       );
     }
-    return response;
+    const baseRequestInit = {
+      ...init,
+      credentials: options.anonymous === true ? "omit" : init.credentials,
+      redirect: "error" as const,
+      signal: controller.signal,
+    };
+    const requestInit =
+      options.anonymous === true
+        ? withoutAuthorization(input, baseRequestInit)
+        : baseRequestInit;
+    const response =
+      options.anonymous === true
+        ? await fetch(input, requestInit)
+        : await authenticatedFetch(input, requestInit, leaseOrigin);
+    if (isRedirectResponse(response)) {
+      await response.body?.cancel("backend redirect forbidden").catch(() => {});
+      throw new ApiTransportError(
+        "EchoDesk 服务拒绝跨地址重定向",
+        "redirect-forbidden",
+        url,
+        response.status || null,
+      );
+    }
+    if (response.url) {
+      let responseOrigin = "";
+      try {
+        responseOrigin = new URL(response.url).origin;
+      } catch {
+        responseOrigin = "";
+      }
+      if (responseOrigin !== leaseOrigin) {
+        await response.body?.cancel("backend response origin changed").catch(() => {});
+        throw new ApiTransportError(
+          "EchoDesk 服务响应来自非预期地址",
+          "redirect-forbidden",
+          url,
+          response.status || null,
+        );
+      }
+    }
+    if (leaseEpoch !== transportOriginEpoch || controller.signal.aborted) {
+      throw new ApiTransportError(
+        "后端地址已切换，已丢弃旧服务响应",
+        "stale-origin",
+        url,
+      );
+    }
+    const declaredLength = response.headers.get("Content-Length")?.trim();
+    if (declaredLength && (response.ok || options.throwHttpErrors === false)) {
+      const declaredBytes = /^\d+$/.test(declaredLength)
+        ? Number(declaredLength)
+        : Number.NaN;
+      if (
+        !Number.isSafeInteger(declaredBytes) ||
+        declaredBytes > maxResponseBytes
+      ) {
+        await response.body?.cancel("backend response exceeds byte limit").catch(() => {});
+        throw new ApiTransportError(
+          `EchoDesk 服务响应超过 ${maxResponseBytes} 字节限制`,
+          "response-too-large",
+          url,
+          response.status || null,
+        );
+      }
+    }
+    const responseTooLargeError = () =>
+      new ApiTransportError(
+        `EchoDesk 服务响应超过 ${maxResponseBytes} 字节限制`,
+        "response-too-large",
+        url,
+        response.status || null,
+      );
+    const leasedResponse = responseWithTransportLease(
+      response,
+      controller.signal,
+      abortTransportError,
+      () =>
+        new ApiTransportError(
+          "为保持后端切换隔离，EchoDesk 响应流不允许 clone/tee 分支",
+          "stream-branch-forbidden",
+          url,
+        ),
+      responseTooLargeError,
+      maxResponseBytes,
+      releaseLease,
+    );
+    leaseTransferred = true;
+    if (options.throwHttpErrors !== false && !leasedResponse.ok) {
+      await httpErrorDetail(leasedResponse);
+      if (controller.signal.aborted) throw abortTransportError();
+      await leasedResponse.body?.cancel().catch(() => {});
+      throw new ApiTransportError(
+        `HTTP ${leasedResponse.status}`,
+        "http",
+        url,
+        leasedResponse.status,
+        null,
+      );
+    }
+    return leasedResponse;
   } catch (error) {
     if (error instanceof ApiTransportError) throw error;
     if (error instanceof IdentityCredentialStoreError) throw error;
-    if (timedOut) {
+    if (error instanceof ClientUpgradeRequiredError) throw error;
+    if (
+      leaseEpoch !== transportOriginEpoch ||
+      timedOut ||
+      externalSignal?.aborted ||
+      isAbortError(error)
+    ) {
+      const normalized = abortTransportError();
       throw new ApiTransportError(
-        `请求超时（${Math.ceil(timeoutMs / 1000)} 秒）`,
-        "timeout",
+        normalized.message,
+        normalized.kind,
         url,
         null,
         null,
         { cause: error },
       );
     }
-    if (externalSignal?.aborted || isAbortError(error)) {
-      throw new ApiTransportError("请求已取消", "aborted", url, null, null, {
-        cause: error,
-      });
-    }
     throw new ApiTransportError("无法连接 EchoDesk 服务", "network", url, null, null, {
       cause: error,
     });
   } finally {
-    window.clearTimeout(timer);
-    externalSignal?.removeEventListener("abort", abortFromCaller);
+    if (!leaseTransferred) releaseLease();
   }
 }
 
@@ -906,6 +1584,7 @@ export function resetSessionForTest(): void {
   forcedRenewPromiseOrigin = null;
   currentSession = null;
   activeBackendOrigin = null;
+  clientUpgradeRequired = null;
   resetIdentityCredentialStoreForTest();
   rendererIdentityTail = Promise.resolve();
   compatibility = "unknown";

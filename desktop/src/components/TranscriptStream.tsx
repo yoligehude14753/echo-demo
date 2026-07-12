@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { UserRound } from "lucide-react";
-import { listRecentAmbient, type AmbientSegment } from "@/api";
+import {
+  artifactDownloadUrl,
+  artifactIdFromDownloadHref,
+  listRecentAmbient,
+  type AmbientSegment,
+} from "@/api";
+import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { TranscriptSegment } from "@/types";
@@ -10,6 +16,7 @@ import {
   buildSpeakerDisplayMap,
   colorForDisplayIdx,
 } from "@/lib/speakerDisplay";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 function fmtClockShort(iso: string): string {
   const d = new Date(iso);
@@ -134,6 +141,12 @@ function dedupeDisplaySegments(segments: DisplaySegment[]): DisplaySegment[] {
 export default function TranscriptStream({
   view = "transcript",
 }: TranscriptStreamProps): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const [ambient, setAmbient] = useState<AmbientSegment[]>([]);
   const events = useStore((s) => s.events);
   const localAmbient = useStore((s) => s.ambientSegments);
@@ -144,6 +157,10 @@ export default function TranscriptStream({
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickyToBottomRef = useRef(true);
   const localOnlyAmbient = shouldHideSharedPublicHistory();
+
+  useEffect(() => {
+    setAmbient([]);
+  }, [backendOriginRevision]);
 
   // 是否走"会议历史"分支：会议已选 + 已结束（ended/finalized 等）+ 有 segments
   // 进行中会议仍走 ambient 分支保持实时性（ambient 是 chunk 写入的最近 100 条）
@@ -235,10 +252,21 @@ export default function TranscriptStream({
       return undefined;
     }
     let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
     const tick = async (): Promise<void> => {
       try {
-        const recent = await listRecentAmbient(100);
-        if (alive) setAmbient(recent);
+        const recent = await listRecentAmbient(100, {
+          signal: controller.signal,
+        });
+        if (
+          alive &&
+          isCurrent(originGeneration) &&
+          !controller.signal.aborted
+        ) {
+          setAmbient(recent);
+        }
       } catch {
         /* 静默 */
       }
@@ -247,26 +275,55 @@ export default function TranscriptStream({
     const t = setInterval(tick, 3_000);
     return () => {
       alive = false;
+      unregisterController();
       clearInterval(t);
     };
-  }, [showMeetingHistory, localOnlyAmbient, view]);
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    localOnlyAmbient,
+    registerAbortController,
+    showMeetingHistory,
+    view,
+  ]);
 
   useEffect(() => {
     if (view === "assistant") return;
     if (localOnlyAmbient) return;
     if (showMeetingHistory) return;
     if (!events.length) return;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
     const last = events[events.length - 1];
     if (
       last.type === "meeting.segment" ||
       last.type === "meeting.auto_detected" ||
       last.type === "meeting.state_changed"
     ) {
-      void listRecentAmbient(100)
-        .then((r) => setAmbient(r))
+      void listRecentAmbient(100, { signal: controller.signal })
+        .then((r) => {
+          if (
+            isCurrent(originGeneration) &&
+            !controller.signal.aborted
+          ) {
+            setAmbient(r);
+          }
+        })
         .catch(() => undefined);
     }
-  }, [events, showMeetingHistory, localOnlyAmbient, view]);
+    return unregisterController;
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    events,
+    isCurrent,
+    localOnlyAmbient,
+    registerAbortController,
+    showMeetingHistory,
+    view,
+  ]);
 
   // 提取布尔到变量：eslint react-hooks/exhaustive-deps 不支持复合表达式作为 dep
   const hasNoSegments = segs.length === 0;
@@ -475,16 +532,26 @@ export default function TranscriptStream({
                         strong: ({ children }) => (
                           <strong className="font-semibold text-ink-950">{children}</strong>
                         ),
-                        a: ({ children, href }) => (
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-blue-600 underline underline-offset-2"
-                          >
-                            {children}
-                          </a>
-                        ),
+                        a: ({ children, href }) => {
+                          const artifactId = artifactIdFromDownloadHref(href);
+                          return artifactId ? (
+                            <AuthenticatedDownloadLink
+                              url={artifactDownloadUrl(artifactId)}
+                              className="text-blue-600 underline underline-offset-2"
+                            >
+                              {children}
+                            </AuthenticatedDownloadLink>
+                          ) : (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 underline underline-offset-2"
+                            >
+                              {children}
+                            </a>
+                          );
+                        },
                         code: ({ children }) => (
                           <code className="rounded bg-white/80 px-1 py-0.5 text-[13px] font-mono text-ink-800">
                             {children}

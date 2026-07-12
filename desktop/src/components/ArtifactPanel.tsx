@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   artifactDownloadUrl,
+  artifactIdFromDownloadHref,
   cancelAgentTask,
   generateArtifact,
   grantAgentRunnerAndResume,
@@ -25,11 +26,12 @@ import {
   listArtifacts,
   type ArtifactKind,
 } from "@/api";
-import { apiUrl } from "@/runtime";
 import { useStore } from "@/store";
 import type { AgentTaskCard, GeneratedArtifact } from "@/types";
 import { formatRelativeTime, type FailedArtifact } from "@/lib/failedArtifact";
 import ArtifactPreviewModal from "@/components/ArtifactPreviewModal";
+import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 /**
  * outputs 面板：展示历史产物列表（只读）+ 7 类 in-app 预览。
@@ -117,6 +119,12 @@ function friendlyFailureReason(reason: string | undefined): string {
 }
 
 export default function ArtifactPanel(): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const globalArtifacts = useStore((s) => s.artifacts);
   const agentTasks = useStore((s) => s.agentTasks);
   const upsertAgentTask = useStore((s) => s.upsertAgentTask);
@@ -134,14 +142,24 @@ export default function ArtifactPanel(): JSX.Element {
     useState<GeneratedArtifact | null>(null);
 
   useEffect(() => {
+    setPreviewArtifact(null);
+    Modal.destroyAll();
+  }, [backendOriginRevision]);
+
+  useEffect(() => {
     if (!connected) return;
     let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive && isCurrent(originGeneration) && !controller.signal.aborted;
     void (async (): Promise<void> => {
       const [restoredResult, tasksResult] = await Promise.allSettled([
-        listArtifacts(500),
-        listAgentTasks(50),
+        listArtifacts(500, { signal: controller.signal }),
+        listAgentTasks(50, { signal: controller.signal }),
       ]);
-      if (!alive) return;
+      if (!canCommit()) return;
       if (restoredResult.status === "fulfilled") {
         const restored = restoredResult.value;
         restored
@@ -161,8 +179,17 @@ export default function ArtifactPanel(): JSX.Element {
     })();
     return () => {
       alive = false;
+      unregisterController();
     };
-  }, [addArtifact, connected, upsertAgentTask]);
+  }, [
+    addArtifact,
+    backendOriginRevision,
+    captureGeneration,
+    connected,
+    isCurrent,
+    registerAbortController,
+    upsertAgentTask,
+  ]);
 
   // outputs 是全局工作产物，不应因为用户正在查看某个历史会议而消失。
   // 会议关联产物只作为补充来源合并进列表；全局新生成产物始终可见。
@@ -178,13 +205,16 @@ export default function ArtifactPanel(): JSX.Element {
     .slice(0, 20);
 
   function onClearAll(): void {
+    const originGeneration = captureGeneration();
     Modal.confirm({
       title: "清空工作产物",
       content: `确定清空 ${globalArtifacts.length} 条历史产物？该操作不可撤回（文件本身仍保留在磁盘）。`,
       okText: "清空",
       okType: "danger",
       cancelText: "取消",
-      onOk: () => clearArtifacts(),
+      onOk: () => {
+        if (isCurrent(originGeneration)) clearArtifacts();
+      },
     });
   }
 
@@ -292,16 +322,15 @@ export default function ArtifactPanel(): JSX.Element {
                       </span>
                     </span>
                     <span className="flex items-center gap-1 shrink-0 opacity-70 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                      <a
-                        href={artifactDownloadUrl(a.artifact_id)}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label={`下载${displayName}`}
-                        onClick={(e) => e.stopPropagation()}
+                      <AuthenticatedDownloadLink
+                        url={artifactDownloadUrl(a.artifact_id)}
+                        downloadName={displayName}
+                        ariaLabel={`下载${displayName}`}
+                        stopPropagation
                         className="p-1 rounded hover:bg-paper-200 focus-visible:bg-paper-200"
                       >
                         <Download className="w-3.5 h-3.5 text-ink-500 hover:text-accent" />
-                      </a>
+                      </AuthenticatedDownloadLink>
                       <button
                         type="button"
                         data-testid="remove-artifact-btn"
@@ -391,6 +420,11 @@ function AgentTaskCardView({
   task: AgentTaskCard;
   onUpdate: (task: AgentTaskCard) => void;
 }): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+  } = useBackendOriginFence();
   const [busy, setBusy] = useState(false);
   const snapshot = task.snapshot ?? {};
   const artifacts = Array.isArray(snapshot.artifacts) ? snapshot.artifacts : task.artifacts;
@@ -399,24 +433,33 @@ function AgentTaskCardView({
   const failed = task.state === "failed" || task.state === "timeout" || task.state === "cancel_failed";
   const Icon = task.state === "succeeded" ? CheckCircle2 : failed ? AlertCircle : Clock3;
 
+  useEffect(() => {
+    setBusy(false);
+  }, [backendOriginRevision]);
+
   async function grantAndStart(e: MouseEvent): Promise<void> {
     e.stopPropagation();
+    const originGeneration = captureGeneration();
     setBusy(true);
     try {
       const res = await grantAgentRunnerAndResume(task.task_id);
-      if (res.resumed_task) onUpdate(res.resumed_task);
+      if (isCurrent(originGeneration) && res.resumed_task) {
+        onUpdate(res.resumed_task);
+      }
     } finally {
-      setBusy(false);
+      if (isCurrent(originGeneration)) setBusy(false);
     }
   }
 
   async function cancel(e: MouseEvent): Promise<void> {
     e.stopPropagation();
+    const originGeneration = captureGeneration();
     setBusy(true);
     try {
-      onUpdate(await cancelAgentTask(task.task_id));
+      const updated = await cancelAgentTask(task.task_id);
+      if (isCurrent(originGeneration)) onUpdate(updated);
     } finally {
-      setBusy(false);
+      if (isCurrent(originGeneration)) setBusy(false);
     }
   }
 
@@ -504,42 +547,18 @@ function AgentArtifactLink({
   item: { name?: string; url?: string; kind?: string };
 }): JSX.Element {
   const rawUrl = typeof item.url === "string" ? item.url : "";
-  const [href, setHref] = useState<string | undefined>(
-    rawUrl && !rawUrl.startsWith("/") ? rawUrl : undefined,
-  );
-
-  useEffect(() => {
-    let alive = true;
-    if (!rawUrl) {
-      setHref(undefined);
-      return () => {
-        alive = false;
-      };
-    }
-    if (!rawUrl.startsWith("/")) {
-      setHref(rawUrl);
-      return () => {
-        alive = false;
-      };
-    }
-    void apiUrl(rawUrl).then((resolved) => {
-      if (alive) setHref(resolved);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [rawUrl]);
+  const artifactId = artifactIdFromDownloadHref(rawUrl);
+  const authenticatedUrl = artifactId ? artifactDownloadUrl(artifactId) : rawUrl;
 
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
+    <AuthenticatedDownloadLink
+      url={authenticatedUrl}
+      downloadName={item.name}
       className="flex items-center gap-1.5 text-[11px] text-accent hover:underline"
     >
       <Download className="w-3 h-3" />
       <span className="truncate">{item.name ?? "产物"}</span>
-    </a>
+    </AuthenticatedDownloadLink>
   );
 }
 
@@ -555,6 +574,11 @@ function FailedArtifactCard({
   failed,
   onDismiss,
 }: FailedArtifactCardProps): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+  } = useBackendOriginFence();
   const [now, setNow] = useState(() => Date.now());
   const [retrying, setRetrying] = useState(false);
   const addArtifact = useStore((s) => s.addArtifact);
@@ -565,6 +589,10 @@ function FailedArtifactCard({
     return () => clearInterval(t);
   }, []);
 
+  useEffect(() => {
+    setRetrying(false);
+  }, [backendOriginRevision]);
+
   const relative = formatRelativeTime(failed.failed_at, now);
   const typeBadgeClass =
     typeBadge[failed.artifact_type] ?? "bg-paper-200 text-ink-700";
@@ -573,6 +601,7 @@ function FailedArtifactCard({
   async function onRetry(e: React.MouseEvent): Promise<void> {
     e.stopPropagation();
     if (!canRetry || retrying || !failed.intent_text) return;
+    const originGeneration = captureGeneration();
     setRetrying(true);
     try {
       const artifact = await generateArtifact({
@@ -582,16 +611,19 @@ function FailedArtifactCard({
         todo_id: failed.todo_id ?? undefined,
         retry_of_run_id: failed.run_id ?? undefined,
       });
-      addArtifact(artifact);
-      onDismiss();
-      message.success(
-        `已重新生成：${artifact.title?.trim() || artifactFallbackTitle(artifact.artifact_type)}`,
-      );
+      if (isCurrent(originGeneration)) {
+        addArtifact(artifact);
+        onDismiss();
+        message.success(
+          `已重新生成：${artifact.title?.trim() || artifactFallbackTitle(artifact.artifact_type)}`,
+        );
+      }
     } catch (err) {
+      if (!isCurrent(originGeneration)) return;
       console.error("[artifact-panel] retry failed", err);
       message.error("重试失败，请稍后再试");
     } finally {
-      setRetrying(false);
+      if (isCurrent(originGeneration)) setRetrying(false);
     }
   }
 

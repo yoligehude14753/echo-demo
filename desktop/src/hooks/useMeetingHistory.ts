@@ -28,8 +28,15 @@ import {
   listWorkflowRuns,
 } from "@/api";
 import { projectMinutesWithWorkflowRuns, useStore } from "@/store";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 export function useMeetingHistory(): void {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const hydrateMeetings = useStore((s) => s.hydrateMeetings);
   const rehydrateMeetings = useStore((s) => s.rehydrateMeetings);
   const rehydrateRevision = useStore((s) => s.rehydrateRevision);
@@ -71,6 +78,11 @@ export function useMeetingHistory(): void {
   // 任一次 200 OK 立即停；alive 守护 unmount 时早退。
   useEffect(() => {
     let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive && isCurrent(originGeneration) && !controller.signal.aborted;
     startMeetingListLoad();
     const fenceSeq =
       rehydrateRevision > 0
@@ -80,14 +92,14 @@ export function useMeetingHistory(): void {
             .events.reduce((max, event) => Math.max(max, event.seq ?? 0), 0);
     const delays = [0, 300, 800, 2000, 5000, 10_000];
     void (async (): Promise<void> => {
-      for (let i = 0; i < delays.length && alive; i++) {
+      for (let i = 0; i < delays.length && canCommit(); i++) {
         if (delays[i] > 0) {
           await new Promise<void>((res) => setTimeout(res, delays[i]));
         }
-        if (!alive) return;
+        if (!canCommit()) return;
         try {
-          const list = await listMeetings(50);
-          if (!alive) return;
+          const list = await listMeetings(50, { signal: controller.signal });
+          if (!canCommit()) return;
           if (rehydrateRevision > 0) {
             rehydrateMeetings(list, fenceSeq);
           } else {
@@ -96,6 +108,7 @@ export function useMeetingHistory(): void {
           completeMeetingListLoad();
           return; // 成功立即终止
         } catch (e) {
+          if (!canCommit()) return;
           if (i === delays.length - 1) {
             console.warn(
               "[meeting-history] listMeetings failed after retries:",
@@ -108,8 +121,11 @@ export function useMeetingHistory(): void {
     })();
     return () => {
       alive = false;
+      unregisterController();
     };
   }, [
+    backendOriginRevision,
+    captureGeneration,
     hydrateMeetings,
     rehydrateMeetings,
     rehydrateRevision,
@@ -118,6 +134,8 @@ export function useMeetingHistory(): void {
     startMeetingListLoad,
     completeMeetingListLoad,
     failMeetingListLoad,
+    isCurrent,
+    registerAbortController,
   ]);
 
   // 选中后按需拉 detail
@@ -125,15 +143,23 @@ export function useMeetingHistory(): void {
     if (!currentMeetingId) return;
     if (detailLoadedRef.current[currentMeetingId]) return;
     let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive && isCurrent(originGeneration) && !controller.signal.aborted;
     void (async (): Promise<void> => {
       try {
         const [segs, minutes, arts, workflowRuns] = await Promise.all([
-          getMeetingTranscript(currentMeetingId),
-          getMeetingMinutes(currentMeetingId),
-          getMeetingArtifacts(currentMeetingId),
-          listWorkflowRuns({ meeting_id: currentMeetingId, limit: 100 }),
+          getMeetingTranscript(currentMeetingId, { signal: controller.signal }),
+          getMeetingMinutes(currentMeetingId, { signal: controller.signal }),
+          getMeetingArtifacts(currentMeetingId, { signal: controller.signal }),
+          listWorkflowRuns(
+            { meeting_id: currentMeetingId, limit: 100 },
+            { signal: controller.signal },
+          ),
         ]);
-        if (!alive) return;
+        if (!canCommit()) return;
         const cur = meetingsRef.current[currentMeetingId];
         const restoredMinutes = projectMinutesWithWorkflowRuns(
           cur?.minutes ?? minutes,
@@ -168,21 +194,25 @@ export function useMeetingHistory(): void {
           });
         markDetailLoaded(currentMeetingId);
       } catch (e) {
+        if (!canCommit()) return;
         console.warn("[meeting-history] load detail failed:", e);
-        if (alive) {
-          markDetailError(currentMeetingId, "会议详情加载失败 · 点击重试");
-        }
+        markDetailError(currentMeetingId, "会议详情加载失败 · 点击重试");
       }
     })();
     return () => {
       alive = false;
+      unregisterController();
     };
   }, [
     applyEvent,
+    backendOriginRevision,
+    captureGeneration,
     currentMeetingId,
     detailRetryRevision,
     upsertMeeting,
     markDetailLoaded,
     markDetailError,
+    isCurrent,
+    registerAbortController,
   ]);
 }

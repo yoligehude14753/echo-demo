@@ -2,30 +2,138 @@ name: Build and upgrade-test signed Android and TV release candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Exact 40-character SHA at the tip of main to sign"
+        required: true
+        type: string
 
 permissions:
   contents: read
-  id-token: write
-  attestations: write
+
+concurrency:
+  group: formal-android-tv-release-${{ inputs.release_sha }}
+  cancel-in-progress: false
 
 jobs:
+  authorize-main:
+    name: release authorization / exact-SHA CI workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: require exact main SHA and successful required check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "yoligehude14753/echo-demo" || {
+            echo "Signed Android release is restricted to the canonical repository." >&2
+            exit 1
+          }
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "Signed Android release is restricted to refs/heads/main (received ${GITHUB_REF})." >&2
+            exit 1
+          }
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "release_sha must be an exact lowercase 40-character commit SHA" >&2
+            exit 1
+          }
+          test "${RELEASE_SHA}" = "${GITHUB_SHA}" || {
+            echo "release_sha is not the exact main commit that dispatched this run" >&2
+            exit 1
+          }
+
+          runs_payload="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha=${RELEASE_SHA}&per_page=100")"
+          selected_run="$(jq -c \
+            --arg sha "${RELEASE_SHA}" \
+            --arg repo "${GITHUB_REPOSITORY}" '
+            [
+              .workflow_runs[]
+              | select(
+                  .head_sha == $sha
+                  and .head_branch == "main"
+                  and .event == "push"
+                  and .status == "completed"
+                  and .conclusion == "success"
+                  and .repository.full_name == $repo
+                  and .path == ".github/workflows/ci.yml"
+                )
+            ]
+            | sort_by(.id)
+            | last // empty
+          ' <<<"${runs_payload}")"
+          test -n "${selected_run}" || {
+            echo "successful exact-SHA push/main ci.yml workflow run was not found" >&2
+            exit 1
+          }
+
+          run_id="$(jq -r '.id' <<<"${selected_run}")"
+          jobs_payload="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100")"
+          selected_check="$(jq -c '
+            [
+              .jobs[]
+              | select(
+                  .name == "check"
+                  and .status == "completed"
+                  and .conclusion == "success"
+                )
+            ]
+            | sort_by(.id)
+            | last // empty
+          ' <<<"${jobs_payload}")"
+          test -n "${selected_check}" || {
+            echo "selected ci.yml workflow run has no completed/success check job" >&2
+            exit 1
+          }
+          check_id="$(jq -r '.id' <<<"${selected_check}")"
+          echo "Exact-SHA CI workflow passed: run_id=${run_id} check_id=${check_id}"
+
   signed-android-tv-release:
     name: Android + TV / signed release candidate and historical upgrade
+    needs: authorize-main
     runs-on: ubuntu-latest
+    environment: android-release
     timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+      - name: verify the checked-out signing source
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "${actual}" = "${RELEASE_SHA}"
+          test "${actual}" = "${GITHUB_SHA}"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
-      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       - name: install pinned Android SDK components
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.1.0"
       - name: install desktop dependencies
@@ -46,6 +154,7 @@ jobs:
           CURRENT_CERT_SHA256: ${{ secrets.ECHODESK_ANDROID_CURRENT_CERT_SHA256 }}
         run: |
           set -euo pipefail
+          umask 077
           for name in \
             LEGACY_KEYSTORE_BASE64 LEGACY_KEY_ALIAS LEGACY_KEYSTORE_PASSWORD \
             LEGACY_KEY_PASSWORD LEGACY_CERT_SHA256 \
@@ -86,6 +195,26 @@ jobs:
           test -f "desktop/release/EchoDesk-${version}-android-signing.json"
           test -f "desktop/release/EchoDesk-${version}-android-signing-lineage.bin"
           test -f "desktop/release/EchoDesk-${version}-smart-tv-oneclick.zip"
+          test -f "desktop/release/EchoDesk-${version}-smart-tv.apk"
+          cmp \
+            "desktop/release/EchoDesk-${version}-android-tv.apk" \
+            "desktop/release/EchoDesk-${version}-smart-tv.apk"
+          installer_extract="$RUNNER_TEMP/echodesk-tv-installer-${version}"
+          rm -rf "$installer_extract"
+          mkdir -p "$installer_extract"
+          unzip -t "desktop/release/EchoDesk-${version}-smart-tv-oneclick.zip"
+          unzip -q \
+            "desktop/release/EchoDesk-${version}-smart-tv-oneclick.zip" \
+            -d "$installer_extract"
+          (
+            cd "$installer_extract"
+            test -f MANIFEST.sha256
+            sha256sum --check --strict MANIFEST.sha256
+            test -f "EchoDesk-${version}-smart-tv.apk"
+            test -f install-tv-macos.sh
+            test -f install-tv-windows.ps1
+            test -f README-TV-INSTALL.txt
+          )
           node -e '
             const fs = require("fs");
             const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
@@ -126,14 +255,26 @@ jobs:
               'be8b0c08004a13dc0e347c0d6edd14653e5c3864db4f78948efb7d80572a6653' \
               'EchoDesk-0.2.34-android-tv.apk' | sha256sum --check --strict
           )
+      - name: enable and verify KVM for signed upgrade instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -c /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
       - name: install real v0.2.34 APKs then upgrade to the signed candidates
-        uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 35
           target: google_apis
           arch: x86_64
           profile: pixel_2
           disable-animations: true
+          disable-linux-hw-accel: false
           script: |
             set -euo pipefail
             version="$(node -p "require('./desktop/package.json').version")"
@@ -169,27 +310,79 @@ jobs:
             ECHODESK_ANDROID_ROTATION_MIN_SDK_VERSION="$rotation_min_sdk" \
               node desktop/scripts/android-candidate-upgrade-smoke.cjs \
               | tee "desktop/release/EchoDesk-${version}-android-tv-upgrade-smoke.json"
+      - name: generate Android and TV CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./desktop/package.json').version")"
+          python scripts/generate-android-sbom.py \
+            "desktop/release/EchoDesk-${version}-Android-SBOM.cdx.json"
+      - name: generate and verify Android and TV SHA-256 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./desktop/package.json').version")"
+          cd desktop/release
+          files=(
+            "EchoDesk-${version}-android.apk"
+            "EchoDesk-${version}-android-tv.apk"
+            "EchoDesk-${version}-smart-tv.apk"
+            "EchoDesk-${version}-smart-tv-oneclick.zip"
+            "EchoDesk-${version}-android-signing.json"
+            "EchoDesk-${version}-android-signing-lineage.bin"
+            "EchoDesk-${version}-android-upgrade-smoke.json"
+            "EchoDesk-${version}-android-tv-upgrade-smoke.json"
+            "EchoDesk-${version}-Android-SBOM.cdx.json"
+          )
+          for file in "${files[@]}"; do test -s "$file"; done
+          sha256sum "${files[@]}" > SHA256SUMS-Android.txt
+          sha256sum --check --strict SHA256SUMS-Android.txt
+          expected=("${files[@]}" "SHA256SUMS-Android.txt")
+          mapfile -t candidates < <(
+            find . -maxdepth 1 -type f \
+              \( -name 'EchoDesk-*-android.apk' \
+                 -o -name 'EchoDesk-*-android-tv.apk' \
+                 -o -name 'EchoDesk-*-smart-tv.apk' \
+                 -o -name 'EchoDesk-*-smart-tv-oneclick.zip' \
+                 -o -name 'EchoDesk-*-android-signing.json' \
+                 -o -name 'EchoDesk-*-android-signing-lineage.bin' \
+                 -o -name 'EchoDesk-*-android-upgrade-smoke.json' \
+                 -o -name 'EchoDesk-*-android-tv-upgrade-smoke.json' \
+                 -o -name 'EchoDesk-*-Android-SBOM.cdx.json' \
+                 -o -name 'SHA256SUMS-Android.txt' \) \
+              -printf '%f\n' | LC_ALL=C sort
+          )
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
+            <(printf '%s\n' "${candidates[@]}")
+          printf 'ECHODESK_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"
       - name: attest Android and TV release provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
-            desktop/release/EchoDesk-*-android.apk
-            desktop/release/EchoDesk-*-android-tv.apk
-            desktop/release/EchoDesk-*-android-signing.json
-            desktop/release/EchoDesk-*-android-signing-lineage.bin
-            desktop/release/EchoDesk-*-android-upgrade-smoke.json
-            desktop/release/EchoDesk-*-android-tv-upgrade-smoke.json
-            desktop/release/EchoDesk-*-smart-tv-oneclick.zip
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android.apk
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-tv.apk
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-smart-tv.apk
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-signing.json
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-signing-lineage.bin
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-upgrade-smoke.json
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-tv-upgrade-smoke.json
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-smart-tv-oneclick.zip
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-Android-SBOM.cdx.json
+            desktop/release/SHA256SUMS-Android.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: echodesk-android-tv-signed-release-candidate
           path: |
-            desktop/release/EchoDesk-*-android.apk
-            desktop/release/EchoDesk-*-android-tv.apk
-            desktop/release/EchoDesk-*-android-signing.json
-            desktop/release/EchoDesk-*-android-signing-lineage.bin
-            desktop/release/EchoDesk-*-smart-tv.apk
-            desktop/release/EchoDesk-*-smart-tv-oneclick.zip
-            desktop/release/EchoDesk-*-android-upgrade-smoke.json
-            desktop/release/EchoDesk-*-android-tv-upgrade-smoke.json
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android.apk
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-tv.apk
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-signing.json
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-signing-lineage.bin
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-smart-tv.apk
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-smart-tv-oneclick.zip
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-upgrade-smoke.json
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-tv-upgrade-smoke.json
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-Android-SBOM.cdx.json
+            desktop/release/SHA256SUMS-Android.txt
           if-no-files-found: error
+          compression-level: 0

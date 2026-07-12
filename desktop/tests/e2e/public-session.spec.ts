@@ -43,6 +43,7 @@ test("public client keeps the device credential out of renderer storage and WS U
   });
 
   let meetingsAuthorization = "";
+  let meetingsClientVersion = "";
   let anonymousMetaAuthorization = "";
   await page.route(/\/(api\/)?bootstrap$/, (route) =>
     route.fulfill({
@@ -66,6 +67,8 @@ test("public client keeps the device credential out of renderer storage and WS U
   );
   await page.route(/\/(api\/)?meetings\?limit=/, (route) => {
     meetingsAuthorization = route.request().headers()["authorization"] ?? "";
+    meetingsClientVersion =
+      route.request().headers()["x-echodesk-client-version"] ?? "";
     return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
   await page.route(/\/(api\/)?anonymous-meta-probe$/, (route) => {
@@ -79,6 +82,7 @@ test("public client keeps the device credential out of renderer storage and WS U
 
   await page.goto("/");
   await expect.poll(() => meetingsAuthorization).toBe("Bearer session-from-server");
+  expect(meetingsClientVersion).toBe("0.3.1");
   const wsUrl = await page.evaluate(
     () =>
       (
@@ -96,6 +100,7 @@ test("public client keeps the device credential out of renderer storage and WS U
     .toContainEqual(
       expect.objectContaining({
         type: "client_hello",
+        client_version: "0.3.1",
         auth: { type: "bearer", token: "session-from-server" },
       }),
     );

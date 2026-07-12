@@ -75,6 +75,7 @@ export async function installEchoMock(
       ws: MockWs | null;
       wsUrl?: string;
       wsSent: string[];
+      wsCreated: number;
       wsClosed: boolean;
       fetchLog: Array<{ url: string; method: string; bodyText?: string }>;
       mockArtifactRunningId?: string;
@@ -82,14 +83,35 @@ export async function installEchoMock(
     } = {
       ws: null,
       wsSent: [],
+      wsCreated: 0,
       wsClosed: false,
       fetchLog: [],
       _seq: 0,
     };
     (window as unknown as { __echoMock__: typeof ctrl }).__echoMock__ = ctrl;
     const existingEcho = (window as unknown as { echo?: Record<string, unknown> }).echo ?? {};
+    const originBoundEcho = { ...existingEcho };
+    const identityOrigin = (): string => {
+      const configured = window.localStorage.getItem("echodesk.mobileBackendBase");
+      const bridgeHost =
+        typeof existingEcho.backendHost === "string" ? existingEcho.backendHost : null;
+      return new URL(configured || bridgeHost || window.location.origin).origin;
+    };
+    for (const method of ["ensurePublicSession", "renewPublicSession"] as const) {
+      const request = existingEcho[method];
+      if (typeof request !== "function") continue;
+      originBoundEcho[method] = async (...args: unknown[]) => {
+        const result = await request(...args);
+        if (!result || typeof result !== "object") return result;
+        const session = result as Record<string, unknown>;
+        return {
+          ...session,
+          backend_origin: session.backend_origin ?? identityOrigin(),
+        };
+      };
+    }
     (window as unknown as { echo: Record<string, unknown> }).echo = {
-      ...existingEcho,
+      ...originBoundEcho,
       isElectron,
       getShareBackendHost: async () => "http://192.168.50.10:8769",
     };
@@ -103,6 +125,7 @@ export async function installEchoMock(
       onerror: (() => void) | null = null;
       private _outbox: string[] = [];
       constructor(_url: string) {
+        ctrl.wsCreated += 1;
         ctrl.wsUrl = _url;
         ctrl.ws = this;
         setTimeout(() => {

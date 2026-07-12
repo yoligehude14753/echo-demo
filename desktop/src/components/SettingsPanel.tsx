@@ -33,9 +33,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   workspaceAddDir,
+  workspacePickDirectory,
   workspaceRemoveDir,
   workspaceScan,
   workspaceStatus,
+  workspaceCapability,
 } from "@/api";
 import {
   DEFAULT_ANDROID_BACKEND_BASE,
@@ -47,12 +49,14 @@ import {
   configuredBackendBase,
   installAppUpdate,
   isNewerAppUpdate,
+  isPackagedElectronRenderer,
   isPublicRuntime,
   normalizeBackendBase,
   openUpdateTarget,
   setStoredBackendBase,
 } from "@/runtime";
 import { apiTransport } from "@/session";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 interface DataDirBreakdown {
   db: number;
@@ -251,6 +255,12 @@ export default function SettingsPanel({
   initialSection = null,
   onReplayOnboarding,
 }: Props): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+  } = useBackendOriginFence();
+  const renderedOriginGeneration = captureGeneration();
   const [dataDir, setDataDir] = useState<DataDirResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [diagBusy, setDiagBusy] = useState(false);
@@ -279,50 +289,126 @@ export default function SettingsPanel({
   const privateBackendConfirmRef = useRef<HTMLButtonElement | null>(null);
   const workspaceInitialFocusDoneRef = useRef(false);
   const workspaceAddDirRef = useRef<HTMLAnchorElement | HTMLButtonElement | null>(null);
+  const dataDirGenerationRef = useRef<number | null>(null);
+  const remoteGenerationRef = useRef<number | null>(null);
+  const workspaceGenerationRef = useRef<number | null>(null);
+  const backendBaseDraftGenerationRef = useRef<number | null>(null);
+  const pendingPrivateBackendGenerationRef = useRef<number | null>(null);
+  const settingsConfirmDestroyersRef = useRef<Set<() => void>>(new Set());
+  const renderedDataDirGeneration = dataDirGenerationRef.current;
+  const renderedRemoteGeneration = remoteGenerationRef.current;
+  const renderedWorkspaceGeneration = workspaceGenerationRef.current;
+  const renderedBackendBaseDraftGeneration =
+    backendBaseDraftGenerationRef.current;
+  const renderedPendingPrivateBackendGeneration =
+    pendingPrivateBackendGenerationRef.current;
   const hostAdminAvailable = !isPublicRuntime();
+  const workspaceDirectoryAvailable = workspaceCapability() !== "unavailable";
+  const backendOriginEditable = !isPackagedElectronRenderer();
+
+  useEffect(() => {
+    for (const destroy of settingsConfirmDestroyersRef.current) destroy();
+    settingsConfirmDestroyersRef.current.clear();
+    dataDirGenerationRef.current = null;
+    remoteGenerationRef.current = null;
+    workspaceGenerationRef.current = null;
+    pendingPrivateBackendGenerationRef.current = null;
+    backendBaseDraftGenerationRef.current = renderedOriginGeneration;
+    backendBaseDraftRef.current =
+      configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE;
+    setDataDir(null);
+    setLoading(false);
+    setDiagBusy(false);
+    setResetBusy(false);
+    setRemote(null);
+    setRemoteBusy(false);
+    setNeedsRestart(false);
+    setRestartBusy(false);
+    setAdminUnavailable(false);
+    setBackendBaseDraft(backendBaseDraftRef.current);
+    setPendingPrivateBackendBase(null);
+    setUpdateBusy(false);
+    setUpdateInstallBusy(false);
+    setBackendVersion(null);
+    setWs(null);
+    setWsBusy(false);
+    setWsScanBusy(false);
+    workspaceInitialFocusDoneRef.current = false;
+    form.resetFields();
+  }, [backendOriginRevision, form, renderedOriginGeneration]);
 
   const refreshDataDir = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
     if (!hostAdminAvailable) {
       setLoading(false);
       setDataDir(null);
+      dataDirGenerationRef.current = null;
       return;
     }
     setLoading(true);
     try {
+      if (!isCurrent(generation)) return;
       const url = await apiUrl("/admin/data-dir");
-      const res = await apiTransport(url, {}, { timeoutMs: 12_000, throwHttpErrors: false });
+      if (!isCurrent(generation)) return;
+      const res = await apiTransport(url, {}, {
+        timeoutMs: 12_000,
+        throwHttpErrors: false,
+      });
+      if (!isCurrent(generation)) return;
       if (res.status === 403) {
         setAdminUnavailable(true);
         setDataDir(null);
+        dataDirGenerationRef.current = null;
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!isCurrent(generation)) return;
       const json = (await res.json()) as DataDirResponse;
+      if (!isCurrent(generation)) return;
+      dataDirGenerationRef.current = generation;
       setAdminUnavailable(false);
       setDataDir(json);
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("load data directory", e, "暂时无法读取数据信息");
+      dataDirGenerationRef.current = null;
       setDataDir(null);
     } finally {
-      setLoading(false);
+      if (isCurrent(generation)) setLoading(false);
     }
-  }, [hostAdminAvailable]);
+  }, [hostAdminAvailable, isCurrent, renderedOriginGeneration]);
 
   const refreshRemote = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
     if (!hostAdminAvailable) {
+      remoteGenerationRef.current = null;
       setRemote(null);
+      form.resetFields();
       return;
     }
     try {
+      if (!isCurrent(generation)) return;
       const url = await apiUrl("/admin/settings/remote");
-      const res = await apiTransport(url, {}, { timeoutMs: 12_000, throwHttpErrors: false });
+      if (!isCurrent(generation)) return;
+      const res = await apiTransport(url, {}, {
+        timeoutMs: 12_000,
+        throwHttpErrors: false,
+      });
+      if (!isCurrent(generation)) return;
       if (res.status === 403) {
         setAdminUnavailable(true);
+        remoteGenerationRef.current = null;
         setRemote(null);
+        form.resetFields();
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!isCurrent(generation)) return;
       const json = (await res.json()) as RemoteSettingsResponse;
+      if (!isCurrent(generation)) return;
+      remoteGenerationRef.current = generation;
       setAdminUnavailable(false);
       setRemote(json);
       // 重置表单：sensitive 字段不显示原值（脱敏值仅作 placeholder），
@@ -333,44 +419,68 @@ export default function SettingsPanel({
       }
       form.setFieldsValue(initial);
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("load service settings", e, "暂时无法读取服务配置");
+      remoteGenerationRef.current = null;
       setRemote(null);
+      form.resetFields();
     }
-  }, [form, hostAdminAvailable]);
+  }, [form, hostAdminAvailable, isCurrent, renderedOriginGeneration]);
 
   const refreshWorkspace = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    if (!workspaceDirectoryAvailable) {
+      workspaceGenerationRef.current = null;
+      setWs(null);
+      return;
+    }
     try {
+      if (!isCurrent(generation)) return;
       const json = await workspaceStatus();
+      if (!isCurrent(generation)) return;
+      workspaceGenerationRef.current = generation;
       setWs(json);
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("load workspace", e, "暂时无法读取工作区状态");
+      workspaceGenerationRef.current = null;
       setWs(null);
     }
-  }, []);
+  }, [isCurrent, renderedOriginGeneration, workspaceDirectoryAvailable]);
 
   const refreshBackendVersion = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
     if (!hostAdminAvailable) {
       setBackendVersion(null);
       return;
     }
     try {
-      const res = await apiTransport(await apiUrl("/healthz/full"), {}, {
+      if (!isCurrent(generation)) return;
+      const url = await apiUrl("/healthz/full");
+      if (!isCurrent(generation)) return;
+      const res = await apiTransport(url, {}, {
         timeoutMs: 12_000,
         throwHttpErrors: false,
       });
+      if (!isCurrent(generation)) return;
       if (!res.ok) {
         setBackendVersion(null);
         return;
       }
+      if (!isCurrent(generation)) return;
       const json = (await res.json()) as { backend?: { version?: string } };
+      if (!isCurrent(generation)) return;
       setBackendVersion(json.backend?.version ?? null);
     } catch {
-      setBackendVersion(null);
+      if (isCurrent(generation)) setBackendVersion(null);
     }
-  }, [hostAdminAvailable]);
+  }, [hostAdminAvailable, isCurrent, renderedOriginGeneration]);
 
   useEffect(() => {
-    if (open) {
+    const generation = renderedOriginGeneration;
+    if (open && isCurrent(generation)) {
       if (hostAdminAvailable) {
         void refreshDataDir();
         void refreshRemote();
@@ -381,25 +491,43 @@ export default function SettingsPanel({
         setRemote(null);
         setBackendVersion(null);
       }
-      void refreshWorkspace();
-      setBackendBaseDraft(configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE);
+      if (workspaceDirectoryAvailable) void refreshWorkspace();
+      const nextBackendBase =
+        configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE;
+      backendBaseDraftGenerationRef.current = generation;
+      backendBaseDraftRef.current = nextBackendBase;
+      setBackendBaseDraft(nextBackendBase);
     }
   }, [
+    backendOriginRevision,
     open,
     hostAdminAvailable,
+    isCurrent,
+    renderedOriginGeneration,
     refreshDataDir,
     refreshRemote,
     refreshWorkspace,
     refreshBackendVersion,
+    workspaceDirectoryAvailable,
   ]);
 
   useEffect(() => {
     if (!open) return undefined;
+    const generation = renderedOriginGeneration;
     let alive = true;
     if (window.echo?.getUpdateStatus) {
-      void window.echo.getUpdateStatus().then((status) => {
-        if (alive) setUpdateInfo(status);
-      });
+      void (async () => {
+        try {
+          if (!alive || !isCurrent(generation)) return;
+          const status = await window.echo!.getUpdateStatus!();
+          if (!alive || !isCurrent(generation)) return;
+          setUpdateInfo(status);
+        } catch (e) {
+          if (alive && isCurrent(generation)) {
+            console.warn("[settings] unable to read update status", e);
+          }
+        }
+      })();
     }
     if (!window.echo?.onUpdateStatus) {
       return () => {
@@ -407,13 +535,13 @@ export default function SettingsPanel({
       };
     }
     const unsubscribe = window.echo.onUpdateStatus((status) => {
-      setUpdateInfo(status);
+      if (alive && isCurrent(generation)) setUpdateInfo(status);
     });
     return () => {
       alive = false;
       unsubscribe();
     };
-  }, [open]);
+  }, [backendOriginRevision, isCurrent, open, renderedOriginGeneration]);
 
   useEffect(() => {
     if (!open) {
@@ -454,13 +582,17 @@ export default function SettingsPanel({
   }, [open, initialSection, drawerOpenSettled, ws]);
 
   const onAddWorkspaceDir = useCallback(async () => {
+    const generation = renderedWorkspaceGeneration;
+    if (generation === null || !isCurrent(generation)) return;
     // 优先用 Electron dialog；浏览器/纯 dev 模式回退到 prompt() 让用户手填路径
     let picked: string | null | undefined;
     try {
       if (window.echo?.pickDirectory) {
-        picked = await window.echo.pickDirectory({
+        if (!isCurrent(generation)) return;
+        picked = await workspacePickDirectory({
           defaultPath: ws?.configured_dirs?.[0],
         });
+        if (!isCurrent(generation)) return;
       } else {
         const v = window.prompt(
           "输入要加入工作区的目录绝对路径（如 /Users/you/Documents）：",
@@ -469,29 +601,39 @@ export default function SettingsPanel({
         picked = v && v.trim() ? v.trim() : null;
       }
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("pick workspace directory", e, "选择目录失败，请重试");
       return;
     }
+    if (!isCurrent(generation)) return;
     if (!picked) return; // 用户取消
     setWsBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const r = await workspaceAddDir(picked);
+      if (!isCurrent(generation)) return;
       if (r.added) {
         message.success(`已加入：${r.path}（后台扫描索引中…）`);
       } else {
         message.info("该目录已在工作区，无需重复添加");
       }
+      if (!isCurrent(generation)) return;
       await refreshWorkspace();
+      if (!isCurrent(generation)) return;
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("add workspace directory", e, "添加目录失败，请确认访问权限");
     } finally {
-      setWsBusy(false);
+      if (isCurrent(generation)) setWsBusy(false);
     }
-  }, [ws, refreshWorkspace]);
+  }, [isCurrent, refreshWorkspace, renderedWorkspaceGeneration, ws]);
 
   const onRemoveWorkspaceDir = useCallback(
     async (dir: string) => {
-      Modal.confirm({
+      const generation = renderedWorkspaceGeneration;
+      if (generation === null || !isCurrent(generation)) return;
+      let destroyer: (() => void) | null = null;
+      const modal = Modal.confirm({
         title: "移除工作区目录？",
         icon: <AlertTriangle className="w-4 h-4 text-amber-500" />,
         content: (
@@ -503,57 +645,82 @@ export default function SettingsPanel({
         okText: "移除",
         okButtonProps: { danger: true },
         cancelText: "取消",
+        afterClose: () => {
+          if (destroyer) settingsConfirmDestroyersRef.current.delete(destroyer);
+        },
         onOk: async () => {
+          if (!isCurrent(generation)) return;
           setWsBusy(true);
           try {
+            if (!isCurrent(generation)) return;
             const r = await workspaceRemoveDir(dir);
+            if (!isCurrent(generation)) return;
             if (r.removed) {
               message.success(`已移除：${dir}`);
             }
+            if (!isCurrent(generation)) return;
             await refreshWorkspace();
+            if (!isCurrent(generation)) return;
           } catch (e) {
+            if (!isCurrent(generation)) return;
             reportSettingsError("remove workspace directory", e, "移除目录失败，请重试");
           } finally {
-            setWsBusy(false);
+            if (isCurrent(generation)) setWsBusy(false);
           }
         },
       });
+      destroyer = modal.destroy;
+      settingsConfirmDestroyersRef.current.add(destroyer);
     },
-    [refreshWorkspace],
+    [isCurrent, refreshWorkspace, renderedWorkspaceGeneration],
   );
 
   const onRescanWorkspace = useCallback(async () => {
+    const generation = renderedWorkspaceGeneration;
+    if (generation === null || !isCurrent(generation)) return;
     setWsScanBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const r = await workspaceScan();
+      if (!isCurrent(generation)) return;
       const text = `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped} · 失败 ${r.n_failed}`;
       if (r.n_failed > 0) {
         message.warning(text);
       } else {
         message.success(text);
       }
+      if (!isCurrent(generation)) return;
       await refreshWorkspace();
+      if (!isCurrent(generation)) return;
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("scan workspace", e, "扫描失败，请检查目录权限后重试");
     } finally {
-      setWsScanBusy(false);
+      if (isCurrent(generation)) setWsScanBusy(false);
     }
-  }, [refreshWorkspace]);
+  }, [isCurrent, refreshWorkspace, renderedWorkspaceGeneration]);
 
   const onOpenDataDir = async () => {
-    if (!dataDir?.path) return;
+    const generation = renderedDataDirGeneration;
+    if (generation === null || !isCurrent(generation) || !dataDir?.path) return;
     try {
+      if (!isCurrent(generation)) return;
       await navigator.clipboard.writeText(dataDir.path);
+      if (!isCurrent(generation)) return;
       message.success(`已复制路径到剪贴板：${dataDir.path}`);
     } catch {
-      message.info(`数据目录：${dataDir.path}`);
+      if (isCurrent(generation)) message.info(`数据目录：${dataDir.path}`);
     }
   };
 
   const onDownloadDiagnostics = async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation) || !hostAdminAvailable) return;
     setDiagBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const url = await apiUrl("/admin/diagnostics/export");
+      if (!isCurrent(generation)) return;
       const a = document.createElement("a");
       a.href = url;
       a.download = `echodesk-diag-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.zip`;
@@ -562,14 +729,16 @@ export default function SettingsPanel({
       document.body.removeChild(a);
       message.success("诊断包下载中…");
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("export diagnostics", e, "诊断包导出失败，请重试");
     } finally {
-      setDiagBusy(false);
+      if (isCurrent(generation)) setDiagBusy(false);
     }
   };
 
   const onSaveRemote = async (values: Record<string, string>) => {
-    if (!remote) return;
+    const generation = renderedRemoteGeneration;
+    if (generation === null || !isCurrent(generation) || !remote) return;
     // 只 PATCH 有真实输入的字段：sensitive 字段空字符串表示"不改"；
     // 非 sensitive 字段如果跟当前明文一致也跳过（避免空写）
     const original = new Map(remote.fields.map((f) => [f.key, f]));
@@ -590,7 +759,9 @@ export default function SettingsPanel({
     }
     setRemoteBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const url = await apiUrl("/admin/settings/remote");
+      if (!isCurrent(generation)) return;
       const res = await apiTransport(
         url,
         {
@@ -600,27 +771,37 @@ export default function SettingsPanel({
         },
         { throwHttpErrors: false },
       );
+      if (!isCurrent(generation)) return;
       if (!res.ok) {
+        if (!isCurrent(generation)) return;
         const detail = await res.text();
+        if (!isCurrent(generation)) return;
         throw new Error(`HTTP ${res.status}: ${detail.slice(0, 200)}`);
       }
+      if (!isCurrent(generation)) return;
       const json = (await res.json()) as {
         written_keys: string[];
         restart_required: boolean;
       };
+      if (!isCurrent(generation)) return;
       message.success(
         `已写入 ${json.written_keys.length} 项${json.restart_required ? "，需重启服务生效" : ""}`,
       );
       setNeedsRestart(json.restart_required);
-      void refreshRemote();
+      if (!isCurrent(generation)) return;
+      await refreshRemote();
+      if (!isCurrent(generation)) return;
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("save service settings", e, "配置保存失败，请检查输入后重试");
     } finally {
-      setRemoteBusy(false);
+      if (isCurrent(generation)) setRemoteBusy(false);
     }
   };
 
   const onRestartBackend = async () => {
+    const generation = renderedRemoteGeneration;
+    if (generation === null || !isCurrent(generation)) return;
     if (restartBusy) return;
     if (!window.echo?.manualRestartBackend) {
       message.warning("仅桌面模式可一键重启；开发模式请手动重启服务");
@@ -628,7 +809,9 @@ export default function SettingsPanel({
     }
     setRestartBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const result = await window.echo.manualRestartBackend();
+      if (!isCurrent(generation)) return;
       if (result.ok) {
         message.success("服务重启已开始");
         setNeedsRestart(false);
@@ -636,13 +819,17 @@ export default function SettingsPanel({
         message.warning("应用正在退出，未启动新的服务进程");
       }
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("restart backend", e, "服务重启失败，请稍后重试");
     } finally {
-      setRestartBusy(false);
+      if (isCurrent(generation)) setRestartBusy(false);
     }
   };
 
   const onSaveBackendBase = () => {
+    if (!backendOriginEditable) return;
+    const generation = renderedBackendBaseDraftGeneration;
+    if (generation === null || !isCurrent(generation)) return;
     let normalized: string | null;
     try {
       normalized = normalizeBackendBase(backendBaseDraftRef.current);
@@ -651,26 +838,57 @@ export default function SettingsPanel({
       return;
     }
 
-    const persist = (value: string | null) => {
+    const persist = (value: string | null): void => {
+      if (!isCurrent(generation)) return;
       const saved = setStoredBackendBase(value ?? "");
+      if (!isCurrent(generation)) {
+        message.success(saved ? `服务地址已保存：${saved}` : "已恢复默认服务地址");
+        return;
+      }
+      backendBaseDraftGenerationRef.current = generation;
+      backendBaseDraftRef.current = saved ?? DEFAULT_ANDROID_BACKEND_BASE;
       setBackendBaseDraft(saved ?? DEFAULT_ANDROID_BACKEND_BASE);
       message.success(saved ? `服务地址已保存：${saved}` : "已恢复默认服务地址");
     };
 
     if (normalized?.startsWith("http://")) {
+      pendingPrivateBackendGenerationRef.current = generation;
       setPendingPrivateBackendBase(normalized);
       return;
     }
     persist(normalized);
   };
 
+  const onResetBackendBase = () => {
+    if (!backendOriginEditable) return;
+    const generation = renderedBackendBaseDraftGeneration;
+    if (generation === null || !isCurrent(generation)) return;
+    const saved = setStoredBackendBase("");
+    if (isCurrent(generation)) {
+      backendBaseDraftGenerationRef.current = generation;
+      backendBaseDraftRef.current = saved ?? DEFAULT_ANDROID_BACKEND_BASE;
+      setBackendBaseDraft(backendBaseDraftRef.current);
+    }
+    message.success("已恢复默认服务地址");
+  };
+
   useEffect(() => {
-    if (!open) setPendingPrivateBackendBase(null);
+    if (!open) {
+      pendingPrivateBackendGenerationRef.current = null;
+      setPendingPrivateBackendBase(null);
+    }
   }, [open]);
 
   useEffect(() => {
     backendBaseDraftRef.current = backendBaseDraft;
   }, [backendBaseDraft]);
+
+  const cancelPrivateBackendBase = useCallback(() => {
+    const generation = renderedPendingPrivateBackendGeneration;
+    if (generation !== null && !isCurrent(generation)) return;
+    pendingPrivateBackendGenerationRef.current = null;
+    setPendingPrivateBackendBase(null);
+  }, [isCurrent, renderedPendingPrivateBackendGeneration]);
 
   useEffect(() => {
     if (!pendingPrivateBackendBase) return;
@@ -682,7 +900,7 @@ export default function SettingsPanel({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        setPendingPrivateBackendBase(null);
+        cancelPrivateBackendBase();
         return;
       }
       if (event.key !== "Tab") return;
@@ -708,22 +926,28 @@ export default function SettingsPanel({
       document.removeEventListener("keydown", onKeyDown);
       previousFocus?.focus();
     };
-  }, [pendingPrivateBackendBase]);
+  }, [cancelPrivateBackendBase, pendingPrivateBackendBase]);
 
   const confirmPrivateBackendBase = () => {
+    const generation = renderedPendingPrivateBackendGeneration;
     const pending = pendingPrivateBackendBase;
-    if (!pending) return;
+    if (generation === null || !pending || !isCurrent(generation)) return;
+    pendingPrivateBackendGenerationRef.current = null;
     setPendingPrivateBackendBase(null);
     const saved = setStoredBackendBase(pending);
-    setBackendBaseDraft(saved ?? DEFAULT_ANDROID_BACKEND_BASE);
     message.success(`服务地址已保存：${saved ?? pending}`);
   };
 
   const onCheckUpdate = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
     setUpdateBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const info = await checkAppUpdate();
+      if (!isCurrent(generation)) return;
       await refreshBackendVersion();
+      if (!isCurrent(generation)) return;
       setUpdateInfo(info);
       if (info.status === "error") {
         console.error("[settings] update check failed", info.error);
@@ -735,13 +959,23 @@ export default function SettingsPanel({
       } else {
         message.success("当前已是最新版本");
       }
+    } catch (e) {
+      if (!isCurrent(generation)) return;
+      reportSettingsError("check update", e, "暂时无法检查更新，请稍后重试");
     } finally {
-      setUpdateBusy(false);
+      if (isCurrent(generation)) setUpdateBusy(false);
     }
-  }, [refreshBackendVersion]);
+  }, [isCurrent, refreshBackendVersion, renderedOriginGeneration]);
 
   const onInstallUpdate = useCallback(async () => {
-    const info = updateInfo ?? (await checkAppUpdate());
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    let info = updateInfo;
+    if (!info) {
+      if (!isCurrent(generation)) return;
+      info = await checkAppUpdate();
+      if (!isCurrent(generation)) return;
+    }
     setUpdateInfo(info);
     if (!canInstallAppUpdate(info)) {
       if (info.status === "current") {
@@ -751,20 +985,26 @@ export default function SettingsPanel({
     }
     setUpdateInstallBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       await installAppUpdate(info);
+      if (!isCurrent(generation)) return;
       if (!info.canAutoInstall) {
         message.info("已打开下载页面");
       }
     } catch (e) {
+      if (!isCurrent(generation)) return;
       reportSettingsError("install update", e, "更新失败，已保留当前版本");
     } finally {
-      setUpdateInstallBusy(false);
+      if (isCurrent(generation)) setUpdateInstallBusy(false);
     }
-  }, [updateInfo]);
+  }, [isCurrent, renderedOriginGeneration, updateInfo]);
 
   const onOpenRelease = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
     await openUpdateTarget(updateInfo ?? undefined);
-  }, [updateInfo]);
+    if (!isCurrent(generation)) return;
+  }, [isCurrent, renderedOriginGeneration, updateInfo]);
 
   const remoteFieldOrder = useMemo(
     () => (remote?.fields ?? []).map((f) => f.key),
@@ -789,7 +1029,10 @@ export default function SettingsPanel({
     : "-";
 
   const onResetSpeakers = () => {
-    Modal.confirm({
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation) || !hostAdminAvailable) return;
+    let destroyer: (() => void) | null = null;
+    const modal = Modal.confirm({
       title: "重置说话人？",
       icon: <AlertTriangle className="w-4 h-4 text-amber-500" />,
       content: (
@@ -804,28 +1047,42 @@ export default function SettingsPanel({
       okText: "确认重置",
       okButtonProps: { danger: true },
       cancelText: "取消",
+      afterClose: () => {
+        if (destroyer) settingsConfirmDestroyersRef.current.delete(destroyer);
+      },
       onOk: async () => {
+        if (!isCurrent(generation)) return;
         setResetBusy(true);
         try {
+          if (!isCurrent(generation)) return;
           const url = await apiUrl("/admin/speakers/reset");
+          if (!isCurrent(generation)) return;
           const res = await apiTransport(
             url,
             { method: "POST" },
             { throwHttpErrors: false },
           );
+          if (!isCurrent(generation)) return;
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (!isCurrent(generation)) return;
           const json = (await res.json()) as SpeakerResetResponse;
+          if (!isCurrent(generation)) return;
           message.success(
             `已重置：清空 ${json.speakers_deleted} 个说话人，更新 ${json.segments_cleared} 段记录`,
           );
-          void refreshDataDir();
+          if (!isCurrent(generation)) return;
+          await refreshDataDir();
+          if (!isCurrent(generation)) return;
         } catch (e) {
+          if (!isCurrent(generation)) return;
           reportSettingsError("reset speakers", e, "说话人数据重置失败，请重试");
         } finally {
-          setResetBusy(false);
+          if (isCurrent(generation)) setResetBusy(false);
         }
       },
     });
+    destroyer = modal.destroy;
+    settingsConfirmDestroyersRef.current.add(destroyer);
   };
 
   return (
@@ -852,6 +1109,7 @@ export default function SettingsPanel({
       keyboard
       maskClosable
       destroyOnHidden
+      forceRender
     >
       <div className="space-y-5 text-[13px]">
         {hostAdminAvailable && (
@@ -925,16 +1183,17 @@ export default function SettingsPanel({
             <Server className="w-4 h-4" />
             <span>模型服务配置</span>
           </div>
-          {!remote ? (
-            <Spin size="small" />
-          ) : (
-            <Form
-              form={form}
-              layout="vertical"
-              onFinish={onSaveRemote}
-              autoComplete="off"
-              data-testid="remote-settings-form"
-            >
+          <Form
+            form={form}
+            layout="vertical"
+            onFinish={onSaveRemote}
+            autoComplete="off"
+            data-testid="remote-settings-form"
+          >
+            {!remote ? (
+              <Spin size="small" />
+            ) : (
+              <>
               {remoteFieldOrder.map((key) => {
                 const meta = REMOTE_FIELD_META[key];
                 const fieldDto = remote.fields.find((f) => f.key === key);
@@ -974,7 +1233,7 @@ export default function SettingsPanel({
                   </Form.Item>
                 );
               })}
-              <div className="flex gap-2">
+                <div className="flex gap-2">
                 <Button
                   type="primary"
                   htmlType="submit"
@@ -999,12 +1258,14 @@ export default function SettingsPanel({
                     {restartBusy ? "正在重启服务" : "重启服务生效"}
                   </Button>
                 )}
-              </div>
-            </Form>
-          )}
+                </div>
+              </>
+            )}
+          </Form>
           </section>
         )}
 
+        {backendOriginEditable && (
         <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Server className="w-4 h-4" />
@@ -1015,6 +1276,9 @@ export default function SettingsPanel({
               size="small"
               value={backendBaseDraft}
               onChange={(e) => {
+                const generation = renderedBackendBaseDraftGeneration;
+                if (generation === null || !isCurrent(generation)) return;
+                backendBaseDraftGenerationRef.current = generation;
                 backendBaseDraftRef.current = e.target.value;
                 setBackendBaseDraft(e.target.value);
               }}
@@ -1032,11 +1296,8 @@ export default function SettingsPanel({
               </Button>
               <Button
                 size="small"
-                onClick={() => {
-                  setBackendBaseDraft("");
-                  setStoredBackendBase("");
-                  message.success("已恢复默认服务地址");
-                }}
+                onClick={onResetBackendBase}
+                data-testid="reset-mobile-backend-base"
               >
                 恢复默认
               </Button>
@@ -1050,6 +1311,7 @@ export default function SettingsPanel({
             </div>
           </div>
         </section>
+        )}
 
         <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
@@ -1163,6 +1425,7 @@ export default function SettingsPanel({
           </div>
         </section>
 
+        {workspaceDirectoryAvailable && (
         <section data-testid="workspace-settings-section" tabIndex={-1}>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Folder className="w-4 h-4" />
@@ -1260,6 +1523,7 @@ export default function SettingsPanel({
             )}
           </div>
         </section>
+        )}
 
         {hostAdminAvailable && !adminUnavailable && (
           <section>
@@ -1354,7 +1618,7 @@ export default function SettingsPanel({
             className="fixed inset-0 z-[1400] flex items-center justify-center bg-black/35 px-5 py-8"
             onMouseDown={(event) => {
               if (event.currentTarget === event.target) {
-                setPendingPrivateBackendBase(null);
+                cancelPrivateBackendBase();
               }
             }}
           >
@@ -1394,7 +1658,7 @@ export default function SettingsPanel({
                 <button
                   type="button"
                   className="rounded-md border border-paper-300 bg-white px-3 py-1.5 text-[13px] font-medium text-ink-700 transition hover:bg-paper-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-                  onClick={() => setPendingPrivateBackendBase(null)}
+                  onClick={cancelPrivateBackendBase}
                 >
                   取消
                 </button>

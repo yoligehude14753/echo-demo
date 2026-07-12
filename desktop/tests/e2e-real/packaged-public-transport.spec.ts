@@ -1,8 +1,11 @@
 import { expect, test, _electron as electron } from "@playwright/test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
 const APP_BIN = process.env.ECHODESK_APP_BIN ?? null;
+const CLIENT_VERSION = JSON.parse(
+  readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+).version as string;
 const PUBLIC_BACKEND_BASE = (
   process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echodesk.yoliyoli.uk"
 ).replace(/\/+$/, "");
@@ -63,7 +66,7 @@ test("packaged public app uses the official Origin with anonymous health and ses
       }
     });
 
-    const result = await win.evaluate(async ({ expectedBase }) => {
+    const result = await win.evaluate(async ({ expectedBase, clientVersion }) => {
       const base = await window.echo?.getBackendHost?.();
       if (base !== expectedBase) throw new Error(`unexpected backend: ${base}`);
       await document.fonts.ready;
@@ -105,7 +108,10 @@ test("packaged public app uses the official Origin with anonymous health and ses
       if (!session?.token) throw new Error("server-issued session unavailable");
       const meetings = await fetch(`${base}/meetings?limit=1`, {
         cache: "no-store",
-        headers: { Authorization: `Bearer ${session.token}` },
+        headers: {
+          Authorization: `Bearer ${session.token}`,
+          "X-EchoDesk-Client-Version": clientVersion,
+        },
       });
 
       const wsType = await new Promise<string>((resolve, reject) => {
@@ -119,6 +125,7 @@ test("packaged public app uses the official Origin with anonymous health and ses
             JSON.stringify({
               type: "client_hello",
               last_seq: 0,
+              client_version: clientVersion,
               auth: { type: "bearer", token: session.token },
             }),
           );
@@ -166,12 +173,13 @@ test("packaged public app uses the official Origin with anonymous health and ses
           a11yOverflow: a11yStyle.overflow,
         },
       };
-    }, { expectedBase: PUBLIC_BACKEND_BASE });
+    }, { expectedBase: PUBLIC_BACKEND_BASE, clientVersion: CLIENT_VERSION });
 
     expect(result.healthStatus).toBe(200);
     expect(result.health).toEqual({ status: "ok" });
     expect(result.bootstrapStatus).toBe(200);
     expect(result.bootstrap.session_required).toBe(true);
+    expect(result.bootstrap.minimum_client_version).toBe(CLIENT_VERSION);
     expect(result.bootstrap).not.toHaveProperty("backend_version");
     expect(result.meetingsStatus).toBe(200);
     expect(result.wsType).toBe("server_hello");

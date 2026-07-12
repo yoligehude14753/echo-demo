@@ -209,7 +209,9 @@ test("mounted packaged app uses only bundled backend and persists owner-scoped d
       .toBe(true);
 
     await win.getByTestId("open-settings").click();
-    await expect(win.getByText("移动端连接")).toBeVisible({ timeout: 15_000 });
+    const settingsDialog = win.getByRole("dialog", { name: "设置" });
+    await expect(settingsDialog).toBeVisible({ timeout: 15_000 });
+    await expect(settingsDialog.getByText("移动端连接")).toHaveCount(0);
     await win.keyboard.press("Escape");
     const command = win.locator("textarea[placeholder*='生成']");
     const smokeCommand = `${EXPECTED_VERSION} 安装态点击验证`;

@@ -5,11 +5,11 @@ const {
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } = require("node:fs");
+const { realpath } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
@@ -21,6 +21,7 @@ const {
   createAppProtocolHandler,
   installAppProtocol,
   parseAppAssetUrl,
+  productionContentSecurityPolicy,
   registerAppScheme,
   resolveAppAssetPath,
 } = require("../app-protocol.cjs");
@@ -78,11 +79,11 @@ test("asset resolver contains decoded paths inside dist", async () => {
   await withDist(async ({ dist }) => {
     assert.equal(
       await resolveAppAssetPath(dist, APP_ENTRY_URL),
-      realpathSync(path.join(dist, "index.html")),
+      await realpath(path.join(dist, "index.html")),
     );
     assert.equal(
       await resolveAppAssetPath(dist, "echodesk://app/assets/app-abc123.js"),
-      realpathSync(path.join(dist, "assets", "app-abc123.js")),
+      await realpath(path.join(dist, "assets", "app-abc123.js")),
     );
     assert.equal(
       await resolveAppAssetPath(dist, "echodesk://app/%2F..%2Foutside.txt"),
@@ -114,13 +115,27 @@ test(
 
 test("protocol handler is read-only and serves controlled static responses", async () => {
   await withDist(async ({ dist }) => {
-    const handler = createAppProtocolHandler({ distRoot: dist });
+    const handler = createAppProtocolHandler({
+      distRoot: dist,
+      backendBase: "https://backend.example",
+    });
 
     const index = await handler(new Request(APP_ENTRY_URL));
     assert.equal(index.status, 200);
     assert.equal(index.headers.get("content-type"), "text/html; charset=utf-8");
     assert.equal(index.headers.get("cache-control"), "no-store");
     assert.equal(index.headers.get("x-content-type-options"), "nosniff");
+    const csp = index.headers.get("content-security-policy");
+    assert.match(csp, /script-src 'self' 'sha256-/);
+    assert.doesNotMatch(csp, /script-src[^;]*'unsafe-inline'/);
+    assert.match(
+      csp,
+      /connect-src 'self' https:\/\/backend\.example wss:\/\/backend\.example/,
+    );
+    assert.match(csp, /object-src 'none'/);
+    assert.match(csp, /frame-ancestors 'none'/);
+    assert.equal(index.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(index.headers.get("x-frame-options"), "DENY");
     assert.equal(await index.text(), "<main>EchoDesk</main>");
 
     const asset = await handler(
@@ -130,6 +145,7 @@ test("protocol handler is read-only and serves controlled static responses", asy
     assert.equal(asset.headers.get("content-type"), "text/javascript; charset=utf-8");
     assert.match(asset.headers.get("cache-control"), /immutable/);
     assert.equal(asset.headers.get("content-length"), String("export default true;".length));
+    assert.equal(asset.headers.get("content-security-policy"), null);
     assert.equal(await asset.text(), "");
 
     const writeAttempt = await handler(
@@ -141,6 +157,32 @@ test("protocol handler is read-only and serves controlled static responses", asy
     const missing = await handler(new Request("echodesk://app/missing.txt"));
     assert.equal(missing.status, 404);
   });
+});
+
+test("production CSP grants only the bound backend and the fixed legacy bootstrap hash", () => {
+  const csp = productionContentSecurityPolicy("http://127.0.0.1:8769");
+  assert.match(csp, /connect-src 'self' http:\/\/127\.0\.0\.1:8769 ws:\/\/127\.0\.0\.1:8769/);
+  assert.doesNotMatch(csp, /https:\s|wss:\s|\*/);
+  assert.doesNotMatch(csp, /script-src[^;]*'unsafe-inline'/);
+
+  const source = readFileSync(path.resolve(__dirname, "../../index.html"), "utf8");
+  const boot = readFileSync(
+    path.resolve(__dirname, "../../public/boot-fallback.js"),
+    "utf8",
+  );
+  const vite = readFileSync(
+    path.resolve(__dirname, "../../vite.config.ts"),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /<script vite-ignore src="\.\/boot-fallback\.js"><\/script>/,
+  );
+  assert.doesNotMatch(source, /<script>\s*\(function/);
+  assert.doesNotMatch(boot, /innerHTML/);
+  assert.match(boot, /textContent/);
+  assert.match(vite, /echodesk-csp-inline-script-gate/);
+  assert.match(vite, /CSP_INLINE_SCRIPT_HASHES/);
 });
 
 test("protocol installer binds only the product scheme and requires Electron net.fetch", () => {
@@ -167,6 +209,7 @@ test("main process registers before ready and never falls back to file loading",
   const main = readFileSync(path.resolve(__dirname, "../main.cjs"), "utf8");
   assert.ok(main.indexOf("registerAppScheme(protocol)") < main.indexOf("app.whenReady()"));
   assert.match(main, /installAppProtocol\(\s*protocol,/);
+  assert.match(main, /\{ backendBase: BACKEND_HOST \}/);
   assert.match(main, /\(url\) => net\.fetch\(url\)/);
   assert.match(main, /await mainWindow\.loadURL\(APP_ENTRY_URL\)/);
   assert.match(main, /error\?\.code === "ERR_ABORTED"/);

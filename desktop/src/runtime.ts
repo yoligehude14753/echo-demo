@@ -6,6 +6,7 @@
  */
 
 import backendConfig from "../backend.config.json";
+import desktopReleaseAssetPatterns from "../electron/release-asset-patterns.json";
 
 // SupervisorStatus 的具体形状定义在 hooks/useBackendHealth.ts；
 // 这里用宽松 unknown 让 runtime.ts 不强耦合 health hook，且 hook 内做窄化
@@ -61,9 +62,14 @@ export interface ElectronWorkspaceScanResult {
   errors: string[];
 }
 
+export interface ElectronWorkspaceContext {
+  expectedBackendOrigin: string;
+}
+
 export interface ElectronPublicSession {
   token: string | null;
   expires_at: string | null;
+  backend_origin: string;
   principal?: Record<string, unknown>;
   credential_expires_at?: string | null;
 }
@@ -97,20 +103,38 @@ interface ElectronEchoBridge {
   // Phase 4 M4 产物预览：用系统默认 App 打开 backend 落盘的绝对路径（pptx → Keynote）。
   // 失败时 reject(new Error(reason))；浏览器/纯 dev 模式下 undefined。
   openArtifactInSystem?: (filePath: string) => Promise<void>;
+  downloadArtifactBlob?: (
+    blobUrl: string,
+    suggestedFilename?: string,
+  ) => Promise<{ ok: boolean; cancelled: boolean; filename: string | null }>;
   // P4-fix-rag-chat：选工作区目录。Promise<string | null>，null=用户取消。
   // 浏览器/纯 dev 模式下 undefined（SettingsPanel 会用 prompt() 兜底）。
-  pickDirectory?: (opts?: { defaultPath?: string }) => Promise<string | null>;
+  pickDirectory?: (
+    context: ElectronWorkspaceContext,
+    opts?: { defaultPath?: string },
+  ) => Promise<string | null>;
   // 公网桌面包：后端在云端，不能直接读取本机目录；目录授权和文件扫描由
   // Electron 主进程在本机完成，再把可索引文件上传到云端 RAG。
-  getLocalWorkspaceStatus?: () => Promise<ElectronWorkspaceStatus>;
+  getLocalWorkspaceStatus?: (
+    context: ElectronWorkspaceContext,
+  ) => Promise<ElectronWorkspaceStatus>;
   addLocalWorkspaceDir?: (
+    context: ElectronWorkspaceContext,
     dir: string,
   ) => Promise<{ added: boolean; path: string; configured_dirs: string[] }>;
   removeLocalWorkspaceDir?: (
+    context: ElectronWorkspaceContext,
     dir: string,
   ) => Promise<{ removed: boolean; path: string; configured_dirs: string[] }>;
-  scanLocalWorkspaces?: () => Promise<ElectronWorkspaceScanResult>;
-  clearLocalWorkspaceDocs?: () => Promise<{ n_removed: number }>;
+  scanLocalWorkspaces?: (
+    context: ElectronWorkspaceContext,
+  ) => Promise<ElectronWorkspaceScanResult>;
+  clearLocalWorkspaceDocs?: (
+    context: ElectronWorkspaceContext,
+  ) => Promise<{ n_removed: number }>;
+  cancelLocalWorkspaceOperations?: (
+    context: ElectronWorkspaceContext,
+  ) => Promise<{ cancelled: number }>;
 }
 
 declare global {
@@ -127,6 +151,7 @@ let cachedBase: string | null = null;
 
 export const MOBILE_BACKEND_BASE_KEY = "echodesk.mobileBackendBase";
 export const MOBILE_BACKEND_BASE_USER_SET_KEY = "echodesk.mobileBackendBase.userSet";
+export const BACKEND_ORIGIN_EVENT = "echodesk:backend-origin-change";
 export const PUBLIC_DATA_BOUNDARY_KEY = "echodesk.publicDataBoundary.v2";
 export const DEFAULT_ANDROID_BACKEND_BASE = backendConfig.public.baseUrl;
 export const DEFAULT_LOCAL_BACKEND_BASE = `http://${backendConfig.local.host}:${backendConfig.local.port}`;
@@ -269,7 +294,9 @@ export function canInstallAppUpdate(
 function preferredUpdateAsset(
   assets: Array<{ name: string; url: string; size?: number }>,
 ): { name: string; url: string; size?: number } | null {
-  let patterns: RegExp[] = [/\.dmg$/i, /-mac\.zip$/i];
+  let patterns = desktopReleaseAssetPatterns.darwin.map(
+    (source) => new RegExp(source, "i"),
+  );
   if (typeof window !== "undefined") {
     const ua = window.navigator.userAgent;
     const tv = isTvRuntime();
@@ -278,9 +305,13 @@ function preferredUpdateAsset(
     } else if (isNativeMobile() || /Android/i.test(ua)) {
       patterns = [/-android\.apk$/i, /smart-tv\.apk$/i];
     } else if (/Windows/i.test(ua)) {
-      patterns = [/Setup\.[\d.]+\.exe$/i, /\.exe$/i];
+      patterns = desktopReleaseAssetPatterns.win32.map(
+        (source) => new RegExp(source, "i"),
+      );
     } else if (/Linux/i.test(ua)) {
-      patterns = [/\.AppImage$/i, /\.deb$/i];
+      patterns = desktopReleaseAssetPatterns.linux.map(
+        (source) => new RegExp(source, "i"),
+      );
     }
   }
   for (const pattern of patterns) {
@@ -308,6 +339,12 @@ export function storedBackendBase(): string | null {
 
 export function setStoredBackendBase(value: string): string | null {
   if (typeof window === "undefined") return null;
+  if (isPackagedElectronRenderer()) {
+    // Installed Electron transport identity is fixed by main/preload. A stale
+    // mobile localStorage value must never redirect authenticated app traffic.
+    return normalizeBackendBase(window.echo?.backendHost);
+  }
+  const previous = storedBackendBase();
   const normalized = normalizeBackendBase(value);
   try {
     if (normalized) {
@@ -325,6 +362,13 @@ export function setStoredBackendBase(value: string): string | null {
     return normalized;
   }
   cachedBase = null;
+  if (previous !== normalized) {
+    window.dispatchEvent(
+      new CustomEvent(BACKEND_ORIGIN_EVENT, {
+        detail: { base: normalized },
+      }),
+    );
+  }
   return normalized;
 }
 
@@ -413,10 +457,13 @@ export async function installAppUpdate(status?: AppUpdateStatus): Promise<void> 
 }
 
 export function configuredBackendBase(): string | null {
+  if (isPackagedElectronRenderer()) {
+    return normalizeBackendBase(window.echo?.backendHost);
+  }
   return storedBackendBase() ?? envBackendBase();
 }
 
-function isPackagedElectronRenderer(): boolean {
+export function isPackagedElectronRenderer(): boolean {
   if (typeof window === "undefined" || window.echo?.isElectron !== true) {
     return false;
   }
@@ -434,6 +481,13 @@ function isPackagedElectronRenderer(): boolean {
 export function backendBaseSnapshot(): string | null {
   if (cachedBase !== null) return cachedBase;
 
+  if (isPackagedElectronRenderer()) {
+    const bridgeHost = normalizeBackendBase(window.echo?.backendHost);
+    if (!bridgeHost) return null;
+    cachedBase = bridgeHost;
+    return cachedBase;
+  }
+
   const configured = configuredBackendBase();
   if (configured) {
     cachedBase = configured;
@@ -442,13 +496,6 @@ export function backendBaseSnapshot(): string | null {
 
   if (isNativeMobile()) {
     cachedBase = DEFAULT_ANDROID_BACKEND_BASE;
-    return cachedBase;
-  }
-
-  if (isPackagedElectronRenderer()) {
-    const bridgeHost = normalizeBackendBase(window.echo?.backendHost);
-    if (!bridgeHost) return null;
-    cachedBase = bridgeHost;
     return cachedBase;
   }
 
@@ -659,6 +706,12 @@ export function installTvRemoteClickBridge(): void {
 }
 
 export async function shareBackendBase(): Promise<string> {
+  if (isPackagedElectronRenderer()) {
+    const authoritative = await window.echo?.getShareBackendHost?.();
+    if (authoritative) {
+      return normalizeBackendBase(authoritative) ?? authoritative;
+    }
+  }
   const configured = configuredBackendBase();
   if (configured) return configured;
 

@@ -101,7 +101,11 @@ test("signed Android workflow upgrades real pinned historical APKs to candidates
   );
   assert.match(workflow, /android-upgrade-smoke\.json/);
   assert.match(workflow, /android-tv-upgrade-smoke\.json/);
-  assert.doesNotMatch(workflow, /GITHUB_ENV/);
+  assert.match(workflow, /ECHODESK_VERSION=%s/);
+  assert.doesNotMatch(
+    workflow,
+    /(?:KEYSTORE|KEY_PASSWORD|CERT_SHA256|KEY_ALIAS)[^\n]*GITHUB_ENV/,
+  );
   assert.match(workflow, /trap cleanup EXIT/);
   assert.doesNotMatch(workflow, /stable signed release/);
 

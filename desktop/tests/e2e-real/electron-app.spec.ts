@@ -15,7 +15,7 @@
  * - 未设置 ECHODESK_APP_BIN 时，非 macOS 会跳过
  */
 import { test, expect, _electron as electron, type Page } from "@playwright/test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
 function defaultAppBin(): string | null {
@@ -27,6 +27,9 @@ function defaultAppBin(): string | null {
 }
 
 const APP_BIN = defaultAppBin();
+const CLIENT_VERSION = JSON.parse(
+  readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+).version as string;
 const PUBLIC_BACKEND_BASE = (
   process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echodesk.yoliyoli.uk"
 ).replace(/\/+$/, "");
@@ -157,10 +160,11 @@ test.describe("EchoDesk 打包 App", () => {
       expect(publicMeta.health).toEqual({ status: "ok" });
       expect(publicMeta.bootstrapStatus).toBe(200);
       expect(publicMeta.bootstrap.session_required).toBe(true);
+      expect(publicMeta.bootstrap.minimum_client_version).toBe(CLIENT_VERSION);
       expect(publicMeta.bootstrap.ws_path).toBe("/ws/echo");
       expect(publicMeta.bootstrap).not.toHaveProperty("backend_version");
 
-      const authenticatedTransport = await win.evaluate(async () => {
+      const authenticatedTransport = await win.evaluate(async (clientVersion) => {
         const base = await window.echo?.getBackendHost?.();
         const session = await window.echo?.ensurePublicSession?.();
         if (!base || !session?.token) {
@@ -168,7 +172,10 @@ test.describe("EchoDesk 打包 App", () => {
         }
         const meetings = await fetch(`${base}/meetings?limit=1`, {
           cache: "no-store",
-          headers: { Authorization: `Bearer ${session.token}` },
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+            "X-EchoDesk-Client-Version": clientVersion,
+          },
         });
         const wsType = await new Promise<string>((resolve, reject) => {
           const socket = new WebSocket(`${base.replace(/^http/, "ws")}/ws/echo`);
@@ -181,6 +188,7 @@ test.describe("EchoDesk 打包 App", () => {
               JSON.stringify({
                 type: "client_hello",
                 last_seq: 0,
+                client_version: clientVersion,
                 auth: { type: "bearer", token: session.token },
               }),
             );
@@ -202,7 +210,7 @@ test.describe("EchoDesk 打包 App", () => {
           wsType,
           sessionIssued: Boolean(session.token),
         };
-      });
+      }, CLIENT_VERSION);
       expect(authenticatedTransport).toEqual({
         meetingsStatus: 200,
         wsType: "server_hello",

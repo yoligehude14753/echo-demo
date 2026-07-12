@@ -50,21 +50,32 @@ contextBridge.exposeInMainWorld("echo", {
   requestMic: () => ipcRenderer.invoke("mic:request"),
   openMicSystemPrefs: () => ipcRenderer.invoke("mic:open-system-prefs"),
 
-  // P4.1 M4 产物预览：把 backend 落盘的绝对路径交给系统默认应用打开。
-  // 主要用途：pptx 浏览器无法原生渲染，调 macOS Keynote / Office；
-  //          docx / xlsx 用户也可以选择在系统应用打开做二次编辑。
-  // 返回 Promise<void>；失败时 reject(new Error(reason))，前端 catch 后提示用户。
+  // 本机产物预览：main 仅接受受控生成根内的真实普通文件；public/remote
+  // runtime 会拒绝此通道并由 renderer 改走 authenticated download。
   openArtifactInSystem: (filePath) =>
     ipcRenderer.invoke("echo:open-artifact-in-system", filePath),
+  downloadArtifactBlob: (blobUrl, suggestedFilename) =>
+    ipcRenderer.invoke(
+      "echo:download-renderer-blob",
+      blobUrl,
+      suggestedFilename,
+    ),
 
   // P4-fix-rag-chat（2026-05-28）：SettingsPanel "工作区目录" section 用。
   // 调系统 dialog.showOpenDialog 选目录；用户取消时 resolve(null)，
-  // 选了一个目录 resolve(absolutePath)；调用失败 reject(Error)。
-  pickDirectory: (opts) => ipcRenderer.invoke("workspace:pick-directory", opts ?? {}),
-  getLocalWorkspaceStatus: () => ipcRenderer.invoke("workspace:local-status"),
-  addLocalWorkspaceDir: (dir) => ipcRenderer.invoke("workspace:add-local-dir", dir),
-  removeLocalWorkspaceDir: (dir) =>
-    ipcRenderer.invoke("workspace:remove-local-dir", dir),
-  scanLocalWorkspaces: () => ipcRenderer.invoke("workspace:scan-local"),
-  clearLocalWorkspaceDocs: () => ipcRenderer.invoke("workspace:clear-local-docs"),
+  // 选中时只返回 origin-bound opaque handle，绝对路径始终留在 main。
+  pickDirectory: (context, opts) =>
+    ipcRenderer.invoke("workspace:pick-directory", context ?? {}, opts ?? {}),
+  getLocalWorkspaceStatus: (context) =>
+    ipcRenderer.invoke("workspace:local-status", context ?? {}),
+  addLocalWorkspaceDir: (context, dir) =>
+    ipcRenderer.invoke("workspace:add-local-dir", context ?? {}, dir),
+  removeLocalWorkspaceDir: (context, dir) =>
+    ipcRenderer.invoke("workspace:remove-local-dir", context ?? {}, dir),
+  scanLocalWorkspaces: (context) =>
+    ipcRenderer.invoke("workspace:scan-local", context ?? {}),
+  clearLocalWorkspaceDocs: (context) =>
+    ipcRenderer.invoke("workspace:clear-local-docs", context ?? {}),
+  cancelLocalWorkspaceOperations: (context) =>
+    ipcRenderer.invoke("workspace:cancel-origin-operations", context ?? {}),
 });

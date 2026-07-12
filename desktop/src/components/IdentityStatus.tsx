@@ -1,5 +1,5 @@
 import { Tooltip } from "antd";
-import { Clock3, RefreshCw, ShieldAlert } from "lucide-react";
+import { Clock3, ExternalLink, RefreshCw, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   IDENTITY_CAPABILITY_EVENT,
@@ -13,6 +13,7 @@ import {
   reconnectServerIdentity,
   type SessionIdentityStatus,
 } from "@/session";
+import { openUpdateTarget } from "@/runtime";
 
 export default function IdentityStatus(): JSX.Element | null {
   const [capability, setCapability] =
@@ -87,6 +88,29 @@ export default function IdentityStatus(): JSX.Element | null {
       window.removeEventListener(SESSION_IDENTITY_EVENT, onSession);
     };
   }, []);
+
+  if (session.phase === "upgrade-required") {
+    return (
+      <Tooltip
+        title={
+          session.message ??
+          "公共服务要求更高版本。身份续签、业务请求和 WebSocket 已停止；请先更新 EchoDesk。"
+        }
+      >
+        <button
+          type="button"
+          className="identity-status is-upgrade"
+          data-testid="identity-status-upgrade"
+          onClick={() => void openUpdateTarget()}
+          aria-label="打开 EchoDesk 更新页面"
+        >
+          <ShieldAlert aria-hidden="true" />
+          <span>客户端需升级</span>
+          <ExternalLink aria-hidden="true" />
+        </button>
+      </Tooltip>
+    );
+  }
 
   if (session.phase === "identity-lost") {
     return (

@@ -14,16 +14,19 @@
  * - 超过 WS_INACTIVE_RECONNECT_MS 没收到任何消息 → 主动重连
  */
 import { useEffect, useRef } from "react";
+import { BACKEND_ORIGIN_EVENT } from "@/runtime";
 import { useStore } from "@/store";
 import {
   type EchoEvent,
   WS_INACTIVE_RECONNECT_MS,
 } from "@/types";
 import {
+  ClientUpgradeRequiredError,
   SESSION_IDENTITY_EVENT,
   authenticatedWsConnection,
   ensureServerSession,
   isIdentityLostError,
+  markClientUpgradeRequired,
   type SessionIdentityStatus,
 } from "@/session";
 
@@ -35,6 +38,22 @@ interface WsCursor {
 }
 
 const WS_CURSOR_PREFIX = "echodesk.wsCursor.v1";
+// WebSocket event payloads are control-plane notifications, not artifact data.
+// Keep the renderer bound well below browser/uvicorn frame allocation limits.
+export const WS_MAX_INBOUND_BYTES = 1024 * 1024;
+const wsFrameEncoder = new TextEncoder();
+const wsFrameScratch = new Uint8Array(WS_MAX_INBOUND_BYTES + 1);
+
+function isBoundedWsTextFrame(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  // UTF-8 uses at least one byte per UTF-16 code unit, so this cheap check
+  // rejects obviously oversized input before any encoding work.
+  if (value.length > WS_MAX_INBOUND_BYTES) return false;
+  // encodeInto writes into one fixed-size buffer instead of allocating an
+  // attacker-sized Uint8Array. A partial read proves the UTF-8 frame exceeds cap.
+  const encoded = wsFrameEncoder.encodeInto(value, wsFrameScratch);
+  return encoded.read === value.length && encoded.written <= WS_MAX_INBOUND_BYTES;
+}
 
 function cursorStorageKey(url: string, principalScope: string): string {
   const endpoint = new URL(url);
@@ -79,6 +98,7 @@ export function useEchoWS(): void {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stateRef = useRef<ConnState>("closed");
   const authBlockedRef = useRef(false);
+  const originGenerationRef = useRef(0);
 
   useEffect(() => {
     stopRef.current = false;
@@ -202,13 +222,27 @@ export function useEchoWS(): void {
         return;
       }
       stateRef.current = "connecting";
+      const originGeneration = originGenerationRef.current;
       let connection: Awaited<ReturnType<typeof authenticatedWsConnection>>;
       try {
         connection = await authenticatedWsConnection();
       } catch (error) {
+        if (stopRef.current) {
+          stateRef.current = "closed";
+          setConnected(false);
+          stopWatchdog();
+          stopReconnectTimer();
+          return;
+        }
+        if (originGeneration !== originGenerationRef.current) return;
         stateRef.current = "closed";
         setConnected(false);
         stopWatchdog();
+        if (error instanceof ClientUpgradeRequiredError) {
+          authBlockedRef.current = true;
+          stopReconnectTimer();
+          return;
+        }
         if (isIdentityLostError(error)) {
           authBlockedRef.current = true;
           stopReconnectTimer();
@@ -217,7 +251,21 @@ export function useEchoWS(): void {
         scheduleReconnect();
         return;
       }
+      if (stopRef.current) {
+        stateRef.current = "closed";
+        setConnected(false);
+        stopWatchdog();
+        stopReconnectTimer();
+        return;
+      }
+      if (originGeneration !== originGenerationRef.current) {
+        return;
+      }
       const { url, token, cursorKey } = connection;
+      const endpoint = new URL(url);
+      const connectionOrigin = `${
+        endpoint.protocol === "wss:" ? "https:" : "http:"
+      }//${endpoint.host}`;
       const storageKey = cursorStorageKey(url, cursorKey);
       if (cursorKeyRef.current !== storageKey) {
         const stored = loadCursor(storageKey);
@@ -230,6 +278,14 @@ export function useEchoWS(): void {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (
+          stopRef.current ||
+          originGeneration !== originGenerationRef.current ||
+          wsRef.current !== ws
+        ) {
+          ws.close(4001, "backend origin changed");
+          return;
+        }
         authBlockedRef.current = false;
         stateRef.current = "open";
         setConnected(true);
@@ -241,7 +297,7 @@ export function useEchoWS(): void {
               type: "client_hello",
               last_seq: lastSeqRef.current,
               stream_epoch: streamEpochRef.current ?? undefined,
-              client_version: "echodesk-0.3",
+              client_version: __APP_VERSION__,
               auth: token ? { type: "bearer", token } : undefined,
             })
           );
@@ -252,11 +308,23 @@ export function useEchoWS(): void {
       };
 
       ws.onmessage = (evt) => {
+        if (
+          stopRef.current ||
+          originGeneration !== originGenerationRef.current ||
+          wsRef.current !== ws
+        ) {
+          return;
+        }
+        if (!isBoundedWsTextFrame(evt.data)) {
+          ws.close(4008, "invalid or oversized event frame");
+          return;
+        }
         lastActivityRef.current = Date.now();
         let data: EchoEvent | null = null;
         try {
           data = JSON.parse(evt.data) as EchoEvent;
         } catch {
+          ws.close(4008, "invalid event JSON");
           return;
         }
         if (!data || typeof data.type !== "string") return;
@@ -297,10 +365,25 @@ export function useEchoWS(): void {
       };
 
       ws.onclose = (event) => {
+        if (
+          originGeneration !== originGenerationRef.current ||
+          wsRef.current !== ws
+        ) {
+          return;
+        }
+        wsRef.current = null;
         stateRef.current = "closed";
         setConnected(false);
         stopWatchdog();
         if (stopRef.current) return;
+        if (event.code === 4426) {
+          authBlockedRef.current = true;
+          stopReconnectTimer();
+          const minimumVersion =
+            event.reason.match(/client upgrade required:([^\s]+)/)?.[1] ?? null;
+          markClientUpgradeRequired(minimumVersion, connectionOrigin);
+          return;
+        }
         if (event.code !== 4401) {
           scheduleReconnect();
           return;
@@ -308,10 +391,27 @@ export function useEchoWS(): void {
         void (async () => {
           try {
             await ensureServerSession(true);
-            if (stopRef.current || authBlockedRef.current) return;
+            if (
+              originGeneration !== originGenerationRef.current ||
+              stopRef.current ||
+              authBlockedRef.current
+            ) {
+              return;
+            }
             retryRef.current = 0;
             scheduleReconnect(0);
           } catch (error) {
+            if (
+              originGeneration !== originGenerationRef.current ||
+              stopRef.current
+            ) {
+              return;
+            }
+            if (error instanceof ClientUpgradeRequiredError) {
+              authBlockedRef.current = true;
+              stopReconnectTimer();
+              return;
+            }
             if (isIdentityLostError(error)) {
               authBlockedRef.current = true;
               stopReconnectTimer();
@@ -325,8 +425,20 @@ export function useEchoWS(): void {
 
     const handleIdentityStatus = (event: Event): void => {
       const status = (event as CustomEvent<SessionIdentityStatus>).detail;
+      if (status?.phase === "upgrade-required") {
+        authBlockedRef.current = true;
+        originGenerationRef.current += 1;
+        stopReconnectTimer();
+        stopWatchdog();
+        setConnected(false);
+        const activeSocket = wsRef.current;
+        wsRef.current = null;
+        stateRef.current = "closed";
+        activeSocket?.close(4004, "client upgrade required");
+        return;
+      }
       if (
-        status?.phase !== "ready" ||
+        (status?.phase !== "ready" && status?.phase !== "idle") ||
         !authBlockedRef.current ||
         stopRef.current
       ) {
@@ -338,15 +450,41 @@ export function useEchoWS(): void {
       void connect();
     };
 
+    const handleBackendOriginChange = (): void => {
+      if (stopRef.current) return;
+      originGenerationRef.current += 1;
+      authBlockedRef.current = false;
+      retryRef.current = 0;
+      stopReconnectTimer();
+      stopWatchdog();
+      setConnected(false);
+      useStore.getState().reset();
+      cursorKeyRef.current = null;
+      streamEpochRef.current = null;
+      lastSeqRef.current = 0;
+      lastRehydrateFenceRef.current = null;
+      const previousSocket = wsRef.current;
+      wsRef.current = null;
+      stateRef.current = "closed";
+      previousSocket?.close(4001, "backend origin changed");
+      void connect();
+    };
+
     window.addEventListener(SESSION_IDENTITY_EVENT, handleIdentityStatus);
+    window.addEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
     void connect();
 
     return () => {
       stopRef.current = true;
       window.removeEventListener(SESSION_IDENTITY_EVENT, handleIdentityStatus);
+      window.removeEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
       stopWatchdog();
       stopReconnectTimer();
-      wsRef.current?.close();
+      const activeSocket = wsRef.current;
+      wsRef.current = null;
+      stateRef.current = "closed";
+      setConnected(false);
+      activeSocket?.close();
     };
   }, [setConnected, applyEvent]);
 }

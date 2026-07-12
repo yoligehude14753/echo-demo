@@ -8,8 +8,10 @@ const test = require("node:test");
 
 const { createCredentialVault } = require("../credential-vault.cjs");
 const {
+  backendBoundJsonFetch,
   classifyRotationResponse,
   createPublicIdentitySessionManager,
+  MAX_IDENTITY_RESPONSE_BYTES,
 } = require("../public-identity-session.cjs");
 
 const official = "https://echodesk.yoliyoli.uk";
@@ -33,15 +35,220 @@ function fixture(storage = safeStorage) {
   return { root, target, vault };
 }
 
-function response(status, body = {}) {
+function response(status, body = {}, responseHeaders = {}) {
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(responseHeaders).map(([name, value]) => [
+      name.toLowerCase(),
+      String(value),
+    ]),
+  );
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: {
+      get(name) {
+        return normalizedHeaders[String(name).toLowerCase()] ?? null;
+      },
+    },
     async json() {
       return body;
     },
   };
 }
+
+test("426 preserves the required client version and never confirms enrollment", async () => {
+  const { root, vault } = fixture();
+  try {
+    const manager = createPublicIdentitySessionManager({
+      vault,
+      newSecret: (() => {
+        const values = ["e".repeat(48), "c".repeat(48)];
+        return () => values.shift();
+      })(),
+      displayName: "old-client",
+      request: async () =>
+        response(
+          426,
+          { error: { code: "client_upgrade_required" } },
+          { "X-EchoDesk-Minimum-Client-Version": "0.4.0" },
+        ),
+    });
+
+    await assert.rejects(manager.ensure(), (error) => {
+      assert.equal(error.code, "CLIENT_UPGRADE_REQUIRED");
+      assert.equal(error.status, 426);
+      assert.equal(error.minimumVersion, "0.4.0");
+      assert.match(error.message, /CLIENT_UPGRADE_REQUIRED minimum=0\.4\.0/);
+      return true;
+    });
+    assert.equal(vault.readRotationState().enrollmentConfirmed, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Electron identity requests always declare the packaged app version", () => {
+  const main = fs.readFileSync(path.resolve(__dirname, "../main.cjs"), "utf8");
+  assert.match(
+    main,
+    /"X-EchoDesk-Client-Version": app\.getVersion\(\)/,
+  );
+  assert.match(main, /backendBoundJsonFetch\(\{/);
+  assert.doesNotMatch(main, /fetch\(new URL\(pathname/);
+  assert.match(main, /displayName: "EchoDesk Desktop"/);
+  assert.doesNotMatch(main, /displayName: os\.hostname\(\)/);
+});
+
+test("backend-bound bootstrap fetch refuses a 307 without contacting its second origin", async () => {
+  const secondOrigin = "https://redirected.example";
+  const calls = [];
+  await assert.rejects(
+    backendBoundJsonFetch({
+      backendOrigin: official,
+      pathname: "/bootstrap",
+      fetchImpl: async (url, init) => {
+        calls.push({ url: url.toString(), redirect: init.redirect });
+        return new Response(null, {
+          status: 307,
+          headers: { Location: `${secondOrigin}/bootstrap` },
+        });
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, "IDENTITY_BACKEND_REDIRECT_FORBIDDEN");
+      assert.equal(error.status, 307);
+      return true;
+    },
+  );
+  assert.deepEqual(calls, [
+    { url: `${official}/bootstrap`, redirect: "error" },
+  ]);
+});
+
+test("backend-bound identity requests reject non-origin URLs before fetch", async () => {
+  for (const backendOrigin of [
+    "http://echodesk.yoliyoli.uk",
+    "https://user@echodesk.yoliyoli.uk",
+    "https://echodesk.yoliyoli.uk/private",
+    "https://echodesk.yoliyoli.uk/?query=1",
+    "https://echodesk.yoliyoli.uk/#fragment",
+  ]) {
+    let fetched = 0;
+    await assert.rejects(
+      backendBoundJsonFetch({
+        backendOrigin,
+        pathname: "/bootstrap",
+        fetchImpl: async () => {
+          fetched += 1;
+          return new Response("{}", { status: 200 });
+        },
+      }),
+      (error) => error.code === "IDENTITY_BACKEND_ORIGIN_INVALID",
+    );
+    assert.equal(fetched, 0);
+  }
+});
+
+test("backend-bound identity requests reject a successful response URL from another origin", async () => {
+  await assert.rejects(
+    backendBoundJsonFetch({
+      backendOrigin: official,
+      pathname: "/bootstrap",
+      fetchImpl: async () => {
+        const result = new Response("{}", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+        Object.defineProperty(result, "url", {
+          value: "https://redirected.example/bootstrap",
+        });
+        return result;
+      },
+    }),
+    (error) => error.code === "IDENTITY_BACKEND_ORIGIN_MISMATCH",
+  );
+});
+
+test("identity response cap rejects declared and chunked oversize bodies", async () => {
+  let declaredCancelled = 0;
+  await assert.rejects(
+    backendBoundJsonFetch({
+      backendOrigin: official,
+      pathname: "/bootstrap",
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            cancel() {
+              declaredCancelled += 1;
+            },
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Length": String(MAX_IDENTITY_RESPONSE_BYTES + 1),
+            },
+          },
+        ),
+    }),
+    (error) => error.code === "IDENTITY_RESPONSE_TOO_LARGE",
+  );
+  assert.equal(declaredCancelled, 1);
+
+  const chunkSize = Math.floor(MAX_IDENTITY_RESPONSE_BYTES / 2) + 1;
+  let chunkedCancelled = 0;
+  await assert.rejects(
+    backendBoundJsonFetch({
+      backendOrigin: official,
+      pathname: "/bootstrap",
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.enqueue(new Uint8Array(chunkSize));
+            },
+            cancel() {
+              chunkedCancelled += 1;
+            },
+          }),
+          { status: 200 },
+        ),
+    }),
+    (error) => error.code === "IDENTITY_RESPONSE_TOO_LARGE",
+  );
+  await Promise.resolve();
+  assert.equal(chunkedCancelled, 1);
+});
+
+test("identity request timeout remains armed through a stalled response body", async () => {
+  let bodyAborted = false;
+  await assert.rejects(
+    backendBoundJsonFetch({
+      backendOrigin: official,
+      pathname: "/session/renew",
+      method: "POST",
+      body: "{}",
+      timeoutMs: 20,
+      fetchImpl: async (_url, init) => {
+        const body = new ReadableStream({
+          start(controller) {
+            const abort = () => {
+              bodyAborted = true;
+              controller.error(init.signal.reason);
+            };
+            if (init.signal.aborted) abort();
+            else init.signal.addEventListener("abort", abort, { once: true });
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    }),
+    (error) => error?.name === "TimeoutError",
+  );
+  assert.equal(bodyAborted, true);
+});
 
 function session(token = "token-" + "t".repeat(40)) {
   return {

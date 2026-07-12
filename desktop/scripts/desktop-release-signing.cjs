@@ -279,11 +279,22 @@ async function runMacRelease({
   const artifacts = {
     app: path.join(desktopRoot, "release", "mac-arm64", "EchoDesk.app"),
     dmg: path.join(desktopRoot, "release", `EchoDesk-${version}-arm64.dmg`),
+    dmgBlockmap: path.join(
+      desktopRoot,
+      "release",
+      `EchoDesk-${version}-arm64.dmg.blockmap`,
+    ),
     zip: path.join(
       desktopRoot,
       "release",
       `EchoDesk-${version}-arm64-mac.zip`,
     ),
+    zipBlockmap: path.join(
+      desktopRoot,
+      "release",
+      `EchoDesk-${version}-arm64-mac.zip.blockmap`,
+    ),
+    updateMetadata: path.join(desktopRoot, "release", "latest-mac.yml"),
   };
   ensureArtifactsExist(artifacts, exists);
 
@@ -309,6 +320,15 @@ async function runMacRelease({
     ...commandOptions,
     label: "DMG notarization ticket staple",
   });
+  runChecked(
+    runner,
+    process.execPath,
+    [path.join(desktopRoot, "scripts", "refresh-mac-update-metadata.cjs")],
+    {
+      ...commandOptions,
+      label: "final macOS updater metadata refresh",
+    },
+  );
 
   for (const [label, artifactPath] of [
     ["application", artifacts.app],
@@ -478,6 +498,12 @@ async function runWindowsRelease({
       "release",
       `EchoDesk-${version}-win-x64.zip`,
     ),
+    installerBlockmap: path.join(
+      desktopRoot,
+      "release",
+      `EchoDesk.Setup.${version}.exe.blockmap`,
+    ),
+    updateMetadata: path.join(desktopRoot, "release", "latest.yml"),
   };
   ensureArtifactsExist(artifacts, exists);
 

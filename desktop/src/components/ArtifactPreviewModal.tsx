@@ -1,15 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, message } from "antd";
 import { Download, ExternalLink, Loader2, AlertCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { artifactDownloadUrl } from "@/api";
+import {
+  artifactDownloadUrl,
+  artifactIdFromDownloadHref,
+} from "@/api";
+import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { apiTransport } from "@/session";
 import type { GeneratedArtifact } from "@/types";
 
 /**
  * 7 类产物 in-app 预览：
- *   html / pdf  → <iframe> 直读 download URL（浏览器原生支持）
+ *   html / pdf  → authenticated bounded fetch → blob URL → <iframe>
  *   markdown    → fetch text + react-markdown 渲染（GFM 表格 / 代码块）
  *   txt         → fetch text + <pre> 等宽字体
  *   docx (word) → fetch ArrayBuffer + mammoth.convertToHtml → iframe srcDoc
@@ -31,7 +36,46 @@ interface ArtifactPreviewModalProps {
   onClose: () => void;
 }
 
+interface PreviewOriginLease {
+  generation: number;
+  isCurrent: (generation: number) => boolean;
+  registerAbortController: (controller: AbortController) => () => void;
+}
+
 type PreviewKind = "html" | "pdf" | "markdown" | "txt" | "docx" | "xlsx" | "pptx" | "other";
+
+const ARTIFACT_DOWNLOAD_MAX_BYTES = 128 * 1024 * 1024;
+const ARTIFACT_TEXT_PREVIEW_MAX_BYTES = 4 * 1024 * 1024;
+const ARTIFACT_BINARY_PREVIEW_MAX_BYTES = 32 * 1024 * 1024;
+const PPTX_DOWNLOAD_OBJECT_URL_GRACE_MS = 30_000;
+const activePptxDownloadUrls = new Map<string, number>();
+let pptxUnloadCleanupInstalled = false;
+
+function revokePptxDownloadUrl(objectUrl: string): void {
+  const timer = activePptxDownloadUrls.get(objectUrl);
+  if (timer !== undefined) window.clearTimeout(timer);
+  activePptxDownloadUrls.delete(objectUrl);
+  URL.revokeObjectURL(objectUrl);
+}
+
+function revokeAllPptxDownloadUrls(): void {
+  for (const objectUrl of [...activePptxDownloadUrls.keys()]) {
+    revokePptxDownloadUrl(objectUrl);
+  }
+}
+
+function retainPptxDownloadUrl(objectUrl: string): void {
+  if (!pptxUnloadCleanupInstalled) {
+    window.addEventListener("pagehide", revokeAllPptxDownloadUrls);
+    window.addEventListener("beforeunload", revokeAllPptxDownloadUrls);
+    pptxUnloadCleanupInstalled = true;
+  }
+  const timer = window.setTimeout(
+    () => revokePptxDownloadUrl(objectUrl),
+    PPTX_DOWNLOAD_OBJECT_URL_GRACE_MS,
+  );
+  activePptxDownloadUrls.set(objectUrl, timer);
+}
 
 const previewTypeLabel: Record<PreviewKind, string> = {
   html: "网页",
@@ -46,6 +90,13 @@ const previewTypeLabel: Record<PreviewKind, string> = {
 
 function previewTitle(artifact: GeneratedArtifact, kind: PreviewKind): string {
   return artifact.title?.trim() || `未命名${previewTypeLabel[kind]}`;
+}
+
+function safeDownloadStem(raw: string): string {
+  const withoutControls = Array.from(raw, (character) =>
+    character.charCodeAt(0) < 32 ? " " : character,
+  ).join("");
+  return withoutControls.replace(/[<>:"/\\|?*]+/g, " ").trim();
 }
 
 function classifyKind(rawType: string): PreviewKind {
@@ -64,45 +115,150 @@ export default function ArtifactPreviewModal({
   artifact,
   onClose,
 }: ArtifactPreviewModalProps): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
+  const handledOriginRevision = useRef(backendOriginRevision);
+  const pptxOpenAttempt = useRef<GeneratedArtifact | null>(null);
+  const onCloseRef = useRef(onClose);
   const kind = useMemo<PreviewKind>(
     () => (artifact ? classifyKind(artifact.artifact_type) : "other"),
     [artifact],
   );
-  const downloadUrl = artifact ? artifactDownloadUrl(artifact.artifact_id) : "";
+  const artifactOriginGeneration = useMemo(
+    () => (artifact ? captureGeneration() : null),
+    [artifact, captureGeneration],
+  );
+  const previewLease = useMemo<PreviewOriginLease | null>(
+    () =>
+      artifactOriginGeneration === null
+        ? null
+        : {
+            generation: artifactOriginGeneration,
+            isCurrent,
+            registerAbortController,
+          },
+    [artifactOriginGeneration, isCurrent, registerAbortController],
+  );
+  const artifactOriginCurrent =
+    artifactOriginGeneration !== null && isCurrent(artifactOriginGeneration);
+  const downloadUrl =
+    artifact && artifactOriginCurrent
+      ? artifactDownloadUrl(artifact.artifact_id)
+      : "";
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (handledOriginRevision.current === backendOriginRevision) return;
+    handledOriginRevision.current = backendOriginRevision;
+    onClose();
+  }, [backendOriginRevision, onClose]);
 
   // pptx 走系统应用打开，Modal 不真展开渲染（artifact 仍非 null 但 open=false 触发 useEffect）
   // 实现：检测到 pptx 时立即触发 openInSystem 并 onClose
   useEffect(() => {
-    if (!artifact || kind !== "pptx") return;
+    if (!artifact) {
+      pptxOpenAttempt.current = null;
+      return;
+    }
+    if (
+      kind !== "pptx" ||
+      !previewLease ||
+      !previewLease.isCurrent(previewLease.generation) ||
+      pptxOpenAttempt.current === artifact
+    ) {
+      return;
+    }
+    pptxOpenAttempt.current = artifact;
+    let alive = true;
+    const controller = new AbortController();
+    const unregisterController = previewLease.registerAbortController(controller);
+    let pendingObjectUrl: string | null = null;
+    let objectUrlRetained = false;
+    const canCommit = (): boolean =>
+      alive &&
+      !controller.signal.aborted &&
+      previewLease.isCurrent(previewLease.generation);
     void (async () => {
       try {
+        if (!canCommit()) return;
         const bridge = typeof window !== "undefined" ? window.echo : undefined;
-        if (bridge?.openArtifactInSystem) {
+        if (
+          bridge?.openArtifactInSystem &&
+          bridge.isPublicDemo !== true &&
+          typeof artifact.file_path === "string" &&
+          artifact.file_path.length > 0
+        ) {
           await bridge.openArtifactInSystem(artifact.file_path);
-          void message.success(
-            `已用系统应用打开 ${previewTitle(artifact, kind)}`,
-          );
+          if (canCommit()) {
+            void message.success(
+              `已用系统应用打开 ${previewTitle(artifact, kind)}`,
+            );
+          }
         } else {
-          // 非 Electron 环境（浏览器 dev / e2e fallback）：退化为提示用户下载
-          void message.info("浏览器无法预览 PPT，已为你触发下载");
+          // public/remote file_path 没有本机语义。通过同源、身份绑定的 API
+          // transport 拉取 Blob，绝不把远端路径交给 Electron main。
+          if (!canCommit()) return;
+          const response = await apiTransport(
+            downloadUrl,
+            { signal: controller.signal },
+            {
+              timeoutMs: 120_000,
+              maxResponseBytes: ARTIFACT_DOWNLOAD_MAX_BYTES,
+              throwHttpErrors: false,
+            },
+          );
+          if (!response.ok) {
+            await response.body?.cancel().catch(() => undefined);
+            throw new Error(`下载失败：HTTP ${response.status}`);
+          }
+          const blob = await response.blob();
+          if (!canCommit()) return;
+          const objectUrl = URL.createObjectURL(blob);
+          pendingObjectUrl = objectUrl;
           const a = document.createElement("a");
-          a.href = downloadUrl;
-          a.download = "";
+          a.href = objectUrl;
+          const safeTitle =
+            safeDownloadStem(
+              artifact.title?.trim() || "echodesk-presentation",
+            ) || "echodesk-presentation";
+          a.download = `${safeTitle}.pptx`;
           a.rel = "noreferrer";
           document.body.appendChild(a);
-          a.click();
-          a.remove();
+          try {
+            a.click();
+          } finally {
+            a.remove();
+          }
+          retainPptxDownloadUrl(objectUrl);
+          objectUrlRetained = true;
+          void message.info("浏览器无法预览 PPT，已安全下载到本机");
         }
       } catch (e) {
+        if (!canCommit()) return;
         console.error("[artifact-preview] open presentation failed", e);
         void message.error("暂时无法打开演示文稿，请下载后重试");
       } finally {
-        onClose();
+        if (pendingObjectUrl && !objectUrlRetained) {
+          URL.revokeObjectURL(pendingObjectUrl);
+        }
+        if (canCommit()) onCloseRef.current();
       }
     })();
-  }, [artifact, kind, downloadUrl, onClose]);
+    return () => {
+      alive = false;
+      controller.abort();
+      unregisterController();
+    };
+  }, [artifact, kind, downloadUrl, previewLease]);
 
-  const open = !!artifact && kind !== "pptx";
+  const open = !!artifact && artifactOriginCurrent && kind !== "pptx";
 
   return (
     <Modal
@@ -123,27 +279,30 @@ export default function ArtifactPreviewModal({
               </span>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <a
-                href={downloadUrl}
-                target="_blank"
-                rel="noreferrer"
+              <AuthenticatedDownloadLink
+                url={downloadUrl}
+                downloadName={`${safeDownloadStem(previewTitle(artifact, kind)) || "echodesk-artifact"}.${artifact.artifact_type}`}
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] text-ink-700 border border-paper-300 hover:bg-paper-150"
-                data-testid="preview-download-btn"
+                testId="preview-download-btn"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>下载</span>
-              </a>
-              {(kind === "docx" || kind === "xlsx") && (
-                <OpenInSystemButton artifact={artifact} />
+              </AuthenticatedDownloadLink>
+              {(kind === "docx" || kind === "xlsx") && previewLease && (
+                <OpenInSystemButton artifact={artifact} lease={previewLease} />
               )}
             </div>
           </div>
         ) : null
       }
     >
-      {artifact && open && (
+      {artifact && open && previewLease && (
         <div className="bg-white rounded-md min-h-[60vh]" data-testid="preview-body">
-          <PreviewBody kind={kind} downloadUrl={downloadUrl} />
+          <PreviewBody
+            kind={kind}
+            downloadUrl={downloadUrl}
+            lease={previewLease}
+          />
         </div>
       )}
     </Modal>
@@ -154,22 +313,33 @@ export default function ArtifactPreviewModal({
 
 function OpenInSystemButton({
   artifact,
+  lease,
 }: {
   artifact: GeneratedArtifact;
+  lease: PreviewOriginLease;
 }): JSX.Element | null {
   // 非 Electron 环境直接不显示，避免给用户假按钮（点了什么也没发生）
+  const localFilePath = artifact.file_path;
   const hasBridge =
-    typeof window !== "undefined" && !!window.echo?.openArtifactInSystem;
+    typeof window !== "undefined" &&
+    window.echo?.isPublicDemo !== true &&
+    !!window.echo?.openArtifactInSystem &&
+    typeof localFilePath === "string" &&
+    localFilePath.length > 0;
   if (!hasBridge) return null;
   return (
     <button
       type="button"
       data-testid="preview-open-in-system-btn"
       onClick={async () => {
+        if (!lease.isCurrent(lease.generation)) return;
         try {
-          await window.echo!.openArtifactInSystem!(artifact.file_path);
-          void message.success("已用系统应用打开");
+          await window.echo!.openArtifactInSystem!(localFilePath);
+          if (lease.isCurrent(lease.generation)) {
+            void message.success("已用系统应用打开");
+          }
         } catch (e) {
+          if (!lease.isCurrent(lease.generation)) return;
           console.error("[artifact-preview] open in system failed", e);
           void message.error("暂时无法用系统应用打开，请下载后重试");
         }
@@ -185,28 +355,22 @@ function OpenInSystemButton({
 interface PreviewBodyProps {
   kind: PreviewKind;
   downloadUrl: string;
+  lease: PreviewOriginLease;
 }
 
-function PreviewBody({ kind, downloadUrl }: PreviewBodyProps): JSX.Element {
+function PreviewBody({ kind, downloadUrl, lease }: PreviewBodyProps): JSX.Element {
   switch (kind) {
     case "html":
     case "pdf":
-      return (
-        <iframe
-          src={downloadUrl}
-          title={kind === "html" ? "html preview" : "pdf preview"}
-          className="w-full h-[72vh] border border-paper-300 bg-white rounded-md"
-          data-testid={`preview-iframe-${kind}`}
-        />
-      );
+      return <AuthenticatedIframePreview kind={kind} downloadUrl={downloadUrl} lease={lease} />;
     case "markdown":
-      return <MarkdownPreview downloadUrl={downloadUrl} />;
+      return <MarkdownPreview downloadUrl={downloadUrl} lease={lease} />;
     case "txt":
-      return <TxtPreview downloadUrl={downloadUrl} />;
+      return <TxtPreview downloadUrl={downloadUrl} lease={lease} />;
     case "docx":
-      return <DocxPreview downloadUrl={downloadUrl} />;
+      return <DocxPreview downloadUrl={downloadUrl} lease={lease} />;
     case "xlsx":
-      return <XlsxPreview downloadUrl={downloadUrl} />;
+      return <XlsxPreview downloadUrl={downloadUrl} lease={lease} />;
     default:
       return (
         <FallbackUnknown
@@ -248,23 +412,102 @@ function PreviewError({
         <span>预览失败</span>
       </div>
       <p className="text-[12px] text-ink-700 leading-relaxed break-all">{msg}</p>
-      <a
-        href={downloadUrl}
-        target="_blank"
-        rel="noreferrer"
+      <AuthenticatedDownloadLink
+        url={downloadUrl}
         className="inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-accent hover:underline"
       >
         <Download className="w-3.5 h-3.5" />
         <span>直接下载</span>
-      </a>
+      </AuthenticatedDownloadLink>
     </div>
+  );
+}
+
+function AuthenticatedIframePreview({
+  kind,
+  downloadUrl,
+  lease,
+}: {
+  kind: "html" | "pdf";
+  downloadUrl: string;
+  lease: PreviewOriginLease;
+}): JSX.Element {
+  const [state, setState] = useState<{
+    loading: boolean;
+    objectUrl?: string;
+    error?: boolean;
+  }>({ loading: true });
+
+  useEffect(() => {
+    if (!lease.isCurrent(lease.generation)) return;
+    let alive = true;
+    let objectUrl: string | null = null;
+    const controller = new AbortController();
+    const unregisterController = lease.registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive && !controller.signal.aborted && lease.isCurrent(lease.generation);
+    setState({ loading: true });
+    void (async () => {
+      try {
+        const response = await apiTransport(
+          downloadUrl,
+          { signal: controller.signal },
+          {
+            timeoutMs: 60_000,
+            maxResponseBytes: ARTIFACT_BINARY_PREVIEW_MAX_BYTES,
+            throwHttpErrors: false,
+          },
+        );
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          throw new Error(`artifact preview HTTP ${response.status}`);
+        }
+        const blob = await response.blob();
+        if (!canCommit()) return;
+        objectUrl = URL.createObjectURL(blob);
+        setState({ loading: false, objectUrl });
+      } catch {
+        if (canCommit()) setState({ loading: false, error: true });
+      }
+    })();
+    return () => {
+      alive = false;
+      unregisterController();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [downloadUrl, lease]);
+
+  if (state.loading) return <PreviewLoading />;
+  if (state.error || !state.objectUrl) {
+    return (
+      <PreviewError
+        message="无法安全加载预览，可下载后用本地应用打开"
+        downloadUrl={downloadUrl}
+      />
+    );
+  }
+  return (
+    <iframe
+      src={state.objectUrl}
+      title={kind === "html" ? "html preview" : "pdf preview"}
+      className="w-full h-[72vh] border border-paper-300 bg-white rounded-md"
+      data-testid={`preview-iframe-${kind}`}
+      sandbox={kind === "html" ? "" : undefined}
+      referrerPolicy="no-referrer"
+    />
   );
 }
 
 // ---------- 各类型 renderer ----------
 
-function MarkdownPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
-  const { text, loading, error } = useTextContent(downloadUrl);
+function MarkdownPreview({
+  downloadUrl,
+  lease,
+}: {
+  downloadUrl: string;
+  lease: PreviewOriginLease;
+}): JSX.Element {
+  const { text, loading, error } = useTextContent(downloadUrl, lease);
   if (loading) return <PreviewLoading />;
   if (error)
     return (
@@ -278,13 +521,40 @@ function MarkdownPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element 
       className="prose prose-sm max-w-none px-6 py-4 h-[72vh] overflow-auto bg-white"
       data-testid="preview-markdown"
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ children, href }) => {
+            const artifactId = artifactIdFromDownloadHref(href);
+            return artifactId ? (
+              <AuthenticatedDownloadLink
+                url={artifactDownloadUrl(artifactId)}
+                className="text-blue-600 underline underline-offset-2"
+              >
+                {children}
+              </AuthenticatedDownloadLink>
+            ) : (
+              <a href={href} target="_blank" rel="noreferrer">
+                {children}
+              </a>
+            );
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
 
-function TxtPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
-  const { text, loading, error } = useTextContent(downloadUrl);
+function TxtPreview({
+  downloadUrl,
+  lease,
+}: {
+  downloadUrl: string;
+  lease: PreviewOriginLease;
+}): JSX.Element {
+  const { text, loading, error } = useTextContent(downloadUrl, lease);
   if (loading) return <PreviewLoading />;
   if (error)
     return (
@@ -303,7 +573,13 @@ function TxtPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
   );
 }
 
-function DocxPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
+function DocxPreview({
+  downloadUrl,
+  lease,
+}: {
+  downloadUrl: string;
+  lease: PreviewOriginLease;
+}): JSX.Element {
   const [state, setState] = useState<{
     loading: boolean;
     html?: string;
@@ -311,10 +587,19 @@ function DocxPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
   }>({ loading: true });
 
   useEffect(() => {
-    let cancelled = false;
+    if (!lease.isCurrent(lease.generation)) return;
+    let alive = true;
+    const controller = new AbortController();
+    const unregisterController = lease.registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive &&
+      lease.isCurrent(lease.generation) &&
+      !controller.signal.aborted;
+    setState({ loading: true });
     void (async () => {
       try {
-        const buf = await fetchArrayBuffer(downloadUrl);
+        const buf = await fetchArrayBuffer(downloadUrl, controller.signal);
+        if (!canCommit()) return;
         // mammoth.browser.js 是 UMD 包；Vite 走 CJS interop 后顶层是 default。
         // 用 unknown + 双重 fallback 保证 ESM / CJS 两边都能 resolve convertToHtml。
         const mod = (await import("mammoth/mammoth.browser.js")) as unknown as {
@@ -325,17 +610,19 @@ function DocxPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
         };
         const fn = mod.convertToHtml ?? mod.default?.convertToHtml;
         if (!fn) throw new Error("mammoth.convertToHtml not found");
+        if (!canCommit()) return;
         const result = await fn({ arrayBuffer: buf });
-        if (!cancelled) setState({ loading: false, html: result.value });
+        if (canCommit()) setState({ loading: false, html: result.value });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (!cancelled) setState({ loading: false, error: msg });
+        if (canCommit()) setState({ loading: false, error: msg });
       }
     })();
     return () => {
-      cancelled = true;
+      alive = false;
+      unregisterController();
     };
-  }, [downloadUrl]);
+  }, [downloadUrl, lease]);
 
   if (state.loading) return <PreviewLoading />;
   if (state.error)
@@ -426,7 +713,13 @@ async function parseXlsxSheets(buf: ArrayBuffer): Promise<XlsxSheet[]> {
   });
 }
 
-function XlsxPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
+function XlsxPreview({
+  downloadUrl,
+  lease,
+}: {
+  downloadUrl: string;
+  lease: PreviewOriginLease;
+}): JSX.Element {
   const [state, setState] = useState<{
     loading: boolean;
     sheets?: XlsxSheet[];
@@ -435,24 +728,35 @@ function XlsxPreview({ downloadUrl }: { downloadUrl: string }): JSX.Element {
   const [activeIdx, setActiveIdx] = useState(0);
 
   useEffect(() => {
-    let cancelled = false;
+    if (!lease.isCurrent(lease.generation)) return;
+    let alive = true;
+    const controller = new AbortController();
+    const unregisterController = lease.registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive &&
+      lease.isCurrent(lease.generation) &&
+      !controller.signal.aborted;
+    setState({ loading: true });
+    setActiveIdx(0);
     void (async () => {
       try {
-        const buf = await fetchArrayBuffer(downloadUrl);
+        const buf = await fetchArrayBuffer(downloadUrl, controller.signal);
+        if (!canCommit()) return;
         const sheets = await parseXlsxSheets(buf);
-        if (!cancelled) setState({ loading: false, sheets });
+        if (canCommit()) setState({ loading: false, sheets });
       } catch (e) {
         const msg =
           e instanceof XlsxPreviewError
             ? e.message
             : "无法生成表格预览，可下载后用 Excel 或兼容应用打开";
-        if (!cancelled) setState({ loading: false, error: msg });
+        if (canCommit()) setState({ loading: false, error: msg });
       }
     })();
     return () => {
-      cancelled = true;
+      alive = false;
+      unregisterController();
     };
-  }, [downloadUrl]);
+  }, [downloadUrl, lease]);
 
   if (state.loading) return <PreviewLoading />;
   if (state.error)
@@ -530,7 +834,10 @@ function FallbackUnknown({
 
 // ---------- hooks ----------
 
-function useTextContent(downloadUrl: string): {
+function useTextContent(
+  downloadUrl: string,
+  lease: PreviewOriginLease,
+): {
   text: string;
   loading: boolean;
   error?: string;
@@ -542,37 +849,58 @@ function useTextContent(downloadUrl: string): {
   }>({ text: "", loading: true });
 
   useEffect(() => {
-    let cancelled = false;
+    if (!lease.isCurrent(lease.generation)) return;
+    let alive = true;
+    const controller = new AbortController();
+    const unregisterController = lease.registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive &&
+      lease.isCurrent(lease.generation) &&
+      !controller.signal.aborted;
     setState({ text: "", loading: true });
     void (async () => {
       try {
-        const resp = await apiTransport(downloadUrl, {}, {
-          timeoutMs: 30_000,
-          throwHttpErrors: false,
-        });
+        const resp = await apiTransport(
+          downloadUrl,
+          { signal: controller.signal },
+          {
+            timeoutMs: 30_000,
+            maxResponseBytes: ARTIFACT_TEXT_PREVIEW_MAX_BYTES,
+            throwHttpErrors: false,
+          },
+        );
         if (!resp.ok) {
           throw new Error(`下载失败：HTTP ${resp.status}`);
         }
         const text = await resp.text();
-        if (!cancelled) setState({ text, loading: false });
+        if (canCommit()) setState({ text, loading: false });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (!cancelled) setState({ text: "", loading: false, error: msg });
+        if (canCommit()) setState({ text: "", loading: false, error: msg });
       }
     })();
     return () => {
-      cancelled = true;
+      alive = false;
+      unregisterController();
     };
-  }, [downloadUrl]);
+  }, [downloadUrl, lease]);
 
   return state;
 }
 
-async function fetchArrayBuffer(url: string): Promise<ArrayBuffer> {
-  const resp = await apiTransport(url, {}, {
-    timeoutMs: 30_000,
-    throwHttpErrors: false,
-  });
+async function fetchArrayBuffer(
+  url: string,
+  signal: AbortSignal,
+): Promise<ArrayBuffer> {
+  const resp = await apiTransport(
+    url,
+    { signal },
+    {
+      timeoutMs: 30_000,
+      maxResponseBytes: ARTIFACT_BINARY_PREVIEW_MAX_BYTES,
+      throwHttpErrors: false,
+    },
+  );
   if (!resp.ok) {
     throw new Error(`下载失败：HTTP ${resp.status}`);
   }

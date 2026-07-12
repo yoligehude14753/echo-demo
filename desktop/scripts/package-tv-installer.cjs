@@ -5,9 +5,11 @@ const {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } = require("node:fs");
+const { createHash } = require("node:crypto");
 const { join } = require("node:path");
 const { spawnSync } = require("node:child_process");
 
@@ -40,6 +42,28 @@ function run(command, args, options = {}) {
   return result.status === 0;
 }
 
+function powershellLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function createBundleZip() {
+  if (process.platform !== "win32") {
+    return run("zip", ["-qr", BUNDLE_ZIP, "."], { cwd: BUNDLE_DIR });
+  }
+
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    `Get-ChildItem -LiteralPath ${powershellLiteral(BUNDLE_DIR)} | Compress-Archive -DestinationPath ${powershellLiteral(BUNDLE_ZIP)} -CompressionLevel Optimal -Force`,
+  ].join("; ");
+  return run("powershell.exe", [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    command,
+  ]);
+}
+
 if (!existsSync(SOURCE_APK)) {
   fail(`Missing ${SOURCE_APK}. Run "npm run app:dist:android" first.`);
 }
@@ -66,8 +90,23 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APK="$SCRIPT_DIR/${SMART_TV_APK_NAME}"
+MANIFEST="$SCRIPT_DIR/MANIFEST.sha256"
 PKG="com.echodesk.tv"
 LEGACY_PKG="com.echodesk.app"
+
+EXPECTED_SHA256="$(awk -v apk="${SMART_TV_APK_NAME}" '$2 == apk { print $1 }' "$MANIFEST")"
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_SHA256="$(sha256sum "$APK" | awk '{ print $1 }')"
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL_SHA256="$(shasum -a 256 "$APK" | awk '{ print $1 }')"
+else
+  echo "没有找到 SHA-256 校验工具；已停止安装。"
+  exit 1
+fi
+if [ -z "$EXPECTED_SHA256" ] || [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+  echo "APK SHA-256 校验失败；已停止安装。"
+  exit 1
+fi
 
 if command -v adb >/dev/null 2>&1; then
   ADB="$(command -v adb)"
@@ -161,8 +200,16 @@ $WaitSeconds = if ($env:ECHODESK_TV_AUTH_TIMEOUT_SECONDS) {
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Apk = Join-Path $ScriptDir "${SMART_TV_APK_NAME}"
+$Manifest = Join-Path $ScriptDir "MANIFEST.sha256"
 $Pkg = "com.echodesk.tv"
 $LegacyPkg = "com.echodesk.app"
+
+$ExpectedSha256 = ((Get-Content -LiteralPath $Manifest | Select-Object -First 1) -split "\\s+")[0].ToLowerInvariant()
+$ActualSha256 = (Get-FileHash -LiteralPath $Apk -Algorithm SHA256).Hash.ToLowerInvariant()
+if (-not $ExpectedSha256 -or $ActualSha256 -ne $ExpectedSha256) {
+  Write-Error "APK SHA-256 校验失败；已停止安装。"
+  exit 1
+}
 
 $Candidates = @(
   "adb.exe",
@@ -295,6 +342,22 @@ writeFileSync(
 );
 writeFileSync(join(BUNDLE_DIR, "README-TV-INSTALL.txt"), readme, "utf-8");
 
+const manifestFiles = [
+  SMART_TV_APK_NAME,
+  "install-tv-macos.sh",
+  "install-tv-windows.ps1",
+  "README-TV-INSTALL.txt",
+];
+const manifest = manifestFiles
+  .map((name) => {
+    const sha256 = createHash("sha256")
+      .update(readFileSync(join(BUNDLE_DIR, name)))
+      .digest("hex");
+    return `${sha256}  ${name}`;
+  })
+  .join("\n");
+writeFileSync(join(BUNDLE_DIR, "MANIFEST.sha256"), `${manifest}\n`, "utf-8");
+
 const tvInstallPage = `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -369,7 +432,7 @@ writeFileSync(
   "utf-8",
 );
 
-if (!run("zip", ["-qr", BUNDLE_ZIP, "."], { cwd: BUNDLE_DIR })) {
+if (!createBundleZip()) {
   fail("zip command failed while creating the TV one-click package.");
 }
 

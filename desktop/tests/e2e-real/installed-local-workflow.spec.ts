@@ -1,6 +1,15 @@
 import { expect, test, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +22,9 @@ const REPO_ROOT = path.resolve(TEST_FILE_DIR, "../../..");
 const BACKEND_ROOT =
   process.env.ECHODESK_BACKEND_ROOT ?? path.join(REPO_ROOT, "backend");
 const PYTHON_BIN = path.join(BACKEND_ROOT, ".venv/bin/python");
+const EXPECTED_BACKEND_BIN =
+  process.env.ECHODESK_EXPECTED_BACKEND_BIN ??
+  path.resolve(path.dirname(APP_BIN), "../Resources/backend/echodesk-backend");
 const AGENTOS_ROOT =
   process.env.ECHODESK_AGENTOS_ROOT ?? path.resolve(REPO_ROOT, "../agentos");
 const MODEL_CONFIG_PATH =
@@ -110,6 +122,35 @@ async function waitForPortState(
 
 async function waitForPort(open: boolean, timeout = 45_000): Promise<void> {
   await waitForPortState(BACKEND_PORT, open, timeout);
+}
+
+function descendantCommands(parentPid: number): string[] {
+  const output = execFileSync("/bin/ps", ["-axo", "ppid=,pid=,command="], {
+    encoding: "utf8",
+  });
+  const rows = output
+    .split("\n")
+    .map((line) => line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/))
+    .filter((match): match is RegExpMatchArray => match !== null)
+    .map((match) => ({
+      ppid: Number(match[1]),
+      pid: Number(match[2]),
+      command: match[3],
+    }));
+  const descendants = new Set([parentPid]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      if (descendants.has(row.ppid) && !descendants.has(row.pid)) {
+        descendants.add(row.pid);
+        changed = true;
+      }
+    }
+  }
+  return rows
+    .filter((row) => descendants.has(row.pid))
+    .map((row) => row.command);
 }
 
 function pipeProcessOutput(child: ChildProcess, label: string): void {
@@ -237,6 +278,30 @@ async function api<T extends JsonMap | JsonMap[]>(
   return result as T;
 }
 
+async function postForm<T extends JsonMap>(
+  win: Page,
+  endpoint: string,
+  fields: Record<string, string>,
+): Promise<T> {
+  const result = await win.evaluate(
+    async ({ endpoint: apiEndpoint, fields: formFields }) => {
+      const base = await (window as unknown as {
+        echo?: { getBackendHost?: () => Promise<string> };
+      }).echo?.getBackendHost?.();
+      if (!base) throw new Error("backend host unavailable");
+      const response = await fetch(`${base}${apiEndpoint}`, {
+        method: "POST",
+        body: new URLSearchParams(formFields),
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`${response.status}: ${text}`);
+      return JSON.parse(text) as JsonMap;
+    },
+    { endpoint, fields },
+  );
+  return result as T;
+}
+
 async function ssePost(
   win: Page,
   endpoint: string,
@@ -300,10 +365,8 @@ async function launchInstalled(skillTimeoutSeconds: number, modelConfig: ModelCo
   win: Page;
 }> {
   await waitForPort(false, 15_000);
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ECHO_BACKEND_CWD: BACKEND_ROOT,
-    ECHO_PYTHON: PYTHON_BIN,
     ECHO_BACKEND_PORT: String(BACKEND_PORT),
     ECHO_BACKEND_BIND_HOST: "127.0.0.1",
     ECHODESK_DISABLE_AUTO_UPDATE_DOWNLOAD: "1",
@@ -326,8 +389,18 @@ async function launchInstalled(skillTimeoutSeconds: number, modelConfig: ModelCo
     AGENT_OS_URL: `http://127.0.0.1:${AGENTOS_SERVER_PORT}`,
     AGENT_TASK_TIMEOUT_S: "300",
   };
-  delete env.ECHO_PUBLIC_DEMO;
-  delete env.ECHO_FORCE_LOCAL_BACKEND;
+  for (const name of [
+    "ECHO_BACKEND_CWD",
+    "ECHO_PYTHON",
+    "ECHO_ALLOW_PACKAGED_SOURCE_BACKEND",
+    "ECHO_PUBLIC_DEMO",
+    "ELECTRON_DEV",
+    "VITE_DEV_URL",
+    "PYTHONPATH",
+  ]) {
+    delete env[name];
+  }
+  env.ECHO_FORCE_LOCAL_BACKEND = "1";
 
   const app = await electron.launch({
     executablePath: APP_BIN,
@@ -402,6 +475,27 @@ async function launchInstalled(skillTimeoutSeconds: number, modelConfig: ModelCo
   await expect(win.locator(".app-connection-status")).toHaveText("已连接", {
     timeout: 30_000,
   });
+  const electronPid = app.process().pid;
+  expect(electronPid).toBeTruthy();
+  await expect
+    .poll(
+      () =>
+        descendantCommands(electronPid ?? -1).some((command) =>
+          command.includes(EXPECTED_BACKEND_BIN),
+        ),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  const backendCommands = descendantCommands(electronPid ?? -1);
+  expect(
+    backendCommands.some(
+      (command) =>
+        command.includes(PYTHON_BIN) ||
+        command.includes("app.main:app") ||
+        command.includes(" -m uvicorn "),
+    ),
+    `installed app must not launch source backend: ${backendCommands.join(" | ")}`,
+  ).toBe(false);
   return { app, win };
 }
 
@@ -467,6 +561,10 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
 
   test("installed app: GLM chat/RAG → failure/restart/retry → real AgentOS", async () => {
     test.setTimeout(900_000);
+    expect(existsSync(EXPECTED_BACKEND_BIN), `bundled backend missing: ${EXPECTED_BACKEND_BIN}`).toBe(
+      true,
+    );
+    expect(() => accessSync(EXPECTED_BACKEND_BIN, constants.X_OK)).not.toThrow();
     rmSync(TEST_ROOT, { recursive: true, force: true });
     mkdirSync(SCREENSHOT_DIR, { recursive: true });
     const modelConfig = loadModelConfig();
@@ -514,7 +612,32 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     }
     const ended = await api<JsonMap>(first.win, "/meetings/manual_end", "POST");
     expect(ended.meeting_id).toBe(meetingId);
-    const minutes = await api<JsonMap>(first.win, `/meetings/${meetingId}/minutes`);
+    const meetingsAfterEnd = await api<JsonMap[]>(first.win, "/meetings?limit=50");
+    const meetingAfterEnd = meetingsAfterEnd.find(
+      (meeting) => meeting.meeting_id === meetingId,
+    );
+    expect(meetingAfterEnd).toBeDefined();
+    const stateAfterEnd = await api<JsonMap>(first.win, "/meetings/current");
+    expect(stateAfterEnd.mode).toBe("idle");
+    expect(["ok", "generation_failed"]).toContain(stateAfterEnd.minutes_status);
+    let minutes: JsonMap;
+    if (stateAfterEnd.minutes_status === "generation_failed") {
+      expect(meetingAfterEnd!.state).toBe("ended");
+      minutes = await postForm<JsonMap>(first.win, `/meetings/${meetingId}/finalize`, {
+        title: "EchoDesk 0.3.1 安装态工作流验收",
+      });
+      const meetingsAfterRecovery = await api<JsonMap[]>(first.win, "/meetings?limit=50");
+      const recoveredMeeting = meetingsAfterRecovery.find(
+        (meeting) => meeting.meeting_id === meetingId,
+      );
+      expect(recoveredMeeting).toBeDefined();
+      expect(recoveredMeeting!.state).toBe("finalized");
+      const stateAfterRecovery = await api<JsonMap>(first.win, "/meetings/current");
+      expect(stateAfterRecovery.mode).toBe("idle");
+      expect(stateAfterRecovery.minutes_status).toBe("ok");
+    } else {
+      minutes = await api<JsonMap>(first.win, `/meetings/${meetingId}/minutes`);
+    }
     const todos = (minutes.todos as JsonMap[]) ?? [];
     const actionableTodo = todos.find(
       (todo) => todo.kind === "actionable" && String(todo.suggested_command ?? "").startsWith("@"),
@@ -576,10 +699,78 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     await expect(row).toHaveAttribute("data-todo-status", "done", {
       timeout: 240_000,
     });
-    await expect(row.getByTestId("minutes-todo-artifact-link")).toHaveAttribute(
-      "href",
-      /\/artifacts\/[^/]+\/download$/,
+    row = await selectMeeting(working.win, meetingId, todoId);
+    const artifactDownloadButton = row.getByTestId("minutes-todo-artifact-link");
+    await expect(artifactDownloadButton).toBeVisible();
+    await expect(artifactDownloadButton).toBeEnabled();
+    const isolatedDownloadDirectory = path.join(TEST_ROOT, "downloads");
+    mkdirSync(isolatedDownloadDirectory, { recursive: true, mode: 0o700 });
+    await working.app.evaluate(
+      ({ app }, directory) => app.setPath("downloads", directory),
+      isolatedDownloadDirectory,
     );
+    const downloadDirectory = await working.app.evaluate(({ app }) =>
+      app.getPath("downloads"),
+    );
+    expect(path.resolve(downloadDirectory)).toBe(
+      path.resolve(isolatedDownloadDirectory),
+    );
+    const downloadsBefore = new Set(readdirSync(downloadDirectory));
+    const productDownloadResponsePromise = working.win.waitForResponse((response) => {
+      if (response.request().method() !== "GET") return false;
+      try {
+        return /\/artifacts\/[^/]+\/download$/.test(new URL(response.url()).pathname);
+      } catch {
+        return false;
+      }
+    }, {
+      timeout: 120_000,
+    });
+    await artifactDownloadButton.click();
+    const productDownloadResponse = await productDownloadResponsePromise;
+    expect(productDownloadResponse.status()).toBe(200);
+    await expect
+      .poll(
+        () =>
+          readdirSync(downloadDirectory).filter((filename) => {
+            if (downloadsBefore.has(filename) || filename.endsWith(".crdownload")) {
+              return false;
+            }
+            const candidate = path.join(downloadDirectory, filename);
+            try {
+              const stat = statSync(candidate);
+              return (
+                stat.isFile() &&
+                stat.size > 0 &&
+                readFileSync(candidate, "utf8").includes(TODO_MARKER)
+              );
+            } catch {
+              return false;
+            }
+          }),
+        { timeout: 30_000, intervals: [100, 250, 500] },
+      )
+      .toHaveLength(1);
+    const downloadedArtifact = readdirSync(downloadDirectory).find((filename) => {
+      if (downloadsBefore.has(filename) || filename.endsWith(".crdownload")) return false;
+      try {
+        return readFileSync(path.join(downloadDirectory, filename), "utf8").includes(
+          TODO_MARKER,
+        );
+      } catch {
+        return false;
+      }
+    });
+    expect(downloadedArtifact).toMatch(/^echodesk-artifact-[0-9a-f]{12}$/);
+    expect(
+      statSync(path.join(downloadDirectory, downloadedArtifact!)).mode & 0o777,
+    ).toBe(0o600);
+    expect(
+      readdirSync(downloadDirectory).filter(
+        (filename) => !downloadsBefore.has(filename) && filename.endsWith(".crdownload"),
+      ),
+    ).toEqual([]);
+    await expect(artifactDownloadButton).toHaveAttribute("aria-busy", "false");
 
     const runs = await api<JsonMap[]>(
       working.win,
@@ -594,14 +785,9 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     );
     expect(meetingArtifacts).toHaveLength(1);
     const todoArtifactId = String(meetingArtifacts[0].artifact_id);
-    const downloadText = await working.win.evaluate(async (artifactId) => {
-      const base = await (window as unknown as {
-        echo?: { getBackendHost?: () => Promise<string> };
-      }).echo?.getBackendHost?.();
-      const response = await fetch(`${base}/artifacts/${artifactId}/download`);
-      return await response.text();
-    }, todoArtifactId);
-    expect(downloadText).toContain(TODO_MARKER);
+    expect(new URL(productDownloadResponse.url()).pathname).toBe(
+      `/artifacts/${todoArtifactId}/download`,
+    );
 
     const agentTask = await api<JsonMap>(working.win, "/agents/tasks", "POST", {
       device_id: DEVICE_ID,

@@ -20,7 +20,10 @@ import { uploadCaptureChunk } from "@/api";
 import { audioCapture } from "@/capture/audioCapture";
 import { CAPTURE_SAMPLE_RATE } from "@/capture/pcm";
 import { shouldAttachMeetingOverlay } from "@/domain/session";
-import { shouldHideSharedPublicHistory } from "@/runtime";
+import {
+  BACKEND_ORIGIN_EVENT,
+  shouldHideSharedPublicHistory,
+} from "@/runtime";
 import { useStore } from "@/store";
 
 export interface CaptureRouterHandlers {
@@ -72,13 +75,18 @@ export function attachCaptureChunkRouter(
   let circuitStreak = 0;
   let requestSeq = 0;
   let lastHealthySeq = 0;
+  let backendOriginGeneration = 0;
   const ladder = backoffLadder();
   const pending: Blob[] = [];
-  let draining = false;
+  let drainingGeneration: number | null = null;
   let disposed = false;
   let activeAbort: AbortController | null = null;
 
-  const processChunk = async (wav: Blob): Promise<void> => {
+  const processChunk = async (
+    wav: Blob,
+    generation: number,
+  ): Promise<void> => {
+    if (disposed || generation !== backendOriginGeneration) return;
     const now = Date.now();
     // ─ 熔断态：直接丢弃 chunk（不上传也不缓冲）─
     // 注意：录音继续，只是不发后端；audioCapture 的 wav buffer 会被 GC
@@ -107,7 +115,13 @@ export function attachCaptureChunkRouter(
       const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId, {
         signal: controller.signal,
       });
-      if (disposed || controller.signal.aborted) return;
+      if (
+        disposed ||
+        controller.signal.aborted ||
+        generation !== backendOriginGeneration
+      ) {
+        return;
+      }
 
       // M_diag_brake：熔断检测优先于成功路径
       if (result.stt_status === "circuit_open") {
@@ -172,7 +186,13 @@ export function attachCaptureChunkRouter(
       }
       if (result.meeting_segments.length > 0) handlers?.onMeetingUploaded?.();
     } catch (e) {
-      if (disposed || controller.signal.aborted) return;
+      if (
+        disposed ||
+        controller.signal.aborted ||
+        generation !== backendOriginGeneration
+      ) {
+        return;
+      }
       failStreak += 1;
       if (failStreak >= FAIL_STREAK_THRESHOLD && !lostNotified) {
         lostNotified = true;
@@ -184,20 +204,44 @@ export function attachCaptureChunkRouter(
   };
 
   const drain = (): void => {
-    if (draining || disposed) return;
-    draining = true;
+    const generation = backendOriginGeneration;
+    if (drainingGeneration === generation || disposed) return;
+    drainingGeneration = generation;
     void (async () => {
       try {
-        while (!disposed && pending.length > 0) {
+        while (
+          !disposed &&
+          generation === backendOriginGeneration &&
+          pending.length > 0
+        ) {
           const next = pending.shift();
-          if (next) await processChunk(next);
+          if (next) await processChunk(next, generation);
         }
       } finally {
-        draining = false;
+        if (drainingGeneration === generation) drainingGeneration = null;
         if (!disposed && pending.length > 0) drain();
       }
     })();
   };
+
+  const handleBackendOriginChange = (): void => {
+    backendOriginGeneration += 1;
+    pending.length = 0;
+    activeAbort?.abort();
+    activeAbort = null;
+
+    const hadOpenCircuit = backoffLevel >= 0;
+    failStreak = 0;
+    lostNotified = false;
+    circuitOpenUntil = 0;
+    backoffLevel = -1;
+    circuitStreak = 0;
+    requestSeq = 0;
+    lastHealthySeq = 0;
+    if (hadOpenCircuit) handlers?.onSttCircuitClosed?.();
+  };
+
+  window.addEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
 
   const offChunk = audioCapture.onChunk((wav) => {
     if (disposed) return;
@@ -211,9 +255,11 @@ export function attachCaptureChunkRouter(
 
   return () => {
     disposed = true;
+    backendOriginGeneration += 1;
     pending.length = 0;
     activeAbort?.abort();
     activeAbort = null;
+    window.removeEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
     offChunk();
   };
 }

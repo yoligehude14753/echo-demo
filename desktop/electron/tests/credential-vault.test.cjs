@@ -53,7 +53,11 @@ test("origin-bound encrypted envelope roundtrips enrollment identity", () => {
     const enrollmentId = "e".repeat(48);
     assert.equal(vault.store(credential, enrollmentId), true);
     assert.deepEqual(vault.readIdentity(), { credential, enrollmentId });
-    assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+    const credentialFile = fs.statSync(target);
+    assert.equal(credentialFile.isFile(), true);
+    if (process.platform !== "win32") {
+      assert.equal(credentialFile.mode & 0o777, 0o600);
+    }
     assert.deepEqual(
       fs.readdirSync(root).filter((name) => name.includes(".tmp-")),
       [],

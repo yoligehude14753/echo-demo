@@ -31,6 +31,7 @@ import {
 } from "react";
 import { ttsDiag, ttsSpeak, TtsSpeakError, type TtsDiagResult } from "@/api";
 import { useStore } from "@/store";
+import { BACKEND_ORIGIN_EVENT } from "@/runtime";
 
 const STORAGE_KEY = "echodesk.tts.enabled";
 const SAMPLE_RATE = 16_000;
@@ -56,6 +57,12 @@ function persistEnabled(v: boolean): void {
   } catch {
     /* ignore */
   }
+}
+
+function isSynthesisExplicitlyDisabled(
+  health: TtsDiagResult | null,
+): boolean {
+  return health?.state === "disabled";
 }
 
 function pcm16ToAudioBuffer(
@@ -96,14 +103,31 @@ function useTtsController(): TtsController {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [synthHealth, setSynthHealth] = useState<TtsDiagResult | null>(null);
+  const synthHealthRef = useRef<TtsDiagResult | null>(null);
+  const diagSettledRef = useRef(false);
   const ctxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const sourceOwnerRef = useRef<{
+    source: AudioBufferSourceNode;
+    controller: AbortController;
+    generation: number;
+  } | null>(null);
   const activeAbortRef = useRef<AbortController | null>(null);
   const queueRef = useRef<string[]>([]);
   const inflightRef = useRef(false);
-  const lastSeqRef = useRef<number>(0);
+  const lastSeqRef = useRef<number>(
+    useStore
+      .getState()
+      .events.reduce((maximum, event) => Math.max(maximum, event.seq || 0), 0),
+  );
   const lastToastRef = useRef<{ msg: string; at: number } | null>(null);
   const events = useStore((s) => s.events);
+
+  const commitSynthHealth = useCallback((result: TtsDiagResult) => {
+    synthHealthRef.current = result;
+    diagSettledRef.current = true;
+    setSynthHealth(result);
+  }, []);
 
   const reportError = useCallback((msg: string) => {
     setLastError(msg);
@@ -116,20 +140,24 @@ function useTtsController(): TtsController {
   }, []);
 
   const refreshHealth = useCallback(async () => {
+    const generation = generationRef.current;
     try {
       const r = await ttsDiag({ fresh: true });
-      setSynthHealth(r);
+      if (generation !== generationRef.current) return;
+      commitSynthHealth(r);
       // 故意不在 r.ok 时清 lastError：lastError 描述的是"最近一次实际用户
       // 触发的 /tts/speak 失败"，diag 是独立 probe，两者解耦——只有真正的
       // 成功 playNow 才有资格清。否则 silent_output 偶发场景里，diag
       // probe 走运 ok 一次就把 toggle 又"洗绿"，用户报错的体感丢失。
     } catch (e) {
+      if (generation !== generationRef.current) return;
+      diagSettledRef.current = true;
       console.warn("[tts] health check failed", e);
       // /tts/diag 本身打不通 → 后端可能挂了；前端只 setLastError 不再 toast
       // （backend 健康有自己的 supervisor pill 显示）
       setLastError("语音播报状态检查失败");
     }
-  }, []);
+  }, [commitSynthHealth]);
 
   const ensureCtx = useCallback((): AudioContext => {
     if (!ctxRef.current) {
@@ -148,19 +176,35 @@ function useTtsController(): TtsController {
       const trimmed = text.trim();
       if (!trimmed) return;
       const generation = generationRef.current;
+      if (
+        !enabledRef.current ||
+        !diagSettledRef.current ||
+        isSynthesisExplicitlyDisabled(synthHealthRef.current)
+      ) {
+        return;
+      }
       const controller = new AbortController();
+      let ownedSource: AudioBufferSourceNode | null = null;
       activeAbortRef.current = controller;
       try {
         const pcm = await ttsSpeak(trimmed, undefined, {
           signal: controller.signal,
         });
-        if (!enabledRef.current || generation !== generationRef.current) return;
+        if (
+          !enabledRef.current ||
+          generation !== generationRef.current ||
+          isSynthesisExplicitlyDisabled(synthHealthRef.current)
+        ) {
+          return;
+        }
         const ctx = ensureCtx();
         const buffer = pcm16ToAudioBuffer(ctx, pcm, SAMPLE_RATE);
         const src = ctx.createBufferSource();
+        ownedSource = src;
         src.buffer = buffer;
         src.connect(ctx.destination);
         sourceRef.current = src;
+        sourceOwnerRef.current = { source: src, controller, generation };
         setIsSpeaking(true);
         setLastError(null);
         await new Promise<void>((resolve) => {
@@ -168,7 +212,26 @@ function useTtsController(): TtsController {
           src.start();
         });
       } catch (e) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || generation !== generationRef.current) return;
+        if (e instanceof TtsSpeakError && e.detail === "tts_disabled") {
+          // The backend can be disabled after the last successful probe. Treat
+          // that stable response as health state, not as a user-visible playback
+          // failure, and prevent every queued request from reaching /tts/speak.
+          commitSynthHealth({
+            ok: false,
+            state: "disabled",
+            detail: null,
+            latency_ms: null,
+            pcm_bytes: null,
+            rms: null,
+            peak: null,
+            voice: null,
+            base_url: null,
+            checked_at: Date.now() / 1000,
+          });
+          setLastError(null);
+          return;
+        }
         // 关键修复：以前这里只 console.warn 静默吞掉，用户看到顶栏 TTS 绿灯
         // 却什么都没听到——以为整个 TTS 完全失效。现在走 message.error +
         // setLastError + 触发 health 刷新，让 StatusBar 同步变红。
@@ -182,12 +245,27 @@ function useTtsController(): TtsController {
         // 不必等下一个 30s 轮询周期。
         void refreshHealth();
       } finally {
-        if (activeAbortRef.current === controller) activeAbortRef.current = null;
-        sourceRef.current = null;
-        setIsSpeaking(false);
+        const ownsAbort = activeAbortRef.current === controller;
+        if (ownsAbort) activeAbortRef.current = null;
+        const currentOwner = sourceOwnerRef.current;
+        const ownsSource =
+          ownedSource !== null &&
+          sourceRef.current === ownedSource &&
+          currentOwner !== null &&
+          currentOwner.source === ownedSource &&
+          currentOwner.controller === controller &&
+          currentOwner.generation === generation;
+        if (ownsSource) {
+          sourceRef.current = null;
+          sourceOwnerRef.current = null;
+          setIsSpeaking(false);
+        } else if (ownsAbort && ownedSource === null) {
+          // This request still owned the fetch slot but never created a source.
+          setIsSpeaking(false);
+        }
       }
     },
-    [ensureCtx, reportError, refreshHealth],
+    [commitSynthHealth, ensureCtx, reportError, refreshHealth],
   );
 
   const drain = useCallback(async () => {
@@ -206,7 +284,13 @@ function useTtsController(): TtsController {
 
   const speak = useCallback(
     async (text: string) => {
-      if (!enabledRef.current) return;
+      if (
+        !enabledRef.current ||
+        !diagSettledRef.current ||
+        isSynthesisExplicitlyDisabled(synthHealthRef.current)
+      ) {
+        return;
+      }
       const t = text.trim();
       if (!t) return;
       queueRef.current.push(t);
@@ -219,17 +303,31 @@ function useTtsController(): TtsController {
     queueRef.current = [];
     activeAbortRef.current?.abort();
     activeAbortRef.current = null;
+    const ownedSource = sourceOwnerRef.current?.source ?? sourceRef.current;
     try {
-      sourceRef.current?.stop();
+      ownedSource?.stop();
     } catch {
       /* ignore */
     }
     sourceRef.current = null;
+    sourceOwnerRef.current = null;
     setIsSpeaking(false);
   }, []);
 
   const setEnabled = useCallback(
     (v: boolean) => {
+      if (v && !enabledRef.current) {
+        // React may not have run the events effect yet when a user re-enables
+        // TTS immediately after a silent-period event. Absorb the store's
+        // current high-water mark synchronously so that event is never replayed.
+        const currentMaximum = useStore
+          .getState()
+          .events.reduce(
+            (maximum, event) => Math.max(maximum, event.seq || 0),
+            lastSeqRef.current,
+          );
+        lastSeqRef.current = currentMaximum;
+      }
       enabledRef.current = v;
       setEnabledState(v);
       persistEnabled(v);
@@ -241,36 +339,64 @@ function useTtsController(): TtsController {
     [cancel],
   );
 
+  useEffect(() => {
+    const handleBackendOriginChange = (): void => {
+      generationRef.current += 1;
+      cancel();
+      lastSeqRef.current = 0;
+      lastToastRef.current = null;
+      setLastError(null);
+      synthHealthRef.current = null;
+      diagSettledRef.current = false;
+      setSynthHealth(null);
+      void refreshHealth();
+    };
+    window.addEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
+    return () =>
+      window.removeEventListener(
+        BACKEND_ORIGIN_EVENT,
+        handleBackendOriginChange,
+      );
+  }, [cancel, refreshHealth]);
+
   // 监听 store.events 里的 tts.suggested → 自动播
   useEffect(() => {
-    if (!enabled || events.length === 0) return;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i];
+    if (events.length === 0) return;
+    let maxObservedSeq = lastSeqRef.current;
+    let queued = false;
+    // Before the initial diagnostic settles, fail closed while still advancing
+    // the cursor. This removes the race where a disabled backend answered the
+    // probe only after an automatic /tts/speak had already been sent. A failed
+    // probe counts as settled/unknown, so future events remain available unless
+    // the backend explicitly reports the disabled state.
+    const canAutoSpeak =
+      enabledRef.current &&
+      diagSettledRef.current &&
+      !isSynthesisExplicitlyDisabled(synthHealthRef.current);
+    const unseenEvents = events
+      .filter((event) => (event.seq || 0) > lastSeqRef.current)
+      .sort((left, right) => (left.seq || 0) - (right.seq || 0));
+    for (const ev of unseenEvents) {
       const seq = ev.seq || 0;
-      if (seq <= lastSeqRef.current) break;
-      if (ev.type === "tts.suggested") {
+      maxObservedSeq = Math.max(maxObservedSeq, seq);
+      if (canAutoSpeak && ev.type === "tts.suggested") {
         const payload = ev.payload as { text?: string };
         if (payload?.text) {
           queueRef.current.push(payload.text);
+          queued = true;
         }
       }
     }
-    if (events.length > 0) {
-      lastSeqRef.current = Math.max(
-        lastSeqRef.current,
-        events[events.length - 1].seq || 0,
-      );
-    }
-    void drain();
-  }, [enabled, events, drain]);
+    lastSeqRef.current = maxObservedSeq;
+    if (queued) void drain();
+  }, [enabled, events, drain, synthHealth?.state]);
 
-  // 初次 mount 时把 lastSeqRef 调到当前最大，避免重放历史 tts.suggested
   useEffect(() => {
-    const init = useStore.getState().events;
-    if (init.length > 0) {
-      lastSeqRef.current = init[init.length - 1].seq || 0;
-    }
-  }, []);
+    if (synthHealth?.state !== "disabled") return;
+    generationRef.current += 1;
+    cancel();
+    setLastError(null);
+  }, [cancel, synthHealth?.state]);
 
   // /tts/diag 定期轮询：第一次 mount 立刻拉，之后 30s 一轮。
   // 不依赖 enabled——即使用户关了 TTS，pill 也应该说"TTS 当前关闭"而不是
@@ -278,19 +404,31 @@ function useTtsController(): TtsController {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      const generation = generationRef.current;
       try {
         const r = await ttsDiag();
-        if (!cancelled) setSynthHealth(r);
+        if (!cancelled && generation === generationRef.current) {
+          commitSynthHealth(r);
+        }
       } catch {
+        if (!cancelled && generation === generationRef.current) {
+          diagSettledRef.current = true;
+        }
         /* 静默：首拉失败时 lastError 留空，pill 显示 unknown 灰色 */
       }
     })();
     const id = window.setInterval(() => {
       void (async () => {
+        const generation = generationRef.current;
         try {
           const r = await ttsDiag();
-          if (!cancelled) setSynthHealth(r);
+          if (!cancelled && generation === generationRef.current) {
+            commitSynthHealth(r);
+          }
         } catch {
+          if (!cancelled && generation === generationRef.current) {
+            diagSettledRef.current = true;
+          }
           /* ignore */
         }
       })();
@@ -299,7 +437,7 @@ function useTtsController(): TtsController {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [commitSynthHealth]);
 
   return useMemo(
     () => ({

@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, isPublicRuntime } from "@/runtime";
 import { apiTransport, bootstrapBackend } from "@/session";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 // === supervisor 推送 ===
 
@@ -25,6 +26,7 @@ export type SupervisorState =
   | "degraded"
   | "python-not-found"
   | "backend-source-not-found"
+  | "bundled-backend-unavailable"
   | "shutting-down"
   | "external"
   | "unknown";
@@ -35,8 +37,9 @@ export interface SupervisorStatus {
   attempt?: number;
   backoff_ms?: number;
   reason?: string;
-  searched?: string[];
-  last_error?: string;
+  reason_code?: string;
+  help_url?: string;
+  attempts?: number;
 }
 
 // === /healthz/full ===
@@ -87,12 +90,12 @@ function healthzTimeoutMs(): number {
   return isPublicRuntime() ? PUBLIC_BACKEND_POLL_TIMEOUT_MS : POLL_TIMEOUT_MS;
 }
 
-async function fetchHealthz(): Promise<HealthzFull | null> {
+async function fetchHealthz(signal?: AbortSignal): Promise<HealthzFull | null> {
   try {
     const bootstrap = await bootstrapBackend();
     const publicHealth = isPublicRuntime() || bootstrap?.session_required === true;
     const url = await apiUrl(publicHealth ? "/healthz" : "/healthz/full");
-    const res = await apiTransport(url, { cache: "no-store" }, {
+    const res = await apiTransport(url, { cache: "no-store", signal }, {
       timeoutMs: healthzTimeoutMs(),
       throwHttpErrors: false,
       anonymous: publicHealth,
@@ -126,6 +129,12 @@ async function fetchMicPermission(): Promise<MicPermission> {
 }
 
 export function useBackendHealth(): BackendHealth {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const [supervisor, setSupervisor] = useState<SupervisorStatus>({
     state: "unknown",
   });
@@ -147,7 +156,8 @@ export function useBackendHealth(): BackendHealth {
           status.state === "external" ||
           status.state === "degraded" ||
           status.state === "python-not-found" ||
-          status.state === "backend-source-not-found"
+          status.state === "backend-source-not-found" ||
+          status.state === "bundled-backend-unavailable"
         ) {
           setManualRestartBusy(false);
         }
@@ -158,10 +168,20 @@ export function useBackendHealth(): BackendHealth {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    failCountRef.current = 0;
+    setHealthz(null);
+    setHealthzOk(false);
 
     const tick = async () => {
-      const data = await fetchHealthz();
-      if (cancelled) return;
+      const data = await fetchHealthz(controller.signal);
+      if (
+        cancelled ||
+        !isCurrent(originGeneration) ||
+        controller.signal.aborted
+      ) return;
       if (data) {
         failCountRef.current = 0;
         setHealthz(data);
@@ -178,9 +198,15 @@ export function useBackendHealth(): BackendHealth {
 
     return () => {
       cancelled = true;
+      unregisterController();
       if (timer) clearTimeout(timer);
     };
-  }, []);
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -214,7 +240,8 @@ export function useBackendHealth(): BackendHealth {
     supervisor.state === "unknown" ||
     supervisor.state === "degraded" ||
     supervisor.state === "python-not-found" ||
-    supervisor.state === "backend-source-not-found";
+    supervisor.state === "backend-source-not-found" ||
+    supervisor.state === "bundled-backend-unavailable";
 
   const effectiveSupervisor: SupervisorStatus =
     healthzProvesBackendReady && supervisorLooksStale

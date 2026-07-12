@@ -23,9 +23,13 @@ async function mockTtsDiag(
     rms?: number | null;
     peak?: number | null;
   },
+  delayMs = 0,
 ): Promise<void> {
-  await page.route("**/tts/diag**", (route) =>
-    route.fulfill({
+  await page.route("**/tts/diag**", async (route) => {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
@@ -40,8 +44,8 @@ async function mockTtsDiag(
         base_url: "http://100.76.3.59:8094",
         checked_at: Date.now() / 1000,
       }),
-    }),
-  );
+    });
+  });
 }
 
 test("健康场景：/tts/diag=ok → 顶栏显示『语音播报』绿色态", async ({ page }) => {
@@ -79,6 +83,49 @@ test("异常场景：/tts/diag=silent_output → 顶栏切『播报异常』+ Po
   await expect(synth).toContainText("未检测到可播放的声音");
 });
 
+test("初始诊断迟到且明确 disabled：消费事件但不请求 speak 或弹 toast", async ({
+  page,
+}) => {
+  await mockTtsDiag(
+    page,
+    {
+      ok: false,
+      state: "disabled",
+      detail: "TTS_ENABLED=false",
+      latency_ms: null,
+      pcm_bytes: null,
+      rms: null,
+      peak: null,
+    },
+    500,
+  );
+  const mock = await installEchoMock(page, {
+    skipPaths: ["/tts/diag", "/tts/speak"],
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const toggle = page.getByTestId("tts-toggle");
+  await expect(toggle).toBeVisible();
+  await mock.publish({
+    type: "tts.suggested",
+    seq: 1,
+    ts: new Date().toISOString(),
+    payload: { text: "诊断确认关闭前也不能请求" },
+  });
+
+  await expect(toggle).toHaveAttribute("data-tts-state", "unhealthy", {
+    timeout: 10_000,
+  });
+  await page.waitForTimeout(100);
+  const speakRequests = (await mock.fetchLog()).filter(({ url }) =>
+    url.replace(/^https?:\/\/[^/]+/, "").includes("/tts/speak"),
+  );
+  expect(speakRequests).toHaveLength(0);
+  await expect(
+    page.locator(".ant-message-error").filter({ hasText: /语音播报/ }),
+  ).toHaveCount(0);
+});
+
 test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async ({
   page,
 }) => {
@@ -113,10 +160,8 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
     payload: { text: "测试一下" },
   });
 
-  // 期望：message.error 弹出。
-  // 注：App.tsx 与 CommandBar.tsx 各自调用 useTtsPlayer()，会产生两个独立的
-  // hook 实例 → 同一个 WS 事件触发两次 fetch、两次 toast。用 .first() 包容
-  // 这一既有现象；真正要测的是"用户看到了错误"，不是"toast 只显示一次"。
+  // App 与 CommandBar 共享 TtsProvider 的单例 controller；同一个 WS 事件
+  // 只能发出一次请求，并产生一条用户可见错误。
   await expect(
     page
       .locator(".ant-message-error")
@@ -134,6 +179,40 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
     url.replace(/^https?:\/\/[^/]+/, "").includes("/tts/speak"),
   );
   expect(speakRequests).toHaveLength(1);
+});
+
+test("批量 tts.suggested 始终按 seq 升序播报", async ({ page }) => {
+  await mockTtsDiag(page, { ok: true, state: "ok" });
+  const mock = await installEchoMock(page, {
+    skipPaths: ["/tts/diag"],
+    errorPaths: { "/tts/speak": 502 },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("tts-toggle")).toHaveAttribute("data-tts-state", "ok");
+
+  await page.evaluate(async () => {
+    const { useStore } = await import("/src/store.ts");
+    const event = (seq: number, text: string) => ({
+      type: "tts.suggested",
+      seq,
+      ts: new Date().toISOString(),
+      payload: { text },
+    });
+    useStore.setState({
+      events: [event(3, "third"), event(1, "first"), event(2, "second")],
+    });
+  });
+
+  await expect
+    .poll(async () => {
+      const requests = (await mock.fetchLog()).filter(({ url }) =>
+        url.replace(/^https?:\/\/[^/]+/, "").includes("/tts/speak"),
+      );
+      return requests.map(({ bodyText }) =>
+        JSON.parse(bodyText ?? "{}") as { text?: string },
+      );
+    })
+    .toEqual([{ text: "first" }, { text: "second" }, { text: "third" }]);
 });
 
 test("用户关闭语音播报：顶栏切『已静音』+ 后续入口不再请求 speak", async ({ page }) => {
@@ -158,4 +237,52 @@ test("用户关闭语音播报：顶栏切『已静音』+ 后续入口不再请
     url.replace(/^https?:\/\/[^/]+/, "").includes("/tts/speak"),
   );
   expect(speakRequests).toHaveLength(0);
+});
+
+test("静音期间持续推进 seq：重开不重放旧事件且只消费新事件", async ({ page }) => {
+  await mockTtsDiag(page, { ok: true, state: "ok" });
+  const mock = await installEchoMock(page, {
+    skipPaths: ["/tts/diag"],
+    errorPaths: { "/tts/speak": 502 },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const toggle = page.getByTestId("tts-toggle");
+  await expect(toggle).toHaveAttribute("data-tts-state", "ok");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("data-tts-state", "disabled");
+
+  await mock.publish({
+    type: "tts.suggested",
+    seq: 1,
+    ts: new Date().toISOString(),
+    payload: { text: "静音期间的旧事件" },
+  });
+  // Deliberately re-enable immediately. The event effect may not have run yet,
+  // so setEnabled(true) must synchronously absorb the store high-water mark.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("data-tts-state", "ok");
+  await page.waitForTimeout(100);
+  expect(
+    (await mock.fetchLog()).filter(({ url }) =>
+      url.replace(/^https?:\/\/[^/]+/, "").includes("/tts/speak"),
+    ),
+  ).toHaveLength(0);
+
+  await mock.publish({
+    type: "tts.suggested",
+    seq: 2,
+    ts: new Date().toISOString(),
+    payload: { text: "重开后的新事件" },
+  });
+  await expect
+    .poll(async () => {
+      const requests = (await mock.fetchLog()).filter(({ url }) =>
+        url.replace(/^https?:\/\/[^/]+/, "").includes("/tts/speak"),
+      );
+      return requests.map(({ bodyText }) =>
+        JSON.parse(bodyText ?? "{}") as { text?: string },
+      );
+    })
+    .toEqual([{ text: "重开后的新事件" }]);
 });

@@ -419,6 +419,20 @@ select:focus-visible,
   outline: none;
 }
 
+.identity-status.is-upgrade {
+  border-color: rgba(14, 116, 144, 0.24);
+  background: rgba(236, 254, 255, 0.92);
+  color: #0e7490;
+  cursor: pointer;
+}
+
+.identity-status.is-upgrade:hover,
+.identity-status.is-upgrade:focus-visible {
+  border-color: rgba(14, 116, 144, 0.44);
+  background: rgba(207, 250, 254, 0.96);
+  outline: none;
+}
+
 .identity-status:disabled {
   cursor: wait;
   opacity: 0.72;
@@ -1397,6 +1411,11 @@ label:has([data-testid="meeting-search-input"]) svg {
 
   .identity-status.is-error > span::after {
     content: "异常";
+    font-size: 10px;
+  }
+
+  .identity-status.is-upgrade > span::after {
+    content: "升级";
     font-size: 10px;
   }
 

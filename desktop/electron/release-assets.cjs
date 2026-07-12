@@ -1,13 +1,10 @@
+const patternSource = require("./release-asset-patterns.json");
+
 function preferredReleaseAsset(assets, platform = process.platform) {
   const candidates = Array.isArray(assets) ? assets : [];
-  const patterns =
-    platform === "darwin"
-      ? [/arm64\.dmg$/i, /arm64-mac\.zip$/i, /\.dmg$/i]
-      : platform === "win32"
-        ? [/Setup\.[\d.]+\.exe$/i, /\.exe$/i]
-        : platform === "linux"
-          ? [/\.AppImage$/i, /\.deb$/i]
-          : [];
+  const patterns = (patternSource[platform] || []).map(
+    (source) => new RegExp(source, "i"),
+  );
 
   for (const pattern of patterns) {
     const asset = candidates.find((candidate) =>

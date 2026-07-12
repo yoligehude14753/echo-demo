@@ -80,7 +80,8 @@ function levelFromSupervisor(s: SupervisorStatus, healthzOk: boolean): Level {
   if (
     s.state === "degraded" ||
     s.state === "python-not-found" ||
-    s.state === "backend-source-not-found"
+    s.state === "backend-source-not-found" ||
+    s.state === "bundled-backend-unavailable"
   )
     return "fail";
   if (s.state === "shutting-down") return "warn";
@@ -242,7 +243,8 @@ function BackendPopover({
   const isFailState =
     supervisor.state === "degraded" ||
     supervisor.state === "python-not-found" ||
-    supervisor.state === "backend-source-not-found";
+    supervisor.state === "backend-source-not-found" ||
+    supervisor.state === "bundled-backend-unavailable";
   const supervisorLabel: Record<SupervisorStatus["state"], string> = {
     ready: "正常运行",
     external: "已连接",
@@ -251,6 +253,7 @@ function BackendPopover({
     degraded: "部分可用",
     "python-not-found": "运行环境缺失",
     "backend-source-not-found": "服务文件缺失",
+    "bundled-backend-unavailable": "安装文件损坏",
     "shutting-down": "正在退出",
     unknown: "正在检查",
   };
@@ -541,6 +544,7 @@ export default function StatusBar({
     degraded: "降级",
     "python-not-found": "无 Python",
     "backend-source-not-found": "无源码",
+    "bundled-backend-unavailable": "后端缺失",
     "shutting-down": "退出中",
     unknown: "未知",
   };

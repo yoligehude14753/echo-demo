@@ -33,6 +33,11 @@ function main() {
   console.log("[android] DEVELOPMENT ONLY: Gradle debug signing; never publish these APKs");
   run("npm", ["run", "build"], { env });
   run("npx", ["cap", "sync", "android"], { env });
+  run(
+    process.execPath,
+    [join(ROOT, "scripts", "prepare-android-gradle-locks.cjs")],
+    { env },
+  );
   buildDebugVariant("com.echodesk.app", ANDROID_OUTPUT, env);
 
   const restoreTvRuntimeMarker = patchTvRuntimeMarker();

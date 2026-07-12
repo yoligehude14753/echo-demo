@@ -33,6 +33,7 @@ import {
 } from "@/api";
 import { useStore, type CommandBarPrefillMeta } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 import { meetingDisplayTitle } from "@/lib/meetingDisplay";
 import { isTvLikeViewport } from "@/runtime";
@@ -133,6 +134,11 @@ export default function CommandBar(): JSX.Element {
   const upsertAgentTask = useStore((s) => s.upsertAgentTask);
   const registerCommandBarPrefill = useStore((s) => s.registerCommandBarPrefill);
   const tts = useTtsPlayer();
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+  } = useBackendOriginFence();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [tvMode, setTvMode] = useState(() => detectTvCommandMode());
@@ -204,15 +210,31 @@ export default function CommandBar(): JSX.Element {
   // P4-fix-rag-chat 智能提示节流：每条会话最多提示一次，避免每次发问都弹。
   const workspaceHintShownRef = useRef(false);
 
+  useEffect(() => {
+    // doc_id、待办 prefill 与 busy/uploading 都属于创建它们的 backend origin。
+    // origin 切换后立即清空，旧异步链路再晚返回也只能被 generation fence 丢弃。
+    setText("");
+    setPrefillMeta(null);
+    setPendingDocs([]);
+    setBusy(false);
+    setUploading(0);
+    setDropActive(false);
+    workspaceHintShownRef.current = false;
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, [backendOriginRevision]);
+
   // 当用户走 search_rag 但 RAG docs 数太少（< 3）且没配置 workspace_dirs 时，
   // 当资料过少时提示用户添加文件夹，避免依赖隐藏命令记忆。
-  const maybePromptWorkspaceConfig = useCallback(async (): Promise<void> => {
-    if (workspaceHintShownRef.current) return;
+  const maybePromptWorkspaceConfig = useCallback(async (
+    originGeneration: number,
+  ): Promise<void> => {
+    if (!isCurrent(originGeneration) || workspaceHintShownRef.current) return;
     try {
       const [docs, ws] = await Promise.all([
         listRagDocs(),
         workspaceStatus(),
       ]);
+      if (!isCurrent(originGeneration)) return;
       const nDocs = docs.total ?? 0;
       const nConfigured = ws.configured_dirs?.length ?? 0;
       if (nDocs < 3 && nConfigured === 0) {
@@ -226,12 +248,14 @@ export default function CommandBar(): JSX.Element {
     } catch {
       /* 静默：智能提示不应阻塞用户主问答 */
     }
-  }, []);
+  }, [isCurrent]);
 
   const handleFiles = useCallback(async (files: FileList | File[]): Promise<void> => {
     const arr = Array.from(files);
     if (!arr.length) return;
+    const originGeneration = captureGeneration();
     for (const f of arr) {
+      if (!isCurrent(originGeneration)) return;
       const ext = pickExt(f.name);
       if (!ACCEPT_EXT_SET.has(ext)) {
         message.warning(`不支持的文件类型：${f.name}（${ext || "无后缀"}）`);
@@ -240,19 +264,23 @@ export default function CommandBar(): JSX.Element {
       setUploading((n) => n + 1);
       try {
         const r = await ingestFile(f, f.name);
+        if (!isCurrent(originGeneration)) return;
         setPendingDocs((prev) => [
           ...prev,
           { doc_id: r.doc_id, title: r.title, filename: f.name },
         ]);
         message.success(`已添加到知识库：${f.name}`);
       } catch (e) {
+        if (!isCurrent(originGeneration)) return;
         console.error("[command-bar] failed to add file to knowledge base", e);
         message.error(`${f.name} 添加失败，请检查文件后重试`);
       } finally {
-        setUploading((n) => Math.max(0, n - 1));
+        if (isCurrent(originGeneration)) {
+          setUploading((n) => Math.max(0, n - 1));
+        }
       }
     }
-  }, []);
+  }, [captureGeneration, isCurrent]);
 
   const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -321,10 +349,14 @@ export default function CommandBar(): JSX.Element {
     clearPendingAfterSubmit: boolean,
   ): Promise<void> {
     if (!value) return;
+    const originGeneration = captureGeneration();
+    if (!isCurrent(originGeneration)) return;
     setBusy(true);
     try {
       const r = routeExplicitGenerateCommand(value) ?? (await routeIntent(value, currentMeetingId));
-      await dispatch(r, value, activePrefillMeta);
+      if (!isCurrent(originGeneration)) return;
+      await dispatch(r, value, activePrefillMeta, originGeneration);
+      if (!isCurrent(originGeneration)) return;
       setText("");
       setPrefillMeta(null);
       // 附件已被发出，清空 pendingDocs（后端 RAG 检索复用 doc_id）
@@ -332,10 +364,11 @@ export default function CommandBar(): JSX.Element {
         setPendingDocs([]);
       }
     } catch (e) {
+      if (!isCurrent(originGeneration)) return;
       console.error("[command-bar] submit failed", e);
       message.error("发送失败，请稍后重试");
     } finally {
-      setBusy(false);
+      if (isCurrent(originGeneration)) setBusy(false);
     }
   }
 
@@ -355,7 +388,9 @@ export default function CommandBar(): JSX.Element {
     r: IntentResult,
     originalText: string,
     meta: CommandBarPrefillMeta | null,
+    originGeneration: number,
   ): Promise<void> {
+    if (!isCurrent(originGeneration)) return;
     switch (r.kind) {
       case "generate_html":
       case "generate_pptx":
@@ -411,6 +446,7 @@ export default function CommandBar(): JSX.Element {
           retry_of_run_id: meta?.retry_of_run_id,
         })
           .then((art) => {
+            if (!isCurrent(originGeneration)) return;
             addArtifact(art);
             const title = art.title?.trim() || `未命名${kindLabel[r.kind].replace("生成 ", "")}`;
             applyEvent({
@@ -425,6 +461,7 @@ export default function CommandBar(): JSX.Element {
             message.success(`已生成 ${art.artifact_type}`);
           })
           .catch((e) => {
+            if (!isCurrent(originGeneration)) return;
             console.error("[command-bar] artifact generation failed", e);
             applyEvent({
               type: "chat.done",
@@ -450,6 +487,7 @@ export default function CommandBar(): JSX.Element {
           mid,
           meetingDisplayTitle(currentMeeting, "会议纪要"),
         );
+        if (!isCurrent(originGeneration)) return;
         message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
         return;
       }
@@ -467,6 +505,7 @@ export default function CommandBar(): JSX.Element {
             current_meeting_id: currentMeetingId,
           },
         });
+        if (!isCurrent(originGeneration)) return;
         upsertAgentTask(task);
         message.info(
           task.state === "waiting_permission" ? "需要授权后开始执行" : "已开始后台执行",
@@ -490,6 +529,7 @@ export default function CommandBar(): JSX.Element {
         message.info("正在回复…");
         void chatAsk(question)
           .then((answer) => {
+            if (!isCurrent(originGeneration)) return;
             applyEvent({
               type: "chat.done",
               seq: 0,
@@ -503,6 +543,7 @@ export default function CommandBar(): JSX.Element {
             void tts.speak(answer);
           })
           .catch((e) => {
+            if (!isCurrent(originGeneration)) return;
             console.error("[command-bar] direct chat failed", e);
             message.error("暂时无法回复，请稍后重试");
           });
@@ -542,10 +583,11 @@ export default function CommandBar(): JSX.Element {
         // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
         // 让 RAG 覆盖整个文件夹，而不是只能用一两个手动上传的 PDF。
         // 不阻塞 ragAsk 主链路（并发触发）。
-        void maybePromptWorkspaceConfig();
+        void maybePromptWorkspaceConfig(originGeneration);
 
         void ragAsk(question)
           .then((ans) => {
+            if (!isCurrent(originGeneration)) return;
             applyEvent({
               type: "rag.answer.done",
               seq: 0,
@@ -563,6 +605,7 @@ export default function CommandBar(): JSX.Element {
             void tts.speak(ans.answer);
           })
           .catch((e) => {
+            if (!isCurrent(originGeneration)) return;
             console.error("[command-bar] retrieval failed", e);
             message.error("检索失败，请稍后重试");
           });

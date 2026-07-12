@@ -2,6 +2,12 @@ import { expect, test } from "@playwright/test";
 import { installEchoMock } from "./_mock";
 
 test("settings restart stays busy and cannot dispatch duplicate IPC calls", async ({ page }) => {
+  const disconnectedFormWarnings: string[] = [];
+  page.on("console", (entry) => {
+    if (entry.text().includes("Instance created by `useForm` is not connected")) {
+      disconnectedFormWarnings.push(entry.text());
+    }
+  });
   await installEchoMock(page, { skipPaths: ["/admin/settings/remote"] });
   await page.route(/\/(api\/)?admin\/settings\/remote$/, (route) => {
     if (route.request().method() === "PATCH") {
@@ -69,4 +75,5 @@ test("settings restart stays busy and cannot dispatch duplicate IPC calls", asyn
   );
   await expect(page.getByText("服务重启已开始")).toBeVisible();
   await expect(restart).toHaveCount(0);
+  expect(disconnectedFormWarnings).toEqual([]);
 });

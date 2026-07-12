@@ -315,6 +315,11 @@ function main() {
     copyFileSync(tempLineage, LINEAGE_OUTPUT);
     run("npm", ["run", "build"], { env });
     run("npx", ["cap", "sync", "android"], { env });
+    run(
+      process.execPath,
+      [join(ROOT, "scripts", "prepare-android-gradle-locks.cjs")],
+      { env },
+    );
     const android = buildReleaseVariant(
       "com.echodesk.app",
       ANDROID_OUTPUT,

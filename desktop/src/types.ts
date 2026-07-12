@@ -111,7 +111,7 @@ export interface GeneratedArtifact {
   artifact_id: string;
   artifact_type: ArtifactType | string;
   title: string;
-  file_path: string;
+  file_path?: string | null;
   mime_type: string;
   size_bytes: number;
   generation_latency_ms: number;
