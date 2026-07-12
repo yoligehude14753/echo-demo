@@ -6,7 +6,6 @@ from types import ModuleType
 
 import pytest
 
-
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "check-python-locks.py"
 
 

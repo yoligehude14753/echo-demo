@@ -276,9 +276,9 @@ def _validate_cpu_diarizer_runtime() -> dict[str, object]:
     """Exercise the frozen ECAPA dependency boundary without fetching a model."""
 
     import torch
-    import torch.distributed as distributed
     import torchaudio
     from speechbrain.inference.speaker import SpeakerRecognition
+    from torch import distributed
 
     del SpeakerRecognition  # the model class import is the frozen SpeechBrain boundary
     cuda_build = torch.version.cuda
