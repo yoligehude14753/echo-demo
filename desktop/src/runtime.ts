@@ -2,8 +2,10 @@
  * 运行时配置：兼容 3 种场景
  *  1. 浏览器 + vite dev server（默认）→ 走相对 /api，由 vite 代理转发到 backend
  *  2. Electron + vite dev server → 同上（preload 注入的 host 仅做兜底）
- *  3. Electron 打包后加载 file://dist/index.html → 直接打 ECHO_BACKEND_HOST
+ *  3. Electron 打包后加载 echodesk://app/index.html → 直接打 ECHO_BACKEND_HOST
  */
+
+import backendConfig from "../backend.config.json";
 
 // SupervisorStatus 的具体形状定义在 hooks/useBackendHealth.ts；
 // 这里用宽松 unknown 让 runtime.ts 不强耦合 health hook，且 hook 内做窄化
@@ -59,12 +61,26 @@ export interface ElectronWorkspaceScanResult {
   errors: string[];
 }
 
+export interface ElectronPublicSession {
+  token: string | null;
+  expires_at: string | null;
+  principal?: Record<string, unknown>;
+  credential_expires_at?: string | null;
+}
+
 interface ElectronEchoBridge {
   isElectron?: boolean;
   isPublicDemo?: boolean;
+  backendHost?: string;
   getBackendHost?: () => Promise<string>;
   getShareBackendHost?: () => Promise<string>;
   loadLocalLegacyHistory?: () => Promise<unknown | null>;
+  ensurePublicSession?: () => Promise<ElectronPublicSession | null>;
+  renewPublicSession?: () => Promise<ElectronPublicSession | null>;
+  rotatePublicCredential?: (
+    sessionToken: string,
+  ) => Promise<{ credential_id: string | null; credential_expires_at: string | null }>;
+  clearPublicCredential?: () => Promise<{ cleared: boolean }>;
   // Phase 1 P1.5/P1.6 BackendSupervisor IPC
   onBackendStatus?: (cb: (status: unknown) => void) => () => void;
   manualRestartBackend?: () => Promise<{ ok: boolean }>;
@@ -103,7 +119,7 @@ declare global {
     Capacitor?: { isNativePlatform?: () => boolean };
     __ECHODESK_TV_PACKAGE__?: boolean;
   }
-  // 由 vite.config.ts define 注入；编译时替换为 "0.2.0" 字面量
+  // 由 vite.config.ts 从当前 package version 注入；编译时替换为版本字面量。
   const __APP_VERSION__: string;
 }
 
@@ -112,7 +128,8 @@ let cachedBase: string | null = null;
 export const MOBILE_BACKEND_BASE_KEY = "echodesk.mobileBackendBase";
 export const MOBILE_BACKEND_BASE_USER_SET_KEY = "echodesk.mobileBackendBase.userSet";
 export const PUBLIC_DATA_BOUNDARY_KEY = "echodesk.publicDataBoundary.v2";
-export const DEFAULT_ANDROID_BACKEND_BASE = "https://echodesk.yoliyoli.uk";
+export const DEFAULT_ANDROID_BACKEND_BASE = backendConfig.public.baseUrl;
+export const DEFAULT_LOCAL_BACKEND_BASE = `http://${backendConfig.local.host}:${backendConfig.local.port}`;
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
 const PUBLIC_DATA_BOUNDARY_SCHEMA = 3;
 export const RELEASES_URL =
@@ -132,11 +149,76 @@ const PUBLIC_HISTORY_STORAGE_KEYS = [
   "echodesk.currentMeeting",
 ];
 
-function normalizeBackendBase(raw: string | null | undefined): string | null {
-  const v = raw?.trim().replace(/\/+$/, "");
-  if (!v) return null;
-  if (!/^https?:\/\//.test(v)) return `http://${v}`;
-  return v;
+export class BackendBasePolicyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BackendBasePolicyError";
+  }
+}
+
+function parseIpv4(hostname: string): number[] | null {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) return null;
+  const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
+  return parts.every((part) => part >= 0 && part <= 255) ? parts : null;
+}
+
+/** HTTP is only a deliberate LAN/loopback escape hatch; public targets require TLS. */
+export function isPrivateHttpHostname(rawHostname: string): boolean {
+  const hostname = rawHostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) return true;
+
+  const ipv4 = parseIpv4(hostname);
+  if (ipv4) {
+    const [a, b] = ipv4;
+    return (
+      a === 10 ||
+      a === 127 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254)
+    );
+  }
+
+  // IPv4-mapped IPv6 inherits the embedded IPv4 policy.
+  const mappedIpv4 = hostname.match(/^(?:::ffff:)(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (mappedIpv4) return isPrivateHttpHostname(mappedIpv4[1]);
+  if (hostname === "::1") return true;
+  const firstHextet = hostname.split(":", 1)[0];
+  const first = Number.parseInt(firstHextet, 16);
+  if (!Number.isFinite(first)) return false;
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+}
+
+export function normalizeBackendBase(
+  raw: string | null | undefined,
+): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  const withScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(value)
+    ? value
+    : `http://${value}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw new BackendBasePolicyError("服务地址格式无效，请输入完整的主机名或 IP 地址");
+  }
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new BackendBasePolicyError("服务地址必须是不含账号信息的 HTTP(S) 地址");
+  }
+  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new BackendBasePolicyError("服务地址只能填写 origin，不能包含路径、参数或片段");
+  }
+  if (parsed.protocol === "http:" && !isPrivateHttpHostname(parsed.hostname)) {
+    throw new BackendBasePolicyError(
+      "公网主机必须使用 HTTPS；HTTP 仅允许 loopback 或私有/链路本地 IP",
+    );
+  }
+  return parsed.origin;
 }
 
 function normalizeVersion(raw: string | null | undefined): string {
@@ -153,6 +235,35 @@ export function compareVersions(a: string, b: string): number {
     if (av < bv) return -1;
   }
   return 0;
+}
+
+/**
+ * 只接受严格高于“桥接上报版本”和当前前端构建版本的更新。
+ *
+ * Electron 的更新状态可能来自缓存或旧主进程，因此不能只信任
+ * updateAvailable / currentVersion。任何一侧显示目标版本不够新时都
+ * fail closed，避免把公开旧版本误当成更新。
+ */
+export function isNewerAppUpdate(
+  status: AppUpdateStatus | null | undefined,
+): boolean {
+  if (!status?.latestVersion) return false;
+  const reportedCurrent = status.currentVersion || __APP_VERSION__;
+  return (
+    compareVersions(status.latestVersion, reportedCurrent) > 0 &&
+    compareVersions(status.latestVersion, __APP_VERSION__) > 0
+  );
+}
+
+export function canInstallAppUpdate(
+  status: AppUpdateStatus | null | undefined,
+): boolean {
+  if (!status || !isNewerAppUpdate(status)) return false;
+  if (status.status === "downloaded") return status.canAutoInstall === true;
+  return (
+    (status.status === "available" || status.status === "checked") &&
+    status.updateAvailable === true
+  );
 }
 
 function preferredUpdateAsset(
@@ -176,7 +287,7 @@ function preferredUpdateAsset(
     const asset = assets.find((a) => pattern.test(a.name));
     if (asset) return asset;
   }
-  return assets[0] ?? null;
+  return null;
 }
 
 function envBackendBase(): string | null {
@@ -251,11 +362,13 @@ export async function checkAppUpdate(): Promise<AppUpdateStatus> {
         url: a.browser_download_url as string,
       }));
     const asset = preferredUpdateAsset(assets);
+    const hasNewerVersion = compareVersions(latestVersion, __APP_VERSION__) > 0;
+    const updateAvailable = hasNewerVersion && asset !== null;
     return {
-      status: compareVersions(latestVersion, __APP_VERSION__) > 0 ? "available" : "current",
+      status: updateAvailable ? "available" : hasNewerVersion ? "checked" : "current",
       currentVersion: __APP_VERSION__,
       latestVersion,
-      updateAvailable: compareVersions(latestVersion, __APP_VERSION__) > 0,
+      updateAvailable,
       releaseName: release.name || release.tag_name || "",
       releaseUrl: release.html_url || RELEASES_URL,
       assetName: asset?.name ?? null,
@@ -289,6 +402,9 @@ export async function openUpdateTarget(status?: AppUpdateStatus): Promise<void> 
 }
 
 export async function installAppUpdate(status?: AppUpdateStatus): Promise<void> {
+  if (!status || !canInstallAppUpdate(status)) {
+    throw new Error("no newer EchoDesk update is available");
+  }
   if (status?.canAutoInstall && typeof window !== "undefined" && window.echo?.installUpdate) {
     await window.echo.installUpdate();
     return;
@@ -300,16 +416,60 @@ export function configuredBackendBase(): string | null {
   return storedBackendBase() ?? envBackendBase();
 }
 
+function isPackagedElectronRenderer(): boolean {
+  if (typeof window === "undefined" || window.echo?.isElectron !== true) {
+    return false;
+  }
+  // file: 仅用于兼容尚未升级到 secure custom scheme 的旧安装包。
+  return window.location.protocol === "echodesk:" || window.location.protocol === "file:";
+}
+
+/**
+ * 同步读取当前 Renderer 的权威 backend base。
+ *
+ * Electron preload 在页面脚本执行前从主进程取得最终 local/public/custom host，
+ * 因而下载链接不需要猜测端口。返回 null 只表示旧 preload 尚未提供同步快照，
+ * 此时异步 API 路径仍可通过 getBackendHost() 完成兼容解析。
+ */
+export function backendBaseSnapshot(): string | null {
+  if (cachedBase !== null) return cachedBase;
+
+  const configured = configuredBackendBase();
+  if (configured) {
+    cachedBase = configured;
+    return cachedBase;
+  }
+
+  if (isNativeMobile()) {
+    cachedBase = DEFAULT_ANDROID_BACKEND_BASE;
+    return cachedBase;
+  }
+
+  if (isPackagedElectronRenderer()) {
+    const bridgeHost = normalizeBackendBase(window.echo?.backendHost);
+    if (!bridgeHost) return null;
+    cachedBase = bridgeHost;
+    return cachedBase;
+  }
+
+  cachedBase = "";
+  return cachedBase;
+}
+
 export function isDefaultPublicBackend(base: string | null | undefined): boolean {
-  const normalized = normalizeBackendBase(base);
-  return normalized === DEFAULT_ANDROID_BACKEND_BASE;
+  try {
+    const normalized = normalizeBackendBase(base);
+    return normalized === DEFAULT_ANDROID_BACKEND_BASE;
+  } catch {
+    return false;
+  }
 }
 
 function isPublicDesktopDemo(): boolean {
   if (typeof window === "undefined") return false;
   // Packaged Electron asks the main process for the authoritative runtime mode.
-  // Keep the file:// heuristic only for older preload bridges that did not expose
-  // isPublicDemo; otherwise an explicit local mode would be misclassified as public.
+  // 只在旧 preload 没有暴露 isPublicDemo 时使用 packaged renderer 启发式；
+  // 否则显式 local 模式会被误判为 public。
   if (
     window.echo?.isElectron === true &&
     typeof window.echo.isPublicDemo === "boolean"
@@ -317,8 +477,7 @@ function isPublicDesktopDemo(): boolean {
     return window.echo.isPublicDemo;
   }
   return (
-    window.echo?.isElectron === true &&
-    window.location.protocol === "file:" &&
+    isPackagedElectronRenderer() &&
     !storedBackendBase()
   );
 }
@@ -330,6 +489,29 @@ function hasExplicitBackendOverride(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Renderer 是否连接公共多租户服务。
+ *
+ * Electron 只信任 main process 在 preload 中给出的最终运行模式；旧 preload
+ * 才使用既有 packaged fallback。Android / TV 和浏览器显式指向默认公共地址时
+ * 也属于 public。组件用这个 capability 裁剪 host-admin 功能，不能靠 403 响应
+ * 事后猜测服务模式。
+ */
+export function isPublicRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  if (typeof window.echo?.isPublicDemo === "boolean") {
+    return window.echo.isPublicDemo;
+  }
+  if (isPublicDesktopDemo()) return true;
+
+  const configured = configuredBackendBase();
+  if (configured !== null && isDefaultPublicBackend(configured)) return true;
+  return (
+    (isNativeMobile() || isTvLikeViewport()) &&
+    isDefaultPublicBackend(configured ?? DEFAULT_ANDROID_BACKEND_BASE)
+  );
 }
 
 function isPublicNativeOrTvContext(): boolean {
@@ -500,29 +682,18 @@ export async function shareBackendBase(): Promise<string> {
 }
 
 export async function backendBase(): Promise<string> {
-  if (cachedBase !== null) return cachedBase;
+  const snapshot = backendBaseSnapshot();
+  if (snapshot !== null) return snapshot;
 
-  const configured = configuredBackendBase();
-  if (configured) {
-    cachedBase = configured;
-    return cachedBase;
-  }
-
-  if (isNativeMobile()) {
-    cachedBase = DEFAULT_ANDROID_BACKEND_BASE;
-    return cachedBase;
-  }
-
-  // file:// 协议（Electron prod）→ 必须走绝对地址
-  if (typeof window !== "undefined" && window.location.protocol === "file:") {
+  // 兼容旧 preload：当前版本会由 backendBaseSnapshot() 同步取得权威 host。
+  if (isPackagedElectronRenderer()) {
     const host =
-      (await window.echo?.getBackendHost?.()) ?? "http://127.0.0.1:8772";
-    cachedBase = host;
+      (await window.echo?.getBackendHost?.()) ?? DEFAULT_LOCAL_BACKEND_BASE;
+    cachedBase = normalizeBackendBase(host) ?? DEFAULT_LOCAL_BACKEND_BASE;
     return cachedBase;
   }
-  // 其它情况：vite 代理
-  cachedBase = "";
-  return cachedBase;
+
+  return "";
 }
 
 export async function backendWsUrl(): Promise<string> {
@@ -534,12 +705,12 @@ export async function backendWsUrl(): Promise<string> {
   if (typeof window !== "undefined" && window.location.protocol.startsWith("http")) {
     return `${window.location.protocol.replace("http", "ws")}//${window.location.host}/ws/echo`;
   }
-  return "ws://127.0.0.1:8772/ws/echo";
+  return DEFAULT_LOCAL_BACKEND_BASE.replace(/^http/, "ws") + "/ws/echo";
 }
 
 export function apiPath(p: string): string {
   // 在 vite 代理场景下，/api 会被 rewrite 掉 /api 前缀 → 直达 backend
-  // 在 Electron file:// 场景，apiPath 拼绝对 base，去掉 /api 前缀
+  // 在 Electron packaged 场景，apiPath 拼绝对 base，去掉 /api 前缀
   return `/api${p.startsWith("/") ? p : `/${p}`}`;
 }
 

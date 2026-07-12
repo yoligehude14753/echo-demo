@@ -1,7 +1,8 @@
 """Ambient 主链路 UseCase：落盘 + STT + RAG；Meeting 为可选叠加层。
 
 设计（方案 2 · 数字分身）：
-- 每个 chunk **必**走 ambient（会议外音频不丢弃）
+- 每个 chunk 必走质量门；只有有效语音持久化 WAV，静音/底噪零文件
+- 有效语音即使 STT 暂时失败也保留音频，便于后续恢复/审计
 - meeting_id 可选：仅当会议 in_meeting 时叠加 MeetingPipeline（复用同一次 STT）
 """
 
@@ -9,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import stat
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,10 +23,14 @@ from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
 from app.ports.punctuator import TextPunctuatorPort
 from app.ports.rag import RagPort
-from app.ports.repository import RepositoryPort
+from app.ports.repository import AmbientAudioFileRecord, RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.capture import CaptureChunkResult, SttStatus
 from app.schemas.meeting import TranscriptSegment
+from app.security.context import current_principal
+from app.security.governor import PrincipalGovernor, QuotaExceeded, QuotaReservation
+from app.security.models import Principal
+from app.security.scope import scoped_directory
 from app.services.audio import normalize_audio_bytes, pcm_to_wav
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
@@ -47,10 +54,10 @@ logger = logging.getLogger("echodesk.ambient")
 class AmbientStats:
     """ambient pipeline 处理结果计数（in-memory, 进程级）。重启清零。
 
-    每个 chunk 进入 ingest_chunk 时 `chunks_total += 1`，并且**且仅有一个**
-    末态计数器 +1（gated_rms / gated_low_speech / stt_circuit_open /
-    stt_failed / stt_empty / hallu_dropped / stored）。diarize_failed 是
-    side-channel：失败时 +1，但不阻断后续路径，所以可能与 stored 同时 +1。
+    每个正常返回的 chunk 有一个转写末态（gated / STT failure / empty /
+    hallucination / stored / segment_store_failed）；storage quota 拒绝会在落盘前
+    抛出并由 HTTP 层返回 429。audio_* 与 diarize_* 是独立 lifecycle/side-channel
+    counters，可能与任一转写末态同时增加。
     """
 
     chunks_total: int = 0  # POST 进入的 chunk 数（含所有末态）
@@ -66,8 +73,19 @@ class AmbientStats:
     # 用户痛点 2026-05-28 看到 57 段 NULL，过去全归类成神秘黑盒。
     diarize_returned_none: int = 0
     stored: int = 0  # 末态: 真正写入 ambient_segments 表
+    segment_store_failed: int = 0  # 有有效文本，但 authoritative segment store 失败
+    audio_files_stored: int = 0  # 通过质量门后成功原子落盘的 WAV 数
+    audio_bytes_stored: int = 0  # 本进程成功落盘的真实 WAV 字节
+    audio_store_failed: int = 0  # 编码/预留/写盘/registry 任一步失败
+    audio_quota_rejected: int = 0  # public quota 或 owner cap 拒绝，且未产生文件
+    audio_files_deleted: int = 0  # retention/capacity GC 实际删除的 WAV 数
+    audio_bytes_deleted: int = 0  # retention/capacity GC 实际删除的字节
+    audio_gc_failed: int = 0  # inventory/scan 阶段失败；本轮 fail-closed 不删除
+    audio_delete_failed: int = 0  # 越界路径、unlink、registry 或 quota release 失败
+    audio_missing_reconciled: int = 0  # registry 有记录但文件已不存在
     last_chunk_at: str | None = None  # ISO timestamp 最近 chunk 进入时间
     last_stored_at: str | None = None  # ISO timestamp 最近一次成功入库时间
+    last_audio_stored_at: str | None = None  # ISO timestamp 最近一次 WAV 成功落盘
     last_rms: float = 0.0  # 最近 chunk 的整段 int16 RMS
     last_speech_ratio: float = 0.0  # 最近 chunk 的 20ms 活跃帧比例
     last_gate_reason: str | None = None  # 最近 chunk 的前置门控结果（ok/rms_too_low/...）
@@ -89,6 +107,13 @@ class _STTCallFailedError(RuntimeError):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class _OwnerAudioFile:
+    path: Path
+    size_bytes: int
+    mtime: float
+
+
 class AmbientCapturePipeline:
     def __init__(
         self,
@@ -103,6 +128,8 @@ class AmbientCapturePipeline:
         meeting_state: MeetingState | None = None,
         event_bus: EventBusPort | None = None,
         punctuator: TextPunctuatorPort | None = None,
+        governor: PrincipalGovernor | None = None,
+        principal: Principal | None = None,
     ) -> None:
         self._settings = settings
         self._stt = stt
@@ -114,23 +141,376 @@ class AmbientCapturePipeline:
         self._state = meeting_state
         self._event_bus = event_bus
         self._punctuator = punctuator
-        self._ambient_dir = Path(settings.storage_dir).expanduser() / "ambient"
-        self._ambient_dir.mkdir(parents=True, exist_ok=True)
+        self._principal = principal or current_principal()
+        self._governor = governor
+        self._ambient_dir = scoped_directory(
+            Path(settings.storage_dir).expanduser() / "ambient",
+            self._principal,
+        )
+        self._audio_registry_enabled = repository is not None and all(
+            callable(getattr(type(repository), method, None))
+            for method in (
+                "register_ambient_audio_file",
+                "list_ambient_audio_files",
+                "delete_ambient_audio_file",
+            )
+        )
         self._stats = AmbientStats()
         self._stt_lock = asyncio.Lock()
+        self._storage_lock = asyncio.Lock()
 
     def get_stats(self) -> AmbientStats:
         """返回当前进程级 7 道门处理结果计数（供 GET /capture/stats 用）。"""
         return self._stats
 
-    def _persist_wav(self, audio_bytes: bytes, sample_rate: int) -> str:
-        now = datetime.now(UTC)
-        day_dir = self._ambient_dir / now.strftime("%Y-%m-%d")
+    def _owner_root(self, *, create: bool) -> Path:
+        """Return a real owner root, rejecting a scope path replaced by a symlink."""
+
+        declared = self._ambient_dir.absolute()
+        if declared.is_symlink():
+            raise RuntimeError("ambient owner root must not be a symlink")
+        if create:
+            declared.mkdir(parents=True, exist_ok=True)
+        if not declared.exists():
+            return declared
+        if not declared.is_dir() or declared.is_symlink():
+            raise RuntimeError("ambient owner root is not a safe directory")
+        return declared.resolve(strict=True)
+
+    def _safe_owner_reference(self, path: Path | str, *, require_file: bool) -> Path | None:
+        """Resolve one server-authored ref without ever escaping this owner scope."""
+
+        candidate = Path(path)
+        if not candidate.is_absolute() or candidate.is_symlink():
+            return None
+        try:
+            root = self._owner_root(create=False).resolve(strict=False)
+            resolved = candidate.resolve(strict=require_file)
+            resolved.relative_to(root)
+            if require_file:
+                mode = candidate.lstat().st_mode
+                if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+                    return None
+        except (FileNotFoundError, OSError, RuntimeError, ValueError):
+            return None
+        return resolved
+
+    def _scan_owner_wavs(self) -> tuple[list[_OwnerAudioFile], int]:
+        root = self._owner_root(create=False)
+        if not root.exists():
+            return [], 0
+        files: list[_OwnerAudioFile] = []
+        unsafe = 0
+        for candidate in root.rglob("*.wav"):
+            resolved = self._safe_owner_reference(candidate, require_file=True)
+            if resolved is None:
+                unsafe += 1
+                continue
+            try:
+                file_stat = resolved.stat()
+            except OSError:
+                unsafe += 1
+                continue
+            files.append(
+                _OwnerAudioFile(
+                    path=resolved,
+                    size_bytes=max(0, int(file_stat.st_size)),
+                    mtime=float(file_stat.st_mtime),
+                )
+            )
+        files.sort(key=lambda item: (item.mtime, str(item.path)))
+        return files, unsafe
+
+    def _write_wav_atomic(self, wav_bytes: bytes, captured_at: datetime) -> Path:
+        root = self._owner_root(create=True)
+        day_dir = root / captured_at.strftime("%Y-%m-%d")
+        if day_dir.is_symlink():
+            raise RuntimeError("ambient day directory must not be a symlink")
         day_dir.mkdir(parents=True, exist_ok=True)
-        name = f"{now.strftime('%H%M%S')}-{uuid.uuid4().hex[:8]}.wav"
-        path = day_dir / name
-        path.write_bytes(pcm_to_wav(audio_bytes, sample_rate=sample_rate))
-        return str(path)
+        day_dir = day_dir.resolve(strict=True)
+        day_dir.relative_to(root)
+        name = f"{captured_at.strftime('%H%M%S')}-{uuid.uuid4().hex[:12]}.wav"
+        destination = day_dir / name
+        temporary = day_dir / f".{name}.{uuid.uuid4().hex}.tmp"
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(wav_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return destination.resolve(strict=True)
+
+    async def _delete_owner_audio(
+        self,
+        item: _OwnerAudioFile,
+        known_record: AmbientAudioFileRecord | None,
+    ) -> bool:
+        """Delete one verified owner file and compensate its durable quota charge."""
+
+        if known_record is not None and known_record.quota_charged and self._governor is None:
+            self._stats.audio_delete_failed += 1
+            logger.error("ambient GC cannot release charged file without quota governor")
+            return False
+        try:
+            await asyncio.to_thread(item.path.unlink)
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            self._stats.audio_delete_failed += 1
+            logger.warning("ambient GC unlink failed: %s", exc)
+            return False
+
+        removed_record: AmbientAudioFileRecord | None = None
+        public_registry_release = (
+            self._audio_registry_enabled
+            and self._repo is not None
+            and self._principal.mode == "public"
+            and self._governor is not None
+        )
+        if public_registry_release:
+            assert self._governor is not None
+            assert self._repo is not None
+            try:
+                released = await self._governor.release_registered_ambient_storage(
+                    self._principal,
+                    str(item.path),
+                )
+                if released is None:
+                    # Unregistered legacy file: still detach any matching transcript ref.
+                    await self._repo.delete_ambient_audio_file(str(item.path))
+            except Exception as exc:
+                # The absent file remains registered and is retried on the next GC pass.
+                self._stats.audio_delete_failed += 1
+                logger.warning("ambient GC atomic quota release failed: %s", exc)
+        elif self._audio_registry_enabled and self._repo is not None:
+            try:
+                removed_record = await self._repo.delete_ambient_audio_file(str(item.path))
+            except Exception as exc:
+                self._stats.audio_delete_failed += 1
+                logger.warning("ambient GC registry delete failed: %s", exc)
+        if removed_record is not None and removed_record.quota_charged:
+            # Defensive fallback for a charged row encountered outside public mode.
+            if self._governor is None:
+                self._stats.audio_delete_failed += 1
+            else:
+                try:
+                    await self._governor.release_storage_bytes(
+                        self._principal,
+                        removed_record.size_bytes,
+                    )
+                except Exception as exc:
+                    self._stats.audio_delete_failed += 1
+                    logger.error("ambient GC quota release failed: %s", exc)
+
+        self._stats.audio_files_deleted += 1
+        self._stats.audio_bytes_deleted += item.size_bytes
+        return True
+
+    async def _reconcile_missing_audio(self, record: AmbientAudioFileRecord) -> None:
+        if record.quota_charged and self._governor is None:
+            self._stats.audio_delete_failed += 1
+            return
+        assert self._repo is not None
+        try:
+            if self._principal.mode == "public" and self._governor is not None:
+                await self._governor.release_registered_ambient_storage(
+                    self._principal,
+                    record.audio_ref,
+                )
+            else:
+                removed = await self._repo.delete_ambient_audio_file(record.audio_ref)
+                if removed is not None and removed.quota_charged:
+                    assert self._governor is not None
+                    await self._governor.release_storage_bytes(self._principal, removed.size_bytes)
+            self._stats.audio_missing_reconciled += 1
+        except Exception as exc:
+            self._stats.audio_delete_failed += 1
+            logger.warning("ambient missing-file reconciliation failed: %s", exc)
+
+    async def _garbage_collect_locked(  # noqa: PLR0912, PLR0915
+        self,
+        *,
+        required_bytes: int,
+        now: datetime,
+    ) -> None:
+        """Apply retention and owner capacity under the already-held storage lock."""
+
+        owner_cap = self._settings.ambient_audio_owner_max_bytes
+        if required_bytes > owner_cap:
+            raise QuotaExceeded("storage_bytes", limit=owner_cap, used=0)
+
+        try:
+            files, unsafe_count = await asyncio.to_thread(self._scan_owner_wavs)
+        except Exception as exc:
+            self._stats.audio_gc_failed += 1
+            logger.warning("ambient owner scan failed closed: %s", exc)
+            if required_bytes:
+                raise RuntimeError("ambient storage scan unavailable") from exc
+            return
+        self._stats.audio_delete_failed += unsafe_count
+
+        records: list[AmbientAudioFileRecord] = []
+        if self._audio_registry_enabled and self._repo is not None:
+            try:
+                records = await self._repo.list_ambient_audio_files()
+            except Exception as exc:
+                self._stats.audio_gc_failed += 1
+                logger.warning("ambient registry scan failed closed: %s", exc)
+                total = sum(item.size_bytes for item in files)
+                if total + required_bytes > owner_cap:
+                    raise QuotaExceeded("storage_bytes", limit=owner_cap, used=total) from exc
+                return
+
+        files_by_ref = {str(item.path): item for item in files}
+        records_by_ref: dict[str, AmbientAudioFileRecord] = {}
+        for record in records:
+            safe_ref = self._safe_owner_reference(record.audio_ref, require_file=False)
+            if safe_ref is None:
+                self._stats.audio_delete_failed += 1
+                continue
+            normalized_ref = str(safe_ref)
+            records_by_ref[normalized_ref] = record
+            if not safe_ref.exists():
+                await self._reconcile_missing_audio(record)
+                records_by_ref.pop(normalized_ref, None)
+            elif normalized_ref not in files_by_ref:
+                # A directory/device/symlink named *.wav is never a GC candidate.
+                self._stats.audio_delete_failed += 1
+
+        cutoff = now.timestamp() - self._settings.ambient_audio_retention_s
+        active = dict(files_by_ref)
+        for ref, item in tuple(active.items()):
+            if item.mtime >= cutoff:
+                continue
+            if await self._delete_owner_audio(item, records_by_ref.get(ref)):
+                active.pop(ref, None)
+                records_by_ref.pop(ref, None)
+
+        total = sum(item.size_bytes for item in active.values())
+        for ref, item in sorted(active.items(), key=lambda pair: (pair[1].mtime, pair[0])):
+            if total + required_bytes <= owner_cap:
+                break
+            if await self._delete_owner_audio(item, records_by_ref.get(ref)):
+                active.pop(ref, None)
+                records_by_ref.pop(ref, None)
+                total -= item.size_bytes
+        if total + required_bytes > owner_cap:
+            raise QuotaExceeded("storage_bytes", limit=owner_cap, used=total)
+
+    async def collect_garbage(self) -> None:
+        """Run owner-scoped retention/capacity GC without creating a storage directory."""
+
+        async with self._storage_lock:
+            await self._garbage_collect_locked(required_bytes=0, now=datetime.now(UTC))
+
+    async def _cleanup_failed_store(
+        self,
+        *,
+        audio_ref: str,
+        registered: bool,
+        reservation: QuotaReservation | None,
+    ) -> None:
+        if audio_ref:
+            safe_path = self._safe_owner_reference(audio_ref, require_file=True)
+            if safe_path is not None:
+                try:
+                    await asyncio.to_thread(safe_path.unlink)
+                except OSError as exc:
+                    logger.error("ambient failed-store cleanup could not unlink: %s", exc)
+            if registered and self._repo is not None:
+                try:
+                    await self._repo.delete_ambient_audio_file(audio_ref)
+                except Exception as exc:
+                    logger.error("ambient failed-store cleanup could not remove registry: %s", exc)
+        if reservation is not None:
+            try:
+                await reservation.release()
+            except Exception as exc:
+                logger.error("ambient failed-store cleanup could not release quota: %s", exc)
+
+    async def _persist_quality_wav(
+        self,
+        audio_bytes: bytes,
+        sample_rate: int,
+        captured_at: datetime,
+    ) -> str:
+        """Encode, reserve exact bytes, atomically write, register and settle."""
+
+        try:
+            wav_bytes = await asyncio.to_thread(
+                pcm_to_wav,
+                audio_bytes,
+                sample_rate=sample_rate,
+            )
+        except Exception:
+            self._stats.audio_store_failed += 1
+            raise
+        size_bytes = len(wav_bytes)
+        async with self._storage_lock:
+            try:
+                await self._garbage_collect_locked(
+                    required_bytes=size_bytes,
+                    now=captured_at,
+                )
+            except QuotaExceeded:
+                self._stats.audio_store_failed += 1
+                self._stats.audio_quota_rejected += 1
+                raise
+            except Exception:
+                self._stats.audio_store_failed += 1
+                raise
+
+            reservation: QuotaReservation | None = None
+            audio_ref = ""
+            registered = False
+            try:
+                if self._governor is not None:
+                    reservation = await self._governor.reserve_storage(
+                        self._principal,
+                        size_bytes,
+                    )
+                path = await asyncio.to_thread(
+                    self._write_wav_atomic,
+                    wav_bytes,
+                    captured_at,
+                )
+                audio_ref = str(path)
+                if self._audio_registry_enabled and self._repo is not None:
+                    await self._repo.register_ambient_audio_file(
+                        audio_ref=audio_ref,
+                        size_bytes=size_bytes,
+                        captured_at=captured_at,
+                        quota_charged=(
+                            self._principal.mode == "public" and self._governor is not None
+                        ),
+                    )
+                    registered = True
+                if reservation is not None:
+                    await reservation.settle(size_bytes)
+            except QuotaExceeded:
+                await self._cleanup_failed_store(
+                    audio_ref=audio_ref,
+                    registered=registered,
+                    reservation=reservation,
+                )
+                self._stats.audio_store_failed += 1
+                self._stats.audio_quota_rejected += 1
+                raise
+            except Exception:
+                await self._cleanup_failed_store(
+                    audio_ref=audio_ref,
+                    registered=registered,
+                    reservation=reservation,
+                )
+                self._stats.audio_store_failed += 1
+                raise
+
+        self._stats.audio_files_stored += 1
+        self._stats.audio_bytes_stored += size_bytes
+        self._stats.last_audio_stored_at = captured_at.isoformat()
+        return audio_ref
 
     async def ingest_chunk(  # noqa: PLR0912, PLR0915
         self,
@@ -139,13 +519,15 @@ class AmbientCapturePipeline:
         sample_rate: int = 16_000,
         meeting_id: str | None = None,
     ) -> CaptureChunkResult:
+        if self._state is not None and not self._settings.public_demo_mode:
+            await self._state.hydrate()
+            self._state.start_watchdog()
         normalized = normalize_audio_bytes(audio_bytes, sample_rate=sample_rate)
         audio_bytes = normalized.pcm
         sample_rate = normalized.sample_rate
-        audio_ref = await asyncio.to_thread(self._persist_wav, audio_bytes, sample_rate)
-
         captured_dt = datetime.now(UTC)
         captured_at = captured_dt.isoformat()
+        audio_ref = ""
         # M_diag_brake：每条 ingest_chunk 头部记一次（含所有末态），
         # 后端日志即使只看 chunks_total 也能粗略知道 firehose 多大。
         self._stats.chunks_total += 1
@@ -173,6 +555,13 @@ class AmbientCapturePipeline:
         # chunk 上 diarizer 仍然会注册新 profile → ECAPA._profiles 累积污染。
         # echo `pipeline.py:652-678` 也是串行：先 STT，文本通过 → 再 diarize。
         if gate.pass_:
+            # 质量门之后才编码/预留/落盘。quota/cap 拒绝会直接抛给 HTTP
+            # middleware 生成 429，且此时尚未创建任何临时或最终文件。
+            audio_ref = await self._persist_quality_wav(
+                audio_bytes,
+                sample_rate,
+                captured_dt,
+            )
             try:
                 stt_segs = await self._safe_stt(audio_bytes, sample_rate)
             except _STTCircuitOpenError:
@@ -204,6 +593,12 @@ class AmbientCapturePipeline:
                 gate.rms,
                 gate.speech_ratio,
             )
+            # 静音流仍可触发 retention；GC 不创建 owner directory，异常也不改变
+            # 本 chunk 的 gated 结果。
+            try:
+                await self.collect_garbage()
+            except Exception as exc:
+                logger.warning("ambient gated-chunk GC skipped: %s", exc)
 
         ambient_stored = False
         ambient_text: str | None = None
@@ -283,17 +678,7 @@ class AmbientCapturePipeline:
         if texts:
             ambient_text = " ".join(texts)
             duration_ms = max(0, max((s.end_ms for s in stt_segs), default=0))
-            try:
-                await self._rag.ingest_ambient_segment(
-                    ambient_text,
-                    captured_at=captured_at,
-                    audio_ref=audio_ref,
-                    speaker_id=speaker_id,
-                    speaker_label=speaker_label,
-                )
-                ambient_stored = True
-            except Exception as e:
-                logger.warning("ambient RAG ingest failed: %s", e)
+            repository_stored: bool | None = None
             if self._repo is not None:
                 try:
                     await self._repo.append_ambient_segment(
@@ -304,13 +689,31 @@ class AmbientCapturePipeline:
                         speaker_label=speaker_label,
                         duration_ms=duration_ms,
                     )
+                    repository_stored = True
                 except Exception as e:
+                    repository_stored = False
                     logger.warning("ambient repo persist failed: %s", e)
+            rag_stored = False
+            try:
+                await self._rag.ingest_ambient_segment(
+                    ambient_text,
+                    captured_at=captured_at,
+                    audio_ref=audio_ref,
+                    speaker_id=speaker_id,
+                    speaker_label=speaker_label,
+                )
+                rag_stored = True
+            except Exception as e:
+                logger.warning("ambient RAG ingest failed: %s", e)
+
+            # DB 是正常运行时 authoritative store；RAG 是可修复 projection。
+            # 仅在没有 repository 的显式降级/单测模式下才沿用 RAG 成功语义。
+            ambient_stored = repository_stored if repository_stored is not None else rag_stored
             if ambient_stored:
-                # 末态：唯一计入 stored 的位置。RAG ingest 失败时按"末态不计"处理
-                # （这条 chunk 就当被 RAG/repo 吃了），避免 stored 与实际表行不一致。
                 self._stats.stored += 1
                 self._stats.last_stored_at = captured_at
+            else:
+                self._stats.segment_store_failed += 1
 
         # 自动会议检测：交给 MeetingState（单例状态机）；它内部协调 detector。
         # ambient 主链路只负责"喂观测"，状态/落库由 MeetingState 全权决定。

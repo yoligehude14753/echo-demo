@@ -25,6 +25,8 @@ import pathlib
 import sqlite3
 import sys
 
+from app.adapters.repo.connection import configure_sqlite_connection
+
 
 def _db_path() -> pathlib.Path:
     """与 backend/app/config.py:Settings.db_path 保持一致。"""
@@ -70,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     con = sqlite3.connect(db)
+    configure_sqlite_connection(con)
     try:
         targets: list[str] = ["speakers"]
         if args.include_segments:

@@ -71,6 +71,51 @@ const typeBadge: Record<string, string> = {
   text: "bg-paper-200 text-ink-700",
 };
 
+const typeLabel: Record<string, string> = {
+  word: "文档",
+  docx: "文档",
+  xlsx: "表格",
+  excel: "表格",
+  pptx: "演示文稿",
+  ppt: "演示文稿",
+  html: "网页",
+  markdown: "Markdown",
+  md: "Markdown",
+  pdf: "PDF",
+  txt: "文本",
+  text: "文本",
+};
+
+function artifactFallbackTitle(type: string): string {
+  return `未命名${typeLabel[type] ?? "文件"}`;
+}
+
+function friendlyFailureReason(reason: string | undefined): string {
+  const normalized = reason?.toLocaleLowerCase() ?? "";
+  if (normalized.includes("timeout") || normalized.includes("超时")) {
+    return "生成时间过长，已停止本次任务。可简化要求后重试。";
+  }
+  if (
+    normalized.includes("no_api_key") ||
+    normalized.includes("api key") ||
+    normalized.includes("未配置")
+  ) {
+    return "生成服务尚未配置，请在设置中完成配置后重试。";
+  }
+  if (
+    normalized.includes("network") ||
+    normalized.includes("connect") ||
+    normalized.includes("http") ||
+    normalized.includes("网络")
+  ) {
+    return "暂时无法连接生成服务，请检查网络后重试。";
+  }
+  if (normalized.includes("permission") || normalized.includes("权限")) {
+    return "任务需要额外权限，请确认授权后重试。";
+  }
+  return "本次生成未完成。可稍后重试，已有产物不会受影响。";
+}
+
 export default function ArtifactPanel(): JSX.Element {
   const globalArtifacts = useStore((s) => s.artifacts);
   const agentTasks = useStore((s) => s.agentTasks);
@@ -134,7 +179,7 @@ export default function ArtifactPanel(): JSX.Element {
 
   function onClearAll(): void {
     Modal.confirm({
-      title: "清空 outputs",
+      title: "清空工作产物",
       content: `确定清空 ${globalArtifacts.length} 条历史产物？该操作不可撤回（文件本身仍保留在磁盘）。`,
       okText: "清空",
       okType: "danger",
@@ -146,8 +191,9 @@ export default function ArtifactPanel(): JSX.Element {
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-paper-50">
       <div className="flex items-center justify-between px-6 h-11 border-b border-paper-300 shrink-0">
-        <span className="text-[13px] text-ink-700 font-medium lowercase tracking-wider">
-          outputs
+        <span className="text-[13px] text-ink-700 font-medium">
+          工作产物
+          <span className="sr-only">outputs</span>
         </span>
         <span className="flex items-center gap-2">
           <span className="text-[11px] text-ink-400">
@@ -158,10 +204,10 @@ export default function ArtifactPanel(): JSX.Element {
             <button
               type="button"
               data-testid="clear-artifacts-btn"
-              aria-label="清空 outputs"
+              aria-label="清空工作产物"
               onClick={onClearAll}
-              className="p-1 rounded text-ink-400 hover:text-err hover:bg-paper-150 transition-colors"
-              title="清空 outputs"
+              className="p-1 rounded text-ink-400 hover:text-err hover:bg-paper-150 focus-visible:text-err focus-visible:bg-paper-150 transition-colors"
+              title="清空工作产物"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -174,103 +220,111 @@ export default function ArtifactPanel(): JSX.Element {
         data-testid="artifact-list"
         data-scope="global"
       >
-        {visibleFailed.map((f) => (
-          <FailedArtifactCard
-            key={f.id}
-            failed={f}
-            onDismiss={() => dismissFailedArtifact(f.id)}
-          />
-        ))}
-        {visibleAgentTasks.map((task) => (
-          <AgentTaskCardView
-            key={task.task_id}
-            task={task}
-            onUpdate={upsertAgentTask}
-          />
-        ))}
+        {visibleFailed.length > 0 && (
+          <ArtifactSection title="生成失败" count={visibleFailed.length} tone="danger">
+            {visibleFailed.map((f) => (
+              <FailedArtifactCard
+                key={f.id}
+                failed={f}
+                onDismiss={() => dismissFailedArtifact(f.id)}
+              />
+            ))}
+          </ArtifactSection>
+        )}
+
+        {visibleAgentTasks.length > 0 && (
+          <ArtifactSection title="执行任务" count={visibleAgentTasks.length}>
+            {visibleAgentTasks.map((task) => (
+              <AgentTaskCardView
+                key={task.task_id}
+                task={task}
+                onUpdate={upsertAgentTask}
+              />
+            ))}
+          </ArtifactSection>
+        )}
+
         {artifacts.length === 0 && visibleFailed.length === 0 && visibleAgentTasks.length === 0 && (
           <div className="px-3 py-8 text-center text-ink-400 text-[11px] space-y-1">
             <div>暂无产物</div>
             <div className="text-ink-300">
-              在输入框输入 @生成 PPT / @报告 / @Excel … 触发
+              描述你需要的文档、表格或演示文稿即可开始生成
             </div>
           </div>
         )}
-        {artifacts.map((a) => {
-          const displayName = a.title || a.artifact_id;
-          const shortId = a.artifact_id.slice(0, 14);
-          return (
-            <div
-              key={a.artifact_id}
-              data-testid="artifact-card"
-              data-artifact-id={a.artifact_id}
-              className="group px-3 py-2.5 rounded-lg hover:bg-paper-150 cursor-pointer transition-colors"
-              onClick={() => setPreviewArtifact(a)}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2 min-w-0 flex-1">
-                  <span
-                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
-                      typeBadge[a.artifact_type] ?? "bg-paper-200 text-ink-700"
-                    }`}
-                  >
-                    {typeIcon[a.artifact_type] ?? null}
-                    <span className="uppercase">{a.artifact_type}</span>
-                  </span>
-                  <span className="flex flex-col min-w-0">
-                    <span
-                      className="text-[13px] text-ink-800 font-medium truncate"
-                      title={a.artifact_id}
-                      data-testid="artifact-title"
-                    >
-                      {displayName}
-                    </span>
-                    {a.title && (
+        {artifacts.length > 0 && (
+          <ArtifactSection title="已生成文件" count={artifacts.length}>
+            {artifacts.map((a) => {
+              const displayName = a.title?.trim() || artifactFallbackTitle(a.artifact_type);
+              return (
+                <div
+                  key={a.artifact_id}
+                  data-testid="artifact-card"
+                  data-artifact-id={a.artifact_id}
+                  className="group px-3 py-2.5 rounded-lg hover:bg-paper-150 focus-visible:bg-paper-150 cursor-pointer transition-colors outline-none"
+                  onClick={() => setPreviewArtifact(a)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setPreviewArtifact(a);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`打开${displayName}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="flex items-start gap-2 min-w-0 flex-1">
                       <span
-                        className="font-mono text-[10px] text-ink-400 truncate"
-                        title={a.artifact_id}
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
+                          typeBadge[a.artifact_type] ?? "bg-paper-200 text-ink-700"
+                        }`}
                       >
-                        {shortId}
+                        {typeIcon[a.artifact_type] ?? null}
+                        <span>{typeLabel[a.artifact_type] ?? "文件"}</span>
                       </span>
-                    )}
-                  </span>
-                </span>
-                <span className="flex items-center gap-1 shrink-0">
-                  <a
-                    href={artifactDownloadUrl(a.artifact_id)}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label="下载产物"
-                    onClick={(e) => e.stopPropagation()}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-paper-200"
-                  >
-                    <Download className="w-3.5 h-3.5 text-ink-500 hover:text-accent" />
-                  </a>
-                  <button
-                    type="button"
-                    data-testid="remove-artifact-btn"
-                    aria-label="删除该产物"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeArtifact(a.artifact_id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-ink-400 hover:text-err hover:bg-paper-200"
-                    title="从列表移除（不删磁盘文件）"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </span>
-              </div>
-              <div className="text-[11px] text-ink-400 mt-1 flex items-center gap-2 pl-1">
-                <span>{(a.size_bytes / 1024).toFixed(1)} KB</span>
-                <span>·</span>
-                <span>{(a.generation_latency_ms / 1000).toFixed(1)}s</span>
-                <span>·</span>
-                <span className="font-mono text-[10px]">{a.model}</span>
-              </div>
-            </div>
-          );
-        })}
+                      <span
+                        className="text-[13px] leading-5 text-ink-800 font-medium line-clamp-2 break-words min-w-0"
+                        title={displayName}
+                        data-testid="artifact-title"
+                      >
+                        {displayName}
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-1 shrink-0 opacity-70 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                      <a
+                        href={artifactDownloadUrl(a.artifact_id)}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`下载${displayName}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="p-1 rounded hover:bg-paper-200 focus-visible:bg-paper-200"
+                      >
+                        <Download className="w-3.5 h-3.5 text-ink-500 hover:text-accent" />
+                      </a>
+                      <button
+                        type="button"
+                        data-testid="remove-artifact-btn"
+                        aria-label={`从列表移除${displayName}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeArtifact(a.artifact_id);
+                        }}
+                        className="p-1 rounded text-ink-400 hover:text-err hover:bg-paper-200 focus-visible:text-err focus-visible:bg-paper-200"
+                        title="从列表移除（不删除文件）"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-ink-400 mt-1 pl-1">
+                    {(a.size_bytes / 1024).toFixed(1)} KB
+                  </div>
+                </div>
+              );
+            })}
+          </ArtifactSection>
+        )}
       </div>
 
       <ArtifactPreviewModal
@@ -278,6 +332,32 @@ export default function ArtifactPanel(): JSX.Element {
         onClose={() => setPreviewArtifact(null)}
       />
     </div>
+  );
+}
+
+function ArtifactSection({
+  title,
+  count,
+  tone = "default",
+  children,
+}: {
+  title: string;
+  count: number;
+  tone?: "default" | "danger";
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <section className="space-y-1.5" aria-label={title}>
+      <div
+        className={`flex items-center justify-between px-1 pt-1 text-[11px] font-medium ${
+          tone === "danger" ? "text-err" : "text-ink-500"
+        }`}
+      >
+        <span>{title}</span>
+        <span className="tabular-nums text-ink-400">{count}</span>
+      </div>
+      <div className="space-y-1">{children}</div>
+    </section>
   );
 }
 
@@ -354,7 +434,7 @@ function AgentTaskCardView({
             <Icon className={`w-3.5 h-3.5 ${failed ? "text-err" : "text-accent"}`} />
             <span className="truncate">{task.title || "EchoDesk 正在执行"}</span>
           </div>
-          <div className="text-[11px] text-ink-500 leading-relaxed">
+          <div className="text-[11px] text-ink-500 leading-relaxed break-words [overflow-wrap:anywhere]">
             {String(snapshot.progress_text ?? task.progress_text ?? statusLabel(task.state))}
           </div>
         </div>
@@ -364,13 +444,15 @@ function AgentTaskCardView({
       </div>
 
       {typeof snapshot.final_text === "string" && snapshot.final_text.length > 0 && (
-        <div className="rounded bg-paper-100 px-2 py-1.5 text-[11px] text-ink-700 leading-relaxed">
+        <div className="rounded bg-paper-100 px-2 py-1.5 text-[11px] text-ink-700 leading-relaxed break-words [overflow-wrap:anywhere]">
           {snapshot.final_text}
         </div>
       )}
 
       {typeof snapshot.error === "string" && snapshot.error.length > 0 && (
-        <div className="text-[11px] text-err leading-relaxed">{snapshot.error}</div>
+        <div className="text-[11px] text-err leading-relaxed break-words [overflow-wrap:anywhere]">
+          {friendlyFailureReason(snapshot.error)}
+        </div>
       )}
 
       {artifacts.length > 0 && (
@@ -502,10 +584,12 @@ function FailedArtifactCard({
       });
       addArtifact(artifact);
       onDismiss();
-      message.success(`已重新生成：${artifact.title || artifact.artifact_id}`);
+      message.success(
+        `已重新生成：${artifact.title?.trim() || artifactFallbackTitle(artifact.artifact_type)}`,
+      );
     } catch (err) {
-      const text = err instanceof Error ? err.message : String(err);
-      message.error(`重试失败：${text}`);
+      console.error("[artifact-panel] retry failed", err);
+      message.error("重试失败，请稍后再试");
     } finally {
       setRetrying(false);
     }
@@ -524,7 +608,7 @@ function FailedArtifactCard({
             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${typeBadgeClass}`}
           >
             {typeIcon[failed.artifact_type] ?? null}
-            <span className="uppercase">{failed.artifact_type}</span>
+            <span>{typeLabel[failed.artifact_type] ?? "文件"}</span>
           </span>
         </span>
         <span className="flex items-center gap-2 shrink-0">
@@ -560,9 +644,8 @@ function FailedArtifactCard({
           WebkitBoxOrient: "vertical",
           WebkitLineClamp: 2,
         }}
-        title={failed.reason}
       >
-        {failed.reason}
+        {friendlyFailureReason(failed.reason)}
       </div>
 
       <div className="flex justify-end pt-0.5">

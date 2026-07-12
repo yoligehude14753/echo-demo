@@ -66,6 +66,13 @@ class FakeWeb:
         return list(self.hits)
 
 
+class FailingAnswerLLM(FakeLLM):
+    async def chat(self, messages: list[ChatMessage], **kw: Any) -> LLMResponse:
+        if messages and "只能输出三个标签之一" in messages[0].content:
+            return await super().chat(messages, **kw)
+        raise RuntimeError("answer backend unavailable")
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_rag_only_branch_skips_web() -> None:
@@ -147,6 +154,7 @@ async def test_classifier_garbage_falls_back_to_either() -> None:
     _ = [c async for c in out.chunks]
     assert rag.query_count == 1
     assert web.search_count == 1
+    assert out.retrieval.chosen_source == "none"
 
 
 @pytest.mark.asyncio
@@ -182,3 +190,19 @@ async def test_prompt_includes_citations() -> None:
     assert llm.answer_kwargs is not None
     assert llm.answer_kwargs["max_tokens"] == 768
     assert llm.answer_kwargs["timeout_s"] == 60.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_answer_generation_error_propagates_instead_of_fake_success_text() -> None:
+    llm = FailingAnswerLLM(classify_label="rag")
+    out = await retrieve_and_answer(
+        main_llm=llm,
+        fast_llm=llm,
+        fast_model="qwen3",
+        rag=FakeRag([]),
+        web=FakeWeb([]),
+        question="must fail",
+    )
+    with pytest.raises(RuntimeError, match="unavailable"):
+        _ = [chunk async for chunk in out.chunks]

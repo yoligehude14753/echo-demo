@@ -25,7 +25,11 @@ def test_adapter_maps_text_tool_artifact_and_result_events() -> None:
     ctx = _ctx()
 
     delta = adapter.translate(
-        {"kind": "assistant_text", "task_id": "runner_1", "payload": {"text": "正在分析", "stream": True}},
+        {
+            "kind": "assistant_text",
+            "task_id": "runner_1",
+            "payload": {"text": "正在分析", "stream": True},
+        },
         context=ctx,
         raw_ref="raw-1",
     )

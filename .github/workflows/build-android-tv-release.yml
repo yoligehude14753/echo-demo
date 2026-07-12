@@ -1,0 +1,195 @@
+name: Build and upgrade-test signed Android and TV release candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  signed-android-tv-release:
+    name: Android + TV / signed release candidate and historical upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+      - name: install pinned Android SDK components
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.1.0"
+      - name: install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: build and verify signed candidates in an isolated signing step
+        shell: bash
+        env:
+          LEGACY_KEYSTORE_BASE64: ${{ secrets.ECHODESK_ANDROID_LEGACY_KEYSTORE_BASE64 }}
+          LEGACY_KEY_ALIAS: ${{ secrets.ECHODESK_ANDROID_LEGACY_KEY_ALIAS }}
+          LEGACY_KEYSTORE_PASSWORD: ${{ secrets.ECHODESK_ANDROID_LEGACY_KEYSTORE_PASSWORD }}
+          LEGACY_KEY_PASSWORD: ${{ secrets.ECHODESK_ANDROID_LEGACY_KEY_PASSWORD }}
+          LEGACY_CERT_SHA256: ${{ secrets.ECHODESK_ANDROID_LEGACY_CERT_SHA256 }}
+          CURRENT_KEYSTORE_BASE64: ${{ secrets.ECHODESK_ANDROID_CURRENT_KEYSTORE_BASE64 }}
+          CURRENT_KEY_ALIAS: ${{ secrets.ECHODESK_ANDROID_CURRENT_KEY_ALIAS }}
+          CURRENT_KEYSTORE_PASSWORD: ${{ secrets.ECHODESK_ANDROID_CURRENT_KEYSTORE_PASSWORD }}
+          CURRENT_KEY_PASSWORD: ${{ secrets.ECHODESK_ANDROID_CURRENT_KEY_PASSWORD }}
+          CURRENT_CERT_SHA256: ${{ secrets.ECHODESK_ANDROID_CURRENT_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          for name in \
+            LEGACY_KEYSTORE_BASE64 LEGACY_KEY_ALIAS LEGACY_KEYSTORE_PASSWORD \
+            LEGACY_KEY_PASSWORD LEGACY_CERT_SHA256 \
+            CURRENT_KEYSTORE_BASE64 CURRENT_KEY_ALIAS CURRENT_KEYSTORE_PASSWORD \
+            CURRENT_KEY_PASSWORD CURRENT_CERT_SHA256; do
+            test -n "${!name}" || { echo "missing required release secret: ${name}" >&2; exit 1; }
+          done
+          legacy_keystore="$RUNNER_TEMP/echodesk-legacy-release.jks"
+          current_keystore="$RUNNER_TEMP/echodesk-current-release.jks"
+          cleanup() {
+            (cd desktop/android && ./gradlew --stop >/dev/null 2>&1) || true
+            rm -f "$legacy_keystore" "$current_keystore"
+          }
+          trap cleanup EXIT
+          printf '%s' "$LEGACY_KEYSTORE_BASE64" | base64 --decode > "$legacy_keystore"
+          printf '%s' "$CURRENT_KEYSTORE_BASE64" | base64 --decode > "$current_keystore"
+          chmod 600 "$legacy_keystore" "$current_keystore"
+          export ECHODESK_ANDROID_LEGACY_KEYSTORE="$legacy_keystore"
+          export ECHODESK_ANDROID_LEGACY_KEY_ALIAS="$LEGACY_KEY_ALIAS"
+          export ECHODESK_ANDROID_LEGACY_KEYSTORE_PASSWORD="$LEGACY_KEYSTORE_PASSWORD"
+          export ECHODESK_ANDROID_LEGACY_KEY_PASSWORD="$LEGACY_KEY_PASSWORD"
+          export ECHODESK_ANDROID_EXPECTED_LEGACY_CERT_SHA256="$LEGACY_CERT_SHA256"
+          export ECHODESK_ANDROID_CURRENT_KEYSTORE="$current_keystore"
+          export ECHODESK_ANDROID_CURRENT_KEY_ALIAS="$CURRENT_KEY_ALIAS"
+          export ECHODESK_ANDROID_CURRENT_KEYSTORE_PASSWORD="$CURRENT_KEYSTORE_PASSWORD"
+          export ECHODESK_ANDROID_CURRENT_KEY_PASSWORD="$CURRENT_KEY_PASSWORD"
+          export ECHODESK_ANDROID_EXPECTED_CURRENT_CERT_SHA256="$CURRENT_CERT_SHA256"
+          export ECHODESK_ANDROID_ROTATION_MIN_SDK_VERSION=33
+          export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false"
+          (
+            cd desktop
+            npm run app:dist:android
+            npm run app:package:tv
+          )
+          version="$(node -p "require('./desktop/package.json').version")"
+          test -f "desktop/release/EchoDesk-${version}-android.apk"
+          test -f "desktop/release/EchoDesk-${version}-android-tv.apk"
+          test -f "desktop/release/EchoDesk-${version}-android-signing.json"
+          test -f "desktop/release/EchoDesk-${version}-android-signing-lineage.bin"
+          test -f "desktop/release/EchoDesk-${version}-smart-tv-oneclick.zip"
+          node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const normalize = (value) => String(value || "").replace(/[^0-9a-f]/gi, "").toLowerCase();
+            const legacy = normalize(process.env.ECHODESK_ANDROID_EXPECTED_LEGACY_CERT_SHA256);
+            const current = normalize(process.env.ECHODESK_ANDROID_EXPECTED_CURRENT_CERT_SHA256);
+            if (manifest.signing !== "rotated-v3.1" || manifest.rotationMinSdkVersion !== 33) process.exit(1);
+            if (!manifest.lineage || !/^[0-9a-f]{64}$/.test(manifest.lineage.sha256)) process.exit(1);
+            if (manifest.lineage.legacyCertificateSha256 !== legacy) process.exit(1);
+            if (manifest.lineage.currentCertificateSha256 !== current) process.exit(1);
+            if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length !== 2) process.exit(1);
+            const appIds = new Set(manifest.artifacts.map((item) => item.applicationId));
+            if (!appIds.has("com.echodesk.app") || !appIds.has("com.echodesk.tv")) process.exit(1);
+            if (manifest.artifacts.some((item) =>
+              item.legacyCertificateSha256 !== legacy ||
+              item.currentCertificateSha256 !== current ||
+              item.legacyMaxSdkVersion !== 32 ||
+              item.currentMinSdkVersion !== 33
+            )) process.exit(1);
+          ' "desktop/release/EchoDesk-${version}-android-signing.json"
+      - name: download and pin the last published Android and TV APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          history="$RUNNER_TEMP/echodesk-history-v0.2.34"
+          mkdir -p "$history"
+          curl --fail --silent --show-error --location \
+            --output "$history/EchoDesk-0.2.34-android.apk" \
+            "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.34/EchoDesk-0.2.34-android.apk"
+          curl --fail --silent --show-error --location \
+            --output "$history/EchoDesk-0.2.34-android-tv.apk" \
+            "https://github.com/yoligehude14753/echo-demo/releases/download/v0.2.34/EchoDesk-0.2.34-android-tv.apk"
+          (
+            cd "$history"
+            printf '%s  %s\n' \
+              'd7533401cb0e0a1dd8cad0d0feab2d8fe4f18dc813df455544eb3f26fb86f6c2' \
+              'EchoDesk-0.2.34-android.apk' \
+              'be8b0c08004a13dc0e347c0d6edd14653e5c3864db4f78948efb7d80572a6653' \
+              'EchoDesk-0.2.34-android-tv.apk' | sha256sum --check --strict
+          )
+      - name: install real v0.2.34 APKs then upgrade to the signed candidates
+        uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            version="$(node -p "require('./desktop/package.json').version")"
+            version_code="$(node -p "require('./desktop/android/version-codes.json').releases.at(-1).versionCode")"
+            signing_manifest="$GITHUB_WORKSPACE/desktop/release/EchoDesk-${version}-android-signing.json"
+            legacy_cert="$(node -p "require(process.argv[1]).lineage.legacyCertificateSha256" "$signing_manifest")"
+            current_cert="$(node -p "require(process.argv[1]).lineage.currentCertificateSha256" "$signing_manifest")"
+            rotation_min_sdk="$(node -p "require(process.argv[1]).rotationMinSdkVersion" "$signing_manifest")"
+            history="$RUNNER_TEMP/echodesk-history-v0.2.34"
+            ECHODESK_ANDROID_HISTORICAL_APK="$history/EchoDesk-0.2.34-android.apk" \
+            ECHODESK_ANDROID_CANDIDATE_APK="$GITHUB_WORKSPACE/desktop/release/EchoDesk-${version}-android.apk" \
+            ECHODESK_ANDROID_EXPECTED_APPLICATION_ID="com.echodesk.app" \
+            ECHODESK_ANDROID_EXPECTED_HISTORICAL_SHA256="d7533401cb0e0a1dd8cad0d0feab2d8fe4f18dc813df455544eb3f26fb86f6c2" \
+            ECHODESK_ANDROID_EXPECTED_HISTORICAL_VERSION="0.2.34" \
+            ECHODESK_ANDROID_EXPECTED_HISTORICAL_VERSION_CODE="234" \
+            ECHODESK_ANDROID_EXPECTED_CANDIDATE_VERSION="$version" \
+            ECHODESK_ANDROID_EXPECTED_CANDIDATE_VERSION_CODE="$version_code" \
+            ECHODESK_ANDROID_EXPECTED_LEGACY_CERT_SHA256="$legacy_cert" \
+            ECHODESK_ANDROID_EXPECTED_CURRENT_CERT_SHA256="$current_cert" \
+            ECHODESK_ANDROID_ROTATION_MIN_SDK_VERSION="$rotation_min_sdk" \
+              node desktop/scripts/android-candidate-upgrade-smoke.cjs \
+              | tee "desktop/release/EchoDesk-${version}-android-upgrade-smoke.json"
+            ECHODESK_ANDROID_HISTORICAL_APK="$history/EchoDesk-0.2.34-android-tv.apk" \
+            ECHODESK_ANDROID_CANDIDATE_APK="$GITHUB_WORKSPACE/desktop/release/EchoDesk-${version}-android-tv.apk" \
+            ECHODESK_ANDROID_EXPECTED_APPLICATION_ID="com.echodesk.tv" \
+            ECHODESK_ANDROID_EXPECTED_HISTORICAL_SHA256="be8b0c08004a13dc0e347c0d6edd14653e5c3864db4f78948efb7d80572a6653" \
+            ECHODESK_ANDROID_EXPECTED_HISTORICAL_VERSION="0.2.34" \
+            ECHODESK_ANDROID_EXPECTED_HISTORICAL_VERSION_CODE="234" \
+            ECHODESK_ANDROID_EXPECTED_CANDIDATE_VERSION="$version" \
+            ECHODESK_ANDROID_EXPECTED_CANDIDATE_VERSION_CODE="$version_code" \
+            ECHODESK_ANDROID_EXPECTED_LEGACY_CERT_SHA256="$legacy_cert" \
+            ECHODESK_ANDROID_EXPECTED_CURRENT_CERT_SHA256="$current_cert" \
+            ECHODESK_ANDROID_ROTATION_MIN_SDK_VERSION="$rotation_min_sdk" \
+              node desktop/scripts/android-candidate-upgrade-smoke.cjs \
+              | tee "desktop/release/EchoDesk-${version}-android-tv-upgrade-smoke.json"
+      - name: attest Android and TV release provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            desktop/release/EchoDesk-*-android.apk
+            desktop/release/EchoDesk-*-android-tv.apk
+            desktop/release/EchoDesk-*-android-signing.json
+            desktop/release/EchoDesk-*-android-signing-lineage.bin
+            desktop/release/EchoDesk-*-android-upgrade-smoke.json
+            desktop/release/EchoDesk-*-android-tv-upgrade-smoke.json
+            desktop/release/EchoDesk-*-smart-tv-oneclick.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: echodesk-android-tv-signed-release-candidate
+          path: |
+            desktop/release/EchoDesk-*-android.apk
+            desktop/release/EchoDesk-*-android-tv.apk
+            desktop/release/EchoDesk-*-android-signing.json
+            desktop/release/EchoDesk-*-android-signing-lineage.bin
+            desktop/release/EchoDesk-*-smart-tv.apk
+            desktop/release/EchoDesk-*-smart-tv-oneclick.zip
+            desktop/release/EchoDesk-*-android-upgrade-smoke.json
+            desktop/release/EchoDesk-*-android-tv-upgrade-smoke.json
+          if-no-files-found: error

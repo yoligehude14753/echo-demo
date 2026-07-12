@@ -15,7 +15,7 @@
  * - 未设置 ECHODESK_APP_BIN 时，非 macOS 会跳过
  */
 import { test, expect, _electron as electron, type Page } from "@playwright/test";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 
 function defaultAppBin(): string | null {
@@ -27,6 +27,12 @@ function defaultAppBin(): string | null {
 }
 
 const APP_BIN = defaultAppBin();
+const PUBLIC_BACKEND_BASE = (
+  process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echodesk.yoliyoli.uk"
+).replace(/\/+$/, "");
+const TEST_USER_DATA =
+  process.env.ECHODESK_TEST_USER_DATA ??
+  path.join(process.env.TMPDIR ?? "/tmp", "echodesk-packaged-public-e2e");
 
 type RectInfo = {
   x: number;
@@ -54,25 +60,56 @@ test.describe("EchoDesk 打包 App", () => {
     const env = {
       ...process.env,
       ECHO_PUBLIC_DEMO: "1",
-      ECHO_PUBLIC_BACKEND_BASE:
-        process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echodesk.yoliyoli.uk",
+      ECHO_PUBLIC_BACKEND_BASE: PUBLIC_BACKEND_BASE,
     };
     delete env.ECHO_FORCE_LOCAL_BACKEND;
     delete env.ECHO_BACKEND_PORT;
+    rmSync(TEST_USER_DATA, { recursive: true, force: true });
+    const args = [`--user-data-dir=${TEST_USER_DATA}`];
+    if (process.env.ECHODESK_TEST_TLS_SPKI) {
+      args.push(
+        `--ignore-certificate-errors-spki-list=${process.env.ECHODESK_TEST_TLS_SPKI}`,
+      );
+    }
 
     const app = await electron.launch({
       executablePath: APP_BIN!,
       cwd: path.dirname(APP_BIN!),
+      args,
       env,
       timeout: 60_000,
     });
 
     try {
-      const appVersion = await app.evaluate(async ({ app }) => app.getVersion());
       // 第一个窗口 = 主 BrowserWindow
       const win: Page = await app.firstWindow({ timeout: 60_000 });
       // 等 React 渲染
       await win.waitForLoadState("domcontentloaded");
+      expect(
+        await win.evaluate(() => ({
+          origin: window.location.origin,
+          protocol: window.location.protocol,
+          pathname: window.location.pathname,
+        })),
+      ).toEqual({
+        origin: "echodesk://app",
+        protocol: "echodesk:",
+        pathname: "/index.html",
+      });
+
+      const publicMetaRequests: Array<{
+        path: string;
+        authorization: string;
+      }> = [];
+      win.on("request", (request) => {
+        const url = new URL(request.url());
+        if (["/bootstrap", "/healthz", "/healthz/full"].includes(url.pathname)) {
+          publicMetaRequests.push({
+            path: url.pathname,
+            authorization: request.headers().authorization ?? "",
+          });
+        }
+      });
       await win.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
       await win.evaluate(() => {
         window.localStorage.setItem("echodesk.onboarding.completed", "1");
@@ -101,13 +138,76 @@ test.describe("EchoDesk 打包 App", () => {
             win.evaluate(async () => window.echo?.getBackendHost?.()),
           { timeout: 10_000 },
         )
-        .toBe("https://echodesk.yoliyoli.uk");
-      const backendHealth = await win.evaluate(async () => {
+        .toBe(PUBLIC_BACKEND_BASE);
+      const publicMeta = await win.evaluate(async () => {
         const base = await window.echo?.getBackendHost?.();
-        const resp = await fetch(`${base}/healthz/full`);
-        return (await resp.json()) as { backend?: { version?: string } };
+        if (!base) throw new Error("public backend host unavailable");
+        const [healthResponse, bootstrapResponse] = await Promise.all([
+          fetch(`${base}/healthz`, { cache: "no-store", credentials: "omit" }),
+          fetch(`${base}/bootstrap`, { cache: "no-store", credentials: "omit" }),
+        ]);
+        return {
+          healthStatus: healthResponse.status,
+          health: (await healthResponse.json()) as Record<string, unknown>,
+          bootstrapStatus: bootstrapResponse.status,
+          bootstrap: (await bootstrapResponse.json()) as Record<string, unknown>,
+        };
       });
-      expect(backendHealth.backend?.version).toBe(appVersion);
+      expect(publicMeta.healthStatus).toBe(200);
+      expect(publicMeta.health).toEqual({ status: "ok" });
+      expect(publicMeta.bootstrapStatus).toBe(200);
+      expect(publicMeta.bootstrap.session_required).toBe(true);
+      expect(publicMeta.bootstrap.ws_path).toBe("/ws/echo");
+      expect(publicMeta.bootstrap).not.toHaveProperty("backend_version");
+
+      const authenticatedTransport = await win.evaluate(async () => {
+        const base = await window.echo?.getBackendHost?.();
+        const session = await window.echo?.ensurePublicSession?.();
+        if (!base || !session?.token) {
+          throw new Error("server-issued public session unavailable");
+        }
+        const meetings = await fetch(`${base}/meetings?limit=1`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${session.token}` },
+        });
+        const wsType = await new Promise<string>((resolve, reject) => {
+          const socket = new WebSocket(`${base.replace(/^http/, "ws")}/ws/echo`);
+          const timer = window.setTimeout(() => {
+            socket.close();
+            reject(new Error("public websocket handshake timeout"));
+          }, 15_000);
+          socket.onopen = () => {
+            socket.send(
+              JSON.stringify({
+                type: "client_hello",
+                last_seq: 0,
+                auth: { type: "bearer", token: session.token },
+              }),
+            );
+          };
+          socket.onmessage = (event) => {
+            const message = JSON.parse(String(event.data)) as { type?: string };
+            if (message.type !== "server_hello") return;
+            window.clearTimeout(timer);
+            socket.close(1000, "packaged public E2E complete");
+            resolve(message.type);
+          };
+          socket.onerror = () => {
+            window.clearTimeout(timer);
+            reject(new Error("public websocket handshake failed"));
+          };
+        });
+        return {
+          meetingsStatus: meetings.status,
+          wsType,
+          sessionIssued: Boolean(session.token),
+        };
+      });
+      expect(authenticatedTransport).toEqual({
+        meetingsStatus: 200,
+        wsType: "server_hello",
+        sessionIssued: true,
+      });
 
       // 3. WS 已握手。当前 UI 把旧的连接 pill 合并进顶部 StatusBar，
       //    `.app-connection-status` 会被视觉隐藏，但仍保留文本状态供 E2E 断言。
@@ -115,11 +215,23 @@ test.describe("EchoDesk 打包 App", () => {
         timeout: 60_000,
       });
       await expect(win.getByTestId("pill-backend")).toBeVisible({ timeout: 15_000 });
+      await expect
+        .poll(() => publicMetaRequests.some((request) => request.path === "/healthz"))
+        .toBe(true);
+      expect(
+        publicMetaRequests.filter((request) => request.path === "/healthz"),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ authorization: "" }),
+        ]),
+      );
+      expect(publicMetaRequests.some((request) => request.path === "/healthz/full")).toBe(
+        false,
+      );
       await win.getByTestId("pill-backend").click();
       const backendPopover = win.locator(".ant-popover").filter({ hasText: "服务端" }).last();
-      await expect(backendPopover.getByText(appVersion, { exact: true })).toBeVisible({
-        timeout: 15_000,
-      });
+      await expect(backendPopover).toContainText(/正常运行|已连接/, { timeout: 15_000 });
+      await expect(backendPopover.getByText("版本", { exact: true })).toHaveCount(0);
       await win.keyboard.press("Escape");
 
       // 4. outputs 面板
@@ -135,9 +247,9 @@ test.describe("EchoDesk 打包 App", () => {
 
       await expect(win.getByTestId("workspace-config-btn")).toBeVisible({ timeout: 15_000 });
       await win.getByTestId("workspace-dirs-tag").click();
-      await expect(win.getByText("知识库 / 工作区文件")).toBeVisible({ timeout: 15_000 });
+      await expect(win.getByText("管理知识库")).toBeVisible({ timeout: 15_000 });
       await win.locator(".ant-modal .ant-modal-close").click();
-      await expect(win.getByText("知识库 / 工作区文件")).toBeHidden({ timeout: 10_000 });
+      await expect(win.getByText("管理知识库")).toBeHidden({ timeout: 10_000 });
 
       const ta = win.locator("textarea[placeholder*='生成']");
       await ta.fill("跨平台打包测试");
@@ -191,7 +303,22 @@ test.describe("EchoDesk 打包 App", () => {
             "[data-testid='transcript-scroller']",
             ".echodesk-transcript-empty",
           ]),
-          transcriptTitle: pick("[data-testid='transcript-title']"),
+          transcriptTab: pick("[data-testid='workspace-view-transcript']"),
+          transcriptA11y: (() => {
+            const el = document.querySelector<HTMLElement>(
+              "[data-testid='transcript-title']",
+            );
+            if (!el) return null;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return {
+              text: el.textContent?.trim() ?? "",
+              width: rect.width,
+              height: rect.height,
+              position: style.position,
+              overflow: style.overflow,
+            };
+          })(),
           command: pick("textarea[placeholder*='生成']"),
           capture: pick("[data-testid='capture-status']"),
           settingsButton: pick("[data-testid='open-settings']"),
@@ -202,7 +329,7 @@ test.describe("EchoDesk 打包 App", () => {
       expect(layout.body.scrollWidth).toBeLessThanOrEqual(layout.viewport.width + 2);
       const workspace = requireRect(layout.workspace, "workspace bar");
       const transcript = requireRect(layout.transcript, "transcript scroller");
-      const transcriptTitle = requireRect(layout.transcriptTitle, "transcript title");
+      const transcriptTab = requireRect(layout.transcriptTab, "transcript tab");
       const command = requireRect(layout.command, "command textarea");
       const captureStatus = requireRect(layout.capture, "capture status");
       const settingsButton = requireRect(layout.settingsButton, "settings button");
@@ -211,6 +338,7 @@ test.describe("EchoDesk 打包 App", () => {
       for (const [name, rect] of Object.entries({
         workspace,
         transcript,
+        transcriptTab,
         command,
         captureStatus,
         settingsButton,
@@ -228,10 +356,18 @@ test.describe("EchoDesk 打包 App", () => {
       }
 
       expect(transcript.height).toBeGreaterThan(200);
-      expect(transcriptTitle.height).toBeGreaterThan(10);
-      expect(transcriptTitle.height).toBeLessThanOrEqual(22);
-      expect(transcriptTitle.x).toBeGreaterThanOrEqual(-1);
-      expect(transcriptTitle.right).toBeLessThanOrEqual(layout.viewport.width + 2);
+      expect(transcriptTab.height).toBeGreaterThan(10);
+      expect(transcriptTab.height).toBeLessThanOrEqual(36);
+      expect(transcriptTab.x).toBeGreaterThanOrEqual(-1);
+      expect(transcriptTab.right).toBeLessThanOrEqual(layout.viewport.width + 2);
+      expect(Number.parseFloat(transcriptTab.fontSize)).toBeGreaterThanOrEqual(12);
+      expect(layout.transcriptA11y).toEqual({
+        text: "转写流",
+        width: 1,
+        height: 1,
+        position: "absolute",
+        overflow: "hidden",
+      });
       expect(command.height).toBeGreaterThanOrEqual(44);
       const commandFontSize = Number.parseFloat(command.fontSize);
       expect(commandFontSize).toBeGreaterThanOrEqual(14);

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import (
@@ -22,11 +23,12 @@ from pydantic_settings import (
 )
 
 from app import __version__
-from app.config_io import JsonConfigSource
+from app.config_io import JsonConfigSource, user_config_dir
 
 # 项目根目录的 .env（dev 期兜底；prod 装机后不强求存在）
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ENV_FILES = (_PROJECT_ROOT / ".env", Path(".env"))
+OFFICIAL_ELECTRON_ORIGIN = "echodesk://app"
 
 
 class Settings(BaseSettings):
@@ -66,6 +68,15 @@ class Settings(BaseSettings):
     port: int = 8769
     log_level: str = "INFO"
 
+    # Transactional outbox fan-out: each backend instance replays only a bounded
+    # recent window, while rows that were globally unpublished at registration
+    # are snapshotted separately and always recovered.
+    workflow_outbox_replay_window_rows: int = Field(default=500, ge=0, le=100_000)
+    workflow_outbox_consumer_ttl_s: float = Field(default=120.0, gt=0)
+    workflow_outbox_retention_s: float = Field(default=24 * 60 * 60, gt=0)
+    workflow_outbox_max_rows: int = Field(default=10_000, ge=1)
+    workflow_outbox_cleanup_interval_s: float = Field(default=60.0, gt=0)
+
     public_ws_url: str = "ws://localhost:8769/ws/echo"
     public_http_url: str = "http://localhost:8769"
     app_version: str = __version__
@@ -76,11 +87,13 @@ class Settings(BaseSettings):
         """Product version is immutable build metadata, not user configuration."""
         return __version__
 
-    # ── LLM 主通道（Yunwu / DeepSeek V4 Flash） ───────────────────
+    # ── LLM 主通道（任意 OpenAI-compatible provider） ─────────────
     llm_main_provider: str = "yunwu"
     llm_main_model: str = "deepseek-v4-flash"
     llm_main_base_url: str = "https://yunwu.ai/v1"
-    yunwu_open_key: str = ""
+    llm_main_api_key: str = Field(default="", repr=False)
+    # 0.2 compatibility only. New config/UI writes ``llm_main_api_key``.
+    yunwu_open_key: str = Field(default="", repr=False)
     llm_fallback_1: str = "GLM-4.6"
     llm_fallback_2: str = "Kimi-K2.6"
     llm_main_max_tokens: int = 80_000
@@ -90,18 +103,25 @@ class Settings(BaseSettings):
     # / LLM_MAIN_MAX_TOKENS 降到 4096；这里的默认值保留给更长上下文的私有部署。
     minutes_max_tokens: int = 12_000
 
+    @property
+    def resolved_llm_main_api_key(self) -> str:
+        """Generic main-provider credential with the 0.2 Yunwu fallback."""
+
+        return self.llm_main_api_key.strip() or self.yunwu_open_key.strip() or "EMPTY"
+
     # ── LLM 快速通道 ────────────────────────────────────────────────
     # public demo 默认跟随 Yunwu 主通道，避免 eight fast LLM 未启动时影响可用性；
     # 私有部署可在设置页改回 eight-local / vLLM 端点。
     llm_fast_provider: str = "bj-model-gateway"
     llm_fast_model: str = "qwen3-vl-8b-local"
     llm_fast_base_url: str = "http://100.87.251.9:7920/v1"
-    llm_local_api_key: str = "EMPTY"
+    llm_local_api_key: str = Field(default="EMPTY", repr=False)
     llm_fast_max_tokens: int = 512
     # STT/TTS/本地模型网关共享 token。历史 eight 裸服务不需要鉴权，adapter 会回退到
     # Bearer x；新部署走网关时用该字段或服务专用 api key 覆盖。
     heyi_gateway_token: str = Field(
         default="",
+        repr=False,
         validation_alias=AliasChoices(
             "heyi_gateway_token",
             "HEYI_GATEWAY_TOKEN",
@@ -113,7 +133,7 @@ class Settings(BaseSettings):
     @property
     def llm_fast_api_key(self) -> str:
         if self.llm_fast_base_url.rstrip("/") == self.llm_main_base_url.rstrip("/"):
-            return self.yunwu_open_key or "EMPTY"
+            return self.resolved_llm_main_api_key
         local_key = self.llm_local_api_key.strip()
         if local_key and local_key.upper() != "EMPTY":
             return local_key
@@ -129,6 +149,7 @@ class Settings(BaseSettings):
     stt_firered_url: str = "http://100.76.3.59:8090"
     stt_firered_api_key: str = Field(
         default="",
+        repr=False,
         validation_alias=AliasChoices(
             "stt_firered_api_key",
             "STT_FIRERED_API_KEY",
@@ -182,6 +203,7 @@ class Settings(BaseSettings):
     )
     tts_qwen3_api_key: str = Field(
         default="",
+        repr=False,
         validation_alias=AliasChoices(
             "tts_qwen3_api_key",
             "TTS_QWEN3_API_KEY",
@@ -306,6 +328,12 @@ class Settings(BaseSettings):
     # 4 → 5：echo 路由层用 3（router）+ 下游 dream consolidator 用 8 双重过滤；
     # echo-demo 单点过滤，取中位数 5 → 拦截 "嗯。" / "Yeah" / "ですね" 等短幻觉
     ambient_min_stt_chars: int = 5
+    # 通过音质门控的 ambient WAV 最长保留时间。GC 只扫描当前 owner 的物理
+    # scope；文本/RAG 生命周期独立，音频删除后 repository 会清空对应 audio_ref。
+    ambient_audio_retention_s: float = Field(default=7 * 24 * 60 * 60, gt=0)
+    # local-first 也受此 owner 级容量上限保护；public backend 还会同时受
+    # quota_storage_bytes 的全持久化预算约束，实际生效值取两道边界中更严格者。
+    ambient_audio_owner_max_bytes: int = Field(default=1024 * 1024 * 1024, ge=1)
 
     # ── 会议自动检测（与 PRD §自动开会/自动结束 对齐） ──────────
     # 检测窗口；distinct speakers 需 ≥ min_distinct 且总语音 ≥ min_active_s
@@ -323,12 +351,25 @@ class Settings(BaseSettings):
     # 手动会议允许短时崩溃/重启后续接，但跨天仍 in_meeting 已无法判断用户意图，
     # 必须自动结束，避免顶栏永久累计成数千分钟。
     meeting_recovery_max_age_s: float = 24 * 60 * 60
+    meeting_rag_repair_interval_s: float = Field(default=60.0, ge=5.0, le=3600.0)
 
     # ── RAG ───────────────────────────────────────────────────────
     rag_index_dir: Path = Field(default=Path("~/.echodesk/rag_index").expanduser())
     rag_top_k: int = 5
     rag_pdf_chunk_tokens: int = 600
     rag_pdf_chunk_overlap: int = 100
+    # BM25 is an in-process ranker. Bound one principal's durable payload and
+    # parsed chunk set so a valid multi-file workload cannot exhaust the server.
+    rag_index_max_payload_bytes_per_principal: int = Field(
+        default=64 * 1024 * 1024,
+        ge=1024 * 1024,
+        le=2 * 1024 * 1024 * 1024,
+    )
+    rag_index_max_chunks_per_principal: int = Field(
+        default=50_000,
+        ge=100,
+        le=1_000_000,
+    )
 
     # ── 授权工作区（M6：用户配置可索引的目录范围） ────────────
     # 多个目录用逗号分隔，例如 ECHO_WORKSPACE_DIRS=~/Documents/work,~/Notes
@@ -341,7 +382,7 @@ class Settings(BaseSettings):
     workspace_max_file_mb: float = 100.0
     workspace_scan_on_startup: bool = True
     workspace_state_file: Path = Field(
-        default=Path("~/.echodesk/workspace_state.json").expanduser()
+        default_factory=lambda: user_config_dir() / "workspace_state.json"
     )
 
     @property
@@ -354,7 +395,7 @@ class Settings(BaseSettings):
     # ── Web Search（Tavily-only；无 key 时联网检索不可用） ──
     web_search_enabled: bool = True
     web_search_top_n: int = 5
-    tavily_api_key: str = ""
+    tavily_api_key: str = Field(default="", repr=False)
     web_arbitration_model: str = "qwen3-vl-8b-local"
 
     # ── Skill 执行器 ──────────────────────────────────────────────
@@ -365,9 +406,42 @@ class Settings(BaseSettings):
     skill_html_tool: str = "single-file-tailwind-cdn"
     skill_fix_max_retries: int = 3
     skill_node_bin: str = "node"
+    # Electron 启动 bundled backend 时注入自身可执行文件。对子进程设置
+    # ELECTRON_RUN_AS_NODE=1 后，它就是随安装包携带、跨平台匹配的 Node runtime。
+    # 源码启动未设置这两个变量时仍使用 PATH 中的 node/npm。
+    echodesk_node_runtime: str = ""
+    echodesk_node_runtime_is_electron: bool = False
     skill_executor_build_dir: Path = Field(default=Path("~/.echodesk/skill_build").expanduser())
     skill_executor_timeout_s: int = 300
     skill_executor_max_tokens: int = 80_000
+    # Startup recovery must never remove another process's in-flight build.
+    # Workflow builds are protected by their durable execution lease; this
+    # grace only applies to legacy/direct executor directories without one.
+    artifact_build_stale_grace_s: float = Field(
+        default=60 * 60,
+        ge=60,
+        le=7 * 24 * 60 * 60,
+    )
+
+    @property
+    def resolved_skill_node_bin(self) -> str:
+        # The Electron-provided runtime is a packaged fallback, not an override
+        # for an explicitly configured skill runtime.  Keeping that precedence
+        # matters for fail-closed diagnostics as well as administrator policy:
+        # setting SKILL_NODE_BIN to a missing/blocked executable must not be
+        # silently masked by ECHODESK_NODE_RUNTIME.
+        configured = self.skill_node_bin.strip()
+        if configured and configured != "node":
+            return configured
+        return self.echodesk_node_runtime.strip() or configured or "node"
+
+    @property
+    def resolved_skill_node_is_electron(self) -> bool:
+        return bool(
+            self.resolved_skill_node_bin == self.echodesk_node_runtime.strip()
+            and self.echodesk_node_runtime.strip()
+            and self.echodesk_node_runtime_is_electron
+        )
 
     # ── phase4-doc-skills：HTML/PPT 高质量 skill 灰度开关 ───────────
     # 默认 false：HTML 走 Kami warm-parchment one-pager；PPT 走 ib_master 14 页
@@ -380,6 +454,22 @@ class Settings(BaseSettings):
     agent_os_enabled: bool = False
     agent_os_url: str = "http://127.0.0.1:4128"
     agent_task_timeout_s: float = 1800.0
+    agent_artifact_proxy_max_bytes: int = Field(
+        default=256 * 1024 * 1024,
+        ge=1024 * 1024,
+        le=2 * 1024 * 1024 * 1024,
+    )
+    agent_bridge_lease_ttl_s: float = Field(default=30.0, gt=0, le=300.0)
+    agent_bridge_heartbeat_s: float = Field(default=10.0, gt=0, le=60.0)
+    agent_bridge_recovery_interval_s: float = Field(default=1.0, gt=0, le=60.0)
+    agent_bridge_retry_base_s: float = Field(default=0.5, gt=0, le=60.0)
+    agent_bridge_retry_max_s: float = Field(default=15.0, gt=0, le=300.0)
+    agent_submit_lease_ttl_s: float = Field(default=90.0, gt=0, le=300.0)
+    agent_submit_heartbeat_s: float = Field(default=10.0, gt=0, le=60.0)
+    agent_cancel_command_lease_ttl_s: float = Field(default=30.0, gt=0, le=300.0)
+    agent_cancel_command_retry_base_s: float = Field(default=0.5, gt=0, le=60.0)
+    agent_cancel_command_retry_max_s: float = Field(default=15.0, gt=0, le=300.0)
+    agent_cancel_command_max_attempts: int = Field(default=5, ge=1, le=20)
 
     # ── DB ────────────────────────────────────────────────────────
     db_path: Path = Field(default=Path("~/.echodesk/echodesk.db").expanduser())
@@ -387,11 +477,104 @@ class Settings(BaseSettings):
 
     # ── Security ──────────────────────────────────────────────────
     allowed_origins: str = (
-        "app://.,capacitor://localhost,https://localhost,http://localhost,"
+        f"{OFFICIAL_ELECTRON_ORIGIN},app://.,capacitor://localhost,"
+        "https://localhost,http://localhost,"
         "http://localhost:5173,http://localhost:8769"
     )
+    # 旧版 packaged renderer 会发送 ``Origin: file://``。仅保留为显式开启的
+    # loopback-only 升级兼容；当前桌面包固定使用 OFFICIAL_ELECTRON_ORIGIN。
+    electron_file_origin_enabled: bool = False
+    trusted_hosts: str = ""
     public_demo_mode: bool = False
-    debug_token: str = ""
+    debug_token: str = Field(default="", repr=False)
+
+    # Public transport admission runs before bearer/resource-ticket validation.
+    # It is process-local by design: global limits bound one backend process,
+    # while peer limits prevent one source from monopolizing those slots.
+    preauth_window_s: float = Field(default=60.0, gt=0, le=3600)
+    preauth_max_peers: int = Field(default=4096, ge=1)
+    preauth_http_global_concurrent: int = Field(default=64, ge=1)
+    preauth_http_peer_concurrent: int = Field(default=8, ge=1)
+    preauth_http_global_requests_per_window: int = Field(default=6000, ge=1)
+    preauth_http_peer_requests_per_window: int = Field(default=600, ge=1)
+    preauth_ws_global_concurrent: int = Field(default=64, ge=1)
+    preauth_ws_peer_concurrent: int = Field(default=8, ge=1)
+    preauth_ws_global_attempts_per_window: int = Field(default=600, ge=1)
+    preauth_ws_peer_attempts_per_window: int = Field(default=60, ge=1)
+
+    # Durable public identity creation admission. Unlike the process-local
+    # request limiter, these bounds survive restarts and serialize across every
+    # backend process sharing SQLite. Existing enrollment retries and renewals
+    # do not consume this new-identity budget.
+    enrollment_admission_window_s: float = Field(default=60 * 60, gt=0)
+    enrollment_admission_peer_max_per_window: int = Field(default=12, ge=1)
+    enrollment_admission_global_max_per_window: int = Field(default=1_000, ge=1)
+    enrollment_admission_peer_max_per_day: int = Field(default=64, ge=1)
+    enrollment_admission_global_max_per_day: int = Field(default=10_000, ge=1)
+    enrollment_admission_total_active_max: int = Field(default=10_000, ge=1)
+    enrollment_admission_cleanup_batch_size: int = Field(default=100, ge=1, le=10_000)
+
+    # ── Public backend resource governor ─────────────────────────
+    # 累计预算按服务端 principal scope 记入 SQLite；并发/WS 是进程内租约。
+    # local-first principal 不受这些 public 多租户护栏影响。
+    quota_requests_per_minute: int = Field(default=240, ge=1)
+    quota_concurrent_requests: int = Field(default=8, ge=1)
+    quota_concurrent_expensive_tasks: int = Field(default=2, ge=1)
+    quota_websocket_connections: int = Field(default=3, ge=1)
+    quota_upload_bytes_per_day: int = Field(default=512 * 1024 * 1024, ge=1)
+    quota_storage_bytes: int = Field(default=1024 * 1024 * 1024, ge=1)
+    quota_llm_tokens_per_day: int = Field(default=500_000, ge=1)
+
+    # Low-level transcript injection is intentionally available to public/TV
+    # clients for offline replay.  Keep one logical segment small enough that
+    # the bounded WS replay buffer cannot be amplified by a single JSON value.
+    meeting_inject_segment_max_bytes: int = Field(
+        default=16 * 1024,
+        ge=1024,
+        le=1024 * 1024,
+    )
+
+    # principal-scoped Python runtimes and event streams must remain bounded.
+    runtime_scope_max_entries: int = Field(default=256, ge=1)
+    runtime_scope_idle_ttl_s: float = Field(default=30 * 60, gt=0)
+    runtime_scope_janitor_interval_s: float = Field(default=60.0, gt=0)
+    ws_scope_max_streams: int = Field(default=512, ge=1)
+    # 全局 scope 满载时只允许有限个 distinct principal 候补，并在短窗口内
+    # 按到达顺序接替释放的 slot；重复 scope 不重复占队列。
+    ws_admission_queue_size: int = Field(default=128, ge=1, le=4096)
+    ws_admission_wait_timeout_s: float = Field(default=2.0, gt=0, le=30.0)
+    ws_subscriber_queue_size: int = Field(default=256, ge=1)
+    ws_replay_buffer_size: int = Field(default=200, ge=1)
+    ws_send_timeout_s: float = Field(default=5.0, gt=0, le=60.0)
+    ws_auth_revalidate_interval_s: float = Field(default=15.0, gt=0, le=300)
+    execution_lease_ttl_s: float = Field(default=30.0, ge=5.0, le=300.0)
+    execution_lease_heartbeat_s: float = Field(default=5.0, ge=1.0, le=60.0)
+    # 所有可携带 body 的 HTTP 路由都在 Starlette 解析 JSON / multipart 前受保护。
+    # 普通 JSON 保持较小上限；上传路由继续使用各自更大的专用上限。
+    request_body_max_bytes: int = Field(
+        default=1024 * 1024,
+        ge=16 * 1024,
+        le=64 * 1024 * 1024,
+    )
+    request_body_timeout_s: float = Field(default=30.0, gt=0, le=300.0)
+    upload_read_chunk_bytes: int = Field(default=64 * 1024, ge=1024, le=4 * 1024 * 1024)
+    upload_multipart_overhead_bytes: int = Field(default=1024 * 1024, ge=64 * 1024)
+    # 为兼容现有部署保留历史字段名；这两个容量边界现在覆盖所有受保护的请求体，
+    # 不再只覆盖 multipart 上传。
+    upload_global_concurrent_requests: int = Field(default=16, ge=1)
+    upload_global_inflight_bytes: int = Field(default=512 * 1024 * 1024, ge=1024 * 1024)
+    upload_body_timeout_s: float = Field(default=120.0, gt=0, le=900)
+    # Public production cutovers create this owner-only token file before a
+    # target process starts.  While it exists, business HTTP/WS is fail-closed
+    # and only the local isolation smoke can bypass it with the token header.
+    deployment_gate_file: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "deployment_gate_file",
+            "DEPLOYMENT_GATE_FILE",
+            "ECHODESK_DEPLOYMENT_GATE_FILE",
+        ),
+    )
     # Electron 会把 backend 绑定到 0.0.0.0 以支持手机/电视扫码保存。
     # 默认只允许局域网访问 share/minutes/download 等只读保存端点；如需让
     # Android/TV 调试完整本机后端，显式设置 ECHO_LAN_FULL_API_ENABLED=true。
@@ -406,7 +589,31 @@ class Settings(BaseSettings):
 
     @property
     def allowed_origins_list(self) -> list[str]:
-        return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
+        configured = [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
+        return list(dict.fromkeys((*configured, OFFICIAL_ELECTRON_ORIGIN)))
+
+    @property
+    def trusted_hosts_list(self) -> list[str]:
+        configured = [host.strip() for host in self.trusted_hosts.split(",") if host.strip()]
+        if configured:
+            return list(dict.fromkeys(configured))
+        if not self.public_demo_mode:
+            return ["*"]
+        canonical_host = urlsplit(self.public_http_url).hostname
+        return list(
+            dict.fromkeys(
+                host
+                for host in (
+                    canonical_host,
+                    "echodesk.yoliyoli.uk",
+                    "localhost",
+                    "127.0.0.1",
+                    "::1",
+                    "testserver",
+                )
+                if host
+            )
+        )
 
 
 @lru_cache(maxsize=1)

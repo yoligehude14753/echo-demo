@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Modal, message } from "antd";
 import { Copy, Download, ExternalLink, Loader2, QrCode, Trash2 } from "lucide-react";
 import { clearMeetingOutputs, meetingShareUrl } from "@/api";
+import { meetingDisplayTitle } from "@/lib/meetingDisplay";
 import type { GeneratedArtifact, MeetingCard, MeetingMinutes } from "@/types";
 
 interface Props {
@@ -26,7 +27,6 @@ function minutesMarkdown(minutes: MeetingMinutes | undefined, artifacts: Generat
   const lines: string[] = [
     `# ${minutes.title}`,
     "",
-    `- 会议 ID：${minutes.meeting_id}`,
     `- 时长：${Math.round(minutes.duration_sec)} 秒`,
     `- 生成时间：${new Date(minutes.created_at).toLocaleString()}`,
     "",
@@ -56,7 +56,7 @@ function minutesMarkdown(minutes: MeetingMinutes | undefined, artifacts: Generat
   }
   if (artifacts.length > 0) {
     lines.push("## 会议产物", "");
-    artifacts.forEach((a) => lines.push(`- ${a.title || a.artifact_id} (${a.artifact_type})`));
+    artifacts.forEach((a) => lines.push(`- ${a.title?.trim() || "未命名文件"} (${a.artifact_type})`));
   }
   return `${lines.join("\n").trim()}\n`;
 }
@@ -103,7 +103,7 @@ export default function MeetingShareModal({
   const [clearing, setClearing] = useState(false);
   const artifactIds = useMemo(() => uniqueArtifactIds(meeting), [meeting]);
   const artifactCount = meeting?.artifacts.length ?? 0;
-  const title = meeting?.minutes?.title || meeting?.display_title || meeting?.title || meeting?.meeting_id || "会议资料";
+  const title = meeting?.minutes?.title || meetingDisplayTitle(meeting, "会议资料");
   const loopbackShareUrl = shareUrl ? isLoopbackUrl(shareUrl) : false;
 
   useEffect(() => {
@@ -131,8 +131,8 @@ export default function MeetingShareModal({
         if (!cancelled) setQrDataUrl(dataUrl);
       })
       .catch((e) => {
-        const msg = e instanceof Error ? e.message : String(e);
-        message.error(`二维码生成失败：${msg}`);
+        console.error("[meeting-share] QR generation failed", e);
+        message.error("二维码生成失败，请稍后重新打开");
       })
       .finally(() => {
         if (!cancelled) setLoadingQr(false);
@@ -195,11 +195,6 @@ export default function MeetingShareModal({
       <div className="space-y-4" data-testid="meeting-share-modal">
         <div className="min-w-0">
           <div className="text-[15px] font-semibold text-ink-900 truncate">{title}</div>
-          {meeting && (
-            <div className="mt-1 font-mono text-[11px] text-ink-400 truncate">
-              {meeting.meeting_id}
-            </div>
-          )}
         </div>
 
         <div className="flex flex-col items-center justify-center rounded-lg border border-paper-300 bg-white py-5 min-h-[260px]">
@@ -236,7 +231,7 @@ export default function MeetingShareModal({
           data-testid="meeting-share-network-hint"
         >
           {loopbackShareUrl
-            ? "当前链接只能在本机打开；请用打包版 EchoDesk 或设置 ECHO_SHARE_BASE_URL 后再让手机/电视扫码。"
+            ? "当前开发预览链接只能在本机打开；请使用已安装的 EchoDesk 再让其他设备扫码。"
             : "手机或电视和这台电脑在同一网络时，可扫码打开并保存纪要、下载产物。"}
         </div>
 

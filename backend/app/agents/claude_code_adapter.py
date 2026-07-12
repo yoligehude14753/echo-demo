@@ -130,7 +130,8 @@ class ClaudeCodeRunnerAdapter:
         _raw_ref: str | None,
         _context: RunnerEventContext,
     ) -> EchoTaskEvent:
-        inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        nested_payload = payload.get("payload")
+        inner: dict[str, Any] = nested_payload if isinstance(nested_payload, dict) else {}
         subtype = str(inner.get("subtype") or inner.get("type") or "")
         if subtype == "init":
             return EchoTaskEvent(
@@ -239,10 +240,13 @@ class ClaudeCodeRunnerAdapter:
         is_timeout = is_error and _is_timeout_message(result_text)
         return EchoTaskEvent(
             **base,
-            event="task.timeout" if is_timeout else ("task.failed" if is_error else "task.completed"),
+            event="task.timeout"
+            if is_timeout
+            else ("task.failed" if is_error else "task.completed"),
             state="timeout" if is_timeout else ("failed" if is_error else "succeeded"),
             visibility="user",
-            message=result_text or ("任务超时" if is_timeout else ("任务失败" if is_error else "任务完成")),
+            message=result_text
+            or ("任务超时" if is_timeout else ("任务失败" if is_error else "任务完成")),
             snapshot={
                 "duration_ms": payload.get("duration_ms"),
                 "num_turns": payload.get("num_turns"),

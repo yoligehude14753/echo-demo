@@ -3,7 +3,7 @@
  *
  * 覆盖业务目标（19-quality-detail.mdc 三问）：
  *   主路径：minutes.ready 到达 → MinutesView 渲染纪要详情
- *   失败路径：minutes.failed 到达 → MinutesView 显示「生成失败 · 重试」+ 具体错误
+ *   失败路径：minutes.failed 到达 → MinutesView 显示可读原因和重试操作
  *   重试路径：点「重新生成纪要」→ POST /meetings/{id}/finalize 触发；
  *             ready 再次到达 → UI 切换到纪要详情
  *
@@ -42,14 +42,17 @@ test("S07 · LLM 失败 → 「生成失败 · 重试」→ 重试成功 → 渲
     );
   });
 
-  await test.step("MinutesView 显示「生成失败」+ 错误消息 + 「重新生成纪要」按钮", async () => {
+  await test.step("MinutesView 显示可读错误 + 「重新生成纪要」按钮", async () => {
     await expect(page.getByTestId("minutes-retry-btn")).toBeVisible({
       timeout: 5_000,
     });
-    await page.getByTestId("minutes-error-toggle").click();
-    await expect(page.getByTestId("minutes-error-detail")).toContainText(
-      "502 bad gateway",
+    await expect(page.getByTestId("minutes-error-headline")).toHaveText(
+      "纪要生成失败",
     );
+    await expect(
+      page.getByText("点击下方按钮重新生成；如反复失败，请检查网络或服务设置"),
+    ).toBeVisible();
+    await expect(page.getByText(/502 bad gateway/)).toHaveCount(0);
   });
 
   await test.step("点击重试 → 触发 POST /meetings/{id}/finalize", async () => {

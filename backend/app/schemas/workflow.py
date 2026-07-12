@@ -42,6 +42,13 @@ class WorkflowRunDTO(BaseModel):
     output: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     timeout_s: float | None = None
+    revision: int = 0
+    idempotency_key: str | None = None
+    active_key: str | None = None
+    attempt: int = 1
+    parent_run_id: str | None = None
+    deadline_at: str | None = None
+    cancel_requested_at: str | None = None
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
@@ -69,6 +76,8 @@ class WorkflowRunCreate(BaseModel):
     agent_task_id: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
     timeout_s: float | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+    active_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class WorkflowRetryRequest(BaseModel):

@@ -9,7 +9,13 @@ from app.schemas.rag import RagChunk
 
 @runtime_checkable
 class RagPort(Protocol):
-    async def ingest_pdf(self, file_path: str, doc_title: str | None = None) -> str:
+    async def ingest_pdf(
+        self,
+        file_path: str,
+        doc_title: str | None = None,
+        *,
+        operation_id: str | None = None,
+    ) -> str:
         """返回 doc_id。"""
 
     async def ingest_file(
@@ -19,11 +25,13 @@ class RagPort(Protocol):
         *,
         source: str = "upload",
         source_path: str | None = None,
+        operation_id: str | None = None,
     ) -> str:
         """通用文件入库（PDF/docx/pptx/xlsx/md/txt/csv/html/...）。
 
         source: "upload"（用户拖入）/ "workspace"（授权工作区扫描）/ "meeting"。
         source_path: 工作区扫描时记录原始绝对路径，便于增量去重。
+        operation_id: durable workflow/scanner operation id；重放时必须复用。
         返回 doc_id。
         """
 

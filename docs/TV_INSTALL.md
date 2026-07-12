@@ -7,8 +7,8 @@
 
 公开发布后从 GitHub Release 下载：
 
-- `EchoDesk-0.3.0-smart-tv.apk`：电视直接安装用 APK。
-- `EchoDesk-0.3.0-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
+- `EchoDesk-0.3.1-smart-tv.apk`：电视直接安装用 APK。
+- `EchoDesk-0.3.1-smart-tv-oneclick.zip`：电脑一键安装包，含 APK、macOS 脚本、Windows PowerShell 脚本。
 - `https://yoligehude14753.github.io/echo-demo/`：电视浏览器短安装页，可用遥控器直接选择下载按钮。
 
 ## 方法 A：电视浏览器安装
@@ -26,7 +26,7 @@
 1. 让电脑和电视连接同一个局域网。
 2. 在电视设置中打开开发者模式和网络调试 / ADB 调试。
 3. 查到电视 IP。
-4. 解压 `EchoDesk-0.3.0-smart-tv-oneclick.zip`。
+4. 解压 `EchoDesk-0.3.1-smart-tv-oneclick.zip`。
 5. macOS：
 
 ```bash
@@ -68,24 +68,21 @@ powershell -ExecutionPolicy Bypass -File .\install-tv-windows.ps1 -TvIp 192.168.
 3. 没有弹窗时重启电视，再重新运行安装脚本。
 4. 仍然是 `offline` 时，换另一个 ADB 端口重试，例如 `5556`。
 
-一键脚本默认会执行干净安装：先停止旧 app、清理旧 WebView / app data，再安装、
-授权麦克风并自动打开 EchoDesk。这样新安装不会继承上一版的本地缓存。
+一键脚本直接覆盖安装，保留当前 WebView / app data、设备身份、会议室配置和现有权限状态，
+随后自动打开 EchoDesk。安装器既不会授予也不会撤销麦克风权限，升级也不会生成新的设备身份。
 当前 TV 包名是 `com.echodesk.tv`，和 Android 手机 / 平板包 `com.echodesk.app` 分离；
-一键脚本默认还会卸载旧 TV 遗留包 `com.echodesk.app`，避免会议历史串包。
-如果只是升级且需要保留旧配置，可在运行前设置：
+默认也不会清理或卸载旧 TV 遗留包 `com.echodesk.app`。安装器不提供清空当前应用数据的开关；
+如需全新初始化，请在电视系统的应用设置中明确选择清除数据，并重新确认系统权限。
 
-```bash
-ECHODESK_TV_KEEP_DATA=1 ./install-tv-macos.sh 192.168.1.23
-```
-
-如果你明确需要保留旧 `com.echodesk.app` 包，可额外设置 `ECHODESK_TV_KEEP_LEGACY=1`。
+如果确认旧 `com.echodesk.app` 已不再需要，可额外设置
+`ECHODESK_TV_REMOVE_LEGACY=1`；该操作会清数据并卸载旧包。
 
 应用内「检查更新」会直接打开最新 TV APK 下载地址；Android / TV 系统会弹出安装确认。
-APK 侧载升级默认保留 app 数据；只有一键安装脚本的默认首次安装模式会清理旧缓存。
+APK 侧载与一键脚本升级都保留当前 app 数据；旧包移除只能通过上述显式开关触发。
 
 ## 方法 C：U 盘安装
 
-1. 把 `EchoDesk-0.3.0-smart-tv.apk` 拷到 U 盘。
+1. 把 `EchoDesk-0.3.1-smart-tv.apk` 拷到 U 盘。
 2. 在电视文件管理器里打开 APK。
 3. 按提示允许安装未知来源应用。
 
@@ -138,4 +135,8 @@ http://192.168.1.20:8769
 - TV 包使用独立 Android 包名 `com.echodesk.tv`；手机 / 平板包继续使用 `com.echodesk.app`。
 - 桌面端扫码保存默认只向局域网开放分享页、纪要下载和产物下载；完整 API 需显式打开
   `ECHO_LAN_FULL_API_ENABLED=true`。
-- 公共演示服务已走 HTTPS；后续正式客户分发还需要 release 签名 APK / AAB、设备注册和限流。
+- 历史公开 APK 的覆盖升级通过 APK Signature Scheme v3.1 lineage 保持：API 24–32
+  继续由 legacy signer 签名，API 33+ 使用 current signer。只用新 key 且不带 lineage 的
+  APK 会被系统以 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` 拒绝。
+- 发布工作流必须核对 legacy/current 两枚固定 SHA-256 指纹、API 33 旋转阈值和 TV
+  `applicationId=com.echodesk.tv`；current signer 不能使用 debug/autogen 身份。

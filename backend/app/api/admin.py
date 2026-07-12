@@ -17,10 +17,9 @@ import contextlib
 import json
 import logging
 import os
-import tempfile
 import zipfile
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -28,11 +27,21 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from app.adapters.repo.sqlite import SQLiteRepository
-from app.api.deps import get_diarizer_singleton, get_repository
+from app.api.deps import (
+    get_artifact_repository,
+    get_diarizer_singleton,
+    get_repository,
+    get_workflow_dispatcher,
+)
+from app.artifacts.repository import ArtifactRepository
 from app.config import Settings, get_settings
 from app.config_io import load_user_config_json, user_config_path, write_user_config_json
 from app.ports.diarizer import DiarizerPort
 from app.ports.repository import RepositoryPort
+from app.schemas.workflow import WorkflowRunCreate
+from app.security.context import current_principal
+from app.security.headers import PRIVATE_NO_STORE_HEADERS
+from app.workflows.kernel import WorkflowContext, WorkflowDispatcher, WorkflowExecutionError
 
 logger = logging.getLogger("echodesk.admin")
 router = APIRouter(tags=["admin"])
@@ -160,11 +169,11 @@ def _build_meeting_zip(
     meeting_payload: dict[str, object],
     transcript_md: str,
     segments_payload: list[dict[str, object]],
-    storage: Path,
-    meeting_id: str,
-    raw_transcript_ref: str | None,
+    raw_transcript_path: Path | None,
+    artifact_files: list[tuple[Path, str]],
+    artifact_manifest: list[dict[str, object]],
 ) -> None:
-    """实际把 zip 写出：核心三件 + 可选 audio/artifacts（best-effort）。"""
+    """Write authoritative meeting data and registered artifact files."""
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
             "meeting.json",
@@ -177,36 +186,167 @@ def _build_meeting_zip(
         )
 
         # raw_transcript_ref（finalize 落盘的逐字稿 json）best-effort 带过来
-        if raw_transcript_ref:
-            ref_path = Path(raw_transcript_ref).expanduser()
-            if ref_path.exists() and ref_path.is_file():
-                try:
-                    zf.write(ref_path, arcname="transcript.raw.json")
-                except OSError as e:
-                    logger.warning("export: 跳过 raw_transcript %s: %s", ref_path, e)
+        if raw_transcript_path is not None:
+            try:
+                zf.write(raw_transcript_path, arcname="transcript.raw.json")
+            except OSError as e:
+                logger.warning("export: skip registered raw transcript: %s", e)
 
-        # audio: meeting 当前没有强绑定的 audio_ref（ambient 链路写在 ambient_segments），
-        # 但若 storage/ambient/ 下能找到与 meeting 同期 wav 就稍后再补；P2.5 阶段只
-        # 把 storage/meetings/{id}/audio/* 当做最小约定（forward-compatible），不存在
-        # 就跳过，不 fail。
-        audio_dir = storage / "meetings" / meeting_id / "audio"
-        if audio_dir.exists() and audio_dir.is_dir():
-            for f in audio_dir.glob("*.wav"):
-                try:
-                    zf.write(f, arcname=f"audio/{_safe_zip_name(f.name)}")
-                except OSError as e:
-                    logger.warning("export: 跳过 audio %s: %s", f, e)
+        for artifact_path, archive_name in artifact_files:
+            try:
+                zf.write(artifact_path, arcname=f"artifacts/{archive_name}")
+            except OSError as e:
+                logger.warning("export: skip registered artifact %s: %s", archive_name, e)
 
-        # artifacts: 同上，约定 storage/meetings/{id}/artifacts/* 是该 meeting 的产物
-        artifacts_dir = storage / "meetings" / meeting_id / "artifacts"
-        if artifacts_dir.exists() and artifacts_dir.is_dir():
-            for f in artifacts_dir.iterdir():
-                if not f.is_file():
-                    continue
-                try:
-                    zf.write(f, arcname=f"artifacts/{_safe_zip_name(f.name)}")
-                except OSError as e:
-                    logger.warning("export: 跳过 artifact %s: %s", f, e)
+        zf.writestr(
+            "export-manifest.json",
+            json.dumps(
+                {
+                    "artifacts": artifact_manifest,
+                    "audio": {
+                        "included": False,
+                        "reason": "meeting audio is not linked by the current storage schema",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+
+def _allowed_export_file(settings: Settings, raw_path: str) -> Path | None:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return None
+    allowed_roots = (
+        Path(settings.storage_dir).expanduser().resolve(),
+        Path(settings.skill_executor_build_dir).expanduser().resolve(),
+    )
+    if not resolved.is_file():
+        return None
+    is_allowed = any(root == resolved or root in resolved.parents for root in allowed_roots)
+    return resolved if is_allowed else None
+
+
+async def _prepare_meeting_export(
+    repository: RepositoryPort,
+    settings: Settings,
+    artifact_repo: ArtifactRepository,
+    meeting_id: str,
+    target: Path,
+) -> str:
+    meeting = await repository.get_meeting(meeting_id)
+    if meeting is None:
+        raise KeyError(meeting_id)
+    segments = await repository.list_meeting_segments(meeting_id)
+    labels = await repository.get_meeting_speaker_labels(meeting_id)
+    minutes_obj: object | None = None
+    if meeting.minutes_json:
+        try:
+            minutes_obj = json.loads(meeting.minutes_json)
+        except json.JSONDecodeError:
+            minutes_obj = None
+    meeting_payload: dict[str, object] = {
+        "id": meeting.id,
+        "title": meeting.title,
+        "state": meeting.state,
+        "started_at": meeting.started_at.isoformat(),
+        "ended_at": meeting.ended_at.isoformat() if meeting.ended_at else None,
+        "finalized_at": meeting.finalized_at.isoformat() if meeting.finalized_at else None,
+        "auto_started": meeting.auto_started,
+        "speaker_labels": labels,
+        "minutes": minutes_obj,
+        "raw_transcript_available": bool(meeting.raw_transcript_ref),
+    }
+    segments_payload = [segment.model_dump() for segment in segments]
+    transcript_md = _segments_to_markdown(
+        segments_payload,
+        title=meeting.title or f"Meeting {meeting_id[:8]}",
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    artifact_files: list[tuple[Path, str]] = []
+    artifact_manifest: list[dict[str, object]] = []
+    for artifact in await artifact_repo.list_meeting_artifacts(meeting_id):
+        artifact_path = _allowed_export_file(settings, artifact.file_path)
+        included = artifact_path is not None
+        archive_name = (
+            f"{_safe_zip_name(artifact.artifact_id)}-{_safe_zip_name(artifact_path.name)}"
+            if artifact_path is not None
+            else None
+        )
+        if artifact_path is not None and archive_name is not None:
+            artifact_files.append((artifact_path, archive_name))
+        artifact_manifest.append(
+            {
+                "artifact_id": artifact.artifact_id,
+                "artifact_type": artifact.artifact_type,
+                "title": artifact.title,
+                "size_bytes": artifact.size_bytes,
+                "included": included,
+                "archive_name": archive_name,
+            }
+        )
+    raw_transcript_path = (
+        _allowed_export_file(settings, meeting.raw_transcript_ref)
+        if meeting.raw_transcript_ref
+        else None
+    )
+    temp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        _build_meeting_zip(
+            temp,
+            meeting_payload=meeting_payload,
+            transcript_md=transcript_md,
+            segments_payload=segments_payload,
+            raw_transcript_path=raw_transcript_path,
+            artifact_files=artifact_files,
+            artifact_manifest=artifact_manifest,
+        )
+        temp.replace(target)
+    finally:
+        temp.unlink(missing_ok=True)
+    started_slug = meeting.started_at.strftime("%Y%m%d-%H%M%S")
+    return f"meeting-{meeting_id[:8]}-{started_slug}.zip"
+
+
+def bind_meeting_export_workflow_handler(
+    dispatcher: WorkflowDispatcher,
+    repository: RepositoryPort,
+    settings: Settings,
+    artifact_repo: ArtifactRepository,
+) -> None:
+    principal = current_principal()
+    scope = (principal.tenant_id, principal.owner_id)
+
+    async def handler(context: WorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
+        meeting_id = str(payload["meeting_id"])
+        target = (
+            Path(settings.storage_dir).expanduser() / "exports" / f"meeting-{context.run_id}.zip"
+        )
+        filename = await _prepare_meeting_export(
+            repository,
+            settings,
+            artifact_repo,
+            meeting_id,
+            target,
+        )
+        return {
+            "meeting_id": meeting_id,
+            "path": str(target),
+            "filename": filename,
+            "size_bytes": target.stat().st_size,
+        }
+
+    dispatcher.registry.register(
+        "meeting.export",
+        handler,
+        scope=scope,
+        replace=True,
+    )
 
 
 @router.post("/meetings/{meeting_id}/export")
@@ -214,75 +354,40 @@ async def export_meeting(
     meeting_id: str,
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     settings: Annotated[Settings, Depends(get_settings)],
+    dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
+    artifact_repo: Annotated[ArtifactRepository, Depends(get_artifact_repository)],
 ) -> FileResponse:
     """把指定会议导出为 zip 返回；缺失 meeting → 404。
 
-    zip 内容固定 3 件 + best-effort 2 件：
+    zip 内容固定 4 件 + best-effort 2 类：
       meeting.json     - meeting record + 解析后的 minutes（若有）
       transcript.md    - segments 拼成的可读文本
       segments.json    - 完整 raw segments
+      export-manifest.json - 导出的产物清单与音频可用性说明
       transcript.raw.json  - finalize 时落盘的逐字稿（若有）
-      audio/*.wav      - storage/meetings/{id}/audio/ 下的 wav（若有）
-      artifacts/*      - storage/meetings/{id}/artifacts/ 下的产物（若有）
+      artifacts/*      - 通过 artifact_links 明确关联且位于允许目录的产物
+
+    当前 schema 未建立会议音频关联，因此不猜测或扫描音频目录。
     """
-    meeting = await repository.get_meeting(meeting_id)
-    if meeting is None:
+    if await repository.get_meeting(meeting_id) is None:
         raise HTTPException(status_code=404, detail="meeting not found")
-
-    segments = await repository.list_meeting_segments(meeting_id)
-    labels = await repository.get_meeting_speaker_labels(meeting_id)
-
-    minutes_obj: object | None = None
-    if meeting.minutes_json:
-        try:
-            minutes_obj = json.loads(meeting.minutes_json)
-        except json.JSONDecodeError:
-            minutes_obj = None
-
-    meeting_payload: dict[str, object] = {
-        "id": meeting.id,
-        "title": meeting.title,
-        "state": meeting.state,
-        "started_at": meeting.started_at.isoformat(),
-        "ended_at": meeting.ended_at.isoformat() if meeting.ended_at else None,
-        "finalized_at": (meeting.finalized_at.isoformat() if meeting.finalized_at else None),
-        "auto_started": meeting.auto_started,
-        "speaker_labels": labels,
-        "minutes": minutes_obj,
-        "raw_transcript_ref": meeting.raw_transcript_ref,
-    }
-    segments_payload = [s.model_dump() for s in segments]
-    transcript_md = _segments_to_markdown(
-        segments_payload, title=meeting.title or f"Meeting {meeting_id[:8]}"
-    )
-
-    storage = Path(settings.storage_dir).expanduser()
-
-    # 手动 close 让 FileResponse + BackgroundTask 接管生命周期；ruff SIM115
-    # 不识别这种"先建文件名再交给下游"的合法模式
-    tmp_fd, tmp_name = tempfile.mkstemp(
-        prefix=f"echodesk-export-{meeting_id[:8]}-",
-        suffix=".zip",
-    )
-    os.close(tmp_fd)
-    tmp_path = Path(tmp_name)
-
+    bind_meeting_export_workflow_handler(dispatcher, repository, settings, artifact_repo)
     try:
-        _build_meeting_zip(
-            tmp_path,
-            meeting_payload=meeting_payload,
-            transcript_md=transcript_md,
-            segments_payload=segments_payload,
-            storage=storage,
-            meeting_id=meeting_id,
-            raw_transcript_ref=meeting.raw_transcript_ref,
+        done = await dispatcher.execute(
+            WorkflowRunCreate(
+                kind="meeting.export",
+                source="admin_export_api",
+                intent_text=f"Export meeting {meeting_id}",
+                meeting_id=meeting_id,
+                input={"meeting_id": meeting_id},
+                timeout_s=120,
+                active_key=f"meeting.export:{meeting_id}",
+            )
         )
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-
-    started_slug = meeting.started_at.strftime("%Y%m%d-%H%M%S")
-    filename = f"meeting-{meeting_id[:8]}-{started_slug}.zip"
+    except WorkflowExecutionError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    tmp_path = Path(str(done.output["path"]))
+    filename = str(done.output["filename"])
 
     def _cleanup() -> None:
         with contextlib.suppress(OSError):
@@ -292,6 +397,7 @@ async def export_meeting(
         path=tmp_path,
         filename=filename,
         media_type="application/zip",
+        headers=PRIVATE_NO_STORE_HEADERS,
         background=BackgroundTask(_cleanup),
     )
 
@@ -389,7 +495,7 @@ async def reset_speakers(
 _REMOTE_FIELDS: list[tuple[str, str, bool]] = [
     # (config key in ~/.echodesk/config.json, Settings 属性, 是否 sensitive)
     ("llm_main_base_url", "llm_main_base_url", False),
-    ("yunwu_open_key", "yunwu_open_key", True),
+    ("llm_main_api_key", "resolved_llm_main_api_key", True),
     ("llm_fast_base_url", "llm_fast_base_url", False),
     ("stt_firered_url", "stt_firered_url", False),
     ("tts_qwen3_url", "tts_qwen3_url", False),
@@ -401,12 +507,9 @@ _ALLOWED_KEYS = {f[0] for f in _REMOTE_FIELDS}
 
 
 def _mask_secret(value: str) -> str:
-    """key 脱敏：留首 4 / 末 4，中间 ***；短 key（≤8）保留首末各 1。空字符串直接空。"""
-    if not value:
-        return ""
-    if len(value) <= 8:
-        return f"{value[0]}***{value[-1]}"
-    return f"{value[:4]}***{value[-4:]}"
+    """Never return credential fragments to the renderer or remote clients."""
+
+    return "[REDACTED]" if value else ""
 
 
 class RemoteFieldDTO(BaseModel):

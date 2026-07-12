@@ -20,7 +20,7 @@ def isolate_non_integration_test_state(
     tmp_path: Path,
 ):
     """非真实集成测试不得读取或写入 ~/.echodesk 与本机 backend/.env。"""
-    if request.node.get_closest_marker("integration") is not None:
+    if request.node.get_closest_marker("live") is not None:
         yield
         return
 

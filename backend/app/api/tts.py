@@ -34,6 +34,7 @@ from app.adapters.tts.qwen3_tts import (
 )
 from app.api.deps import get_event_bus
 from app.config import Settings, get_settings
+from app.security.context import current_principal
 from app.use_cases.speak import SpeakUseCase, TtsKind
 
 logger = logging.getLogger("echodesk.tts")
@@ -179,6 +180,26 @@ class DiagResult(BaseModel):
     checked_at: float = Field(default_factory=time.time)
 
 
+_PUBLIC_DIAG_DETAIL: dict[str, str | None] = {
+    "ok": None,
+    "disabled": "语音播报已关闭",
+    "upstream_error": "语音合成服务暂时不可用",
+    "silent_output": "语音合成结果不可播放",
+    "empty": "语音合成服务未返回音频",
+}
+
+
+def _visible_diag(result: DiagResult, *, public: bool) -> DiagResult:
+    if not public:
+        return result
+    return result.model_copy(
+        update={
+            "base_url": None,
+            "detail": _PUBLIC_DIAG_DETAIL[result.state],
+        }
+    )
+
+
 async def _run_diag_uncached(tts: Qwen3TTS, settings: Settings) -> DiagResult:
     """跑一次实际合成 probe。结果总是返回 DiagResult，绝不抛——失败编码进 state。"""
     if not settings.tts_enabled:
@@ -244,20 +265,23 @@ async def tts_diag(
 ) -> DiagResult:
     """真实合成回环健康检查；30s cache 防止 UI 轮询打爆 heyi。
 
-    ``?fresh=true`` 强制刷新（前端"立即重试"按钮用）。
+    ``?fresh=true`` 仅允许本地/管理员强制刷新；公共身份始终复用共享缓存，
+    防止健康检查成为无配额的真实合成入口。
     """
     global _diag_cache  # noqa: PLW0603
+    public = current_principal().mode == "public"
+    effective_fresh = fresh and not public
     now = time.time()
-    if not fresh and _diag_cache is not None:
+    if not effective_fresh and _diag_cache is not None:
         cached_at, cached = _diag_cache
         if now - cached_at < _DIAG_CACHE_TTL_S:
-            return cached
+            return _visible_diag(cached, public=public)
     async with _diag_lock:
         # 双重检查（lock 内）：可能等锁期间别人已经刷过 cache
-        if not fresh and _diag_cache is not None:
+        if not effective_fresh and _diag_cache is not None:
             cached_at, cached = _diag_cache
-            if now - cached_at < _DIAG_CACHE_TTL_S:
-                return cached
+            if time.time() - cached_at < _DIAG_CACHE_TTL_S:
+                return _visible_diag(cached, public=public)
         result = await _run_diag_uncached(tts, settings)
         _diag_cache = (time.time(), result)
         logger.info(
@@ -267,7 +291,7 @@ async def tts_diag(
             result.rms,
             result.peak,
         )
-        return result
+        return _visible_diag(result, public=public)
 
 
 def _reset_diag_cache_for_tests() -> None:

@@ -23,15 +23,18 @@ from typing import Any
 import pytest
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.api.deps import (
+    get_artifact_repository,
     get_diarizer_singleton,
     get_repository,
     reset_deps_for_test,
 )
+from app.artifacts.repository import ArtifactRepository
 from app.config import Settings, get_settings
 from app.main import create_app
+from app.schemas.artifact import GeneratedArtifact
 from app.schemas.meeting import TranscriptSegment
 from fastapi.testclient import TestClient
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
 
 def _make_settings(tmp_path: Path) -> Settings:
@@ -155,9 +158,70 @@ def test_data_dir_when_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 # ───────────────────── 2. meeting export ─────────────────────
 
 
+def _assert_registered_meeting_export(
+    response: Response,
+    runs_response: Response,
+    *,
+    meeting_id: str,
+    outside_transcript: Path,
+) -> None:
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/zip"
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert f"meeting-{meeting_id[:8]}" in response.headers["content-disposition"]
+    export_run = next(item for item in runs_response.json() if item["kind"] == "meeting.export")
+    assert export_run["state"] == "succeeded"
+    assert export_run["output"]["size_bytes"] > 0
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        names = set(zf.namelist())
+        assert {"meeting.json", "transcript.md", "segments.json", "export-manifest.json"} <= names
+        assert "artifacts/artifact-registered-report.txt" in names
+        assert "transcript.raw.json" not in names
+        assert not any(name.endswith("secret.txt") for name in names)
+        assert zf.read("artifacts/artifact-registered-report.txt") == b"registered artifact"
+
+        meeting_payload = json.loads(zf.read("meeting.json").decode("utf-8"))
+        assert meeting_payload["id"] == meeting_id
+        assert meeting_payload["title"] == "Q3 销售复盘"
+        assert meeting_payload["state"] == "in_meeting"
+        assert meeting_payload["started_at"].startswith("2026-05-28T10:30:00")
+        assert meeting_payload["speaker_labels"] == {"spk-1": "Alice"}
+        assert meeting_payload["raw_transcript_available"] is True
+        assert "raw_transcript_ref" not in meeting_payload
+        assert str(outside_transcript) not in zf.read("meeting.json").decode("utf-8")
+
+        manifest = json.loads(zf.read("export-manifest.json").decode("utf-8"))
+        assert manifest["audio"]["included"] is False
+        assert manifest["artifacts"] == [
+            {
+                "artifact_id": "artifact-registered",
+                "artifact_type": "txt",
+                "title": "Registered report",
+                "size_bytes": len(b"registered artifact"),
+                "included": True,
+                "archive_name": "artifact-registered-report.txt",
+            }
+        ]
+
+        transcript = zf.read("transcript.md").decode("utf-8")
+        assert all(
+            expected in transcript
+            for expected in ("Q3 销售复盘", "说话人1", "说话人2", "大家好", "销售额超目标")
+        )
+        segments = json.loads(zf.read("segments.json").decode("utf-8"))
+        assert len(segments) == 2
+        assert segments[0]["text"] == "大家好,今天复盘 Q3"
+        assert segments[0]["speaker_id"] == "spk-1"
+
+
 @pytest.mark.unit
-async def test_export_meeting_returns_zip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """对预先 seed 的 meeting 拉 export → 200 + zip 内含 3 核心条目。"""
+async def test_export_meeting_returns_only_registered_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """导出包含权威会议数据与已关联产物，不扫描猜测路径或泄漏越界路径。"""
     monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
     reset_deps_for_test()
 
@@ -192,42 +256,53 @@ async def test_export_meeting_returns_zip(tmp_path: Path, monkeypatch: pytest.Mo
         await repo.upsert_meeting_speaker_label(meeting_id, "spk-1", "Alice")
 
         settings = _make_settings(tmp_path)
+        registered_file = settings.skill_executor_build_dir / "artifact-registered" / "report.txt"
+        registered_file.parent.mkdir(parents=True)
+        registered_file.write_text("registered artifact", encoding="utf-8")
+        guessed_file = settings.storage_dir / "meetings" / meeting_id / "artifacts" / "secret.txt"
+        guessed_file.parent.mkdir(parents=True)
+        guessed_file.write_text("must not be exported", encoding="utf-8")
+        outside_transcript = tmp_path / "outside-transcript.json"
+        outside_transcript.write_text('{"secret":"must not leak"}', encoding="utf-8")
+        await repo.update_meeting_state(
+            meeting_id,
+            state="in_meeting",
+            raw_transcript_ref=str(outside_transcript),
+        )
+
+        artifact_repo = ArtifactRepository(settings)
+        await artifact_repo.save_artifact(
+            GeneratedArtifact(
+                artifact_id="artifact-registered",
+                artifact_type="txt",
+                title="Registered report",
+                file_path=str(registered_file),
+                mime_type="text/plain",
+                size_bytes=registered_file.stat().st_size,
+                generation_latency_ms=1.0,
+                model="test",
+            )
+        )
+        await artifact_repo.link_artifact(
+            artifact_id="artifact-registered",
+            source="meeting-test",
+            meeting_id=meeting_id,
+        )
         app = create_app()
         app.dependency_overrides[get_settings] = lambda: settings
         app.dependency_overrides[get_repository] = lambda: repo
+        app.dependency_overrides[get_artifact_repository] = lambda: artifact_repo
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post(f"/admin/meetings/{meeting_id}/export")
+            runs_response = await ac.get(f"/workflows/runs?meeting_id={meeting_id}")
 
-        assert r.status_code == 200, r.text
-        assert r.headers["content-type"] == "application/zip"
-        cd = r.headers["content-disposition"]
-        assert f"meeting-{meeting_id[:8]}" in cd
-
-        zf = zipfile.ZipFile(io.BytesIO(r.content))
-        names = set(zf.namelist())
-        assert "meeting.json" in names
-        assert "transcript.md" in names
-        assert "segments.json" in names
-
-        mj = json.loads(zf.read("meeting.json").decode("utf-8"))
-        assert mj["id"] == meeting_id
-        assert mj["title"] == "Q3 销售复盘"
-        assert mj["state"] == "in_meeting"
-        assert mj["started_at"].startswith("2026-05-28T10:30:00")
-        assert mj["speaker_labels"] == {"spk-1": "Alice"}
-
-        md = zf.read("transcript.md").decode("utf-8")
-        assert "Q3 销售复盘" in md  # title heading
-        assert "说话人1" in md
-        assert "说话人2" in md
-        assert "大家好" in md
-        assert "销售额超目标" in md
-
-        segs = json.loads(zf.read("segments.json").decode("utf-8"))
-        assert len(segs) == 2
-        assert segs[0]["text"] == "大家好,今天复盘 Q3"
-        assert segs[0]["speaker_id"] == "spk-1"
+        _assert_registered_meeting_export(
+            r,
+            runs_response,
+            meeting_id=meeting_id,
+            outside_transcript=outside_transcript,
+        )
     finally:
         await repo.aclose()
 

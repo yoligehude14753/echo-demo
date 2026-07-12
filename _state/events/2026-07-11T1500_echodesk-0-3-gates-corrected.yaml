@@ -1,0 +1,45 @@
+event_id: "E-20260711T1500-001"
+event_type: "supersede"
+timestamp: "2026-07-11T15:00:00+08:00"
+author: "agent/codex-echodesk-0-3-repair"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-016"
+      claim: "EchoDesk 0.3 now passes deterministic backend and desktop gates with principal isolation and dispatcher recovery, while its live installed workflow gate is blocked by a main-provider timeout."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-11T15:00:00+08:00"
+      observed_by: "agent/codex-echodesk-0-3-repair"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "backend/app/workflows/kernel.py"
+        - "backend/app/workflows/service.py"
+        - "backend/app/main.py"
+        - "backend/tests/unit/test_public_principal_http.py"
+        - "backend/tests/unit/test_workflow_kernel.py"
+        - "desktop/tests/e2e-real/packaged-local-smoke.spec.ts"
+        - "desktop/tests/e2e-real/installed-local-workflow.spec.ts"
+        - "runtime:pytest backend/tests -m not-live => 588 passed, 0 skipped"
+        - "runtime:desktop mock E2E => 57 passed; scenarios => 29 passed"
+      evidence: "Deterministic backend finished with 588 passed, zero skips and 16 live tests deselected; desktop mock E2E and scenarios passed 57/57 and 29/29; the packaged local app smoke passed, but the installed end-to-end retry failed after deepseek-v4-flash timed out at 180 seconds."
+      supersedes:
+        - "F-ECHO-007"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.0"
+        - "workflow"
+        - "principal-isolation"
+        - "gates"
+        - "live-blocker"
+  - action: "supersede"
+    old_fact: "F-ECHO-007"
+    new_fact: "F-ECHO-016"
+    reason: "The prior fact overclaimed a fully passing installed workflow; the current real packaged run reaches retry recovery but fails visibly when the configured main provider times out."
+git_commit: null

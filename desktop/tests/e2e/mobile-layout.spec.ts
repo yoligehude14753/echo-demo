@@ -8,8 +8,16 @@ test("移动视口：主工作区不被 AntD Sider 布局压成 0 宽", async ({
   await page.goto("/");
 
   await expect(page.getByText("转写流")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText("会议纪要", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("inspector-tab-minutes")).toBeVisible();
   await expect(page.getByTestId("command-bar")).toBeVisible();
+
+  // 会话历史收进移动抽屉，不因隐藏桌面左栏而丢失入口。
+  await page.getByTestId("mobile-session-toggle").click();
+  const sessionDrawer = page.locator(".mobile-session-drawer .ant-drawer-content");
+  await expect(sessionDrawer).toBeVisible();
+  await expect(sessionDrawer.getByTestId("meeting-item-ambient")).toBeVisible();
+  await sessionDrawer.getByTestId("meeting-item-ambient").click();
+  await expect(sessionDrawer).toBeHidden();
 
   const boxes = await page.evaluate(() => {
     const pick = (selector: string) => {

@@ -38,11 +38,12 @@ export interface CaptureRouterHandlers {
   /** M_diag_brake：熔断退出（探测 chunk 拿到非 circuit_open 响应）。 */
   onSttCircuitClosed?: () => void;
   /** M_diag_brake：因为熔断或暂停态直接丢弃 chunk，让 UI 计数。 */
-  onChunkDropped?: (reason: "circuit_open") => void;
+  onChunkDropped?: (reason: "circuit_open" | "backpressure") => void;
 }
 
 const FAIL_STREAK_THRESHOLD = 2; // 连续 2 次才报错，避免一次抖动也弹 toast
 const CIRCUIT_STREAK_THRESHOLD = 3; // 连续 3 次 circuit_open 才认为 STT 真的不可用
+const MAX_PENDING_CHUNKS = 4;
 
 /**
  * 指数退避梯子（毫秒）。每次拿到稳定 circuit_open 升一级，最长 30s。
@@ -72,8 +73,12 @@ export function attachCaptureChunkRouter(
   let requestSeq = 0;
   let lastHealthySeq = 0;
   const ladder = backoffLadder();
+  const pending: Blob[] = [];
+  let draining = false;
+  let disposed = false;
+  let activeAbort: AbortController | null = null;
 
-  return audioCapture.onChunk(async (wav) => {
+  const processChunk = async (wav: Blob): Promise<void> => {
     const now = Date.now();
     // ─ 熔断态：直接丢弃 chunk（不上传也不缓冲）─
     // 注意：录音继续，只是不发后端；audioCapture 的 wav buffer 会被 GC
@@ -96,8 +101,13 @@ export function attachCaptureChunkRouter(
       : undefined;
 
     const seq = ++requestSeq;
+    const controller = new AbortController();
+    activeAbort = controller;
     try {
-      const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId);
+      const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId, {
+        signal: controller.signal,
+      });
+      if (disposed || controller.signal.aborted) return;
 
       // M_diag_brake：熔断检测优先于成功路径
       if (result.stt_status === "circuit_open") {
@@ -162,11 +172,48 @@ export function attachCaptureChunkRouter(
       }
       if (result.meeting_segments.length > 0) handlers?.onMeetingUploaded?.();
     } catch (e) {
+      if (disposed || controller.signal.aborted) return;
       failStreak += 1;
       if (failStreak >= FAIL_STREAK_THRESHOLD && !lostNotified) {
         lostNotified = true;
         handlers?.onConnectionLost?.(e);
       }
+    } finally {
+      if (activeAbort === controller) activeAbort = null;
     }
+  };
+
+  const drain = (): void => {
+    if (draining || disposed) return;
+    draining = true;
+    void (async () => {
+      try {
+        while (!disposed && pending.length > 0) {
+          const next = pending.shift();
+          if (next) await processChunk(next);
+        }
+      } finally {
+        draining = false;
+        if (!disposed && pending.length > 0) drain();
+      }
+    })();
+  };
+
+  const offChunk = audioCapture.onChunk((wav) => {
+    if (disposed) return;
+    if (pending.length >= MAX_PENDING_CHUNKS) {
+      handlers?.onChunkDropped?.("backpressure");
+      return;
+    }
+    pending.push(wav);
+    drain();
   });
+
+  return () => {
+    disposed = true;
+    pending.length = 0;
+    activeAbort?.abort();
+    activeAbort = null;
+    offChunk();
+  };
 }

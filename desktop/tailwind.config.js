@@ -5,13 +5,11 @@ export default {
     extend: {
       fontFamily: {
         sans: [
-          "Inter",
           "-apple-system",
           "BlinkMacSystemFont",
+          "Segoe UI",
           "PingFang SC",
           "Microsoft YaHei",
-          "Helvetica Neue",
-          "Arial",
           "sans-serif",
         ],
         mono: [

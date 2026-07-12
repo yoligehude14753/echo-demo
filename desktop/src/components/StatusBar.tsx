@@ -7,11 +7,11 @@
  *   - 点开 popover：详细诊断信息（version / latency / 错误）
  *   - 服务端 pill degraded 时多一个"重启服务"按钮
  *
- * 数据源：useBackendHealth hook（合并 supervisor IPC + /healthz/full + mic perm）
+ * 数据源：useBackendHealth hook（合并 supervisor IPC + 分级 health + mic perm）
  */
 
 import { Tooltip, Popover, Button } from "antd";
-import { RefreshCw, Mic, Server, Sparkles } from "lucide-react";
+import { AlertTriangle, RefreshCw, Mic, Server, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { TtsDiagResult } from "@/api";
 import {
@@ -118,6 +118,7 @@ function levelFromMic(p: MicPermission): Level {
 
 interface PillProps {
   label: string;
+  shortLabel?: string;
   level: Level;
   icon: JSX.Element;
   tooltip?: string;
@@ -125,19 +126,23 @@ interface PillProps {
   testId: string;
 }
 
-function Pill({ label, level, icon, tooltip, popover, testId }: PillProps): JSX.Element {
+function Pill({ label, shortLabel, level, icon, tooltip, popover, testId }: PillProps): JSX.Element {
   const c = COLORS[level];
   const button = (
     <button
       type="button"
       data-testid={testId}
+      aria-label={label}
       className={`app-no-drag flex h-8 items-center gap-1 rounded-md px-2 transition hover:bg-paper-200 ${c.text}`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${c.dot} ${level === "ok" ? c.ring : ""}`} />
-      <span className="text-[11px] flex items-center gap-0.5">
+      <span className="status-pill-icon flex items-center">
         {icon}
-        {label}
       </span>
+      <span className="status-pill-label" aria-hidden="true">
+        {shortLabel ?? label}
+      </span>
+      <span className="sr-only">{label}</span>
     </button>
   );
   const trigger = (
@@ -152,7 +157,24 @@ function Pill({ label, level, icon, tooltip, popover, testId }: PillProps): JSX.
 
 function fmtLatency(p?: ProbeResultDTO): string {
   if (!p || p.latency_ms === undefined) return "—";
-  return `${p.latency_ms}ms`;
+  return `${p.latency_ms} 毫秒`;
+}
+
+function probeFailureLabel(p: ProbeResultDTO): string {
+  const detail = `${p.error ?? ""} ${p.reason ?? ""}`.toLocaleLowerCase();
+  if (detail.includes("no_api_key") || detail.includes("api key")) {
+    return "未配置";
+  }
+  if (detail.includes("timeout") || detail.includes("timed out")) {
+    return "连接超时";
+  }
+  if (detail.includes("refused") || detail.includes("connect")) {
+    return "无法连接";
+  }
+  if (detail.includes("rate") || detail.includes("429")) {
+    return "请求过于频繁";
+  }
+  return p.ok === null ? "等待检查" : "暂不可用";
 }
 
 // fmtCheckedAgo 之前用在 HeyiPopover 末行；M_tts_check 把 footer 改成静态
@@ -177,10 +199,10 @@ function ProbeRow({
     probe.ok === true ? "text-accent" : probe.ok === false ? "text-err" : "text-amber-500";
   const status =
     probe.ok === true
-      ? `ok · ${fmtLatency(probe)}`
+      ? `正常 · ${fmtLatency(probe)}`
       : probe.ok === false
-        ? `fail · ${probe.error ?? "unknown"}`
-        : (probe.reason ?? "n/a");
+        ? probeFailureLabel(probe)
+        : probeFailureLabel(probe);
   return (
     <div className="flex items-center justify-between text-[11px]">
       <span className="text-ink-700">{name}</span>
@@ -213,7 +235,7 @@ function BackendPopover({
 }: {
   health: BackendHealth;
 }): JSX.Element {
-  const { supervisor, healthz, healthzOk, manualRestart } = health;
+  const { supervisor, healthz, healthzOk, manualRestart, manualRestartBusy } = health;
   const backendVersionBehind =
     healthz?.backend?.version &&
     compareVersions(healthz.backend.version, __APP_VERSION__) < 0;
@@ -221,6 +243,17 @@ function BackendPopover({
     supervisor.state === "degraded" ||
     supervisor.state === "python-not-found" ||
     supervisor.state === "backend-source-not-found";
+  const supervisorLabel: Record<SupervisorStatus["state"], string> = {
+    ready: "正常运行",
+    external: "已连接",
+    starting: "正在启动",
+    restarting: "正在重启",
+    degraded: "部分可用",
+    "python-not-found": "运行环境缺失",
+    "backend-source-not-found": "服务文件缺失",
+    "shutting-down": "正在退出",
+    unknown: "正在检查",
+  };
 
   return (
     <div className="min-w-[260px] text-[12px] py-1">
@@ -230,55 +263,52 @@ function BackendPopover({
       </div>
       <div className="flex items-center justify-between mb-1">
         <span className="text-ink-500">状态</span>
-        <span className="font-mono">{supervisor.state}</span>
+        <span>{supervisorLabel[supervisor.state]}</span>
       </div>
-      {healthz?.backend && (
-        <>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-ink-500">版本</span>
-            <span className="font-mono">{healthz.backend.version}</span>
-          </div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-ink-500">端口</span>
-            <span className="font-mono">{healthz.backend.port}</span>
-          </div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-ink-500">运行时间</span>
-            <span className="font-mono">{Math.floor(healthz.backend.uptime_s)}s</span>
-          </div>
-          {backendVersionBehind && (
-            <div
-              className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-relaxed text-amber-700"
-              data-testid="backend-version-warning"
-            >
-              服务端还是 v{healthz.backend.version}，当前客户端是 v
-              {__APP_VERSION__}。请同步更新服务端，否则 STT/TTS/扫码保存等修复可能不一致。
-            </div>
-          )}
-        </>
+      {healthz?.backend?.version && (
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-ink-500">版本</span>
+          <span className="font-mono">{healthz.backend.version}</span>
+        </div>
+      )}
+      {typeof healthz?.backend?.port === "number" && (
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-ink-500">端口</span>
+          <span className="font-mono">{healthz.backend.port}</span>
+        </div>
+      )}
+      {typeof healthz?.backend?.uptime_s === "number" && (
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-ink-500">运行时间</span>
+          <span>{Math.max(1, Math.floor(healthz.backend.uptime_s / 60))} 分钟</span>
+        </div>
+      )}
+      {backendVersionBehind && (
+        <div
+          className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-relaxed text-amber-700"
+          data-testid="backend-version-warning"
+        >
+          服务端还是 v{healthz?.backend.version}，当前客户端是 v
+          {__APP_VERSION__}。请同步更新服务端，否则语音识别、语音播报和扫码保存可能不完整。
+        </div>
       )}
       {healthz?.db && (
         <div className="flex items-center justify-between mb-1">
           <span className="text-ink-500">数据库</span>
           <span className={healthz.db.ok ? "text-accent" : "text-err"}>
-            {healthz.db.ok ? `${healthz.db.size_mb ?? "?"}MB` : (healthz.db.error ?? "fail")}
+            {healthz.db.ok ? `${healthz.db.size_mb ?? "?"} MB` : "暂不可用"}
           </span>
         </div>
       )}
       {!healthzOk && (
-        <div className="text-err text-[11px] mt-1">
-          ⚠ /healthz/full 暂时不通（最近 2 次失败）
+        <div className="mt-1 flex items-start gap-1.5 text-[11px] text-err">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+          <span>服务诊断暂时不可用（最近 2 次检查失败）</span>
         </div>
       )}
-      {supervisor.reason && (
-        <div className="text-ink-500 text-[11px] mt-1">原因：{supervisor.reason}</div>
-      )}
-      {supervisor.searched && supervisor.searched.length > 0 && (
-        <div className="text-ink-500 text-[10px] mt-1 font-mono">
-          已搜索：
-          <div className="ml-2 mt-0.5 text-ink-400 truncate">
-            {supervisor.searched.join("\n")}
-          </div>
+      {supervisor.reason && isFailState && (
+        <div className="text-ink-500 text-[11px] mt-1">
+          后台服务未能正常启动，可尝试下方的重启操作。
         </div>
       )}
       {isFailState && (
@@ -288,9 +318,11 @@ function BackendPopover({
           icon={<RefreshCw className="w-3 h-3" />}
           className="!mt-2 !text-[11px]"
           onClick={() => void manualRestart()}
+          loading={manualRestartBusy}
+          disabled={manualRestartBusy}
           data-testid="backend-manual-restart"
         >
-          重启服务
+          {manualRestartBusy ? "正在重启" : "重启服务"}
         </Button>
       )}
     </div>
@@ -330,14 +362,16 @@ function AiEnginePopover({
   const synthOk = ttsHealth?.ok === true;
   const synthText =
     ttsEnabled === false
-      ? "已在设置中关闭"
+      ? "已关闭"
       : ttsLastError
-        ? `失败 · ${ttsLastError}`
+        ? "最近一次播报失败"
         : !ttsHealth
-          ? "—"
+          ? "正在检查"
           : synthOk
-            ? `ok · 合成 ${ttsHealth.latency_ms ?? "?"}ms · rms=${ttsHealth.rms ?? "?"}`
-            : `${synthState} · ${ttsHealth.detail ?? "—"}`;
+            ? `正常 · ${ttsHealth.latency_ms ?? "?"} 毫秒`
+            : synthState === "silent_output"
+              ? "未检测到可播放的声音"
+              : "暂不可用";
   const synthColor =
     ttsEnabled === false
       ? "text-ink-500"
@@ -353,14 +387,14 @@ function AiEnginePopover({
         <Sparkles className="w-3.5 h-3.5" />
         AI 引擎
       </div>
-      <ProbeMetaRow name="LLM 主模型" probe={mainModel} fallback="deepseek-v4-flash" />
-      <ProbeRow name="LLM 连通性" probe={mainModel} />
+      <ProbeMetaRow name="主模型" probe={mainModel} fallback="deepseek-v4-flash" />
+      <ProbeRow name="模型连接" probe={mainModel} />
       <ProbeRow name="联网检索" probe={webSearch} />
       <div className="my-2 h-px bg-paper-300" />
       <ProbeRow name="语音识别" probe={stt} />
       <ProbeRow name="语音合成连接" probe={tts} />
       <div className="flex items-start justify-between text-[11px] mt-0.5">
-        <span className="text-ink-700 shrink-0 mr-2">TTS 合成回环</span>
+        <span className="text-ink-700 shrink-0 mr-2">语音播报</span>
         <span
           className={`${synthColor} text-right break-words`}
           data-testid="tts-synth-status"
@@ -371,7 +405,7 @@ function AiEnginePopover({
       </div>
       <div className="flex items-center justify-between mt-2">
         <span className="text-ink-400 text-[10px]">
-          TCP 探针 30s · 合成回环 30s
+          服务状态每 30 秒更新
         </span>
         {onRefreshTtsHealth && (
           <Button
@@ -388,15 +422,19 @@ function AiEnginePopover({
         )}
       </div>
       {ttsLastError && (
-        <div className="text-err text-[10px] mt-1.5 break-words">
-          ⚠ 最近一次 /tts/speak：{ttsLastError}
+        <div className="mt-1.5 flex items-start gap-1.5 break-words text-[10px] text-err">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+          <span>最近一次语音播报失败，可重新测试或在设置中暂时关闭播报。</span>
         </div>
       )}
       {(mainModel?.reason === "no_api_key" || webSearch?.reason === "no_api_key") && (
-        <div className="text-amber-600 text-[10px] mt-2">
-          ⚠ 部分密钥未配置，相关功能（@生成/纪要/@查）将不可用。
-          <br />
-          编辑 ~/.echodesk/config.json 填入即可（重启 app 生效）。
+        <div className="mt-2 flex items-start gap-1.5 text-[10px] text-amber-600">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+          <span>
+            部分服务凭证未配置，文档生成、纪要或资料检索可能不可用。
+            <br />
+            请在设置中补充配置并重新启动 EchoDesk。
+          </span>
         </div>
       )}
     </div>
@@ -404,6 +442,12 @@ function AiEnginePopover({
 }
 
 function MicPopover({ perm }: { perm: MicPermission }): JSX.Element {
+  const permissionLabel: Record<MicPermission, string> = {
+    granted: "已允许",
+    denied: "已拒绝",
+    prompt: "待确认",
+    unknown: "正在检查",
+  };
   return (
     <div className="min-w-[260px] text-[12px] py-1">
       <div className="font-semibold mb-1.5 flex items-center gap-1.5">
@@ -421,7 +465,7 @@ function MicPopover({ perm }: { perm: MicPermission }): JSX.Element {
                 : "text-amber-500"
           }
         >
-          {perm}
+          {permissionLabel[perm]}
         </span>
       </div>
       {perm === "denied" && (
@@ -505,6 +549,7 @@ export default function StatusBar({
     <div className="flex items-center gap-2" data-testid="status-bar">
       <Pill
         label="服务端"
+        shortLabel="服务"
         level={backendLevel}
         icon={<Server className="w-3 h-3" />}
         tooltip={`服务端：${supervisorPretty[supervisor.state]}`}
@@ -512,7 +557,8 @@ export default function StatusBar({
         testId="pill-backend"
       />
       <Pill
-        label="AI 引擎 · LLM"
+        label="AI 引擎"
+        shortLabel="AI"
         level={aiEngineLevel}
         icon={<Sparkles className="w-3 h-3" />}
         tooltip="LLM / 知识库生成 / 联网检索"

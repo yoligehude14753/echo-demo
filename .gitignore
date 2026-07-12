@@ -24,10 +24,12 @@ wheels/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
 coverage.xml
 *.cover
 .hypothesis/
+/backend/pytest*.xml
 
 # Node / Electron
 node_modules/
@@ -46,6 +48,10 @@ yarn-error.log*
 .yoli.env*
 *.pem
 *.key
+*.jks
+*.keystore
+*.p12
+*.pfx
 
 # Editors
 .idea/

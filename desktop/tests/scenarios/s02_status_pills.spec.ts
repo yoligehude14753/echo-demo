@@ -75,9 +75,9 @@ test("S02 · 顶栏 3 个 pill 巡检（P2.1 全绿态）", async ({ page }) => 
     });
   });
 
-  await test.step("AI 引擎 pill popover：LLM 主模型 + 联网检索", async () => {
+  await test.step("AI 引擎 pill popover：主模型 + 联网检索", async () => {
     await probePill(page, "pill-ai-engine", async (po) => {
-      await expect(po.getByText("LLM 主模型")).toBeVisible({ timeout: 3_000 });
+      await expect(po.getByText("主模型")).toBeVisible({ timeout: 3_000 });
       await expect(po.getByText("deepseek-v4-flash")).toBeVisible();
       const hiddenProviderName = ["yu", "nwu"].join("");
       await expect(po).not.toContainText(hiddenProviderName);
@@ -85,10 +85,10 @@ test("S02 · 顶栏 3 个 pill 巡检（P2.1 全绿态）", async ({ page }) => 
     });
   });
 
-  await test.step("mic pill popover：granted 绿色", async () => {
+  await test.step("mic pill popover：已允许", async () => {
     await probePill(page, "pill-mic", async (po) => {
       await expect(po.getByText("权限状态")).toBeVisible({ timeout: 3_000 });
-      await expect(po.getByText("granted")).toBeVisible();
+      await expect(po.getByText("已允许")).toBeVisible();
     });
   });
 });

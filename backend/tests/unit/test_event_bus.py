@@ -37,6 +37,56 @@ async def test_publish_fanout_to_multiple_subscribers() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_same_scope_subscriber_joins_while_first_admission_grant_is_in_flight() -> None:
+    class _PausedFirstGrantBus(InMemoryEventBus):
+        def __init__(self) -> None:
+            super().__init__()
+            self.first_grant_ready = asyncio.Event()
+            self.release_first_grant = asyncio.Event()
+            self._pause_first_grant = True
+
+        async def _await_scope_admission(
+            self,
+            scope: tuple[str, str],
+        ) -> asyncio.Future[None] | None:
+            admission = await super()._await_scope_admission(scope)
+            if admission is not None and self._pause_first_grant:
+                self._pause_first_grant = False
+                self.first_grant_ready.set()
+                await self.release_first_grant.wait()
+            return admission
+
+    bus = _PausedFirstGrantBus()
+    first = bus.subscribe()
+    second = bus.subscribe()
+    first_receive = asyncio.create_task(first.__anext__())
+    second_receive: asyncio.Task[EchoEvent] | None = None
+    try:
+        await asyncio.wait_for(bus.first_grant_ready.wait(), timeout=1.0)
+        second_receive = asyncio.create_task(second.__anext__())
+        await bus.publish(EchoEvent(type="meeting.started", meeting_id="m1"))
+        second_event = await asyncio.wait_for(second_receive, timeout=1.0)
+        assert second_event.type == "meeting.started"
+
+        bus.release_first_grant.set()
+        first_event = await asyncio.wait_for(first_receive, timeout=1.0)
+        assert first_event.type == "meeting.started"
+    finally:
+        bus.release_first_grant.set()
+        for task in (first_receive, second_receive):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            first_receive,
+            *(task for task in (second_receive,) if task is not None),
+            return_exceptions=True,
+        )
+        await first.aclose()
+        await second.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_subscription_count_tracks_active() -> None:
     bus = InMemoryEventBus()
     assert bus.subscriber_count() == 0

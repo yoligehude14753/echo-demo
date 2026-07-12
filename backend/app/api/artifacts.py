@@ -9,10 +9,13 @@ GET  /artifacts/{id}/download — 下载产物文件，filename 形如
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,17 +24,32 @@ from fastapi.responses import FileResponse
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import LLMError
 from app.adapters.skill import SkillError, SkillExecutor
-from app.api.deps import get_artifact_repository, get_event_bus, get_workflow_service
+from app.api.deps import (
+    get_artifact_repository,
+    get_event_bus,
+    get_workflow_dispatcher,
+    require_admin_access,
+)
 from app.api.deps import get_llm_singleton as get_llm
 from app.artifacts.repository import ArtifactRepository
+from app.artifacts.staging import (
+    load_workflow_artifact,
+    workflow_artifact_id,
+    workflow_build_lease_marker,
+    write_workflow_artifact_manifest,
+)
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
 from app.ports.skill import SkillExecutorPort
 from app.schemas.artifact import ArtifactRequest, GeneratedArtifact
 from app.schemas.events import EchoEvent
 from app.schemas.workflow import WorkflowRunCreate
+from app.security.context import current_principal
+from app.security.errors import InternalHTTPException
+from app.security.headers import PRIVATE_NO_STORE_HEADERS
+from app.security.scope import scoped_directory
 from app.use_cases.generate_artifact import generate_artifact
-from app.workflows.service import WorkflowService
+from app.workflows.kernel import WorkflowContext, WorkflowDispatcher, WorkflowExecutionError
 
 _log = logging.getLogger("echodesk.artifacts")
 
@@ -53,13 +71,234 @@ def reset_skill_singleton() -> None:
     _skill_singleton = None
 
 
-@router.post("/artifacts/generate", response_model=GeneratedArtifact)
+def bind_artifact_workflow_handler(
+    dispatcher: WorkflowDispatcher,
+    *,
+    settings: Settings,
+    llm: LLMPort,
+    runner: SkillExecutorPort,
+    event_bus: InMemoryEventBus,
+    artifact_repo: ArtifactRepository,
+) -> None:
+    principal = current_principal()
+    scope = (principal.tenant_id, principal.owner_id)
+
+    async def handler(context: WorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
+        meeting_id = str(payload["meeting_id"]) if payload.get("meeting_id") else None
+        todo_id = str(payload["todo_id"]) if payload.get("todo_id") else None
+        artifact_type = str(payload["artifact_type"])
+        await event_bus.publish(
+            EchoEvent(
+                type="artifact.generating",
+                meeting_id=meeting_id,
+                payload={
+                    "artifact_type": artifact_type,
+                    "brief": str(payload["brief"])[:200],
+                    "run_id": context.run_id,
+                    "todo_id": todo_id,
+                },
+            )
+        )
+        await dispatcher.service.record_event(
+            context.run_id,
+            "artifact.generating",
+            message="正在生成产物",
+            payload={"artifact_type": artifact_type},
+        )
+        try:
+            artifact = load_workflow_artifact(
+                settings,
+                run_id=context.run_id,
+                artifact_type=artifact_type,
+            )
+            if artifact is None:
+                with workflow_build_lease_marker(
+                    settings,
+                    run_id=context.run_id,
+                    artifact_type=artifact_type,
+                    fence_token=context.fence_token,
+                ):
+                    artifact = await generate_artifact(
+                        runner=runner,
+                        llm=llm,
+                        artifact_type=artifact_type,
+                        brief=str(payload["brief"]),
+                        extra_instructions=(
+                            str(payload["extra_instructions"])
+                            if payload.get("extra_instructions")
+                            else None
+                        ),
+                        artifact_id=workflow_artifact_id(context.run_id, artifact_type),
+                    )
+            artifact = write_workflow_artifact_manifest(
+                settings,
+                run_id=context.run_id,
+                artifact_type=artifact_type,
+                artifact=artifact,
+            )
+        except (SkillError, LLMError) as exc:
+            error = (
+                f"远程 LLM 不可达：{str(exc)[:200]}"
+                if isinstance(exc, LLMError)
+                else str(exc)[:500]
+            )
+            failed_events = [
+                EchoEvent(
+                    type="artifact.failed",
+                    meeting_id=meeting_id,
+                    payload={
+                        "artifact_type": artifact_type,
+                        "error": error,
+                        "reason": "remote_llm" if isinstance(exc, LLMError) else "skill",
+                        "run_id": context.run_id,
+                        "todo_id": todo_id,
+                    },
+                )
+            ]
+            if meeting_id and todo_id:
+                failed_events.append(
+                    EchoEvent(
+                        type="meeting.todo.updated",
+                        meeting_id=meeting_id,
+                        payload={
+                            "todo_id": todo_id,
+                            "state": "failed",
+                            "run_id": context.run_id,
+                            "error": error,
+                        },
+                    )
+                )
+            await dispatcher.service.fail_run_atomic(
+                context.run_id,
+                error=error,
+                domain_events=failed_events,
+                payload={"reason": "remote_llm"} if isinstance(exc, LLMError) else None,
+            )
+            raise RuntimeError(error) from exc
+
+        links: list[dict[str, str | None]] = []
+        domain_events: list[EchoEvent] = []
+
+        async def write_domain(conn: aiosqlite.Connection) -> None:
+            await artifact_repo.save_artifact_tx(conn, artifact, run_id=context.run_id)
+            if meeting_id or todo_id:
+                link = await artifact_repo.link_artifact_tx(
+                    conn,
+                    artifact_id=artifact.artifact_id,
+                    source="todo" if todo_id else "meeting",
+                    meeting_id=meeting_id,
+                    todo_id=todo_id,
+                    run_id=context.run_id,
+                )
+                links.append(
+                    {
+                        "link_id": link.link_id,
+                        "source": link.source,
+                        "meeting_id": link.meeting_id,
+                        "todo_id": link.todo_id,
+                        "run_id": link.run_id,
+                    }
+                )
+            if meeting_id and todo_id:
+                principal_now = current_principal()
+                cur = await conn.execute(
+                    """SELECT minutes_json FROM meetings
+                       WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
+                    (meeting_id, principal_now.tenant_id, principal_now.owner_id),
+                )
+                row = await cur.fetchone()
+                await cur.close()
+                if row and row["minutes_json"]:
+                    minutes = json.loads(str(row["minutes_json"]))
+                    now = datetime.now(UTC).isoformat()
+                    for todo in minutes.get("todos") or []:
+                        if isinstance(todo, dict) and todo.get("id") == todo_id:
+                            todo.update(
+                                status="done", done_at=now, artifact_id=artifact.artifact_id
+                            )
+                            await conn.execute(
+                                """UPDATE meetings SET minutes_json = ?
+                                   WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
+                                (
+                                    json.dumps(minutes, ensure_ascii=False),
+                                    meeting_id,
+                                    principal_now.tenant_id,
+                                    principal_now.owner_id,
+                                ),
+                            )
+                            domain_events.extend(
+                                [
+                                    EchoEvent(
+                                        type="meeting.todo.updated",
+                                        meeting_id=meeting_id,
+                                        payload={
+                                            "todo_id": todo_id,
+                                            "state": "succeeded",
+                                            "run_id": context.run_id,
+                                            "artifact_id": artifact.artifact_id,
+                                        },
+                                    ),
+                                    EchoEvent(
+                                        type="meeting.todo.completed",
+                                        meeting_id=meeting_id,
+                                        payload={
+                                            "todo_id": todo_id,
+                                            "artifact_id": artifact.artifact_id,
+                                            "done_at": now,
+                                        },
+                                    ),
+                                ]
+                            )
+                            break
+            domain_events.append(
+                EchoEvent(
+                    type="artifact.ready",
+                    meeting_id=meeting_id,
+                    payload={
+                        **artifact.model_dump(mode="json"),
+                        "meeting_id": meeting_id,
+                        "todo_id": todo_id,
+                        "run_id": context.run_id,
+                        "links": links,
+                    },
+                )
+            )
+
+        output = {
+            "artifact": artifact.model_dump(mode="json"),
+            "artifact_id": artifact.artifact_id,
+            "links": links,
+        }
+        committed = await dispatcher.service.complete_run_atomic(
+            context.run_id,
+            output=output,
+            domain_writer=write_domain,
+            domain_events=domain_events,
+            message="产物已生成",
+        )
+        if committed is None:
+            raise RuntimeError("artifact workflow disappeared")
+        return output
+
+    dispatcher.registry.register(
+        "artifact.generate",
+        handler,
+        scope=scope,
+        replace=True,
+    )
+
+
+@router.post(
+    "/artifacts/generate",
+    response_model=GeneratedArtifact,
+    dependencies=[Depends(require_admin_access)],
+)
 async def generate(
     body: ArtifactRequest,
     llm: LLMPort = Depends(get_llm),
     runner: SkillExecutorPort = Depends(get_skill),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
-    workflow_service: WorkflowService = Depends(get_workflow_service),
+    dispatcher: WorkflowDispatcher = Depends(get_workflow_dispatcher),
     artifact_repo: ArtifactRepository = Depends(get_artifact_repository),
 ) -> GeneratedArtifact:
     """生成产物。artifact_type 走 ArtifactKind 枚举校验（含 ppt/pptx/word/xlsx/excel/html 别名）。
@@ -71,220 +310,41 @@ async def generate(
     """
     if not body.brief.strip():
         raise HTTPException(status_code=400, detail="brief empty")
-    run = await workflow_service.create_run(
-        WorkflowRunCreate(
-            kind="artifact.generate",
-            source="retry" if body.retry_of_run_id else ("todo" if body.todo_id else "artifact_api"),
-            title=body.title,
-            intent_text=body.brief,
-            meeting_id=body.meeting_id,
-            todo_id=body.todo_id,
-            input={
-                "artifact_type": body.artifact_type,
-                "extra_instructions": body.extra_instructions,
-                "context_refs": body.context_refs,
-                "quality_first": body.quality_first,
-                "retry_of": body.retry_of_run_id,
-            },
-        )
+    bind_artifact_workflow_handler(
+        dispatcher,
+        settings=artifact_repo.settings,
+        llm=llm,
+        runner=runner,
+        event_bus=event_bus,
+        artifact_repo=artifact_repo,
     )
-    await workflow_service.start_run(run.run_id)
-    if body.meeting_id and body.todo_id:
-        await event_bus.publish(
-            EchoEvent(
-                type="meeting.todo.updated",
-                meeting_id=body.meeting_id,
-                payload={"todo_id": body.todo_id, "state": "running", "run_id": run.run_id},
-            )
-        )
-    await event_bus.publish(
-        EchoEvent(
-            type="artifact.generating",
-            meeting_id=body.meeting_id,
-            payload={
-                "artifact_type": body.artifact_type,
-                "brief": body.brief[:200],
-                "run_id": run.run_id,
-                "todo_id": body.todo_id,
-            },
-        )
-    )
-    await workflow_service.record_event(
-        run.run_id,
-        "artifact.generating",
-        message="正在生成产物",
-        payload={"artifact_type": body.artifact_type},
-    )
+    input_payload = body.model_dump(mode="json")
+    digest = hashlib.sha256(
+        json.dumps(input_payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
     try:
-        artifact = await generate_artifact(
-            runner=runner,
-            llm=llm,
-            artifact_type=body.artifact_type,
-            brief=body.brief,
-            extra_instructions=body.extra_instructions,
-        )
-    except SkillError as e:
-        await workflow_service.fail_run(run.run_id, error=str(e)[:500])
-        await event_bus.publish(
-            EchoEvent(
-                type="artifact.failed",
+        done = await dispatcher.execute(
+            WorkflowRunCreate(
+                kind="artifact.generate",
+                source="retry"
+                if body.retry_of_run_id
+                else ("todo" if body.todo_id else "artifact_api"),
+                title=body.title,
+                intent_text=body.brief,
                 meeting_id=body.meeting_id,
-                payload={
-                    "artifact_type": body.artifact_type,
-                    "error": str(e)[:300],
-                    "run_id": run.run_id,
-                    "todo_id": body.todo_id,
-                },
+                todo_id=body.todo_id,
+                input=input_payload,
+                timeout_s=600,
+                active_key=f"artifact.generate:{digest}",
             )
         )
-        if body.meeting_id and body.todo_id:
-            await event_bus.publish(
-                EchoEvent(
-                    type="meeting.todo.updated",
-                    meeting_id=body.meeting_id,
-                    payload={
-                        "todo_id": body.todo_id,
-                        "state": "failed",
-                        "run_id": run.run_id,
-                        "error": str(e)[:300],
-                    },
-                )
-            )
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except LLMError as e:
-        # P2.3：LLM 远程不可达（Yunwu/eight 断）也算 graceful failure，
-        # 否则前端只能看到 500 静默挂。带 reason="remote_llm" 让前端区分这
-        # 类失败（可引导查 StatusBar 云 pill）。
-        error = f"远程 LLM 不可达：{str(e)[:200]}"
-        await workflow_service.fail_run(
-            run.run_id,
-            error=error,
-            payload={"reason": "remote_llm"},
-        )
-        await event_bus.publish(
-            EchoEvent(
-                type="artifact.failed",
-                meeting_id=body.meeting_id,
-                payload={
-                    "artifact_type": body.artifact_type,
-                    "error": error,
-                    "reason": "remote_llm",
-                    "run_id": run.run_id,
-                    "todo_id": body.todo_id,
-                },
-            )
-        )
-        if body.meeting_id and body.todo_id:
-            await event_bus.publish(
-                EchoEvent(
-                    type="meeting.todo.updated",
-                    meeting_id=body.meeting_id,
-                    payload={
-                        "todo_id": body.todo_id,
-                        "state": "failed",
-                        "run_id": run.run_id,
-                        "error": error,
-                    },
-                )
-            )
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    artifact = await artifact_repo.save_artifact(artifact, run_id=run.run_id)
-    links: list[dict[str, str | None]] = []
-    if body.meeting_id or body.todo_id:
-        link = await artifact_repo.link_artifact(
-            artifact_id=artifact.artifact_id,
-            source="todo" if body.todo_id else "meeting",
-            meeting_id=body.meeting_id,
-            todo_id=body.todo_id,
-            run_id=run.run_id,
-        )
-        links.append(
-            {
-                "link_id": link.link_id,
-                "source": link.source,
-                "meeting_id": link.meeting_id,
-                "todo_id": link.todo_id,
-                "run_id": link.run_id,
-            }
-        )
-    # M_minutes_refactor：todo 回写（artifact 已经生成，回写失败只警告日志，
-    # 不影响 artifact.ready 事件正常发出，否则用户看不到产物已生成）
-    if body.meeting_id and body.todo_id:
-        await _attach_artifact_to_todo_safe(
-            meeting_id=body.meeting_id,
-            todo_id=body.todo_id,
-            artifact_id=artifact.artifact_id,
-        )
-        await event_bus.publish(
-            EchoEvent(
-                type="meeting.todo.updated",
-                meeting_id=body.meeting_id,
-                payload={
-                    "todo_id": body.todo_id,
-                    "state": "succeeded",
-                    "run_id": run.run_id,
-                    "artifact_id": artifact.artifact_id,
-                },
-            )
-        )
-    await workflow_service.complete_run(
-        run.run_id,
-        output={"artifact_id": artifact.artifact_id, "links": links},
-        message="产物已生成",
-    )
-    payload = artifact.model_dump(mode="json")
-    if body.meeting_id:
-        payload["meeting_id"] = body.meeting_id
-    if body.todo_id:
-        payload["todo_id"] = body.todo_id
-    payload["run_id"] = run.run_id
-    payload["links"] = links
-    await event_bus.publish(
-        EchoEvent(
-            type="artifact.ready",
-            meeting_id=body.meeting_id,
-            payload=payload,
-        )
-    )
-    return artifact
-
-
-async def _attach_artifact_to_todo_safe(*, meeting_id: str, todo_id: str, artifact_id: str) -> None:
-    """从 meetings.py 拿 pipeline 单例并尝试回写 todo；任何异常只警告日志。
-
-    use_cases / api 层间用 lazy import 避免循环引用（meetings.py 也 import 这里的
-    schemas / 反向风险）。回写失败不抛错——artifact 自身已经成功生成，前端能
-    在 ArtifactPanel 看到下载链接；只是 todo checkbox 不会自动划掉。
-    """
-    try:
-        from app.api.meetings import _pipeline
-
-        if _pipeline is None:
-            _log.warning(
-                "todo writeback skipped: meeting pipeline singleton not initialized "
-                "(meeting_id=%s todo_id=%s artifact_id=%s)",
-                meeting_id,
-                todo_id,
-                artifact_id,
-            )
-            return
-        ok = await _pipeline.attach_artifact_to_todo(meeting_id, todo_id, artifact_id)
-        if not ok:
-            _log.warning(
-                "todo writeback miss: meeting_id=%s todo_id=%s artifact_id=%s "
-                "(meeting / minutes_json / todo not found)",
-                meeting_id,
-                todo_id,
-                artifact_id,
-            )
-    except Exception as e:  # pragma: no cover - 防御性，不影响主路径
-        _log.warning(
-            "todo writeback failed: meeting_id=%s todo_id=%s artifact_id=%s err=%s",
-            meeting_id,
-            todo_id,
-            artifact_id,
-            e,
-        )
+    except WorkflowExecutionError as exc:
+        detail = str(exc)
+        raise InternalHTTPException(
+            status_code=502 if "远程 LLM" in detail else 400,
+            detail=detail,
+        ) from exc
+    return GeneratedArtifact.model_validate(done.output["artifact"])
 
 
 # 跨平台不允许的文件名字符 + 控制字符
@@ -356,13 +416,19 @@ async def download(
                 f,
                 filename=_download_name_from_artifact(artifact, f),
                 media_type=artifact.mime_type or None,
+                headers=PRIVATE_NO_STORE_HEADERS,
             )
 
-    base = Path(settings.skill_executor_build_dir).expanduser().resolve()
-    build_dir = (base / artifact_id).resolve()
-    if build_dir == base or base not in build_dir.parents:
+    # 旧版本允许仅凭可猜的 build 目录名下载未登记文件。local-first 继续兼容；
+    # public 模式必须以 owner-scoped metadata 为授权事实源，查不到即 404。
+    if settings.public_demo_mode:
         raise HTTPException(status_code=404, detail="artifact not found")
-    if not build_dir.exists():
+
+    base = Path(settings.skill_executor_build_dir).expanduser().resolve()
+    scoped_build_dir = (scoped_directory(base).resolve() / artifact_id).resolve()
+    legacy_build_dir = (base / artifact_id).resolve()
+    build_dir = scoped_build_dir if scoped_build_dir.is_dir() else legacy_build_dir
+    if build_dir == base or base not in build_dir.parents or not build_dir.is_dir():
         raise HTTPException(status_code=404, detail="artifact not found")
     candidates = list(build_dir.glob("output.*"))
     if not candidates:
@@ -382,4 +448,4 @@ async def download(
         except (OSError, json.JSONDecodeError, ValueError):
             download_name = f.name
 
-    return FileResponse(f, filename=download_name)
+    return FileResponse(f, filename=download_name, headers=PRIVATE_NO_STORE_HEADERS)

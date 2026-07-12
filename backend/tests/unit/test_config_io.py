@@ -131,6 +131,15 @@ class TestJsonConfigSource:
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.heyi_gateway_token == "gw-token"
 
+    def test_generic_main_key_loads_without_legacy_yunwu_key(self, isolated_user_dir: Path) -> None:
+        write_user_config_json({"llm_main_api_key": "generic-token"})
+        from app.config import Settings
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.llm_main_api_key == "generic-token"
+        assert settings.yunwu_open_key == ""
+        assert settings.resolved_llm_main_api_key == "generic-token"
+
     def test_service_api_key_aliases_resolved_in_source(self, isolated_user_dir: Path) -> None:
         write_user_config_json(
             {
@@ -145,6 +154,24 @@ class TestJsonConfigSource:
         assert s.stt_firered_api_key == "stt-token"
         assert s.tts_qwen3_api_key == "tts-token"
         assert s.tts_qwen3_timeout_s == 45
+
+    def test_secret_values_are_excluded_from_settings_repr(self, isolated_user_dir: Path) -> None:
+        from app.config import Settings
+
+        secret_values = {
+            "llm_main_api_key": "main-secret-value",
+            "yunwu_open_key": "legacy-secret-value",
+            "llm_local_api_key": "local-secret-value",
+            "heyi_gateway_token": "gateway-secret-value",
+            "stt_firered_api_key": "stt-secret-value",
+            "tts_qwen3_api_key": "tts-secret-value",
+            "tavily_api_key": "search-secret-value",
+            "debug_token": "admin-secret-value",
+        }
+        settings = Settings(**secret_values, _env_file=None)  # type: ignore[call-arg]
+        rendered = repr(settings)
+
+        assert all(value not in rendered for value in secret_values.values())
 
     def test_unknown_field_ignored_with_warning(
         self, isolated_user_dir: Path, caplog: pytest.LogCaptureFixture
@@ -162,9 +189,32 @@ class TestJsonConfigSource:
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.port == 8769  # P1.1 canonical default
 
-    def test_default_main_model_uses_yunwu_deepseek_v4_flash(
+    def test_official_electron_origin_survives_deployment_override(
         self, isolated_user_dir: Path
     ) -> None:
+        from app.config import OFFICIAL_ELECTRON_ORIGIN, Settings
+
+        settings = Settings(
+            allowed_origins="https://browser.example.test",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.allowed_origins_list == [
+            "https://browser.example.test",
+            OFFICIAL_ELECTRON_ORIGIN,
+        ]
+
+    def test_workspace_state_defaults_to_isolated_user_dir(
+        self,
+        isolated_user_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from app.config import Settings
+
+        monkeypatch.delenv("WORKSPACE_STATE_FILE", raising=False)
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.workspace_state_file == isolated_user_dir / "workspace_state.json"
+
+    def test_default_main_model_uses_yunwu_deepseek_v4_flash(self, isolated_user_dir: Path) -> None:
         from app.config import Settings
 
         s = Settings(_env_file=None)  # type: ignore[call-arg]

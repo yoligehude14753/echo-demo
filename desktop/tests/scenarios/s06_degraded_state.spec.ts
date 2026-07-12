@@ -24,12 +24,12 @@ test("S06a · 语音服务全挂 → AI 引擎 pill 保持绿色 + 错误 popove
     });
   });
 
-  await test.step("点击 AI 引擎 pill：popover 显示语音探针 fail + 错误原因", async () => {
+  await test.step("点击 AI 引擎 pill：popover 显示可读的语音服务状态", async () => {
     await page.getByTestId("pill-ai-engine").click();
     const popover = page.locator(
       ".ant-popover:not(.ant-popover-hidden) .ant-popover-content",
     );
-    await expect(popover.getByText("Connection refused").first()).toBeVisible({
+    await expect(popover.getByText("无法连接").first()).toBeVisible({
       timeout: 3_000,
     });
   });
@@ -46,12 +46,14 @@ test("S06b · 主模型 / 联网检索缺 key → 智能引擎 pill 橙色 + 提
     });
   });
 
-  await test.step("点击智能引擎 pill：popover 显示「部分密钥未配置」橙色提示", async () => {
+  await test.step("点击智能引擎状态：popover 显示可理解的配置提示", async () => {
     await page.getByTestId("pill-ai-engine").click();
     const popover = page.locator(
       ".ant-popover:not(.ant-popover-hidden) .ant-popover-content",
     );
-    await expect(popover.getByText(/部分密钥未配置/)).toBeVisible({ timeout: 3_000 });
-    await expect(popover.getByText(/config\.json/)).toBeVisible();
+    await expect(popover.getByText(/部分服务凭证未配置/)).toBeVisible({
+      timeout: 3_000,
+    });
+    await expect(popover.getByText(/请在设置中补充配置/)).toBeVisible();
   });
 });

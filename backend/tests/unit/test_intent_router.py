@@ -190,9 +190,7 @@ async def test_route_no_at_returns_chat(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_route_no_at_can_select_agent_task(tmp_path: Path) -> None:
     """0.3：无 @ 的复杂执行请求也必须能进入正式 Agent workflow。"""
-    llm = _MockLLM(
-        content='{"kind":"agent_task","confidence":0.92,"rationale":"需要多步文件操作"}'
-    )
+    llm = _MockLLM(content='{"kind":"agent_task","confidence":0.92,"rationale":"需要多步文件操作"}')
     router = LLMIntentRouter(_settings(tmp_path), llm)
     text = "使用浏览器完成一个多步骤操作"
     r = await router.route(text, current_meeting_id=None)

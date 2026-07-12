@@ -1,212 +1,185 @@
-# EchoDesk 0.3 架构设计
+# EchoDesk 0.3 模块与 UX 架构
 
-日期：2026-07-09  
-阶段：开发前架构确认  
-基线：`v0.2.50` [F-ECHO-001]  
+版本：0.3.1 | 状态：实现快照 | 更新时间：2026-07-12
 
-## 1. 设计目标
+总览与事务细节以 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) 为主；本文说明 0.3 的模块责任、用户流程投影和完成标准。
 
-EchoDesk 0.3 把产品抽象为一个本地优先的 workflow 系统。[F-ECHO-002]
+## 1. 目标
 
-核心目标：
+EchoDesk 0.3 解决的不是“再加一个工作流页面”，而是把已有会议、知识、Artifact、Todo、Agent、分享和诊断收束到清晰的执行模型：
 
-1. 所有长流程都有统一 run 记录。
-2. 所有状态变化都有可 replay 的事件。
-3. 所有产物都有持久 owner 和来源。
-4. 会议、Todo、Artifact、Agent、分享、诊断不再各自维护临时状态。
-5. Claude Code / AgentOS 作为正式 Agent Runner 纳入同一工作流。
+- 需要恢复或产生持久副作用：durable Workflow。
+- 无副作用、依赖当前连接：cancellable read stream。
+- public 数据：server-verified principal scope。
+- local host 能力：显式受信任的 Desktop Pro 边界。
+- UI：只投影后端事实，并把失败转译为用户可执行的下一步。
 
-## 2. 6W2H
+## 2. 组件边界
 
-| 维度 | 0.3 定义 |
-|---|---|
-| Who | 主要用户是需要本地会议记录、知识检索、办公产物和后台执行能力的桌面用户。 |
-| What | 把会议、知识、任务、产物、分享归档连成可恢复 workflow。 |
-| Where | Electron 桌面为主，Android/TV/Public Demo 作为受限入口保留。 |
-| When | 会议中、会后整理、基于资料生成产物、交给 Agent 执行长任务时使用。 |
-| Why | 0.2.50 已有能力，但产物关联、失败恢复、Agent 闭环和 contract 门禁不完整。 |
-| How | 新增 Workflow Core，统一 DB、事件流、状态机和 UI 投影。 |
-| How Much | 以 7 个 PR 切片完成，先后端核心，再 UI，再 contract gates。 |
-| How Well | 重启可恢复、失败可重试、产物可追溯、事件可 replay、契约有测试。 |
-
-## 3. 总体架构
-
-```mermaid
-flowchart TB
-  UI["Electron / React UI"]
-  CMD["CommandBar / Intent Router"]
-  WF["Workflow Core"]
-  MEET["Meeting Workflow"]
-  RAG["Knowledge Workflow"]
-  ART["Artifact Workflow"]
-  TODO["Todo Execution Workflow"]
-  AGENT["Agent Runner Workflow<br/>Claude Code / AgentOS"]
-  SHARE["Share / Export / Diagnostics"]
-  DB[("SQLite<br/>workflow_runs / workflow_events / artifacts / artifact_links")]
-  STORAGE[("~/.echodesk/storage")]
-  WS["/ws/echo<br/>event projection"]
-  IPC["Electron IPC<br/>workspace / artifact / update / mic"]
-  EXT["External Services<br/>LLM / STT / TTS / AgentOS / Web"]
-
-  UI --> CMD
-  UI --> IPC
-  CMD --> WF
-  WF --> MEET
-  WF --> RAG
-  WF --> ART
-  WF --> TODO
-  WF --> AGENT
-  MEET --> DB
-  RAG --> DB
-  ART --> DB
-  TODO --> DB
-  AGENT --> DB
-  ART --> STORAGE
-  AGENT --> STORAGE
-  DB --> WS
-  WS --> UI
-  DB --> SHARE
-  STORAGE --> SHARE
-  MEET --> EXT
-  RAG --> EXT
-  ART --> EXT
-  AGENT --> EXT
-```
-
-## 4. Workflow Core
-
-Workflow Core 是 0.3 的唯一长流程编排入口。
-
-职责：
-
-- 创建 `workflow_runs`。
-- 写入 `workflow_events`。
-- 驱动状态迁移。
-- 暴露 replay API。
-- 将领域事件投影到 `/ws/echo`。
-- 绑定 artifacts 和 upstream task。
-- 在重启后恢复未完成 run。
-
-不做：
-
-- 不直接调用 STT/LLM/TTS/AgentOS SDK。
-- 不承载 UI 状态。
-- 不决定具体 artifact 生成策略。
-- 不直接读写用户文件正文。
-
-## 5. 统一状态机
-
-```mermaid
-stateDiagram-v2
-  [*] --> pending
-  pending --> running: start
-  pending --> cancelled: cancel_before_start
-  running --> succeeded: complete
-  running --> failed: fail
-  running --> timeout: timeout
-  running --> cancel_requested: cancel
-  cancel_requested --> cancelled: upstream_confirmed_or_local_stopped
-  cancel_requested --> cancel_failed: upstream_reject_or_unknown
-  failed --> pending: retry_new_run
-  timeout --> pending: retry_new_run
-  cancel_failed --> pending: retry_new_run
-  succeeded --> [*]
-  cancelled --> [*]
-```
-
-状态定义：
-
-| 状态 | 含义 | 终态 |
-|---|---|---|
-| `pending` | 已创建，未开始执行 | 否 |
-| `running` | 正在执行 | 否 |
-| `cancel_requested` | 用户已请求取消，等待收口 | 否 |
-| `succeeded` | 成功完成 | 是 |
-| `failed` | 执行失败 | 是 |
-| `timeout` | 超时收口 | 是 |
-| `cancelled` | 确认取消 | 是 |
-| `cancel_failed` | 取消失败或状态未知 | 是 |
-
-## 6. 领域模块边界
-
-| 模块 | 入口 | Owner | 依赖 |
+| 模块 | 入口 | 事实 Owner | 主要依赖 |
 |---|---|---|---|
-| Workflow Core | `backend/app/workflows` | 后端 | repo, event bus |
-| Meeting Workflow | `backend/app/use_cases/meeting_*` | 后端 | STT, diarizer, LLM, Workflow Core |
-| Knowledge Workflow | RAG/workspace APIs | 后端 | RAG adapter, workspace scanner |
-| Artifact Workflow | `/artifacts/*` | 后端 | skill runner, storage, Workflow Core |
-| Todo Workflow | meetings minutes + artifact | 后端 | Workflow Core, Artifact Workflow |
-| Agent Runner Workflow | `/agents/*` | 后端 | AgentOS, Workflow Core |
-| UI Projection | `desktop/src/store.ts` | 前端 | `/ws/echo`, REST hydration |
-| Desktop Local Capability | Electron preload/main | Electron | OS, filesystem, shell |
+| Identity / Session | `/session*` | identity SQLite tables | access policy、credential vault |
+| Workflow Kernel | `/workflows/runs*` | `workflow_runs/events/outbox` | Unit of Work、lease store |
+| Meeting | `/meetings*`、`/capture*` | meetings/segments/minutes | STT、diarizer、Workflow |
+| RAG Write | `/rag/ingest`、delete、scan | SQLite manifest/revision | BM25 cache、Workflow |
+| RAG Answer | `/rag/ask` | 当前 SSE 连接 | LLM、RAG、Web ports |
+| Artifact / Todo | `/artifacts*`、meeting todo | Artifact + Workflow | skill runner、staging |
+| Agent | `/agents*` | `agent_tasks/events` + Workflow projection | runner、lease、bridge |
+| Event Projection | `/ws/echo` | committed outbox/event | scoped event bus |
+| Desktop UI | React store | 可丢失视图状态 | REST、SSE、WS、IPC |
+| Local Capability | Electron main/preload | OS + local config | backend supervisor、vault |
 
-## 7. 数据 Owner
+API adapter 可以依赖 application service；use case、port 和 schema 不依赖 FastAPI 或具体外部 SDK。外部 LLM、STT、TTS、Web、Agent 和文件执行都在 adapter 边界。
 
-| 数据 | Owner | 0.3 规则 |
-|---|---|---|
-| workflow run | backend SQLite | 所有长流程必须创建 |
-| workflow event | backend SQLite | 所有状态变化必须追加 |
-| artifact metadata | backend SQLite | 所有产物必须登记 |
-| artifact file | backend storage | 文件在 storage，DB 只保存路径和元数据 |
-| meeting artifact link | backend SQLite | 不再只靠前端内存 |
-| todo execution link | backend SQLite | Todo 状态从 workflow 投影 |
-| Agent runner task id | backend SQLite | EchoDesk task 与 upstream task 分离 |
-| UI current view | frontend store | 可丢失，不作为事实源 |
-| workspace directory grant | Electron/user config | 必须显式授权 |
+## 3. Identity 与 Scope
 
-## 8. Contract 原则
+public principal 由服务端根据 bearer/session 验证产生：
 
-REST：
+```text
+(tenant_id, owner_id, device_id, session_id, family_id?)
+```
 
-- 任何新增 route 必须进入 route snapshot。
-- 任何删除 route 必须更新 0.3 文档和测试。
+请求 body、query 和 WebSocket hello 中的逻辑 ID 只能作为资源标识，不能提升或替换 principal。HTTP/WS 验证成功后绑定 context；repository、runtime registry、RAG、Workflow、storage 和 event bus 从 context 获取 scope。
 
-WebSocket：
+隔离覆盖：
 
-- `/ws/echo` 是唯一主线。
-- Workflow events 通过 `workflow.event` 或既有领域事件投影。
-- Agent runner raw event 不直接暴露给 UI。
+- meeting、segments、speaker labels、ambient audio；
+- Workflow run/event/outbox；
+- Artifact metadata/link/file；
+- Agent task/event/grant；
+- RAG document/content owner/index payload；
+- WebSocket subscriber；
+- quota、resource ticket 和 public enrollment。
 
-IPC：
+Desktop local-first 使用固定 local principal；这不是 public 多租户身份，也不应通过网络暴露 host-admin 权限。
 
-- preload 暴露、main handler、renderer wrapper 三边必须对账。
-- 新增本地能力必须写安全边界。
+## 4. Workflow 执行模型
 
-## 9. UI 信息架构
+### 4.1 生命周期
 
-0.3 UI 不重做视觉系统，只重构信息归属。
+```text
+create -> pending -> running -> succeeded
+                           \-> failed
+                           \-> timeout
+                           \-> cancel_requested -> cancelled | cancel_failed
+```
 
-Must：
+规则：
 
-- 当前会议状态。
-- 当前正在执行的 workflow。
-- 产物列表。
-- 失败和可重试入口。
-- Agent 任务状态。
+- first terminal wins；冲突的晚到 terminal 仅记录 debug/ignored 信息。
+- retry 创建新 run，保留 parent/attempt lineage。
+- active key 和 idempotency key 在当前 scope 内生效。
+- deadline、cancel request、revision 和 lease fence 都可持久化检查。
 
-Should：
+### 4.2 Atomic completion
 
-- Workflow 历史。
-- 单个 run 的事件时间线。
-- 产物来源和关联会议。
+成功/失败收口不允许拆成“先写 domain，之后再补 workflow”。处理器通过 WorkflowService atomic API 在一个 `BEGIN IMMEDIATE` transaction 中：
 
-Could：
+1. 校验 scope、state、revision 与 lease；
+2. 写 domain rows；
+3. 更新 run；
+4. 追加 events；
+5. 写 outbox；
+6. commit 后再投影。
 
-- Agent runner 详细日志折叠区。
-- 分享前产物选择器。
+Artifact staging、meeting minutes/tombstone、RAG lifecycle 等都遵守这个顺序。
 
-Deferred：
+### 4.3 Outbox 与慢消费者
 
-- 多用户协作权限。
-- 云端同步 workflow。
+每个 backend 实例以自己的 consumer cursor 读取 committed outbox。失败 row 进入 backoff recovery；scope lane 保证某个 owner 的失败不会阻塞全部 owner；global recovery lease/fence 负责多实例接管。
 
-## 10. 架构完成标准
+WebSocket subscriber 队列满时连接被移除并结束 generator，不能留下永久等待任务。客户端重连后的 `server_resync` 触发 REST rehydrate，而不是只靠缺失事件猜状态。
 
-0.3 架构完成必须满足：
+### 4.4 Lease
 
-- `GET /meetings/{id}/artifacts` 返回真实持久化数据。
-- Todo 执行不依赖前端内存。
-- Agent task 写入统一 workflow。
-- Agent 产物进入统一 artifact。
-- outputs UI 只做投影，不承担事实源。
-- contract tests 能阻止 route、WS、IPC 漂移。
+Workflow Dispatcher 和 Agent bridge 通过 lease + heartbeat + fence 保证同一 durable work 的单一有效执行者。旧 worker 失去 lease 时停止 handler，不能继续写 terminal projection。
+
+## 5. RAG 执行边界
+
+### Write path
+
+ingest、delete、workspace scan、meeting projection 是 durable workflow。SQLite 中的 `rag_documents`、`rag_content_owners`、`bm25_index_state` 和 `bm25_index_documents` 是 owner 与 revision 事实源。
+
+JSON BM25 文件是原子替换的 cache；任意 backend 实例都根据 SQLite revision 加载同一 payload manifest。因此 Query、Ambient 与 Meeting 不再拥有互相不可见的独立索引。
+
+### Read path
+
+`/rag/ask` 直接流式返回 provider delta、citations 和 terminal frame：
+
+- `done`：回答完成；
+- `error`：失败，不显示“已回答”；
+- disconnect：取消 provider 与 Web fallback；
+- 不把已无人接收的回答伪装成跨重启 workflow。
+
+## 6. Meeting 与 Artifact
+
+- 同 tenant/owner 同时最多一个 active meeting。
+- capture 的原始流与 meeting finalize 分开；finalize/minutes 才进入 durable completion。
+- `minutes_cleared_at` 是用户清除纪要的 tombstone。
+- meeting RAG projection 记录 state/error/projected_at，启动恢复可以补投。
+- Artifact 文件先在安全 staging 生成，再原子登记 metadata 与 links。
+- UI 的 outputs 来自 Artifact/Agent/Workflow 持久投影，不从内存数组推断。
+
+## 7. Agent
+
+`agent_tasks` 是 runner task 的权威记录，关联 `workflow_run_id`；raw event 先进入 `agent_task_events`，stream bridge 再投影 Workflow 和 Artifact。
+
+边界：
+
+- create/cancel/retry 和 grant 需要本机或 host-admin 权限；
+- bridge lease 过期、heartbeat 失败或进程重启后可接管；
+- Artifact import/proxy 有 path、Content-Length、chunk 和总大小限制；
+- Agent terminal 与 linked Workflow terminal/event/outbox 在同一 Unit of Work 内仲裁；read barrier 与 recovery 仅作为崩溃恢复护栏。
+
+## 8. UI/UX 架构
+
+### 三个稳定区域
+
+- **Session Navigation**：实时记录入口、会议搜索、历史会议。
+- **Workbench**：转写 / 助手互斥切换；CommandBar 固定属于当前工作上下文。
+- **Inspector**：会议纪要 / 工作产物互斥切换；Todo、Agent 和失败重试归入产物视图。
+
+### 视觉与内容规则
+
+- 全局系统字体：`-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`。
+- 一套线性图标；Emoji 和文本符号不承担核心语义。
+- 青绿表示选中/连接，琥珀表示可恢复降级，红色只表示失败或危险操作。
+- 状态使用“标题 + 说明 + 下一步”，不直接展示异常类名。
+- 输入框在 1–6 行内增长；转写正文自然换行；标题和元数据按容器省略。
+- icon-only 操作必须有 accessible name 和 tooltip。
+
+### 响应式
+
+- 宽屏：Navigation、Workbench、Inspector 并列。
+- 960px：Inspector 使用可关闭 drawer，并恢复触发按钮焦点。
+- 411px：纵向组织，输入与主要操作保持可达。
+- TV：转写优先双栏，使用远距离可读尺寸。
+
+## 9. 运行与发布模式
+
+| 模式 | 默认行为 |
+|---|---|
+| Electron packaged | 启动 bundled backend，写本机数据 |
+| Electron public | 仅显式 `ECHO_PUBLIC_DEMO=1`，不启动本机 backend |
+| Android / TV | 连接配置的 HTTPS backend |
+| Dev Vite | 通过配置 proxy 到本机或测试 backend |
+
+桌面包必须包含对应平台 backend binary。Android / TV 公开资产必须使用稳定 release 身份签名并校验；Windows 在 Authenticode 未配置前拒绝 public publish；macOS ad-hoc 只用于本机测试。
+
+## 10. Agent 一致性门禁
+
+1. Agent HTTP 终态读取经过 Workflow read barrier；任务详情、列表与事件快照只在关联 Workflow 修复并核对为相同终态后返回。
+2. Agent submit 使用 tenant/owner/task 派生的 opaque key、heartbeat submit lease 和 fenced CAS；AgentOS durable UNIQUE reservation 精确复用同一 runner，响应丢失不依赖任务列表扫描，也不把 key 写进 prompt。
+3. migration 036 的 `agent_command_outbox` 与 Agent/Workflow `cancel_requested` 同事务提交；恢复 worker 使用 fenced lease 和稳定 `Idempotency-Key`。晚到 runner id 触发 `force_remote` cancel，不复活本地状态。
+4. Agent terminal、linked Workflow terminal/event/outbox，以及 cancel command completion 在同一个 Unit of Work 内仲裁；已有 Workflow terminal 胜出时迟到 Agent 终态降为 debug audit event。
+
+## 11. 完成标准与证据
+
+- tenant/owner 隔离覆盖 HTTP、WS、DB、RAG 和文件边界。
+- domain write、run/event 与 outbox 同事务。
+- 多实例执行由 lease/fence 保护。
+- RAG 使用 SQLite revision/manifest 单一提交点。
+- Desktop 不混排转写、助手、纪要与产物。
+- 失败路径有反例测试和用户可执行恢复入口。
+
+当前证据：Backend `898 passed / 0 skipped`（`916 collected`、`18 live deselected`、coverage `87%`、自然退出）；GLM live `2 / 2`；Electron `70`；Desktop E2E `95`；scenarios `29`；真实安装态 workflow `1 / 1`；packaged smoke 通过。

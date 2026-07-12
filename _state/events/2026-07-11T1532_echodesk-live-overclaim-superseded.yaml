@@ -1,0 +1,11 @@
+event_id: "E-20260711T1532-001"
+event_type: "supersede"
+timestamp: "2026-07-11T15:32:00+08:00"
+author: "agent/codex-echodesk-0-3-repair"
+session_id: null
+changes:
+  - action: "supersede"
+    old_fact: "F-ECHO-008"
+    new_fact: "F-ECHO-016"
+    reason: "The historical installed-workflow success is no longer current evidence; the latest real installed rerun reached recovery and retry lineage but the configured main provider timed out before the full live chain completed."
+git_commit: null

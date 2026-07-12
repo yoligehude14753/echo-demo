@@ -81,4 +81,13 @@ test("S01 · 首次启动引导 → About 对话框（P3.1 + P3.5 + P3.3）", as
     await expect(page.getByText("欢迎来到 EchoDesk")).not.toBeVisible();
     await expect(page.getByTestId("status-bar")).toBeVisible();
   });
+
+  await test.step("从设置重新打开引导时回到欢迎页", async () => {
+    await page.getByTestId("open-settings").click();
+    await page.getByTestId("replay-onboarding").click();
+    await expect(page.getByText("欢迎来到 EchoDesk")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("准备就绪")).not.toBeVisible();
+    await expect(page.getByTestId("onboarding-prev")).toHaveCount(0);
+    await expect(page.getByTestId("onboarding-next")).toHaveText("下一步");
+  });
 });

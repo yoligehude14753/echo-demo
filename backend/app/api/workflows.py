@@ -6,16 +6,27 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import get_workflow_service
+from app.adapters.event_bus.inmemory import InMemoryEventBus
+from app.agents.service import AgentTaskService, get_agent_task_service
+from app.api.deps import get_event_bus, get_workflow_dispatcher, get_workflow_service
+from app.config import Settings, get_settings
 from app.schemas.workflow import (
     WorkflowCancelRequest,
     WorkflowEventsResponse,
     WorkflowRetryRequest,
     WorkflowRunDTO,
 )
-from app.workflows.service import WorkflowService
+from app.workflows.kernel import WorkflowDispatcher
+from app.workflows.service import InvalidWorkflowTransition, WorkflowService
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+
+def _agent_service(
+    settings: Settings = Depends(get_settings),
+    event_bus: InMemoryEventBus = Depends(get_event_bus),
+) -> AgentTaskService:
+    return get_agent_task_service(settings, event_bus)
 
 
 @router.get("/runs", response_model=list[WorkflowRunDTO])
@@ -69,9 +80,20 @@ async def get_run_events(
 async def cancel_run(
     run_id: str,
     body: WorkflowCancelRequest,
+    dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
     service: Annotated[WorkflowService, Depends(get_workflow_service)],
+    agents: Annotated[AgentTaskService, Depends(_agent_service)],
 ) -> WorkflowRunDTO:
-    run = await service.request_cancel(run_id, reason=body.reason)
+    existing = await service.get_run(run_id)
+    if existing is None:
+        raise HTTPException(404, "workflow run not found")
+    if existing.kind == "agent_task" and existing.agent_task_id:
+        await agents.cancel_task(existing.agent_task_id)
+        projected = await service.get_run(run_id)
+        if projected is None:
+            raise HTTPException(404, "workflow run not found")
+        return projected.to_dto()
+    run = await dispatcher.cancel(run_id, reason=body.reason)
     if run is None:
         raise HTTPException(404, "workflow run not found")
     return run.to_dto()
@@ -81,9 +103,25 @@ async def cancel_run(
 async def retry_run(
     run_id: str,
     body: WorkflowRetryRequest,
+    dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
     service: Annotated[WorkflowService, Depends(get_workflow_service)],
+    agents: Annotated[AgentTaskService, Depends(_agent_service)],
 ) -> WorkflowRunDTO:
-    run = await service.retry_run(run_id, reason=body.reason)
+    existing = await service.get_run(run_id)
+    if existing is None:
+        raise HTTPException(404, "workflow run not found")
+    if existing.kind == "agent_task" and existing.agent_task_id:
+        retried = await agents.retry_task(existing.agent_task_id)
+        if retried is None or retried.workflow_run_id is None:
+            raise HTTPException(409, "agent task cannot be retried")
+        projected = await service.get_run(retried.workflow_run_id)
+        if projected is None:
+            raise HTTPException(500, "agent retry workflow missing")
+        return projected.to_dto()
+    try:
+        run = await dispatcher.retry(run_id, reason=body.reason)
+    except InvalidWorkflowTransition as exc:
+        raise HTTPException(409, str(exc)) from exc
     if run is None:
         raise HTTPException(404, "workflow run not found")
     return run.to_dto()

@@ -9,18 +9,31 @@ import type {
   WorkflowRunDTO,
 } from "@/types";
 import {
-  DEFAULT_ANDROID_BACKEND_BASE,
+  DEFAULT_LOCAL_BACKEND_BASE,
   apiPath,
   apiUrl,
   backendBase,
+  backendBaseSnapshot,
   configuredBackendBase,
   isDefaultPublicBackend,
   isNativeMobile,
   shareBackendBase,
 } from "@/runtime";
+import { apiTransport } from "@/session";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
 const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
+const CAPTURE_UPLOAD_TIMEOUT_MS = 20_000;
+const TTS_SPEAK_TIMEOUT_MS = 30_000;
+// Keep the client envelope slightly wider than each durable backend workflow.
+const RAG_QUERY_TIMEOUT_MS = 190_000;
+const MEETING_FINALIZE_TIMEOUT_MS = 310_000;
+const ARTIFACT_GENERATE_TIMEOUT_MS = 610_000;
+const WORKSPACE_SCAN_TIMEOUT_MS = 610_000;
+
+function fetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  return apiTransport(input, init, { throwHttpErrors: false });
+}
 
 async function asJson<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
@@ -43,15 +56,24 @@ function probeTimeoutMs(): number {
 }
 
 async function fetchProbe(url: string, init: RequestInit = {}): Promise<Response> {
-  const requestInit: RequestInit = { cache: "no-store", ...init };
-  if (typeof AbortController === "undefined") return fetch(url, requestInit);
-  const ctl = new AbortController();
-  const timer = window.setTimeout(() => ctl.abort(), probeTimeoutMs());
-  try {
-    return await fetch(url, { ...requestInit, signal: ctl.signal });
-  } finally {
-    window.clearTimeout(timer);
-  }
+  return apiTransport(
+    url,
+    { cache: "no-store", ...init },
+    { timeoutMs: probeTimeoutMs(), throwHttpErrors: false },
+  );
+}
+
+async function fetchWithAbortTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal,
+): Promise<Response> {
+  return apiTransport(
+    url,
+    { ...init, signal: externalSignal ?? init.signal },
+    { timeoutMs, throwHttpErrors: false },
+  );
 }
 
 export async function startMeeting(meetingId: string): Promise<void> {
@@ -82,13 +104,19 @@ export async function uploadCaptureChunk(
   blob: Blob,
   sampleRate = 16000,
   meetingId?: string,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<CaptureChunkResponse> {
   const fd = new FormData();
   fd.append("audio", blob, "chunk.wav");
   fd.append("sample_rate", String(sampleRate));
   if (meetingId) fd.append("meeting_id", meetingId);
   const u = await apiUrl("/capture/chunk");
-  const r = await fetch(u, { method: "POST", body: fd });
+  const r = await fetchWithAbortTimeout(
+    u,
+    { method: "POST", body: fd },
+    options.timeoutMs ?? CAPTURE_UPLOAD_TIMEOUT_MS,
+    options.signal,
+  );
   // backend 在引入 stt_status 字段前的旧版本可能不返回；缺省视为 "ok"。
   const parsed = await asJson<CaptureChunkResponse>(r);
   if (!parsed.stt_status) parsed.stt_status = "ok";
@@ -142,7 +170,11 @@ export async function uploadChunk(
   fd.append("audio", blob, "chunk.wav");
   fd.append("sample_rate", String(sampleRate));
   const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/chunk`);
-  const r = await fetch(u, { method: "POST", body: fd });
+  const r = await fetchWithAbortTimeout(
+    u,
+    { method: "POST", body: fd },
+    CAPTURE_UPLOAD_TIMEOUT_MS,
+  );
   return asJson<TranscriptSegment[]>(r);
 }
 
@@ -153,7 +185,11 @@ export async function finalizeMeeting(
   const fd = new FormData();
   fd.append("title", title);
   const u = await apiUrl(`/meetings/${encodeURIComponent(meetingId)}/finalize`);
-  const r = await fetch(u, { method: "POST", body: fd });
+  const r = await fetchWithAbortTimeout(
+    u,
+    { method: "POST", body: fd },
+    MEETING_FINALIZE_TIMEOUT_MS,
+  );
   return asJson<MeetingMinutes>(r);
 }
 
@@ -280,12 +316,16 @@ export async function meetingShareUrl(
   meetingId: string,
   artifactIds: string[] = [],
 ): Promise<string> {
-  const params = new URLSearchParams();
-  const ids = artifactIds.filter(Boolean);
-  if (ids.length > 0) params.set("artifact_ids", ids.join(","));
-  const path = `/meetings/${encodeURIComponent(meetingId)}/share${
-    params.toString() ? `?${params.toString()}` : ""
-  }`;
+  // artifactIds is retained for source compatibility; the backend derives links
+  // from owner-scoped artifact_links and returns a narrow, expiring share path.
+  void artifactIds;
+  const ticketUrl = await apiUrl(
+    `/meetings/${encodeURIComponent(meetingId)}/share-ticket`,
+  );
+  const ticketResponse = await fetch(ticketUrl, { method: "POST" });
+  const { path } = await asJson<{ path: string; expires_in_s: number | null }>(
+    ticketResponse,
+  );
   const base = await shareBackendBase();
   if (base) {
     const useApiPrefix =
@@ -357,11 +397,15 @@ export async function generateArtifact(req: {
   retry_of_run_id?: string;
 }): Promise<GeneratedArtifact> {
   const u = await apiUrl("/artifacts/generate");
-  const r = await fetch(u, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
+  const r = await fetchWithAbortTimeout(
+    u,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+    ARTIFACT_GENERATE_TIMEOUT_MS,
+  );
   return asJson<GeneratedArtifact>(r);
 }
 
@@ -494,30 +538,23 @@ export async function grantAgentRunnerAndResume(
 }
 
 export function artifactDownloadUrl(artifactId: string): string {
-  // 同步版本：浏览器 / vite dev 用相对路径；Electron file:// 下用 sync sentinel
-  // 由于 backendBase() 是异步的，但下载/预览只在前端运行时拼接，简单起见在 file:// 下回退默认 host。
-  const configured = configuredBackendBase();
-  if (configured || isNativeMobile()) {
-    const host = configured ?? DEFAULT_ANDROID_BACKEND_BASE;
-    return `${host}/artifacts/${encodeURIComponent(artifactId)}/download`;
-  }
-  if (
-    typeof window !== "undefined" &&
-    window.location.protocol === "file:"
-  ) {
-    const host = "http://127.0.0.1:8772";
-    return `${host}/artifacts/${encodeURIComponent(artifactId)}/download`;
-  }
-  return `/api/artifacts/${encodeURIComponent(artifactId)}/download`;
+  const path = `/artifacts/${encodeURIComponent(artifactId)}/download`;
+  const base = backendBaseSnapshot();
+  if (base !== null) return base ? `${base}${path}` : `/api${path}`;
+
+  // 仅兼容旧 preload；当前 Electron 会在首个 Renderer 脚本前同步提供 backendHost。
+  return `${DEFAULT_LOCAL_BACKEND_BASE}${path}`;
 }
 
 /**
  * 解析后端 /rag/ask 的 SSE 响应。
  *
  * 协议（见 backend/app/api/retrieval.py _sse）：
- *   - 第 1 帧：`data: {"meta": {...citations...}}`
- *   - 中间帧：`data: {"delta": "..."}` 多次
- *   - 结束帧：`data: [DONE]`
+ *   - 中间帧：`event: delta` + `{type:"delta", delta:"..."}`
+ *   - 成功终帧：`event: done` + 完整 answer / sources / trace
+ *   - 失败终帧：`event: error`，必须 reject，不保留部分答案
+ *
+ * 为了滚动升级，仍接受旧服务端 `[DONE]`，但提前 EOF 绝不视为成功。
  */
 export async function ragAsk(question: string): Promise<{
   answer: string;
@@ -532,11 +569,15 @@ export async function ragAsk(question: string): Promise<{
   arbitration: string;
 }> {
   const u = await apiUrl("/rag/ask");
-  const r = await fetch(u, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
-  });
+  const r = await fetchWithAbortTimeout(
+    u,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    },
+    RAG_QUERY_TIMEOUT_MS,
+  );
   if (!r.ok) {
     const text = await r.text();
     throw new Error(`${r.status} ${r.statusText}: ${text}`);
@@ -554,25 +595,68 @@ export async function ragAsk(question: string): Promise<{
   let answer = "";
   let citations: Array<Record<string, unknown>> = [];
   let arbitration = "rag";
+  let completed = false;
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
 
-    let nl: number;
-    while ((nl = buf.indexOf("\n\n")) >= 0) {
-      const block = buf.slice(0, nl);
-      buf = buf.slice(nl + 2);
-      const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
-      if (!dataLine) continue;
-      const payload = dataLine.slice("data: ".length);
-      if (payload === "[DONE]") continue;
-      try {
-        const obj = JSON.parse(payload) as Record<string, unknown>;
-        if ("delta" in obj && typeof obj.delta === "string") {
+      let nl: number;
+      while ((nl = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, nl);
+        buf = buf.slice(nl + 2);
+        const lines = block.split("\n");
+        const eventType = lines
+          .find((line) => line.startsWith("event: "))
+          ?.slice("event: ".length)
+          .trim();
+        const dataLine = lines.find((line) => line.startsWith("data: "));
+        if (!dataLine) continue;
+        const payload = dataLine.slice("data: ".length);
+        if (payload === "[DONE]") {
+          completed = true;
+          continue;
+        }
+        let obj: Record<string, unknown>;
+        try {
+          obj = JSON.parse(payload) as Record<string, unknown>;
+        } catch (error) {
+          throw new Error("RAG 响应格式损坏", { cause: error });
+        }
+        const frameType = typeof obj.type === "string" ? obj.type : eventType;
+        if (frameType === "error" || typeof obj.error === "string") {
+          throw new Error(
+            typeof obj.error === "string" ? obj.error : "暂时无法生成回答，请稍后重试",
+          );
+        }
+        if (frameType === "done") {
+          if (typeof obj.answer === "string") answer = obj.answer;
+          const sources = Array.isArray(obj.sources) ? obj.sources : undefined;
+          const meta =
+            obj.meta && typeof obj.meta === "object"
+              ? (obj.meta as Record<string, unknown>)
+              : undefined;
+          if (sources) citations = sources as Array<Record<string, unknown>>;
+          else if (Array.isArray(meta?.citations)) {
+            citations = meta.citations as Array<Record<string, unknown>>;
+          }
+          const trace =
+            obj.trace && typeof obj.trace === "object"
+              ? (obj.trace as Record<string, unknown>)
+              : undefined;
+          if (typeof trace?.chosen_source === "string") {
+            arbitration = trace.chosen_source;
+          } else if (typeof meta?.chosen_source === "string") {
+            arbitration = meta.chosen_source;
+          }
+          completed = true;
+          continue;
+        }
+        if (typeof obj.delta === "string") {
           answer += obj.delta;
-        } else if ("meta" in obj && obj.meta && typeof obj.meta === "object") {
+        } else if (obj.meta && typeof obj.meta === "object") {
           const meta = obj.meta as Record<string, unknown>;
           if (Array.isArray(meta.citations)) {
             citations = meta.citations as Array<Record<string, unknown>>;
@@ -581,10 +665,15 @@ export async function ragAsk(question: string): Promise<{
             arbitration = meta.chosen_source;
           }
         }
-      } catch {
-        // 单帧解析失败不致命，继续
       }
     }
+    buf += decoder.decode();
+    if (buf.trim()) throw new Error("RAG 响应在完整帧之前中断");
+    if (!completed) throw new Error("RAG 响应未完成，请重试");
+    if (!answer.trim()) throw new Error("RAG 未返回有效答案");
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   }
 
   return {
@@ -625,8 +714,10 @@ export async function chatAsk(question: string): Promise<string> {
   }
   const ct = r.headers.get("content-type") ?? "";
   if (!ct.includes("text/event-stream")) {
-    const obj = (await r.json()) as { delta?: string; content?: string };
-    return obj.delta ?? obj.content ?? "";
+    const obj = (await r.json()) as { answer?: string; delta?: string; content?: string };
+    const answer = obj.answer ?? obj.delta ?? obj.content ?? "";
+    if (!answer.trim()) throw new Error("Chat 未返回有效答案");
+    return answer;
   }
 
   const reader = r.body?.getReader();
@@ -634,30 +725,48 @@ export async function chatAsk(question: string): Promise<string> {
   const decoder = new TextDecoder("utf-8");
   let buf = "";
   let answer = "";
+  let completed = false;
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf("\n\n")) >= 0) {
-      const block = buf.slice(0, nl);
-      buf = buf.slice(nl + 2);
-      const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
-      if (!dataLine) continue;
-      const payload = dataLine.slice("data: ".length);
-      if (payload === "[DONE]") continue;
-      try {
-        const obj = JSON.parse(payload) as { delta?: string; error?: string };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, nl);
+        buf = buf.slice(nl + 2);
+        const lines = block.split("\n");
+        const eventLine = lines.find((line) => line.startsWith("event: "));
+        const eventType = eventLine?.slice("event: ".length).trim();
+        const dataLine = lines.find((line) => line.startsWith("data: "));
+        if (!dataLine) continue;
+        const payload = dataLine.slice("data: ".length);
+        if (payload === "[DONE]") {
+          completed = true;
+          continue;
+        }
+        let obj: { delta?: string; error?: string };
+        try {
+          obj = JSON.parse(payload) as { delta?: string; error?: string };
+        } catch (error) {
+          throw new Error("Chat 响应格式损坏", { cause: error });
+        }
+        if (eventType === "error" || typeof obj.error === "string") {
+          throw new Error(obj.error || "暂时无法回复，请稍后重试");
+        }
         if (typeof obj.delta === "string") {
           answer += obj.delta;
-        } else if (typeof obj.error === "string") {
-          throw new Error(obj.error);
         }
-      } catch {
-        /* 单帧解析失败不致命 */
       }
     }
+    buf += decoder.decode();
+    if (buf.trim()) throw new Error("Chat 响应在完整帧之前中断");
+    if (!completed) throw new Error("Chat 响应未完成，请重试");
+    if (!answer.trim()) throw new Error("Chat 未返回有效答案");
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   }
 
   return answer;
@@ -769,7 +878,11 @@ export async function workspaceScan(): Promise<WorkspaceScanResult> {
     return window.echo.scanLocalWorkspaces();
   }
   const u = await apiUrl("/workspace/scan");
-  const r = await fetch(u, { method: "POST" });
+  const r = await fetchWithAbortTimeout(
+    u,
+    { method: "POST" },
+    WORKSPACE_SCAN_TIMEOUT_MS,
+  );
   return asJson<WorkspaceScanResult>(r);
 }
 
@@ -863,14 +976,14 @@ function summarizeTtsDetail(status: number, raw: string): string {
     /* not json */
   }
   if (detail.startsWith("tts_silent_output")) {
-    return "TTS 上游返回静音（可能 qwen3-tts 冷启动），请稍后重试";
+    return "语音播报未检测到可播放的声音，请稍后重试";
   }
   if (detail.startsWith("tts_upstream_error")) {
-    return `TTS 上游异常：${detail.replace("tts_upstream_error:", "").trim()}`;
+    return "语音播报服务暂时不可用，请稍后重试";
   }
-  if (status === 503) return "TTS 已在设置中关闭";
-  if (status === 400) return "TTS 文本为空";
-  return `TTS 失败：${detail || `HTTP ${status}`}`;
+  if (status === 503) return "语音播报已在设置中关闭";
+  if (status === 400) return "没有可播报的内容";
+  return "语音播报失败，请稍后重试";
 }
 
 /**
@@ -882,13 +995,19 @@ function summarizeTtsDetail(status: number, raw: string): string {
 export async function ttsSpeak(
   text: string,
   voice?: string,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ArrayBuffer> {
   const u = await apiUrl("/tts/speak");
-  const r = await fetch(u, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice }),
-  });
+  const r = await fetchWithAbortTimeout(
+    u,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice }),
+    },
+    options.timeoutMs ?? TTS_SPEAK_TIMEOUT_MS,
+    options.signal,
+  );
   if (!r.ok) {
     const raw = await r.text();
     throw new TtsSpeakError(summarizeTtsDetail(r.status, raw), r.status, raw);

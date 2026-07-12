@@ -1,5 +1,5 @@
 import { expect, test, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -15,7 +15,7 @@ const BACKEND_ROOT =
 const PYTHON_BIN = path.join(BACKEND_ROOT, ".venv/bin/python");
 const AGENTOS_ROOT =
   process.env.ECHODESK_AGENTOS_ROOT ?? path.resolve(REPO_ROOT, "../agentos");
-const YUNWU_CONFIG_PATH =
+const MODEL_CONFIG_PATH =
   process.env.ECHODESK_REAL_CONFIG ?? path.join(os.homedir(), ".echodesk/config.json");
 const TEST_ROOT = path.join(os.tmpdir(), "echodesk-0.3-installed-e2e");
 const DB_PATH = path.join(TEST_ROOT, "echodesk.db");
@@ -27,14 +27,19 @@ const SCREENSHOT_DIR = path.join(REPO_ROOT, "desktop/test-results/installed-loca
 const BACKEND_PORT = 8769;
 const AGENTOS_PROXY_PORT = 14127;
 const AGENTOS_SERVER_PORT = 14128;
-const TODO_ID = "todo-installed-local-e2e";
 const DEVICE_ID = "desktop-installed-local-e2e";
-const TODO_COMMAND =
-  "@生成 TXT 依据以下已提供事实写一份不少于 700 字符的纯文本验收报告，第一行必须包含 ECHODESK_TODO_E2E_OK。已验证事实：EchoDesk 版本为 0.3.0；本地 backend 使用隔离 SQLite；首次 Todo run 因 1 秒超时进入 failed 并写入 workflow_events；应用完全退出并重启后，会议、Todo failed 状态和原 run_id 均从数据库恢复；重试请求携带 retry_of 指向原 run；成功产物必须进入 artifacts 和 artifact_links，并能通过会议 artifacts API 下载。请按执行摘要、状态转换、持久化证据、结论与下一步四节展开，以上内容就是完整事实材料，不要回答资料不足。";
+const TODO_MARKER = "ECHODESK_TODO_E2E_OK";
+const TRANSCRIPT_SEGMENTS = [
+  "本次是 EchoDesk 0.3.1 安装态工作流验收。我们确认桌面客户端连接隔离的本地 backend 和 SQLite。",
+  "明确决议：会议纪要、待办、产物和 AgentOS 都必须经过真实产品 API 和 Workflow Kernel，禁止直接修改数据库或使用 mock。",
+  `行动项：请 EchoDesk 生成 TXT 纯文本验收报告，报告第一行必须原样包含 ${TODO_MARKER}，正文按执行摘要、状态转换、持久化证据、结论与下一步四节展开。`,
+  "报告需要说明首次待办运行因执行超时失败，应用重启后恢复 failed 状态和原 run_id，随后重试成功并通过 retry_of 建立谱系，产物可从会议详情下载。",
+];
 
 type JsonMap = Record<string, unknown>;
 
-type YunwuConfig = {
+type ModelConfig = {
+  provider: string;
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -48,22 +53,34 @@ type AgentServices = {
 const activeApps = new Set<ElectronApplication>();
 let activeAgentServices: AgentServices | null = null;
 
-function loadYunwuConfig(): YunwuConfig {
-  if (!existsSync(YUNWU_CONFIG_PATH)) {
-    throw new Error(`real main-model config missing: ${YUNWU_CONFIG_PATH}`);
+function loadModelConfig(): ModelConfig {
+  if (!existsSync(MODEL_CONFIG_PATH) && !process.env.ECHODESK_REAL_BASE_URL) {
+    throw new Error(`real main-model config missing: ${MODEL_CONFIG_PATH}`);
   }
-  const config = JSON.parse(readFileSync(YUNWU_CONFIG_PATH, "utf8")) as JsonMap;
-  const apiKey = String(config.yunwu_open_key ?? "").trim();
-  if (!apiKey) throw new Error(`main-model API key missing in ${YUNWU_CONFIG_PATH}`);
-  const model = String(config.llm_main_model ?? "").trim();
-  const baseUrl = String(config.llm_main_base_url ?? "").trim().replace(/\/$/, "");
-  if (model !== "deepseek-v4-flash") {
-    throw new Error(`real E2E requires deepseek-v4-flash, got ${model || "<empty>"}`);
+  const config = existsSync(MODEL_CONFIG_PATH)
+    ? (JSON.parse(readFileSync(MODEL_CONFIG_PATH, "utf8")) as JsonMap)
+    : {};
+  const provider = String(
+    process.env.ECHODESK_REAL_PROVIDER ?? config.llm_main_provider ?? "openai-compatible",
+  ).trim();
+  const model = String(
+    process.env.ECHODESK_REAL_MODEL ?? config.llm_main_model ?? "",
+  ).trim();
+  const baseUrl = String(
+    process.env.ECHODESK_REAL_BASE_URL ?? config.llm_main_base_url ?? "",
+  )
+    .trim()
+    .replace(/\/$/, "");
+  const apiKey = String(
+    process.env.ECHODESK_REAL_API_KEY ??
+      config.llm_main_api_key ??
+      config.yunwu_open_key ??
+      "EMPTY",
+  ).trim();
+  if (!model || !baseUrl) {
+    throw new Error(`real E2E requires a non-empty model and base URL in ${MODEL_CONFIG_PATH}`);
   }
-  if (baseUrl !== "https://yunwu.ai/v1") {
-    throw new Error(`real E2E main-model endpoint mismatch: ${baseUrl || "<empty>"}`);
-  }
-  return { apiKey, model, baseUrl };
+  return { provider, apiKey: apiKey || "EMPTY", model, baseUrl };
 }
 
 async function isPortOpen(port: number): Promise<boolean> {
@@ -115,7 +132,7 @@ async function stopProcess(process: ChildProcess | undefined): Promise<void> {
   }
 }
 
-async function startRealAgentServices(config: YunwuConfig): Promise<AgentServices> {
+async function startRealAgentServices(config: ModelConfig): Promise<AgentServices> {
   await waitForPortState(AGENTOS_PROXY_PORT, false, 5_000);
   await waitForPortState(AGENTOS_SERVER_PORT, false, 5_000);
 
@@ -220,7 +237,65 @@ async function api<T extends JsonMap | JsonMap[]>(
   return result as T;
 }
 
-async function launchInstalled(skillTimeoutSeconds: number, yunwu: YunwuConfig): Promise<{
+async function ssePost(
+  win: Page,
+  endpoint: string,
+  body: JsonMap,
+): Promise<{ text: string; events: JsonMap[] }> {
+  const raw = await win.evaluate(
+    async ({ endpoint: apiEndpoint, body: apiBody }) => {
+      const base = await (window as unknown as {
+        echo?: { getBackendHost?: () => Promise<string> };
+      }).echo?.getBackendHost?.();
+      if (!base) throw new Error("backend host unavailable");
+      const response = await fetch(`${base}${apiEndpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(apiBody),
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`${response.status}: ${text}`);
+      return text;
+    },
+    { endpoint, body },
+  );
+  let text = "";
+  const events: JsonMap[] = [];
+  let completed = false;
+  for (const block of raw.split("\n\n")) {
+    const event = block
+      .split("\n")
+      .find((line) => line.startsWith("event: "))
+      ?.slice(7)
+      .trim();
+    const payload = block
+      .split("\n")
+      .find((line) => line.startsWith("data: "))
+      ?.slice(6);
+    if (!payload) continue;
+    if (payload === "[DONE]") {
+      completed = true;
+      continue;
+    }
+    const decoded = JSON.parse(payload) as JsonMap;
+    events.push(decoded);
+    const frameType = typeof decoded.type === "string" ? decoded.type : event;
+    if (frameType === "error" || typeof decoded.error === "string") {
+      throw new Error(`SSE error from ${endpoint}: ${String(decoded.error ?? payload)}`);
+    }
+    if (frameType === "done") {
+      completed = true;
+      if (typeof decoded.answer === "string") text = decoded.answer;
+      continue;
+    }
+    if (typeof decoded.delta === "string") text += decoded.delta;
+  }
+  if (!completed) throw new Error(`SSE stream from ${endpoint} ended before a terminal frame`);
+  if (!text.trim()) throw new Error(`SSE stream from ${endpoint} returned an empty answer`);
+  return { text, events };
+}
+
+async function launchInstalled(skillTimeoutSeconds: number, modelConfig: ModelConfig): Promise<{
   app: ElectronApplication;
   win: Page;
 }> {
@@ -237,10 +312,16 @@ async function launchInstalled(skillTimeoutSeconds: number, yunwu: YunwuConfig):
     STORAGE_DIR,
     SKILL_EXECUTOR_BUILD_DIR: SKILL_DIR,
     SKILL_EXECUTOR_TIMEOUT_S: String(skillTimeoutSeconds),
-    LLM_MAIN_PROVIDER: "yunwu",
-    LLM_MAIN_MODEL: yunwu.model,
-    LLM_MAIN_BASE_URL: yunwu.baseUrl,
-    YUNWU_OPEN_KEY: yunwu.apiKey,
+    LLM_MAIN_PROVIDER: modelConfig.provider,
+    LLM_MAIN_MODEL: modelConfig.model,
+    LLM_MAIN_BASE_URL: modelConfig.baseUrl,
+    LLM_MAIN_API_KEY: modelConfig.apiKey,
+    LLM_FAST_PROVIDER: modelConfig.provider,
+    LLM_FAST_MODEL: modelConfig.model,
+    LLM_FAST_BASE_URL: modelConfig.baseUrl,
+    LLM_LOCAL_API_KEY: modelConfig.apiKey,
+    TTS_ENABLED: "false",
+    AMBIENT_CAPTURE_ENABLED: "false",
     AGENT_OS_ENABLED: "true",
     AGENT_OS_URL: `http://127.0.0.1:${AGENTOS_SERVER_PORT}`,
     AGENT_TASK_TIMEOUT_S: "300",
@@ -344,61 +425,22 @@ async function closeInstalled(app: ElectronApplication): Promise<void> {
   }
 }
 
-function sqlQuote(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function seedFinalizedMinutes(meetingId: string): void {
-  const now = new Date().toISOString();
-  const minutes = {
-    meeting_id: meetingId,
-    title: "0.3 本机 Workflow 验收",
-    duration_sec: 120,
-    speakers: [],
-    summary: "通过已安装 EchoDesk 验证 Todo workflow 的失败、重试、产物关联与重启恢复。",
-    sections: [
-      {
-        heading: "验收要求",
-        bullets: ["真实 backend", "真实 SQLite", "真实 Claude 模型输出"],
-      },
-    ],
-    decisions: ["Todo 失败后必须保留 retry lineage"],
-    todos: [
-      {
-        id: TODO_ID,
-        text: "生成包含 ECHODESK_TODO_E2E_OK 的 TXT Workflow 验收报告",
-        assignee: "EchoDesk",
-        kind: "actionable",
-        status: "pending",
-        done_at: null,
-        artifact_id: null,
-        suggested_command: TODO_COMMAND,
-      },
-    ],
-    action_items: [],
-    raw_transcript_ref: null,
-    created_at: now,
-  };
-  const sql = `
-    UPDATE meetings
-       SET title = ${sqlQuote(minutes.title)},
-           display_title = ${sqlQuote(minutes.title)},
-           state = 'finalized',
-           ended_at = ${sqlQuote(now)},
-           finalized_at = ${sqlQuote(now)},
-           minutes_json = ${sqlQuote(JSON.stringify(minutes))},
-           minutes_status = 'ok',
-           minutes_error = NULL
-     WHERE id = ${sqlQuote(meetingId)};
-  `;
-  execFileSync("/usr/bin/sqlite3", [DB_PATH, sql], { stdio: "inherit" });
-}
-
-async function selectMeeting(win: Page, meetingId: string): Promise<ReturnType<Page["locator"]>> {
-  const meetingItem = win.locator(`[data-meeting-id="${meetingId}"]`);
-  await expect(meetingItem).toBeVisible({ timeout: 30_000 });
-  await meetingItem.click();
-  const row = win.locator(`[data-todo-id="${TODO_ID}"]`);
+async function selectMeeting(
+  win: Page,
+  meetingId: string,
+  todoId: string,
+): Promise<ReturnType<Page["locator"]>> {
+  const row = win.locator(`[data-todo-id="${todoId}"]`);
+  if (!(await row.isVisible())) {
+    const meetingItem = win.locator(`[data-meeting-id="${meetingId}"]`);
+    await expect(meetingItem).toBeVisible({ timeout: 30_000 });
+    await meetingItem.click();
+  }
+  if (!(await row.isVisible())) {
+    const minutesTab = win.getByRole("tab", { name: "会议纪要" });
+    await expect(minutesTab).toBeVisible({ timeout: 30_000 });
+    await minutesTab.click();
+  }
   await expect(row).toBeVisible({ timeout: 30_000 });
   return row;
 }
@@ -423,16 +465,16 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     await stopRealAgentServices(activeAgentServices);
   });
 
-  test("installed app: failure → restart → DS v4 retry → real AgentOS", async () => {
+  test("installed app: GLM chat/RAG → failure/restart/retry → real AgentOS", async () => {
     test.setTimeout(900_000);
     rmSync(TEST_ROOT, { recursive: true, force: true });
     mkdirSync(SCREENSHOT_DIR, { recursive: true });
-    const yunwu = loadYunwuConfig();
-    const agentServices = await startRealAgentServices(yunwu);
+    const modelConfig = loadModelConfig();
+    const agentServices = await startRealAgentServices(modelConfig);
 
-    let first = await launchInstalled(180, yunwu);
+    let first = await launchInstalled(1, modelConfig);
     const appVersion = await first.app.evaluate(async ({ app }) => app.getVersion());
-    expect(appVersion).toBe("0.3.0");
+    expect(appVersion).toBe("0.3.1");
     expect(
       await first.win.evaluate(
         () => (window as unknown as { echo?: { isPublicDemo?: boolean } }).echo?.isPublicDemo,
@@ -449,7 +491,12 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
       .toBe("http://127.0.0.1:8769");
 
     const health = await api<JsonMap>(first.win, "/healthz/full");
-    expect((health.backend as JsonMap).version).toBe("0.3.0");
+    expect((health.backend as JsonMap).version).toBe("0.3.1");
+    const chat = await ssePost(first.win, "/chat", {
+      question: "只回复 ECHODESK_CHAT_GL5_OK，不要添加其他内容。",
+      model: "FAST",
+    });
+    expect(chat.text).toContain("ECHODESK_CHAT_GL5_OK");
     const meetingBar = first.win.getByTestId("meeting-status-bar");
     await expect(meetingBar).toBeEnabled({ timeout: 30_000 });
     await meetingBar.click();
@@ -457,54 +504,71 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     const current = await api<JsonMap>(first.win, "/meetings/current");
     const meetingId = String(current.meeting_id);
     expect(meetingId).toMatch(/^m-/);
-    await first.win.evaluate(
-      ({ meetingId: id, todoId }) => {
-        window.localStorage.setItem(`echodesk:auto-exec:v1:${id}:${todoId}`, "1");
-      },
-      { meetingId, todoId: TODO_ID },
+    for (const [index, text] of TRANSCRIPT_SEGMENTS.entries()) {
+      await api<JsonMap>(first.win, `/meetings/${meetingId}/inject_segment`, "POST", {
+        text,
+        start_ms: index * 30_000,
+        end_ms: (index + 1) * 30_000,
+        speaker_label: index < 2 ? "说话人1" : "说话人2",
+      });
+    }
+    const ended = await api<JsonMap>(first.win, "/meetings/manual_end", "POST");
+    expect(ended.meeting_id).toBe(meetingId);
+    const minutes = await api<JsonMap>(first.win, `/meetings/${meetingId}/minutes`);
+    const todos = (minutes.todos as JsonMap[]) ?? [];
+    const actionableTodo = todos.find(
+      (todo) => todo.kind === "actionable" && String(todo.suggested_command ?? "").startsWith("@"),
     );
-    await first.win.screenshot({
-      path: path.join(SCREENSHOT_DIR, "01-installed-meeting-started.png"),
-      fullPage: true,
+    expect(actionableTodo, "real minutes must contain an executable todo").toBeDefined();
+    const todoId = String(actionableTodo!.id);
+    const todoCommand = String(actionableTodo!.suggested_command);
+    expect(todoId).toMatch(/^t-/);
+    expect(todoCommand.toLowerCase()).toContain("txt");
+    const ragAnswer = await ssePost(first.win, "/rag/ask", {
+      question: "EchoDesk 0.3.1 安装态工作流验收会议的行动项和报告要求是什么？",
+      rag_top_k: 6,
+      web_top_n: 0,
     });
-    await closeInstalled(first.app);
-    seedFinalizedMinutes(meetingId);
-
-    const failing = await launchInstalled(1, yunwu);
-    const restoredMeetings = await api<JsonMap[]>(failing.win, "/meetings?limit=50");
-    expect(restoredMeetings.some((meeting) => meeting.meeting_id === meetingId)).toBe(true);
-    let row = await selectMeeting(failing.win, meetingId);
-    await expect(row).toHaveAttribute("data-todo-status", "pending");
-    await row.getByTestId("minutes-todo-execute-btn").click();
-    const textarea = failing.win.getByTestId("command-textarea");
-    await expect(textarea).toHaveValue(TODO_COMMAND);
-    await textarea.press("Enter");
-    await expect(row).toHaveAttribute("data-todo-status", "failed", {
-      timeout: 45_000,
-    });
-    await expect(row.getByTestId("minutes-todo-execute-btn")).toHaveText("重试");
-    await expect(failing.win.getByTestId("failed-artifact-card").first()).toBeVisible();
+    expect(ragAnswer.text).toMatch(/TXT|验收报告/);
+    const ragMeta = ragAnswer.events.find(
+      (event) => event.meta && typeof event.meta === "object",
+    )?.meta as JsonMap | undefined;
+    expect((ragMeta?.citations as JsonMap[] | undefined)?.length ?? 0).toBeGreaterThan(0);
+    await expect
+      .poll(
+        async () => {
+          const runs = await api<JsonMap[]>(
+            first.win,
+            `/workflows/runs?meeting_id=${meetingId}&todo_id=${todoId}&limit=20`,
+          );
+          return runs.some((run) => run.state === "failed");
+        },
+        { timeout: 45_000, intervals: [250, 500, 1000] },
+      )
+      .toBe(true);
     const failedRuns = await api<JsonMap[]>(
-      failing.win,
-      `/workflows/runs?meeting_id=${meetingId}&todo_id=${TODO_ID}&limit=20`,
+      first.win,
+      `/workflows/runs?meeting_id=${meetingId}&todo_id=${todoId}&limit=20`,
     );
     const failedRun = failedRuns.find((run) => run.state === "failed");
     expect(failedRun).toBeDefined();
     const failedRunId = String(failedRun!.run_id);
     const failedEventResponse = await api<JsonMap>(
-      failing.win,
+      first.win,
       `/workflows/runs/${failedRunId}/events`,
     );
     const failedEvents = (failedEventResponse.events as JsonMap[]) ?? [];
     expect(failedEvents.some((event) => event.state === "failed")).toBe(true);
-    await failing.win.screenshot({
-      path: path.join(SCREENSHOT_DIR, "02-installed-todo-failed.png"),
+    await first.win.screenshot({
+      path: path.join(SCREENSHOT_DIR, "01-installed-todo-failed.png"),
       fullPage: true,
     });
-    await closeInstalled(failing.app);
+    await closeInstalled(first.app);
 
-    const working = await launchInstalled(180, yunwu);
-    row = await selectMeeting(working.win, meetingId);
+    const working = await launchInstalled(180, modelConfig);
+    const restoredMeetings = await api<JsonMap[]>(working.win, "/meetings?limit=50");
+    expect(restoredMeetings.some((meeting) => meeting.meeting_id === meetingId)).toBe(true);
+    let row = await selectMeeting(working.win, meetingId, todoId);
     await expect(row).toHaveAttribute("data-todo-status", "failed", { timeout: 30_000 });
     await expect(row).toHaveAttribute("data-workflow-run-id", failedRunId);
     await row.getByTestId("minutes-todo-execute-btn").click();
@@ -512,15 +576,18 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     await expect(row).toHaveAttribute("data-todo-status", "done", {
       timeout: 240_000,
     });
-    await expect(row.getByTestId("minutes-todo-artifact-link")).toBeVisible();
+    await expect(row.getByTestId("minutes-todo-artifact-link")).toHaveAttribute(
+      "href",
+      /\/artifacts\/[^/]+\/download$/,
+    );
 
     const runs = await api<JsonMap[]>(
       working.win,
-      `/workflows/runs?meeting_id=${meetingId}&todo_id=${TODO_ID}&limit=20`,
+      `/workflows/runs?meeting_id=${meetingId}&todo_id=${todoId}&limit=20`,
     );
     const succeededRun = runs.find((run) => run.state === "succeeded");
     expect(succeededRun).toBeDefined();
-    expect((succeededRun!.input as JsonMap).retry_of).toBe(failedRunId);
+    expect((succeededRun!.input as JsonMap).retry_of_run_id).toBe(failedRunId);
     const meetingArtifacts = await api<JsonMap[]>(
       working.win,
       `/meetings/${meetingId}/artifacts`,
@@ -534,7 +601,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
       const response = await fetch(`${base}/artifacts/${artifactId}/download`);
       return await response.text();
     }, todoArtifactId);
-    expect(downloadText).toContain("ECHODESK_TODO_E2E_OK");
+    expect(downloadText).toContain(TODO_MARKER);
 
     const agentTask = await api<JsonMap>(working.win, "/agents/tasks", "POST", {
       device_id: DEVICE_ID,
@@ -603,19 +670,19 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     expect(timeoutRuns.some((run) => run.state === "timeout")).toBe(true);
 
     await working.win.screenshot({
-      path: path.join(SCREENSHOT_DIR, "03-installed-workflows-complete.png"),
+      path: path.join(SCREENSHOT_DIR, "02-installed-workflows-complete.png"),
       fullPage: true,
     });
     await closeInstalled(working.app);
 
-    first = await launchInstalled(180, yunwu);
-    row = await selectMeeting(first.win, meetingId);
+    first = await launchInstalled(180, modelConfig);
+    row = await selectMeeting(first.win, meetingId, todoId);
     await expect(row).toHaveAttribute("data-todo-status", "done", { timeout: 30_000 });
     await expect(first.win.locator(`[data-task-id="${agentTaskId}"]`)).toContainText("已完成");
     await expect(first.win.locator(`[data-task-id="${cancelTaskId}"]`)).toContainText("已取消");
     await expect(first.win.locator(`[data-task-id="${timeoutTaskId}"]`)).toContainText("已超时");
     await first.win.screenshot({
-      path: path.join(SCREENSHOT_DIR, "04-installed-restart-restored.png"),
+      path: path.join(SCREENSHOT_DIR, "03-installed-restart-restored.png"),
       fullPage: true,
     });
     await closeInstalled(first.app);

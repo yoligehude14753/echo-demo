@@ -2,6 +2,7 @@ import ReactDOM from "react-dom/client";
 import { ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import App from "@/App";
+import { TtsProvider } from "@/hooks/useTtsPlayer";
 import {
   installPublicDemoStorageMigration,
   installRuntimeBodyClasses,
@@ -39,7 +40,7 @@ if (!alreadyMounted) {
           colorBorderSecondary: "#f0f0f0",
           borderRadius: 8,
           fontFamily:
-            'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif',
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
         },
         components: {
           Layout: {
@@ -58,7 +59,9 @@ if (!alreadyMounted) {
         },
       }}
     >
-      <App />
+      <TtsProvider>
+        <App />
+      </TtsProvider>
     </ConfigProvider>,
   );
 }

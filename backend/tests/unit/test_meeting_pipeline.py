@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app.adapters.repo.migrator import run_migrations
+from app.adapters.repo.sqlite import SQLiteRepository
 from app.config import Settings
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
 from app.schemas.meeting import TranscriptSegment
@@ -48,11 +50,16 @@ class FakeDiarizer:
 class FakeRag:
     def __init__(self) -> None:
         self.ingested: list[tuple[str, str, str]] = []
+        self.deleted: list[str] = []
+        self.fail_ingest = False
+        self.fail_delete = False
 
     async def ingest_pdf(self, file_path: str, doc_title: str | None = None) -> str:
         return "pdf-doc-id"
 
     async def ingest_meeting(self, meeting_id: str, transcript: str, title: str) -> str:
+        if self.fail_ingest:
+            raise RuntimeError("temporary RAG ingest failure")
         self.ingested.append((meeting_id, transcript, title))
         return f"meeting-doc-{meeting_id}"
 
@@ -60,7 +67,9 @@ class FakeRag:
         return []
 
     async def delete(self, doc_id: str) -> None:
-        return None
+        if self.fail_delete:
+            raise RuntimeError("temporary RAG delete failure")
+        self.deleted.append(doc_id)
 
 
 class FakeLLM:
@@ -177,6 +186,81 @@ async def test_finalize_generates_minutes_and_ingests_rag(tmp_path: Path) -> Non
     assert meeting_id == "m3"
     assert title == "预算评审"
     assert "Q3" in payload and "说话人1" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_meeting_rag_projection_failure_is_durable_and_repaired_after_restart(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "projection.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    migration = await run_migrations(settings.db_path)
+    assert migration.errors == []
+    repo = SQLiteRepository(settings.db_path)
+    await repo.init()
+    failing_rag = FakeRag()
+    failing_rag.fail_ingest = True
+    minutes_json = json.dumps(
+        {
+            "title": "可修复投影",
+            "summary": "会议纪要已提交，但索引暂时失败。",
+            "sections": [{"heading": "状态", "bullets": ["纪要成功", "稍后补索引"]}],
+        },
+        ensure_ascii=False,
+    )
+    first = MeetingPipeline(
+        settings=settings,
+        stt=FakeSTT([[TranscriptSegment(text="持久纪要内容", start_ms=0, end_ms=1500)]]),
+        diarizer=FakeDiarizer(["spk-A"]),
+        rag=failing_rag,
+        llm=FakeLLM(minutes_json),
+        repository=repo,
+    )
+    await first.start_meeting("m-rag-repair", title="投影修复")
+    await first.add_audio_chunk("m-rag-repair", b"\x00" * 16_000)
+    minutes = await first.finalize_meeting("m-rag-repair", title="投影修复")
+    assert minutes.summary
+    failed = await repo.get_meeting("m-rag-repair")
+    assert failed is not None
+    assert failed.minutes_status == "ok"
+    assert failed.rag_projection_state == "index_failed"
+    assert "temporary RAG ingest failure" in (failed.rag_projection_error or "")
+
+    recovered_rag = FakeRag()
+    restarted = MeetingPipeline(
+        settings=settings,
+        stt=FakeSTT([]),
+        diarizer=FakeDiarizer([]),
+        rag=recovered_rag,
+        llm=FakeLLM("{}"),
+        repository=repo,
+    )
+    assert await restarted.repair_rag_projections() == (1, 1)
+    repaired = await repo.get_meeting("m-rag-repair")
+    assert repaired is not None
+    assert repaired.rag_projection_state == "indexed"
+    assert repaired.rag_projection_error is None
+    assert repaired.rag_projected_at is not None
+    assert recovered_rag.ingested[0][0] == "m-rag-repair"
+
+    await repo.clear_meeting_outputs("m-rag-repair")
+    recovered_rag.fail_delete = True
+    assert await restarted.repair_rag_projections() == (1, 0)
+    delete_failed = await repo.get_meeting("m-rag-repair")
+    assert delete_failed is not None
+    assert delete_failed.rag_projection_state == "delete_failed"
+    recovered_rag.fail_delete = False
+    assert await restarted.repair_rag_projections() == (1, 1)
+    deleted = await repo.get_meeting("m-rag-repair")
+    assert deleted is not None
+    assert deleted.rag_projection_state == "deleted"
+    assert recovered_rag.deleted == ["meeting-m-rag-repair"]
+    await repo.aclose()
 
 
 @pytest.mark.asyncio

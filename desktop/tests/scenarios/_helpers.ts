@@ -192,7 +192,7 @@ export async function installScenarioMock(
               source: "user",
             },
             {
-              key: "yunwu_open_key",
+              key: "llm_main_api_key",
               value: "sk-abcd***wxyz",
               sensitive: true,
               source: "user",

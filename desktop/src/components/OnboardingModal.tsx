@@ -10,10 +10,11 @@
  * 用户后续想重看，在 SettingsPanel 触发 resetForDebug() 即可。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, Modal, Steps } from "antd";
 import { CheckCircle2, FolderOpen, Mic, Sparkles } from "lucide-react";
 import { apiUrl } from "@/runtime";
+import { apiTransport } from "@/session";
 
 type StepKey = "welcome" | "mic" | "done";
 
@@ -27,12 +28,22 @@ interface Props {
 export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
   const [stepIdx, setStepIdx] = useState(0);
   const stepKey: StepKey = STEPS[stepIdx] ?? "welcome";
+  const wasOpenRef = useRef(open);
 
   const [dataDirPath, setDataDirPath] = useState<string | null>(null);
   const [micState, setMicState] = useState<"unknown" | "granted" | "denied" | "prompt">(
     "unknown",
   );
   const [requesting, setRequesting] = useState(false);
+
+  // OnboardingModal 本身始终挂载；AntD 只会销毁 Modal 内部节点，因此步骤 state
+  // 不会随着弹窗关闭自动清空。只在“已关闭 → 再次打开”的边沿回到欢迎页，
+  // 避免首次打开或用户切换步骤时被 effect 意外重置。
+  useLayoutEffect(() => {
+    const isReopening = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+    if (isReopening) setStepIdx(0);
+  }, [open]);
 
   // 拉数据目录路径（让用户知道数据存在哪）
   useEffect(() => {
@@ -41,7 +52,7 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
     (async () => {
       try {
         const u = await apiUrl("/admin/data-dir");
-        const r = await fetch(u);
+        const r = await apiTransport(u, {}, { timeoutMs: 8_000, throwHttpErrors: false });
         if (!r.ok) return;
         const d = (await r.json()) as { path?: string };
         if (!cancelled && d.path) setDataDirPath(d.path);
@@ -111,7 +122,7 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
       footer={null}
       width={520}
       title={null}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="py-2">
         <Steps
@@ -190,7 +201,7 @@ function WelcomeStep({ dataDirPath }: { dataDirPath: string | null }): JSX.Eleme
         </div>
         <div className="text-ink-400 mt-1.5">
           会议数据库、录音、知识库索引、日志全部都在这里。可在「设置 → 数据」
-          里查看占用 / 一键导出 / 卸载。
+          里查看占用、导出诊断信息或卸载。
         </div>
       </div>
     </div>
@@ -293,13 +304,13 @@ function DoneStep(): JSX.Element {
       <div className="text-ink-600">三个关键交互点：</div>
       <ul className="list-disc pl-5 space-y-1.5 text-[12px] text-ink-600">
         <li>
-          底部 CommandBar 输入 <b>@生成 PPT / @报告 / @查 …</b> 触发 LLM 流程
+          在底部输入问题，或直接描述要生成的文档、表格和演示文稿
         </li>
         <li>
-          左上「开始会议」启动录音；侧边录音状态条会显示当前会议
+          点击「开始会议」保存本次记录；不开始会议时也会持续显示实时转写
         </li>
         <li>
-          右上「设置 ⚙」可查数据占用、导出诊断包、重置说话人
+          右上「设置」可管理知识库、数据占用、诊断包和说话人
         </li>
       </ul>
       <div className="text-ink-400 text-[11px]">

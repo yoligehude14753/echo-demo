@@ -16,21 +16,30 @@ endpoint 让 SettingsPanel GUI（dialog.showOpenDialog → POST）一键完成�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.adapters.rag.workspace_scanner import WorkspaceScanner
+from app.api.deps import get_workflow_dispatcher, require_admin_access
 from app.api.retrieval import get_rag
 from app.config import Settings, get_settings
 from app.config_io import write_user_config_json
 from app.ports.rag import RagPort
+from app.schemas.workflow import WorkflowRunCreate
+from app.workflows.kernel import WorkflowContext, WorkflowDispatcher, WorkflowExecutionError
 
 logger = logging.getLogger("echodesk.workspace")
 
-router = APIRouter(prefix="/workspace", tags=["workspace"])
+router = APIRouter(
+    prefix="/workspace",
+    tags=["workspace"],
+    dependencies=[Depends(require_admin_access)],
+)
 
 
 _scanner_singleton: WorkspaceScanner | None = None
@@ -52,6 +61,84 @@ def reset_singleton() -> None:
     _scanner_singleton = None
 
 
+def bind_workspace_workflow_handlers(
+    dispatcher: WorkflowDispatcher,
+    scanner: WorkspaceScanner,
+    settings: Settings | None = None,
+) -> None:
+    async def scan_handler(context: WorkflowContext, _payload: dict[str, Any]) -> dict[str, Any]:
+        if context.cancel_event.is_set():
+            raise asyncio.CancelledError
+        result = await scanner.scan()
+        return {
+            "n_total": result.n_total,
+            "n_added": result.n_added,
+            "n_updated": result.n_updated,
+            "n_removed": result.n_removed,
+            "n_skipped": result.n_skipped,
+            "n_failed": result.n_failed,
+            "duration_s": result.duration_s,
+            "errors": result.errors[:10],
+        }
+
+    async def clear_handler(context: WorkflowContext, _payload: dict[str, Any]) -> dict[str, Any]:
+        if context.cancel_event.is_set():
+            raise asyncio.CancelledError
+        return {"n_removed": await scanner.clear()}
+
+    if dispatcher.registry.resolve("workspace.scan") is None:
+        dispatcher.registry.register("workspace.scan", scan_handler)
+    if dispatcher.registry.resolve("workspace.clear") is None:
+        dispatcher.registry.register("workspace.clear", clear_handler)
+    if settings is not None:
+
+        async def config_handler(
+            context: WorkflowContext,
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            if context.cancel_event.is_set():
+                raise asyncio.CancelledError
+            new_csv = str(payload["workspace_dirs"])
+            write_user_config_json({"workspace_dirs": new_csv})
+            settings.workspace_dirs = new_csv
+            scan_run = await dispatcher.dispatch(
+                WorkflowRunCreate(
+                    kind="workspace.scan",
+                    source=str(payload["source"]),
+                    intent_text="Scan workspace after durable configuration update",
+                    timeout_s=600,
+                    active_key="workspace.scan",
+                )
+            )
+            return {
+                "workspace_dirs": new_csv,
+                "scan_run_id": scan_run.run_id,
+            }
+
+        for kind in ("workspace.config.add", "workspace.config.remove"):
+            if dispatcher.registry.resolve(kind) is None:
+                dispatcher.registry.register(kind, config_handler)
+
+
+async def _run_workspace_scan(
+    dispatcher: WorkflowDispatcher,
+    scanner: WorkspaceScanner,
+    *,
+    source: str,
+) -> dict[str, object]:
+    bind_workspace_workflow_handlers(dispatcher, scanner)
+    done = await dispatcher.execute(
+        WorkflowRunCreate(
+            kind="workspace.scan",
+            source=source,
+            intent_text="Scan authorized workspace directories",
+            timeout_s=600,
+            active_key="workspace.scan",
+        )
+    )
+    return done.output
+
+
 @router.get("/status")
 async def workspace_status(
     scanner: WorkspaceScanner = Depends(get_scanner),
@@ -62,26 +149,33 @@ async def workspace_status(
 @router.post("/scan")
 async def workspace_scan(
     scanner: WorkspaceScanner = Depends(get_scanner),
+    dispatcher: WorkflowDispatcher = Depends(get_workflow_dispatcher),
 ) -> dict[str, object]:
-    r = await scanner.scan()
-    return {
-        "n_total": r.n_total,
-        "n_added": r.n_added,
-        "n_updated": r.n_updated,
-        "n_removed": r.n_removed,
-        "n_skipped": r.n_skipped,
-        "n_failed": r.n_failed,
-        "duration_s": r.duration_s,
-        "errors": r.errors[:10],
-    }
+    try:
+        return await _run_workspace_scan(dispatcher, scanner, source="workspace_api")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/clear")
 async def workspace_clear(
     scanner: WorkspaceScanner = Depends(get_scanner),
+    dispatcher: WorkflowDispatcher = Depends(get_workflow_dispatcher),
 ) -> dict[str, int]:
-    n = await scanner.clear()
-    return {"n_removed": n}
+    bind_workspace_workflow_handlers(dispatcher, scanner)
+    try:
+        done = await dispatcher.execute(
+            WorkflowRunCreate(
+                kind="workspace.clear",
+                source="workspace_api",
+                intent_text="Clear workspace RAG documents",
+                timeout_s=120,
+                active_key="workspace.clear",
+            )
+        )
+    except WorkflowExecutionError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"n_removed": int(done.output["n_removed"])}
 
 
 class _DirRequest(BaseModel):
@@ -120,6 +214,7 @@ async def workspace_add_dir(
     body: _DirRequest,
     settings: Settings = Depends(get_settings),
     scanner: WorkspaceScanner = Depends(get_scanner),
+    dispatcher: WorkflowDispatcher = Depends(get_workflow_dispatcher),
 ) -> dict[str, object]:
     """把一个目录加入 workspace_dirs：持久化 user.json + 原地更新 settings + fire-and-forget scan。
 
@@ -157,30 +252,36 @@ async def workspace_add_dir(
     new_dirs = [*existing, p]
     new_csv = _dirs_to_csv(new_dirs)
 
-    # 2. 持久化到 ~/.echodesk/config.json（merge 模式只动 workspace_dirs 字段）
+    # 2. 先落 durable config run；handler 幂等写配置并在同一执行路径创建 scan run。
+    bind_workspace_workflow_handlers(dispatcher, scanner, settings)
+    digest = hashlib.sha256(new_csv.encode()).hexdigest()
     try:
-        write_user_config_json({"workspace_dirs": new_csv})
-    except OSError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"写入 user config 失败: {e}",
-        ) from e
-
-    # 3. 原地更新 live settings 实例（lru_cache 单例，所有 get_settings 调用立即看到新值）
-    settings.workspace_dirs = new_csv
+        configured = await dispatcher.execute(
+            WorkflowRunCreate(
+                kind="workspace.config.add",
+                source="workspace_add_dir",
+                intent_text=f"Add workspace directory {p}",
+                input={"workspace_dirs": new_csv, "source": "workspace_add_dir"},
+                timeout_s=30,
+                active_key=f"workspace.config.add:{digest}",
+            )
+        )
+    except WorkflowExecutionError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    scan_run_id = str(configured.output["scan_run_id"])
     logger.info("workspace add-dir: %s; current dirs=%s", p, new_csv)
 
-    # 4. fire-and-forget 扫描；不阻塞 HTTP 响应（10MB+ 文件夹可能跑 10+s）
     async def _bg_scan() -> None:
         try:
-            r = await scanner.scan()
+            done = await dispatcher.wait_succeeded(scan_run_id)
+            output = done.output
             logger.info(
                 "workspace add-dir scan: added=%d updated=%d skipped=%d removed=%d failed=%d",
-                r.n_added,
-                r.n_updated,
-                r.n_skipped,
-                r.n_removed,
-                r.n_failed,
+                output["n_added"],
+                output["n_updated"],
+                output["n_skipped"],
+                output["n_removed"],
+                output["n_failed"],
             )
         except Exception as e:
             logger.warning("workspace add-dir scan failed: %s", e)
@@ -191,6 +292,8 @@ async def workspace_add_dir(
         "added": True,
         "path": str(p),
         "configured_dirs": [str(d) for d in new_dirs],
+        "workflow_run_id": scan_run_id,
+        "config_workflow_run_id": configured.run_id,
         "message": "已加入工作区目录，正在后台扫描索引…",
     }
 
@@ -200,6 +303,7 @@ async def workspace_remove_dir(
     body: _DirRequest,
     settings: Settings = Depends(get_settings),
     scanner: WorkspaceScanner = Depends(get_scanner),
+    dispatcher: WorkflowDispatcher = Depends(get_workflow_dispatcher),
 ) -> dict[str, object]:
     """把一个目录从 workspace_dirs 摘掉。
 
@@ -226,20 +330,27 @@ async def workspace_remove_dir(
     new_dirs = [d for d in existing if d != target]
     new_csv = _dirs_to_csv(new_dirs)
 
+    bind_workspace_workflow_handlers(dispatcher, scanner, settings)
+    digest = hashlib.sha256(new_csv.encode()).hexdigest()
     try:
-        write_user_config_json({"workspace_dirs": new_csv})
-    except OSError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"写入 user config 失败: {e}",
-        ) from e
-    settings.workspace_dirs = new_csv
+        configured = await dispatcher.execute(
+            WorkflowRunCreate(
+                kind="workspace.config.remove",
+                source="workspace_remove_dir",
+                intent_text=f"Remove workspace directory {target}",
+                input={"workspace_dirs": new_csv, "source": "workspace_remove_dir"},
+                timeout_s=30,
+                active_key=f"workspace.config.remove:{digest}:{hashlib.sha256(str(target).encode()).hexdigest()[:12]}",
+            )
+        )
+    except WorkflowExecutionError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    scan_run_id = str(configured.output["scan_run_id"])
     logger.info("workspace remove-dir: %s; current dirs=%s", target, new_csv)
 
-    # 触发 scan 让 scanner 把"消失"的文件清掉
     async def _bg_scan() -> None:
         try:
-            await scanner.scan()
+            await dispatcher.wait_succeeded(scan_run_id)
         except Exception as e:
             logger.warning("workspace remove-dir scan failed: %s", e)
 
@@ -249,5 +360,7 @@ async def workspace_remove_dir(
         "removed": True,
         "path": str(target),
         "configured_dirs": [str(d) for d in new_dirs],
+        "workflow_run_id": scan_run_id,
+        "config_workflow_run_id": configured.run_id,
         "message": "已从工作区目录移除（已索引的文件将在下次扫描时清理）",
     }

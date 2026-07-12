@@ -208,6 +208,7 @@ class WorkspaceScanner:
                     doc_title=path.stem,
                     source="workspace",
                     source_path=key,
+                    operation_id=f"workspace:{key}:{sha1}:{size}",
                 )
                 state[key] = _FileState(
                     source_path=key,
@@ -254,11 +255,16 @@ class WorkspaceScanner:
 
     async def status(self) -> dict[str, Any]:
         dirs = self.list_authorized_dirs()
-        state = self._load_state()
+        # The state file is only an incremental-scan cursor. It can legitimately
+        # outlive a rebuilt/cleared owner-scoped RAG index, so exposing its row
+        # count as "indexed documents" makes the UI contradict /rag/docs.
+        # Report the authoritative, current-scope RAG projection instead.
+        docs = await self._rag.list_docs()
+        n_indexed = sum(1 for doc in docs if doc.get("source") == "workspace")
         return {
             "configured_dirs": [str(p) for p in self._settings.workspace_dirs_list],
             "authorized_dirs": [str(p) for p in dirs],
-            "n_indexed": len(state),
+            "n_indexed": n_indexed,
             "max_file_mb": self._settings.workspace_max_file_mb,
             "scan_on_startup": self._settings.workspace_scan_on_startup,
         }

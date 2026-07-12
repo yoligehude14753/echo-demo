@@ -1,0 +1,13 @@
+{
+  "local": {
+    "host": "127.0.0.1",
+    "port": 8769
+  },
+  "lanShare": {
+    "enabled": true,
+    "bindHost": "0.0.0.0"
+  },
+  "public": {
+    "baseUrl": "https://echodesk.yoliyoli.uk"
+  }
+}

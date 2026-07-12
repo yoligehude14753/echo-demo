@@ -39,6 +39,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+MAX_INTENT_TEXT_CHARS = 32_000
+MAX_RESOURCE_ID_CHARS = 256
+
 IntentKind = Literal[
     "search_web",
     "search_rag",
@@ -98,8 +101,11 @@ class IntentResult(BaseModel):
 
 
 class IntentRequest(BaseModel):
-    text: str
-    current_meeting_id: str | None = None  # 提供给 summarize_meeting 用
+    text: str = Field(min_length=1, max_length=MAX_INTENT_TEXT_CHARS)
+    current_meeting_id: str | None = Field(
+        default=None,
+        max_length=MAX_RESOURCE_ID_CHARS,
+    )  # 提供给 summarize_meeting 用
 
 
 def parse_at_prefix(text: str) -> str | None:

@@ -3,14 +3,29 @@ import { installEchoMock } from "./_mock";
 
 const MOCK_UPDATE_VERSION = "9.9.9";
 
-test("公共演示设置页：admin 禁用时仍可查看和修改服务地址", async ({ page }) => {
-  await page.route(/\/(api\/)?admin\/(data-dir|settings\/remote)$/, async (route) => {
-    await route.fulfill({
-      status: 403,
-      contentType: "application/json",
-      body: JSON.stringify({ detail: "admin endpoints are disabled in public demo mode" }),
-    });
+test("公共演示 About 与设置页不探测主机管理接口，也不显示不可达噪声", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { echo?: Record<string, unknown> }).echo = {
+      isElectron: true,
+      isPublicDemo: true,
+    };
   });
+  await page.route(
+    "https://api.github.com/repos/yoligehude14753/echo-demo/releases/latest",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({
+          tag_name: `v${MOCK_UPDATE_VERSION}`,
+          name: `EchoDesk v${MOCK_UPDATE_VERSION}`,
+          html_url: `https://github.com/yoligehude14753/echo-demo/releases/tag/v${MOCK_UPDATE_VERSION}`,
+          assets: [],
+        }),
+      });
+    },
+  );
   await page.route(/\/(api\/)?workspace\/status$/, async (route) => {
     await route.fulfill({
       status: 200,
@@ -25,17 +40,39 @@ test("公共演示设置页：admin 禁用时仍可查看和修改服务地址",
     });
   });
 
-  await installEchoMock(page, {
-    skipPaths: ["/admin/data-dir", "/admin/settings/remote", "/workspace/status"],
-  });
+  const mock = await installEchoMock(page, { skipPaths: ["/workspace/status"] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
+  await page.getByTestId("open-about").click();
+  await expect(page.getByTestId("about-backend-version")).toHaveText("公共服务");
+  await expect(page.getByTestId("about-modal-body")).not.toContainText("暂时无法连接");
+  await page.locator(".ant-modal-close").first().focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".ant-modal-wrap")).toBeHidden();
+
   await page.getByTestId("open-settings").click();
-  await expect(page.getByText("公共演示服务不开放本机数据目录")).toBeVisible();
+  await expect(page.getByTestId("settings-host-data")).toHaveCount(0);
+  await expect(page.getByTestId("settings-host-model")).toHaveCount(0);
+  await expect(page.getByTestId("remote-settings-form")).toHaveCount(0);
+  await expect(page.getByText("公共演示服务不开放本机数据目录")).toHaveCount(0);
   await expect(page.getByTestId("mobile-backend-base")).toHaveValue(
     "https://echodesk.yoliyoli.uk",
   );
-  await expect(page.getByTestId("remote-settings-form")).toBeHidden();
+  await page.getByTestId("check-updates").click();
+  await expect(page.getByTestId("update-status-tag")).toContainText("暂无适用安装包");
+
+  const hostAdminPaths = new Set([
+    "/healthz/full",
+    "/api/healthz/full",
+    "/admin/data-dir",
+    "/api/admin/data-dir",
+    "/admin/settings/remote",
+    "/api/admin/settings/remote",
+  ]);
+  const requestedPaths = (await mock.fetchLog()).map(
+    (entry) => new URL(entry.url, page.url()).pathname,
+  );
+  expect(requestedPaths.filter((path) => hostAdminPaths.has(path))).toEqual([]);
 });
 
 test("公共桌面包工作区目录读取本机 IPC 而不是远端后端", async ({ page }) => {
@@ -134,7 +171,8 @@ test("公共演示启动会清理旧历史状态和非显式服务地址", async
   ).toContain('"schema":3');
 
   const fetchLog = await mock.fetchLog();
-  expect(fetchLog.some((r) => /\/(api\/)?meetings\?/.test(r.url))).toBe(false);
+  // Public sessions are server-isolated in 0.3, so full REST hydrate is required.
+  expect(fetchLog.some((r) => /\/(api\/)?meetings\?/.test(r.url))).toBe(true);
   expect(fetchLog.some((r) => /\/(api\/)?capture\/recent/.test(r.url))).toBe(false);
 });
 
@@ -232,6 +270,12 @@ test("服务端版本落后时顶部和设置页都显式警告", async ({ page 
 });
 
 test("设置页：检查更新会展示当前平台优选 release 资产", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "userAgent", {
+      value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      configurable: true,
+    });
+  });
   await page.route(
     "https://api.github.com/repos/yoligehude14753/echo-demo/releases/latest",
     async (route) => {
@@ -282,6 +326,66 @@ test("设置页：检查更新会展示当前平台优选 release 资产", async
     `EchoDesk.Setup.${MOCK_UPDATE_VERSION}.exe`,
   );
   await expect(page.getByTestId("install-update")).toBeEnabled();
+});
+
+test("桌面 Web 遇到仅 Android 的新版时不显示可用更新", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "userAgent", {
+      value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      configurable: true,
+    });
+  });
+  await page.route(
+    "https://api.github.com/repos/yoligehude14753/echo-demo/releases/latest",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({
+          tag_name: `v${MOCK_UPDATE_VERSION}`,
+          name: `EchoDesk v${MOCK_UPDATE_VERSION}`,
+          html_url: `https://github.com/yoligehude14753/echo-demo/releases/tag/v${MOCK_UPDATE_VERSION}`,
+          assets: [
+            {
+              name: `EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
+              size: 456,
+              browser_download_url:
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
+            },
+            {
+              name: `EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
+              size: 789,
+              browser_download_url:
+                `https://github.com/yoligehude14753/echo-demo/releases/download/v${MOCK_UPDATE_VERSION}/EchoDesk-${MOCK_UPDATE_VERSION}-smart-tv.apk`,
+            },
+          ],
+        }),
+      });
+    },
+  );
+  await installEchoMock(page, { isElectron: false });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const update = await page.evaluate(async () => {
+    const { checkAppUpdate } = await import("/src/runtime.ts");
+    return checkAppUpdate();
+  });
+  expect(update).toMatchObject({
+    status: "checked",
+    latestVersion: MOCK_UPDATE_VERSION,
+    updateAvailable: false,
+    assetName: null,
+    assetUrl: null,
+  });
+
+  await expect(page.getByTestId("app-update-button")).toHaveCount(0);
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("check-updates").click();
+  await expect(page.getByTestId("update-status-tag")).toHaveText("暂无适用安装包");
+  await expect(page.getByTestId("update-asset-name")).toHaveCount(0);
+  await expect(page.getByTestId("install-update")).toBeDisabled();
+  await expect(page.getByTestId("install-update")).toHaveText("暂无适用安装包");
 });
 
 test("TV 模式检查更新优先展示 smart-tv APK", async ({ page }) => {
@@ -392,6 +496,75 @@ test("Android 横屏非 TV 包检查更新仍优先展示 android APK", async ({
   await expect(page.getByTestId("update-asset-name")).toContainText(
     `EchoDesk-${MOCK_UPDATE_VERSION}-android.apk`,
   );
+});
+
+test("本机版本高于公开版本时不会提供降级下载或安装", async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = window as unknown as Window & {
+      __installUpdateCalls?: number;
+      __openExternalCalls?: number;
+      echo?: Record<string, unknown>;
+    };
+    state.__installUpdateCalls = 0;
+    state.__openExternalCalls = 0;
+    state.echo = {
+      ...(state.echo ?? {}),
+      isElectron: true,
+      getUpdateStatus: async () => ({
+        status: "available",
+        currentVersion: "0.2.0",
+        latestVersion: "0.2.50",
+        // 即使旧主进程上报的 currentVersion 落后、并错误标记 available，
+        // 目标版本低于当前 0.3.1 前端构建时仍必须阻止降级。
+        updateAvailable: true,
+        canAutoInstall: true,
+        assetName: "EchoDesk-0.2.50.dmg",
+        assetUrl: "https://example.invalid/EchoDesk-0.2.50.dmg",
+        releaseUrl: "https://example.invalid/releases/0.2.50",
+      }),
+      installUpdate: async () => {
+        state.__installUpdateCalls = (state.__installUpdateCalls ?? 0) + 1;
+        return { ok: true };
+      },
+      openExternal: async () => {
+        state.__openExternalCalls = (state.__openExternalCalls ?? 0) + 1;
+        return { ok: true };
+      },
+    };
+  });
+  await installEchoMock(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByTestId("app-update-button")).toHaveCount(0);
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("update-status-tag")).toHaveText("本机版本较新");
+  await expect(page.getByTestId("update-version-note")).toContainText(
+    "为避免降级，下载与安装已停用",
+  );
+  await expect(page.getByTestId("install-update")).toHaveText("无需更新");
+  await expect(page.getByTestId("install-update")).toBeDisabled();
+  await expect(page.getByTestId("update-asset-name")).toBeHidden();
+  await page.getByTestId("install-update").evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as Window & { __installUpdateCalls?: number })
+            .__installUpdateCalls ?? 0,
+      ),
+    )
+    .toBe(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as Window & { __openExternalCalls?: number })
+            .__openExternalCalls ?? 0,
+      ),
+    )
+    .toBe(0);
 });
 
 test("桌面端发现新版本后会在顶栏显示更新入口并可点击安装", async ({ page }) => {

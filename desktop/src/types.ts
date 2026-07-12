@@ -27,6 +27,7 @@ export type ProtocolEventType =
   | "server_hello"
   | "server_ping"
   | "server_resync"
+  | "server_sync"
   | "client_hello"
   | "client_ping";
 
@@ -35,6 +36,7 @@ export type EventType = BusinessEventType | ProtocolEventType;
 export interface EchoEvent<T = Record<string, unknown>> {
   type: EventType;
   seq: number;
+  stream_epoch?: string | null;
   ts: string;
   meeting_id?: string | null;
   payload: T;

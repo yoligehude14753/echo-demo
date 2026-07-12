@@ -20,7 +20,9 @@ from app.adapters.repo.migrator import run_migrations
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.api.deps import (
     aclose_repository,
+    get_event_bus,
     get_repository,
+    get_workflow_service,
     reset_deps_for_test,
 )
 from app.api.meetings import reset_meeting_pipeline
@@ -433,18 +435,6 @@ async def test_clear_meeting_outputs_clears_minutes_and_deletes_artifacts(
     tmp_path: Path,
 ) -> None:
     artifact_id = "artifact-delete-001"
-    linked_artifact = await _seed_artifact_link(
-        tmp_path,
-        artifact_id=artifact_id,
-        meeting_id="mtg-clear",
-        artifact_type="txt",
-        title="待清理产物",
-        body=b"delete me",
-    )
-    build_dir = tmp_path / "skill_build" / artifact_id
-    rogue_dir = tmp_path / "skill_build" / "rogue-from-client"
-    rogue_dir.mkdir(parents=True)
-    (rogue_dir / "output.txt").write_text("do not delete", encoding="utf-8")
     await _seed_meeting(
         repo,
         "mtg-clear",
@@ -462,6 +452,18 @@ async def test_clear_meeting_outputs_clears_minutes_and_deletes_artifacts(
             "action_items": [],
         },
     )
+    linked_artifact = await _seed_artifact_link(
+        tmp_path,
+        artifact_id=artifact_id,
+        meeting_id="mtg-clear",
+        artifact_type="txt",
+        title="待清理产物",
+        body=b"delete me",
+    )
+    build_dir = tmp_path / "skill_build" / artifact_id
+    rogue_dir = tmp_path / "skill_build" / "rogue-from-client"
+    rogue_dir.mkdir(parents=True)
+    (rogue_dir / "output.txt").write_text("do not delete", encoding="utf-8")
 
     r = client.request(
         "DELETE",
@@ -481,6 +483,77 @@ async def test_clear_meeting_outputs_clears_minutes_and_deletes_artifacts(
     assert rec.state == "ended"
     assert rec.minutes_json is None
     assert rec.minutes_status is None
+    assert rec.minutes_cleared_at is not None
+    runs = client.get("/workflows/runs?meeting_id=mtg-clear").json()
+    cleanup_run = next(item for item in runs if item["kind"] == "meeting.outputs.clear")
+    assert cleanup_run["state"] == "succeeded"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_clear_meeting_outputs_rolls_back_domain_writes_when_terminal_commit_crashes(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_meeting(
+        repo,
+        "mtg-cleanup-crash",
+        title="清理崩溃回滚",
+        started_at=datetime(2026, 5, 28, 12, 0, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": "mtg-cleanup-crash",
+            "title": "仍应保留",
+            "duration_sec": 60,
+            "summary": "rollback",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+    artifact = await _seed_artifact_link(
+        tmp_path,
+        artifact_id="artifact-cleanup-crash",
+        meeting_id="mtg-cleanup-crash",
+        artifact_type="txt",
+        body=b"must survive rollback",
+    )
+    service = get_workflow_service(_settings(tmp_path), get_event_bus())
+    original_complete = service.complete_run_atomic
+
+    async def crash_after_domain_writer(run_id: str, **kwargs: object) -> object:
+        domain_writer = kwargs["domain_writer"]
+
+        async def write_then_crash(conn: object) -> None:
+            await domain_writer(conn)  # type: ignore[operator]
+            raise RuntimeError("injected crash before workflow terminal commit")
+
+        kwargs["domain_writer"] = write_then_crash
+        return await original_complete(run_id, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(service, "complete_run_atomic", crash_after_domain_writer)
+
+    response = client.request(
+        "DELETE",
+        "/meetings/mtg-cleanup-crash/outputs",
+        json={"artifact_ids": [], "clear_minutes": True},
+    )
+
+    assert response.status_code == 500
+    artifact_repo = ArtifactRepository(_settings(tmp_path))
+    assert await artifact_repo.get_artifact(artifact.artifact_id) is not None
+    assert len(await artifact_repo.list_links_for_artifact(artifact.artifact_id)) == 1
+    assert Path(artifact.file_path).exists()
+    meeting = await repo.get_meeting("mtg-cleanup-crash")
+    assert meeting is not None
+    assert meeting.state == "finalized"
+    assert meeting.minutes_json is not None
+    runs = client.get("/workflows/runs?meeting_id=mtg-cleanup-crash").json()
+    cleanup_run = next(item for item in runs if item["kind"] == "meeting.outputs.clear")
+    assert cleanup_run["state"] == "failed"
 
 
 @pytest.mark.unit

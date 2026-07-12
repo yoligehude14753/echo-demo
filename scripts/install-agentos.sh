@@ -82,18 +82,48 @@ fi
 "$AGENTOS_PY" -c "import agentos; from agentos.server import create_server_app; print('AgentOS import ok')"
 
 RUNNER_ENABLED="$($BACKEND_PY - "$CONFIG_PATH" <<'PY'
+import ipaddress
 import json
 import os
 import sys
 import tempfile
+import urllib.parse
+
+
+def private_upstream_without_key(base_url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(base_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            return False
+        if parsed.hostname.lower() == "localhost":
+            return True
+        address = ipaddress.ip_address(parsed.hostname)
+        return address.is_private or address.is_loopback
+    except ValueError:
+        return False
 
 path = sys.argv[1]
 with open(path, encoding="utf-8") as handle:
     config = json.load(handle)
-enabled = bool(str(config.get("yunwu_open_key", "")).strip())
-enabled = enabled and config.get("llm_main_provider") == "yunwu"
-enabled = enabled and config.get("llm_main_model") == "deepseek-v4-flash"
-enabled = enabled and str(config.get("llm_main_base_url", "")).rstrip("/") == "https://yunwu.ai/v1"
+provider = str(config.get("llm_main_provider", "")).strip()
+model = str(config.get("llm_main_model", "")).strip()
+base_url = str(config.get("llm_main_base_url", "")).strip()
+api_key = str(config.get("llm_main_api_key", "")).strip()
+if not api_key:
+    api_key = str(config.get("yunwu_open_key", "")).strip()
+enabled = bool(
+    provider
+    and model
+    and base_url
+    and (api_key or private_upstream_without_key(base_url))
+)
 config["agent_os_enabled"] = enabled
 config["agent_os_url"] = "http://127.0.0.1:4128"
 directory = os.path.dirname(path)

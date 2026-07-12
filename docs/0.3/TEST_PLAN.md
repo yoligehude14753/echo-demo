@@ -1,257 +1,269 @@
-# EchoDesk 0.3 测试与验收计划
+# EchoDesk 0.3 测试计划
 
-日期：2026-07-09  
-状态：开发前测试设计  
+版本：0.3.1 | 状态：最终门禁 | 更新时间：2026-07-12
 
-## 1. 测试目标
+## 1. 测试原则
 
-0.3 测试目标不是证明接口返回 200，而是证明用户 workflow 可完成：
+1. 测试用户 workflow，不只测试 HTTP 200。
+2. deterministic 与 live 明确分流；deterministic skip 视为失败。
+3. happy、sad、boundary、并发和 crash-recovery 都要有反例。
+4. mock E2E、scenario、packaged smoke、installed full workflow 和 public isolation smoke 互不替代。
+5. 测试使用隔离 user dir、SQLite、storage 和模型配置，不读写真实 `~/.echodesk`。
+6. JUnit、trace、video、coverage 等是 CI artifact，不提交源码仓库。
 
-- 会议可生成纪要。
-- Todo 可执行并生成产物。
-- 产物可跨重启恢复。
-- Claude Code Agent 可授权、执行、取消、超时、重试、归档。
-- 分享导出能带上正确产物。
-- contract gates 能阻止再次补丁化。
+## 2. 测试层次
 
-## 2. 测试分层
-
-| 层级 | 范围 | 工具 |
+| 层次 | 目标 | 入口 |
 |---|---|---|
-| Unit | 状态机、repository、schema、adapter 翻译 | `pytest` / Vitest |
-| Integration | DB migration、WorkflowService、Agent bridge、artifact link | `pytest` |
-| Contract | REST route、WS event、IPC key | snapshot tests |
-| E2E | CommandBar、outputs、Todo、meeting share | Playwright |
-| Release Smoke | packaged app、TV、installer | existing scripts |
+| Unit | 状态机、repo、identity、错误与边界 | `backend/tests/unit` |
+| Architecture | route、layer、Workflow/IPC contract | `backend/tests/arch`、Electron tests |
+| Deterministic integration | 多组件但不访问 live provider | `backend/tests/integration` 中非 live |
+| Live contract | 当前配置的真实 OpenAI-compatible 主模型 | `test_product_model_live.py` |
+| Desktop mock E2E | UI、transport、WS、responsive、accessibility | `desktop/tests/e2e` |
+| Business scenarios | 可见点击、录像、sad path | `desktop/tests/scenarios` |
+| Packaged smoke | bundled backend、端口、版本、持久化、点击 | `packaged-local-smoke.spec.ts` 与平台脚本 |
+| Installed full workflow | 真模型、故障注入、重启、retry、Agent | `installed-local-workflow.spec.ts` |
+| Public isolation | 双 principal 负例与 cleanup | `scripts/public-isolation-smoke.py` |
+| Android / TV | build、identity instrumentation、安装 | Gradle + emulator / device |
 
-## 3. Workflow Core 测试
-
-Unit：
-
-- `create_run` 创建 pending run。
-- `record_event` seq 单调递增。
-- raw hash 去重。
-- `complete_run` 只能从 pending/running/cancel_requested 合法迁移。
-- terminal run 不能继续写非 replay event。
-- retry 创建新 run，保留 parent reference。
-
-Integration：
-
-- migration 后旧 DB 可启动。
-- 重启后 `restore_unfinished` 找到 pending/running/cancel_requested。
-- REST `/workflows/runs/{id}/events?after_seq=N` 正确返回。
-
-Sad Path：
-
-- 无效 state transition 抛错。
-- event payload 非 JSON 可序列化时报错。
-- DB 写入失败不吞错。
-
-## 4. Artifact 测试
-
-Unit：
-
-- artifact metadata 保存。
-- artifact link 创建。
-- meeting artifacts 从 `artifact_links` 查询。
-- 文件路径必须在允许目录。
-
-Integration：
-
-- `/artifacts/generate` 创建 run。
-- 成功生成 artifact 后 DB 有 artifact + link。
-- `GET /meetings/{id}/artifacts` 返回真实数据。
-- `DELETE /meetings/{id}/outputs` 只删除本会议 link 指向产物。
-
-Sad Path：
-
-- skill runner 失败生成 run failed。
-- artifact 文件缺失时 download 返回 404。
-- metadata 存在但文件缺失时分享页显示缺失。
-
-Boundary：
-
-- 同一 artifact 多个 link。
-- 同一会议多个产物。
-- 旧 artifact 没 meeting link。
-
-## 5. Todo Workflow 测试
-
-Unit：
-
-- todo execution 创建 workflow run。
-- todo status 从 run state 投影。
-- old minutes JSON 无 todo id 时不崩。
-
-E2E：
-
-1. 会议有 Todo。
-2. 用户点击执行。
-3. UI 显示执行中。
-4. artifact 生成成功。
-5. Todo 显示完成并带下载入口。
-6. 刷新/重启后状态仍存在。
-
-Sad Path：
-
-- artifact failed 后 Todo 显示失败。
-- 点击重试创建新 run。
-- 同一 Todo 已 running 时再次点击不会创建重复 run。
-
-## 6. Agent Runner 测试
-
-Unit：
-
-- 无 grant 时 run 进入 waiting_permission。
-- 授权后提交 AgentOS。
-- AgentOS submit 失败 -> run failed。
-- ClaudeCodeRunnerAdapter 翻译 text/tool/artifact/result。
-- unknown raw event 只生成 debug event。
-- cancel_requested / cancelled / cancel_failed 状态迁移。
-
-Integration：
-
-- Mock AgentOS HTTP submit。
-- Mock AgentOS WS event stream。
-- bridge 断线重连。
-- terminal event 后 bridge 停止。
-- upstream artifact 被导入统一 artifacts。
-
-E2E：
-
-1. CommandBar 输入长任务。
-2. intent 返回 agent_task。
-3. outputs 出现 AgentTask 卡片。
-4. 用户点击允许并开始。
-5. 卡片显示 running。
-6. Mock event 推送产物。
-7. 卡片显示完成，产物进入产物区。
-
-Sad Path：
-
-- `agent_os_enabled=false` 时用户看到 runner 未启用。
-- AgentOS 断开时任务不假成功。
-- 用户取消时先显示 cancel_requested。
-- cancel 上游失败时显示 cancel_failed。
-- timeout 后可 retry。
-
-Boundary：
-
-- backend 重启恢复 pending/running Agent run。
-- 同一任务重复授权。
-- Agent 生成多个文件。
-- Agent 生成路径含空格/中文。
-
-## 7. RAG / Workspace 测试
-
-Integration：
-
-- 文件 upload ingest 创建 run。
-- workspace scan 创建 run 或记录 scan result。
-- 删除 doc 后 UI 刷新。
-- RAG answer 返回 citations。
-
-Sad Path：
-
-- 文件过大。
-- PDF 解析失败。
-- workspace path 权限失败。
-- web fallback 不可用。
-
-Boundary：
-
-- 文件改名。
-- 文件删除。
-- 同名不同路径。
-- 中英混合查询。
-
-## 8. Share / Export 测试
-
-Integration：
-
-- 分享页列出 meeting minutes。
-- 分享页列出 linked artifacts。
-- 导出 zip 包含 minutes、transcript、artifacts。
-- 诊断包 mask secret。
-
-Sad Path：
-
-- artifact link 存在但文件丢失。
-- meeting 没有 minutes。
-- zip 写入失败。
-
-Boundary：
-
-- 产物很多。
-- 文件名含中文。
-- LAN safe endpoint 访问。
-
-## 9. Contract Tests
-
-REST route snapshot：
+## 3. 依赖与供应链门禁
 
 ```bash
-pytest backend/tests/contracts/test_routes_snapshot.py
+node scripts/check-npm-lock-registries.cjs
+python3 scripts/check-ci-action-pins.py
+python3 scripts/check-python-locks.py
+node desktop/scripts/check-version-sync.cjs
 ```
 
-WS event snapshot：
+要求：
+
+- GitHub Actions 使用 immutable commit SHA。
+- npm lock 只使用允许的官方 registry。
+- 6 份 Python requirements lock 带 hash 且与输入文件一致。
+- Desktop、Backend、Android、package-lock 和 Commitizen 版本一致。
+- dependency audit 的临时例外必须有 owner、缓解措施、过期日与 regression gate。
+
+## 4. Backend 确定性全量门禁
+
+CI 安装：
 
 ```bash
-pytest backend/tests/contracts/test_ws_events_snapshot.py
+python3.11 -m venv backend/.venv
+backend/.venv/bin/pip install --require-hashes -r backend/requirements-dev.lock
+npm ci --prefix backend/app/adapters/skill/assets/ppt_ib_deck
 ```
 
-IPC snapshot：
-
-```bash
-cd desktop
-npm run test:ipc-contract
-```
-
-Script matrix：
-
-```bash
-pytest backend/tests/contracts/test_script_matrix.py
-```
-
-## 10. PR 必跑命令
-
-基础：
-
-```bash
-cd desktop
-npm run typecheck
-npm run build
-
-cd ../backend
-pytest
-```
-
-0.3 专项：
+执行：
 
 ```bash
 cd backend
-pytest tests/unit/test_workflow_service.py
-pytest tests/unit/test_agent_task_service.py
-pytest tests/integration/test_echo_task_stream_bridge.py
-pytest tests/integration/test_artifact_links.py
+export ECHO_RUN_NODE_INSTALL=1
+export ECHODESK_NODE_RUNTIME="$(command -v node)"
+export ECHODESK_NODE_RUNTIME_IS_ELECTRON=true
+.venv/bin/pytest tests -m "not live" \
+  --junitxml=pytest-deterministic.xml \
+  --cov=app --cov-report=term-missing \
+  --timeout=60 --timeout-method=thread --durations=20
 ```
 
-前端专项：
+随后解析 JUnit：`failures=0`、`errors=0`、`skipped=0`。测试进程必须自然退出；打印绿色摘要后仍被非 daemon worker 卡住不算通过。
+
+当前最终结果：
+
+```text
+916 collected
+18 live deselected
+898 passed
+0 skipped
+coverage 87%
+process exited naturally
+```
+
+## 5. Backend 静态门禁
+
+```bash
+backend/.venv/bin/ruff check backend
+backend/.venv/bin/ruff format --check backend
+backend/.venv/bin/mypy backend/app
+```
+
+Architecture tests 额外约束：
+
+- route snapshot 与 endpoint capability 不漂移；
+- use case/port/schema 不反向依赖 adapter/FastAPI；
+- durable side-effect path 使用 Workflow contract；
+- local/public endpoint 和 host capability 边界明确。
+
+## 6. 关键 Backend 反例矩阵
+
+### Identity / public isolation
+
+- 两个 principal 不能互读/互写 meeting、RAG、Artifact、Workflow、Agent。
+- WebSocket 只能收到当前 scope event。
+- token/credential 只在正确 transport 位置接受；query/header 泄漏路径被拒绝。
+- renew、rotation、additional device、revoke 的 401/409/429 fail closed。
+- enrollment admission、quota 和 resource ticket 不能跨 owner 重放。
+
+对应测试集中在：
+
+```text
+test_public_principal_http.py
+test_principal_repository_isolation.py
+test_principal_sessions.py
+test_identity_continuity.py
+test_enrollment_admission.py
+test_public_quota_http.py
+test_transport_security.py
+test_scoped_event_bus.py
+```
+
+### Workflow / Unit of Work / outbox
+
+- domain write 成功但 run/event/outbox 失败时整体 rollback。
+- revision/idempotency/active key 并发冲突。
+- lease 过期、heartbeat 丢失、旧 fence 写入被拒绝。
+- per-consumer、scope lane 和 global recovery 不丢消息、不永久阻塞健康 scope。
+- terminal first-wins；冲突晚到 terminal 被忽略。
+- cancel 与 complete 的竞态不会形成永久 Agent/Workflow 分裂。
+
+对应测试：
+
+```text
+test_workflow_kernel.py
+test_workflow_service.py
+test_workflow_http_scenarios.py
+test_execution_lease_store.py
+test_agent_task_service.py
+test_agent_bridge_recovery.py
+```
+
+### RAG / storage / upload
+
+- 多实例共享 SQLite revision，新增/删除无需重启即可可见。
+- owner manifest、content owner、quota 与 cache 一致。
+- upload 超限、超时、取消和 ownership rollback。
+- workspace path、symlink 和 Artifact path 不能逃逸授权根。
+- SSE error/disconnect 不发送假 `done`。
+
+对应测试：
+
+```text
+test_rag_bm25.py
+test_rag_content_lifecycle.py
+test_rag_sse_streaming.py
+test_upload_ingress.py
+test_limited_upload.py
+test_workspace_scanner.py
+test_ambient_storage_boundary.py
+```
+
+### Meeting / Artifact / Agent
+
+- 同 scope 单 active meeting。
+- minutes tombstone 阻止恢复重建。
+- Artifact staging、metadata、link、download 同 scope。
+- Agent Artifact declared/chunked oversize 与取消 cleanup。
+- bridge 过期 lease 自动接管。
+- Agent 成功、失败、取消、超时、retry 和 Artifact import 都有终态。
+
+## 7. Live model contract
+
+Live gate 只运行 provider-neutral 产品合同：
+
+```bash
+cd backend
+.venv/bin/pytest tests/integration/test_product_model_live.py -m live
+```
+
+两条合同：
+
+1. 配置的 MAIN model 非流式与流式 chat 返回指定内容并报告 usage。
+2. 同一 model 生成真实 TXT Artifact，文件存在、size 匹配、内容通过断言。
+
+缺 key、provider 不可达、timeout 或格式失败都算失败，不允许 skip。当前 GLM 结果：`2 / 2 passed`。
+
+其它 Yunwu、STT、TTS、Web provider 诊断测试保留为独立 reachability 信息，不替代这两条产品合同。
+
+## 8. Desktop 门禁
 
 ```bash
 cd desktop
-npm run e2e -- --grep "workflow|artifact|agent|todo"
+npm ci
+npm run test:electron
+npm run version:check
+npm run lint
+npm run typecheck
+npm run build
+CI=1 NODE_ENV=test npm run e2e
+CI=1 NODE_ENV=test npm run scenarios
 ```
 
-## 11. 业务验收清单
+当前结果：Electron `70 passed`；E2E `95 passed`；scenarios `29 passed`。
 
-进入 0.3 beta 前必须人工确认：
+覆盖：
 
-- 结束会议后纪要生成失败能看见原因并重试。
-- Todo 执行失败能重试。
-- 会议产物重启后仍能显示。
-- Agent 任务能授权、执行、取消、重试。
-- Agent 产物和普通产物展示一致。
-- 分享页包含会议相关产物。
-- 诊断包不泄露 secret。
-- 断网/远端服务挂掉时 UI 不假绿。
+- session enroll/renew/rotation/identity lost；
+- WebSocket 4401/resync/reconnect/rehydrate；
+- Capture/Chat SSE/TTS/meeting detail 的 timeout、cancel 和 error；
+- onboarding、settings、workspace、Artifact preview、clear outputs；
+- 411/960/1280/1920 responsive 与 text overflow；
+- dialog/drawer accessible name、focus restore、icon label；
+- update downgrade protection；
+- public finalize 和 owner boundary。
+
+## 9. Packaged 与 installed
+
+### Packaged local smoke
+
+验证安装包内 backend binary、版本、自定义端口、SQLite 写入、主要点击和退出后端口清理。它证明 packaging boundary，不验证真实模型和 Agent 长流程。
+
+### Installed full workflow
+
+真实安装 App 的完整路径必须覆盖：
+
+1. 真实 GLM chat/RAG/minutes；
+2. 故意缩短 Artifact timeout 形成失败；
+3. 完整退出并重启；
+4. 恢复失败状态并 retry 成功，检查 lineage 和下载；
+5. 真实 AgentOS 成功与 Artifact import；
+6. cancel、timeout 和 Workflow/Agent terminal 一致；
+7. 最终重启后仍能恢复全部持久状态。
+
+当前结果：`1 / 1 passed`。
+
+## 10. Public isolation smoke
+
+```bash
+backend/.venv/bin/python scripts/public-isolation-smoke.py --self-test
+backend/.venv/bin/python scripts/public-isolation-smoke.py \
+  --base-url https://staged.example.invalid
+```
+
+实际 staged URL 由部署环境提供。非 loopback HTTP 必须显式 `--allow-insecure-http`，默认拒绝把 bearer 发到明文链路。
+
+验证双 principal 的 meeting、RAG、Artifact、Workflow、Agent、WS 隔离，并在结束后撤销 session family、清理可公开删除的测试资源。输出不能打印 bearer、credential 或正文。
+
+## 11. 跨平台发布门禁
+
+| 平台 | 必跑 |
+|---|---|
+| macOS | backend binary、Electron build、codesign verify、mounted DMG smoke |
+| Windows | PyInstaller backend、NSIS/zip、installed smoke、contents/hash/SBOM；未配 Authenticode时拒绝 public publish |
+| Linux | x64 backend、AppImage/deb、isolated packaged smoke、hash/SBOM |
+| Android / TV | development build、identity instrumentation；release 使用稳定签名并校验产物 |
+
+任何平台“构建成功”都不能代替安装后启动、bundled backend、身份和持久化 smoke。
+
+## 12. Agent 一致性门禁
+
+`tests/unit/test_agent_cancel_outbox.py` 必须覆盖并持续通过：terminal HTTP read barrier、Agent/Workflow/command 同事务、远端副作用后崩溃使用同 operation key 重放、双实例只持有一个 fenced lease、first-terminal-wins 时不调用远端，以及 AgentOS `Idempotency-Key` 请求头。配套 `test_agent_task_service.py` 继续覆盖 terminal publish barrier 与成功/取消跨实例竞态。
+
+focused 契约只用于定位失败；最终验收以本页的完整 deterministic suite、静态门禁和跨平台 CI 为准，不复制会漂移的局部测试计数。
+
+## 13. 证据管理
+
+- JUnit：CI artifact；源码只记录最终数字和命令。
+- Playwright trace/video/screenshot：失败或 scenario artifact，不提交源码。
+- 安装包、APK、SBOM、hash：release workflow artifact。
+- 本机用户 DB、`.env`、credential、logs：不得进入测试证据。
+- 文档更新必须区分“当前源码通过”“CI 通过”“已签名”“已发布”“已部署”。

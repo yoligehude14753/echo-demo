@@ -7,6 +7,7 @@ P2.6（独立产品 Phase 2）：诊断包是用户报 bug 时唯一的 ground t
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import sqlite3
@@ -15,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from app.adapters.repo.migrator import run_migrations
 from app.api import diagnostics as diag_mod
 from app.api import health as health_mod
 from app.api.deps import reset_deps_for_test
@@ -111,18 +113,12 @@ class TestMask:
         assert diag_mod._mask(None) == ""
 
     def test_short_string(self) -> None:
-        # 短到不足 12 不能保留可识别前后缀，直接 ***
-        assert diag_mod._mask("short") == "***"
-        assert diag_mod._mask("abc") == "***"
+        assert diag_mod._mask("short") == "[REDACTED]"
+        assert diag_mod._mask("abc") == "[REDACTED]"
 
-    def test_long_string_keeps_head_tail_and_length(self) -> None:
+    def test_long_string_is_fully_redacted(self) -> None:
         masked = diag_mod._mask("sk-secret123456789")
-        # 隐私 sanity：原 secret 子串 "secret123" 绝不能出现在脱敏结果
-        assert "secret123" not in masked
-        assert masked.startswith("sk-s")
-        # 后缀 6789 在 (len=...) 之前；用 in 检查更准确
-        assert "***6789" in masked
-        assert "(len=18)" in masked
+        assert masked == "[REDACTED]"
 
 
 @pytest.mark.unit
@@ -142,8 +138,8 @@ class TestRedactSettings:
         redacted = diag_mod._redact_settings(data)
         assert "secret123" not in redacted["yunwu_open_key"]
         assert "very-secret" not in redacted["tavily_api_key"]
-        assert "***" in redacted["auth_token"]
-        assert "***" in redacted["db_password"]
+        assert redacted["auth_token"] == "[REDACTED]"
+        assert redacted["db_password"] == "[REDACTED]"
         # 非敏感字段原样保留
         assert redacted["innocent_field"] == "normal-value"
         assert redacted["nested"]["value"] == "kept"
@@ -166,6 +162,27 @@ def test_export_returns_zip(client: TestClient) -> None:
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     names = zf.namelist()
     assert any(n.endswith("/manifest.json") for n in names)
+
+
+@pytest.mark.unit
+def test_export_uses_workflow_when_schema_is_available(tmp_path: Path) -> None:
+    settings = Settings(
+        db_path=tmp_path / "workflow-diagnostics.db",
+        storage_dir=tmp_path / "storage",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert asyncio.run(run_migrations(settings.db_path)).errors == []
+    reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[diag_mod.get_settings] = lambda: settings
+    client = TestClient(app)
+
+    response = client.get("/admin/diagnostics/export")
+    assert response.status_code == 200
+    runs = client.get("/workflows/runs").json()
+    run = next(item for item in runs if item["kind"] == "diagnostics.export")
+    assert run["state"] == "succeeded"
+    assert run["output"]["size_bytes"] > 0
 
 
 @pytest.mark.unit
@@ -199,8 +216,7 @@ def test_export_redacts_api_keys(client: TestClient) -> None:
     assert "yunwu_open_key" in settings_dump
     masked_key = settings_dump["yunwu_open_key"]
     assert "secret123" not in masked_key
-    assert "***" in masked_key
-    assert "(len=" in masked_key
+    assert masked_key == "[REDACTED]"
     # tavily 同样脱敏
     assert "very-secret" not in settings_dump.get("tavily_api_key", "")
 
@@ -339,6 +355,31 @@ def test_export_includes_logs_with_rotated(client: TestClient, tmp_path: Path) -
     assert any(n.endswith("/logs/backend.log") for n in log_entries)
     assert any(n.endswith("/logs/backend.log.2026-05-27") for n in log_entries)
     assert any(n.endswith("/logs/backend.log.2026-05-26") for n in log_entries)
+
+
+@pytest.mark.unit
+def test_export_sanitizes_log_credentials_and_url_queries(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "logs" / "backend.log"
+    log_path.write_text(
+        "GET /meetings/m1/share?share=fake-ticket HTTP/1.1\n"
+        "endpoint=https://user:fake-pass@example.test/v1?api_key=fake-key\n"
+        "Authorization: Bearer fake-bearer\n",
+        encoding="utf-8",
+    )
+
+    response = client.get("/admin/diagnostics/export")
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    log_entry = next(name for name in archive.namelist() if name.endswith("/logs/backend.log"))
+    content = archive.read(log_entry).decode("utf-8")
+    assert "fake-ticket" not in content
+    assert "fake-pass" not in content
+    assert "fake-key" not in content
+    assert "fake-bearer" not in content
+    assert "/meetings/m1/share?redacted" in content
+    assert "https://example.test/v1?redacted" in content
 
 
 @pytest.mark.unit

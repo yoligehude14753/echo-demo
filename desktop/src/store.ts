@@ -46,6 +46,13 @@ export type CommandBarPrefillHandler = (
   meta?: CommandBarPrefillMeta,
 ) => void;
 
+export type MeetingListLoadPhase =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "error"
+  | "degraded";
+
 interface Store {
   meetings: Record<string, MeetingCard>;
   currentMeetingId: string | null;
@@ -55,6 +62,15 @@ interface Store {
    * 自然会通过 applyEvent 增量更新，无需重置该 flag。
    */
   meetingDetailLoaded: Record<string, boolean>;
+  meetingDetailErrors: Record<string, string>;
+  meetingDetailRetryRevision: Record<string, number>;
+  meetingListLoadPhase: MeetingListLoadPhase;
+  meetingListError: string | null;
+  meetingListLastSuccessAt: string | null;
+  meetingListRetryRevision: number;
+  rehydrateRevision: number;
+  rehydrateFenceSeq: number;
+  meetingEventSeq: Record<string, number>;
   artifacts: GeneratedArtifact[];
   ambientSegments: LocalAmbientSegment[];
   failedArtifacts: FailedArtifact[];
@@ -79,8 +95,16 @@ interface Store {
   upsertMeeting(id: string, patch: Partial<MeetingCard>): void;
   /** 用 GET /meetings 返回的列表把 store.meetings 与每条 summary 合并（保留事件已注入的 segments/minutes/artifacts）。 */
   hydrateMeetings(summaries: MeetingSummary[]): void;
+  rehydrateMeetings(summaries: MeetingSummary[], fenceSeq: number): void;
+  requestRehydrate(fenceSeq?: number): void;
   /** 标记某 meeting detail 已加载完毕，避免重复 fetch。 */
   markMeetingDetailLoaded(id: string): void;
+  markMeetingDetailError(id: string, message: string): void;
+  retryMeetingDetail(id: string): void;
+  startMeetingListLoad(): void;
+  completeMeetingListLoad(): void;
+  failMeetingListLoad(message: string): void;
+  retryMeetingListLoad(): void;
   addArtifact(a: GeneratedArtifact): void;
   addAmbientSegment(seg: LocalAmbientSegment): void;
   markMeetingActive(
@@ -336,6 +360,15 @@ export const useStore = create<Store>((set, get) => ({
   meetings: {},
   currentMeetingId: null,
   meetingDetailLoaded: {},
+  meetingDetailErrors: {},
+  meetingDetailRetryRevision: {},
+  meetingListLoadPhase: "idle",
+  meetingListError: null,
+  meetingListLastSuccessAt: null,
+  meetingListRetryRevision: 0,
+  rehydrateRevision: 0,
+  rehydrateFenceSeq: 0,
+  meetingEventSeq: {},
   artifacts: [],
   ambientSegments: [],
   failedArtifacts: [],
@@ -368,6 +401,15 @@ export const useStore = create<Store>((set, get) => ({
       meetings: {},
       currentMeetingId: null,
       meetingDetailLoaded: {},
+      meetingDetailErrors: {},
+      meetingDetailRetryRevision: {},
+      meetingListLoadPhase: "idle",
+      meetingListError: null,
+      meetingListLastSuccessAt: null,
+      meetingListRetryRevision: 0,
+      rehydrateRevision: 0,
+      rehydrateFenceSeq: 0,
+      meetingEventSeq: {},
       artifacts: [],
       ambientSegments: [],
       failedArtifacts: [],
@@ -407,6 +449,14 @@ export const useStore = create<Store>((set, get) => ({
           ),
         };
       }
+      // The startup snapshot may have been requested before a local/manual start
+      // completed. Never let that older empty snapshot erase an in-progress card;
+      // the next server event or resync will reconcile it by sequence.
+      for (const [id, meeting] of Object.entries(s.meetings)) {
+        if (!next[id] && meeting.state === "in_meeting") {
+          next[id] = meeting;
+        }
+      }
       return {
         meetings: next,
         currentMeetingId:
@@ -416,9 +466,110 @@ export const useStore = create<Store>((set, get) => ({
       };
     }),
 
-  markMeetingDetailLoaded: (id) =>
+  rehydrateMeetings: (summaries, fenceSeq) =>
+    set((s) => {
+      const next: Record<string, MeetingCard> = {};
+      for (const sum of summaries) {
+        const cur = s.meetings[sum.meeting_id] ?? emptyMeeting(sum.meeting_id);
+        if ((s.meetingEventSeq[sum.meeting_id] ?? 0) > fenceSeq) {
+          next[sum.meeting_id] = cur;
+          continue;
+        }
+        next[sum.meeting_id] = {
+          ...cur,
+          title: sum.display_title ?? sum.title ?? cur.title,
+          display_title: sum.display_title ?? cur.display_title ?? null,
+          state: sum.state === "in_meeting" ? "in_meeting" : "ended",
+          started_at: sum.started_at,
+          ended_at: sum.ended_at ?? undefined,
+          summary_segment_count: sum.n_segments,
+          summary_speaker_count: sum.n_speakers,
+          minutes_status: sum.has_minutes ? "ok" : cur.minutes_status,
+        };
+      }
+      for (const [id, meeting] of Object.entries(s.meetings)) {
+        if (
+          !next[id] &&
+          (meeting.state === "in_meeting" ||
+            (s.meetingEventSeq[id] ?? 0) > fenceSeq)
+        ) {
+          next[id] = meeting;
+        }
+      }
+      return {
+        meetings: next,
+        meetingDetailLoaded: {},
+        meetingDetailErrors: {},
+        currentMeetingId:
+          s.currentMeetingId && next[s.currentMeetingId]
+            ? s.currentMeetingId
+            : null,
+      };
+    }),
+
+  requestRehydrate: (fenceSeq) =>
     set((s) => ({
-      meetingDetailLoaded: { ...s.meetingDetailLoaded, [id]: true },
+      rehydrateRevision: s.rehydrateRevision + 1,
+      rehydrateFenceSeq:
+        fenceSeq ??
+        s.events.reduce((max, event) => Math.max(max, event.seq ?? 0), 0),
+      meetingDetailLoaded: {},
+      meetingDetailErrors: {},
+    })),
+
+  markMeetingDetailLoaded: (id) =>
+    set((s) => {
+      const meetingDetailErrors = { ...s.meetingDetailErrors };
+      delete meetingDetailErrors[id];
+      return {
+        meetingDetailLoaded: { ...s.meetingDetailLoaded, [id]: true },
+        meetingDetailErrors,
+      };
+    }),
+
+  markMeetingDetailError: (id, message) =>
+    set((s) => ({
+      meetingDetailErrors: { ...s.meetingDetailErrors, [id]: message },
+    })),
+
+  retryMeetingDetail: (id) =>
+    set((s) => {
+      const meetingDetailErrors = { ...s.meetingDetailErrors };
+      delete meetingDetailErrors[id];
+      return {
+        meetingDetailErrors,
+        meetingDetailRetryRevision: {
+          ...s.meetingDetailRetryRevision,
+          [id]: (s.meetingDetailRetryRevision[id] ?? 0) + 1,
+        },
+      };
+    }),
+
+  startMeetingListLoad: () =>
+    set({
+      meetingListLoadPhase: "loading",
+      meetingListError: null,
+    }),
+
+  completeMeetingListLoad: () =>
+    set({
+      meetingListLoadPhase: "ready",
+      meetingListError: null,
+      meetingListLastSuccessAt: new Date().toISOString(),
+    }),
+
+  failMeetingListLoad: (message) =>
+    set((s) => ({
+      meetingListLoadPhase:
+        Object.keys(s.meetings).length > 0 ? "degraded" : "error",
+      meetingListError: message,
+    })),
+
+  retryMeetingListLoad: () =>
+    set((s) => ({
+      meetingListLoadPhase: "loading",
+      meetingListError: null,
+      meetingListRetryRevision: s.meetingListRetryRevision + 1,
     })),
 
   dismissFailedArtifact: (id) =>
@@ -581,7 +732,18 @@ export const useStore = create<Store>((set, get) => ({
     }),
 
   applyEvent: (e) => {
-    set((s) => ({ events: [...s.events.slice(-200), e] }));
+    set((s) => ({
+      events: [...s.events.slice(-200), e],
+      meetingEventSeq: e.meeting_id
+        ? {
+            ...s.meetingEventSeq,
+            [e.meeting_id]: Math.max(
+              s.meetingEventSeq[e.meeting_id] ?? 0,
+              e.seq ?? 0,
+            ),
+          }
+        : s.meetingEventSeq,
+    }));
 
     const mid = e.meeting_id ?? undefined;
     if (mid && !get().meetings[mid]) {

@@ -24,9 +24,11 @@ test("TV 会后扫码保存：二维码、分享链接和删除输出路径可�
     meetingId,
   );
 
-  await expect(page.getByTestId("minutes-title")).toContainText("测试纪要");
   await expect(page.locator(`[data-artifact-id="${artifactId}"]`)).toBeVisible();
 
+  await page.getByTestId("inspector-tab-minutes").click();
+  await expect(page.getByTestId("minutes-title")).toContainText("测试纪要");
+  await expect(page.getByTestId("minutes-title")).toBeVisible();
   await page.getByTestId("open-meeting-share").click();
   await expect(page.getByTestId("meeting-share-modal")).toBeVisible();
   await expect(page.getByTestId("meeting-share-qr")).toBeVisible({ timeout: 8_000 });
@@ -35,7 +37,18 @@ test("TV 会后扫码保存：二维码、分享链接和删除输出路径可�
   );
   await expect(page.getByTestId("meeting-share-url")).not.toContainText("127.0.0.1");
   await expect(page.getByTestId("meeting-share-network-hint")).toContainText("同一网络");
-  await expect(page.getByTestId("meeting-share-url")).toContainText(artifactId);
+  await expect(page.getByTestId("meeting-share-url")).toContainText("share=mock-narrow-ticket");
+  await expect(page.getByTestId("meeting-share-url")).not.toContainText("mock-session-token");
+  await expect
+    .poll(async () => {
+      const log = await mock.fetchLog();
+      return log.some(
+        (r) =>
+          r.method === "POST" &&
+          r.url.includes(`/meetings/${meetingId}/share-ticket`),
+      );
+    })
+    .toBe(true);
 
   await page.getByTestId("clear-meeting-outputs-btn").click();
   await page.locator(".ant-modal-confirm .ant-btn-dangerous").click();

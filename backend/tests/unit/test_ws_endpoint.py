@@ -8,27 +8,94 @@ integration 阶段覆盖 ws 路径。
 
 from __future__ import annotations
 
+import asyncio
 import json
-import os
+import sqlite3
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from app.adapters.event_bus.inmemory import InMemoryEventBus
-from app.api.deps import get_event_bus, reset_deps_for_test
+from app.adapters.repo.migrator import run_migrations
+from app.api.deps import get_event_bus, get_repository, reset_deps_for_test
 from app.api.meetings import get_meeting_pipeline, reset_meeting_pipeline
 from app.config import Settings, get_settings
 from app.main import create_app
+from app.ports.repository import MeetingRecord
 from app.schemas.meeting import TranscriptSegment
 from app.use_cases.meeting_pipeline import MeetingPipeline
 from fastapi.testclient import TestClient
 
 from tests.unit.test_meeting_pipeline import FakeDiarizer, FakeLLM, FakeRag, FakeSTT
 
-# 全文件 CI 跳过（见 module docstring）
-pytestmark = pytest.mark.skipif(
-    "CI" in os.environ,
-    reason="CI 上 starlette 0.38 + pytest-asyncio 0.24 websocket+POST 死锁，本地通过",
-)
+
+class _MeetingRepo:
+    def __init__(self, db_path: Path | None = None) -> None:
+        self.db_path = db_path
+        self.meetings: dict[str, MeetingRecord] = {}
+        self.segments: dict[str, list[TranscriptSegment]] = defaultdict(list)
+
+    async def create_meeting(
+        self,
+        meeting_id: str,
+        *,
+        started_at: datetime,
+        title: str | None = None,
+        auto_started: bool = False,
+    ) -> MeetingRecord:
+        self.meetings.setdefault(
+            meeting_id,
+            MeetingRecord(
+                id=meeting_id,
+                title=title,
+                state="in_meeting",
+                started_at=started_at,
+                auto_started=auto_started,
+            ),
+        )
+        if self.db_path is not None:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    """INSERT OR IGNORE INTO meetings
+                       (id, state, started_at, tenant_id, device_id, owner_id)
+                       VALUES (?, 'in_meeting', ?, 'legacy-local', 'legacy-local', 'legacy-local')""",
+                    (meeting_id, started_at.isoformat()),
+                )
+                conn.commit()
+        return self.meetings[meeting_id]
+
+    async def get_meeting(self, meeting_id: str) -> MeetingRecord | None:
+        return self.meetings.get(meeting_id)
+
+    async def update_meeting_state(self, meeting_id: str, **values: Any) -> None:
+        record = self.meetings[meeting_id]
+        self.meetings[meeting_id] = record.model_copy(
+            update={key: value for key, value in values.items() if value is not None}
+        )
+
+    async def append_meeting_segment(
+        self,
+        meeting_id: str,
+        segment: TranscriptSegment,
+        *,
+        captured_at: datetime,
+    ) -> None:
+        _ = captured_at
+        self.segments[meeting_id].append(segment)
+
+    async def list_meeting_segments(self, meeting_id: str) -> list[TranscriptSegment]:
+        return list(self.segments[meeting_id])
+
+    async def get_meeting_speaker_labels(self, meeting_id: str) -> dict[str, str]:
+        _ = meeting_id
+        return {}
+
+    async def upsert_meeting_speaker_label(
+        self, meeting_id: str, speaker_id: str, label: str
+    ) -> None:
+        _ = (meeting_id, speaker_id, label)
 
 
 @pytest.fixture
@@ -45,17 +112,22 @@ def client(tmp_path: Path) -> TestClient:
         },
         ensure_ascii=False,
     )
+    settings = Settings(storage_dir=tmp_path, db_path=tmp_path / "echo.db")
+    assert asyncio.run(run_migrations(settings.db_path)).errors == []
+    repo = _MeetingRepo(settings.db_path)
     pipe = MeetingPipeline(
-        settings=Settings(storage_dir=tmp_path),
+        settings=settings,
         stt=FakeSTT([[TranscriptSegment(text="hi", start_ms=0, end_ms=500)]]),
         diarizer=FakeDiarizer(["spk-A"]),
         rag=FakeRag(),
         llm=FakeLLM(minutes_json),
         event_bus=bus,
+        repository=repo,  # type: ignore[arg-type]
     )
     app = create_app()
-    app.dependency_overrides[get_settings] = lambda: Settings(storage_dir=tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_event_bus] = lambda: bus
+    app.dependency_overrides[get_repository] = lambda: repo
     app.dependency_overrides[get_meeting_pipeline] = lambda: pipe
     return TestClient(app)
 
@@ -77,21 +149,28 @@ def test_ws_receives_meeting_lifecycle_events(client: TestClient) -> None:
         )
         client.post("/meetings/ws-1/finalize", data={"title": "demo"})
 
-        # 期望 4 个业务事件
-        for _ in range(4):
+        # Workflow outbox events are intentionally interleaved with domain events.
+        # Read through the committed stream until the four meeting events arrive.
+        while (
+            len([event for event in received if event["type"].startswith(("meeting.", "minutes."))])
+            < 4
+        ):
             msg = ws.receive_text()
             received.append(json.loads(msg))
 
-    types = [e["type"] for e in received]
+    domain_events = [
+        event for event in received if event["type"].startswith(("meeting.", "minutes."))
+    ]
+    types = [event["type"] for event in domain_events]
     assert types == [
         "meeting.started",
         "meeting.segment",
         "meeting.ended",
         "minutes.ready",
     ]
-    assert [e["seq"] for e in received] == [1, 2, 3, 4]
-    assert received[1]["payload"]["text"] == "hi"
-    assert received[3]["payload"]["decisions"] == ["d1"]
+    assert [e["seq"] for e in received] == list(range(1, len(received) + 1))
+    assert domain_events[1]["payload"]["text"] == "hi"
+    assert domain_events[3]["payload"]["decisions"] == ["d1"]
 
 
 @pytest.mark.unit
@@ -154,8 +233,11 @@ def test_ws_server_resync_when_history_expired(tmp_path: Path) -> None:
     reset_deps_for_test()
     # 极小 replay_buffer，便于触发淘汰
     bus = InMemoryEventBus(replay_buffer=2)
+    settings = Settings(storage_dir=tmp_path, db_path=tmp_path / "resync.db")
+    assert asyncio.run(run_migrations(settings.db_path)).errors == []
+    repo = _MeetingRepo(settings.db_path)
     pipe = MeetingPipeline(
-        settings=Settings(storage_dir=tmp_path),
+        settings=settings,
         stt=FakeSTT([[TranscriptSegment(text="x", start_ms=0, end_ms=100)]]),
         diarizer=FakeDiarizer(["spk"]),
         rag=FakeRag(),
@@ -170,33 +252,38 @@ def test_ws_server_resync_when_history_expired(tmp_path: Path) -> None:
             )
         ),
         event_bus=bus,
+        repository=repo,  # type: ignore[arg-type]
     )
     app = create_app()
-    app.dependency_overrides[get_settings] = lambda: Settings(storage_dir=tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_event_bus] = lambda: bus
+    app.dependency_overrides[get_repository] = lambda: repo
     app.dependency_overrides[get_meeting_pipeline] = lambda: pipe
     c = TestClient(app)
 
-    # 生成 5 个事件（meeting.started/segment/ended/minutes.ready/tts.suggested），
-    # replay_buffer=2 → 只保留 seq=4,5
+    # Domain + workflow outbox events exceed replay_buffer=2; only the last two remain.
     c.post("/meetings/resync/start")
     c.post(
         "/meetings/resync/chunk",
         files={"audio": ("c.wav", b"\x00" * 16_000, "audio/wav")},
     )
     c.post("/meetings/resync/finalize", data={"title": "x"})
-    assert bus.max_seq == 5
-    assert bus.oldest_history_seq == 4
+    max_seq = bus.max_seq
+    oldest_seq = max_seq - 1
+    assert max_seq > 5
+    assert bus.oldest_history_seq == oldest_seq
 
     with c.websocket_connect("/ws/echo") as ws:
         ws.send_text(json.dumps({"type": "client_hello", "last_seq": 1}))
         msg1 = json.loads(ws.receive_text())
         assert msg1["type"] == "server_resync", msg1
-        assert msg1["payload"]["oldest_seq"] == 4
+        assert msg1["payload"]["oldest_seq"] == oldest_seq
         assert msg1["payload"]["client_last_seq"] == 1
         msg2 = json.loads(ws.receive_text())
-        assert msg2["type"] == "server_hello"
-        # 然后是 history 内剩余的 seq=4, 5
-        m4 = json.loads(ws.receive_text())
-        m5 = json.loads(ws.receive_text())
-        assert m4["seq"] == 4 and m5["seq"] == 5
+        assert msg2["type"] == "server_sync"
+        assert msg2["payload"]["strategy"] == "replace"
+        assert msg2["payload"]["fence_seq"] == max_seq
+        msg3 = json.loads(ws.receive_text())
+        assert msg3["type"] == "server_hello"
+        # ``server_sync`` is a replace fence, so stale buffered events are not
+        # replayed after it; future events resume strictly after ``max_seq``.

@@ -1,4 +1,4 @@
-"""Integration: 真实 PDF（如已下载）+ 真实 Tavily API。"""
+"""Integration: deterministic PDF ingest + opt-in live Tavily contract."""
 
 from __future__ import annotations
 
@@ -12,19 +12,29 @@ from app.config import Settings
 
 pytestmark = pytest.mark.integration
 
-ECHO_PDF = Path.home() / "Downloads" / "the-state-of-enterprise-ai_2025-report.pdf"
-
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not ECHO_PDF.exists(), reason=f"{ECHO_PDF.name} not in ~/Downloads")
 async def test_real_pdf_ingest_and_query(tmp_path: Path) -> None:
+    from fpdf import FPDF
+
+    fixture = tmp_path / "enterprise-ai-fixture.pdf"
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12)
+    pdf.multi_cell(
+        0,
+        8,
+        "Enterprise AI adoption report. ChatGPT usage and enterprise adoption "
+        "increased across finance, support, engineering, and operations.",
+    )
+    pdf.output(str(fixture))
     s = Settings(rag_index_dir=tmp_path, rag_pdf_chunk_tokens=600, rag_pdf_chunk_overlap=100)
     rag = BM25Rag(s)
-    doc_id = await rag.ingest_pdf(str(ECHO_PDF), doc_title="Enterprise AI 2025")
+    doc_id = await rag.ingest_pdf(str(fixture), doc_title="Enterprise AI fixture")
     assert doc_id.startswith("pdf-")
 
     stats = rag.stats()
-    assert stats["n_chunks"] > 30, f"expected ≥30 chunks for 10MB PDF, got {stats['n_chunks']}"
+    assert stats["n_chunks"] >= 1
 
     # 该报告里的关键术语；不强求 top1，但 top5 应该至少 1 个 chunk 文本里包含
     hits = await rag.query("ChatGPT enterprise adoption", top_k=5)
@@ -38,6 +48,7 @@ def _has_tavily_key() -> bool:
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 @pytest.mark.skipif(not _has_tavily_key(), reason="TAVILY_API_KEY not set")
 async def test_real_tavily_search() -> None:
     web = TavilyWebSearch(Settings())

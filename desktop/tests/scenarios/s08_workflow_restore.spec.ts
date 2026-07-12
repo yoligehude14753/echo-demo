@@ -5,6 +5,13 @@ const MEETING_ID = "m-workflow-restore-001";
 const TODO_ID = "todo-workflow-restore-001";
 
 test("S08 · 重启后从 workflow history 恢复 Todo 失败态", async ({ page }) => {
+  await page.route(/\/(api\/)?meetings\/current$/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ mode: "idle", meeting_id: null }),
+    }),
+  );
   await page.route(/\/(api\/)?meetings(\?|$)/, async (route) => {
     await route.fulfill({
       status: 200,
@@ -94,7 +101,11 @@ test("S08 · 重启后从 workflow history 恢复 Todo 失败态", async ({ page
   });
 
   const mock = await installScenarioMock(page, {
-    skipPaths: ["/meetings", "/workflows/runs"],
+    skipPaths: [
+      "/meetings?",
+      `/meetings/${MEETING_ID}`,
+      "/workflows/runs",
+    ],
   });
 
   await page.goto("/");

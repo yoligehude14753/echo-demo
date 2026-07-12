@@ -57,22 +57,50 @@ print(str(value).strip())
 PY
 }
 
-MAIN_PROVIDER="$(read_config llm_main_provider yunwu)"
-MAIN_MODEL="$(read_config llm_main_model deepseek-v4-flash)"
-MAIN_BASE_URL="$(read_config llm_main_base_url https://yunwu.ai/v1)"
-YUNWU_OPEN_KEY="$(read_config yunwu_open_key '')"
+MAIN_PROVIDER="$(read_config llm_main_provider openai-compatible)"
+MAIN_MODEL="$(read_config llm_main_model '')"
+MAIN_BASE_URL="$(read_config llm_main_base_url '')"
+MAIN_API_KEY="$(read_config llm_main_api_key '')"
+if [ -z "$MAIN_API_KEY" ]; then
+    MAIN_API_KEY="$(read_config yunwu_open_key '')"
+fi
 
-if [ "$MAIN_PROVIDER" != "yunwu" ] || [ "$MAIN_MODEL" != "deepseek-v4-flash" ]; then
-    echo "AgentOS main-model configuration does not match the Desktop Pro defaults" >&2
+if [ -z "$MAIN_PROVIDER" ] || [ -z "$MAIN_MODEL" ] || [ -z "$MAIN_BASE_URL" ]; then
+    echo "AgentOS cannot start: main-model provider, model and base URL are required" >&2
     exit 78
 fi
-if [ "$MAIN_BASE_URL" != "https://yunwu.ai/v1" ]; then
-    echo "AgentOS main-model endpoint does not match the Desktop Pro defaults" >&2
-    exit 78
-fi
-if [ -z "$YUNWU_OPEN_KEY" ]; then
-    echo "AgentOS cannot start: main-model API key is empty" >&2
-    exit 78
+if [ -z "$MAIN_API_KEY" ]; then
+    PRIVATE_UPSTREAM="$($PYTHON_BIN - "$MAIN_BASE_URL" <<'PY'
+import ipaddress
+import sys
+import urllib.parse
+
+try:
+    parsed = urllib.parse.urlsplit(sys.argv[1])
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError
+    if parsed.hostname.lower() == "localhost":
+        print("1")
+    else:
+        address = ipaddress.ip_address(parsed.hostname)
+        print("1" if address.is_private or address.is_loopback else "0")
+except ValueError:
+    print("0")
+PY
+)"
+    if [ "$PRIVATE_UPSTREAM" = "1" ]; then
+        MAIN_API_KEY="agentos-internal-vllm-no-auth"
+    else
+        echo "AgentOS cannot start: public main-model API key is empty" >&2
+        exit 78
+    fi
 fi
 
 mkdir -p "$AGENTOS_DATA_DIR/workspaces"
@@ -90,7 +118,7 @@ export PYTHONPATH="$AGENTOS_SOURCE${PYTHONPATH:+:$PYTHONPATH}"
 export AGENTOS_PROXY_AUTOCONFIG_ECHO=false
 export AGENTOS_PROXY_UPSTREAM_BASE_URL="$MAIN_BASE_URL"
 export AGENTOS_PROXY_UPSTREAM_MODEL="$MAIN_MODEL"
-export AGENTOS_PROXY_UPSTREAM_API_KEY="$YUNWU_OPEN_KEY"
+export AGENTOS_PROXY_UPSTREAM_API_KEY="$MAIN_API_KEY"
 export AGENTOS_PROXY_REASONING_TOKEN_BUDGET=0
 export HTTP_PROXY=""
 export HTTPS_PROXY=""

@@ -5,13 +5,22 @@ from __future__ import annotations
 import json
 import mimetypes
 import re
+import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.adapters.repo.connection import (
+    configure_aiosqlite_connection,
+    open_aiosqlite_connection,
+)
 from app.artifacts.repository import ArtifactRepository
+from app.artifacts.staging import cleanup_abandoned_builds, is_workflow_managed_build
 from app.config import Settings
 from app.ports.repository import RepositoryPort
 from app.schemas.artifact import GeneratedArtifact, normalize_kind
+from app.security.models import LEGACY_OWNER_ID, LEGACY_TENANT_ID
+from app.security.scope import scoped_directory_for
 
 _ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 _EXT_KIND = {
@@ -32,6 +41,8 @@ class ArtifactRecoveryReport:
     linked: int = 0
     already_recorded: int = 0
     skipped: int = 0
+    workflow_managed: int = 0
+    abandoned_builds_cleaned: int = 0
 
 
 def _read_meta(path: Path) -> dict[str, object]:
@@ -42,7 +53,7 @@ def _read_meta(path: Path) -> dict[str, object]:
     return data if isinstance(data, dict) else {}
 
 
-def _todo_links(meetings: list[object]) -> dict[str, tuple[str, str | None]]:
+def _todo_links(meetings: Sequence[object]) -> dict[str, tuple[str, str | None]]:
     links: dict[str, tuple[str, str | None]] = {}
     for meeting in meetings:
         meeting_id = str(getattr(meeting, "id", ""))
@@ -133,13 +144,18 @@ async def recover_skill_build_artifacts(
     if not root.is_dir():
         return ArtifactRecoveryReport()
 
+    abandoned_builds_cleaned = await cleanup_abandoned_builds(settings)
+
     meetings = await repository.list_meetings(limit=10_000)
     known_meeting_ids = {meeting.id for meeting in meetings}
     todo_links = _todo_links(meetings)
-    discovered = recovered = linked = already_recorded = skipped = 0
+    discovered = recovered = linked = already_recorded = skipped = workflow_managed = 0
 
     for directory in sorted(root.iterdir()):
         if not directory.is_dir():
+            continue
+        if is_workflow_managed_build(directory):
+            workflow_managed += 1
             continue
         candidate = _candidate(root, directory)
         if candidate is None:
@@ -162,8 +178,7 @@ async def recover_skill_build_artifacts(
         if meeting_link:
             existing_links = await artifact_repo.list_links_for_artifact(artifact.artifact_id)
             if not any(
-                item.meeting_id == meeting_link
-                and item.todo_id == todo_id
+                item.meeting_id == meeting_link and item.todo_id == todo_id
                 for item in existing_links
             ):
                 await artifact_repo.link_artifact(
@@ -180,4 +195,64 @@ async def recover_skill_build_artifacts(
         linked=linked,
         already_recorded=already_recorded,
         skipped=skipped,
+        workflow_managed=workflow_managed,
+        abandoned_builds_cleaned=abandoned_builds_cleaned,
     )
+
+
+async def replay_succeeded_artifact_file_cleanups(settings: Settings) -> int:
+    """Idempotently finish post-commit file deletion after an earlier crash.
+
+    ``meeting.outputs.clear`` deletes links/metadata in its SQLite Unit of Work
+    and records artifact ids in the succeeded workflow output.  Filesystem
+    deletion happens after commit, so startup replays the durable cleanup intent.
+    """
+
+    root = Path(settings.skill_executor_build_dir).expanduser().resolve()
+    if not root.is_dir() or not Path(settings.db_path).is_file():
+        return 0
+    artifact_ids: set[tuple[str, str, str]] = set()
+    protected_artifact_ids: set[tuple[str, str, str]] = set()
+    async with open_aiosqlite_connection(settings.db_path) as conn:
+        await configure_aiosqlite_connection(conn)
+        cur = await conn.execute(
+            """SELECT tenant_id, owner_id, output_json FROM workflow_runs
+               WHERE kind = 'meeting.outputs.clear' AND state = 'succeeded'"""
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        cur = await conn.execute("SELECT tenant_id, owner_id, artifact_id FROM artifacts")
+        protected_artifact_ids = {
+            (str(row[0]), str(row[1]), str(row[2])) for row in await cur.fetchall()
+        }
+        await cur.close()
+    for tenant_id, owner_id, raw_output in rows:
+        try:
+            output = json.loads(str(raw_output))
+        except json.JSONDecodeError:
+            continue
+        ids = output.get("file_cleanup_artifact_ids") if isinstance(output, dict) else None
+        if not isinstance(ids, list):
+            continue
+        artifact_ids.update(
+            (str(tenant_id), str(owner_id), artifact_id)
+            for artifact_id in ids
+            if isinstance(artifact_id, str) and _ARTIFACT_ID_RE.fullmatch(artifact_id)
+        )
+
+    removed = 0
+    for tenant_id, owner_id, artifact_id in artifact_ids - protected_artifact_ids:
+        scope_root = scoped_directory_for(root, tenant_id, owner_id).resolve()
+        candidates = [scope_root / artifact_id]
+        if (tenant_id, owner_id) == (LEGACY_TENANT_ID, LEGACY_OWNER_ID):
+            candidates.append(root / artifact_id)
+        for candidate in candidates:
+            if candidate.is_symlink():
+                continue
+            directory = candidate.resolve()
+            if directory.parent != candidate.parent.resolve() or not directory.is_dir():
+                continue
+            shutil.rmtree(directory)
+            removed += 1
+            break
+    return removed

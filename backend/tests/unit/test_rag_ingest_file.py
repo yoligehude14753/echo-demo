@@ -119,3 +119,19 @@ async def test_ingest_persists_across_reload(tmp_path: Path) -> None:
     hits = await rag2.query("持久化")
     assert hits
     assert await rag2.find_by_source_path(str(f.resolve())) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ingest_operation_id_is_replay_safe(tmp_path: Path) -> None:
+    rag = BM25Rag(_settings(tmp_path / "idx"))
+    source = tmp_path / "replay.txt"
+    source.write_text("durable replay content", encoding="utf-8")
+
+    first = await rag.ingest_file(str(source), operation_id="run-fixed")
+    second = await rag.ingest_file(str(source), operation_id="run-fixed")
+
+    assert second == first
+    assert rag.stats()["n_docs"] == 1
+    assert rag.stats()["n_chunks"] == 1
+    assert len(await rag.list_docs()) == 1

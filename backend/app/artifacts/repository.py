@@ -12,8 +12,13 @@ from typing import Any
 
 import aiosqlite
 
+from app.adapters.repo.connection import (
+    configure_aiosqlite_connection,
+    open_aiosqlite_connection,
+)
 from app.config import Settings
 from app.schemas.artifact import GeneratedArtifact
+from app.security.context import current_principal
 
 
 def utc_now_iso() -> str:
@@ -36,6 +41,11 @@ def _metadata(raw: str | None) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items()}
 
 
+def _scope() -> tuple[str, str, str]:
+    principal = current_principal()
+    return principal.tenant_id, principal.device_id, principal.owner_id
+
+
 @dataclass(slots=True)
 class ArtifactLinkRecord:
     link_id: str
@@ -53,10 +63,121 @@ class ArtifactRepository:
 
     @asynccontextmanager
     async def _conn(self) -> AsyncIterator[aiosqlite.Connection]:
-        async with aiosqlite.connect(str(self.settings.db_path)) as conn:
+        async with open_aiosqlite_connection(self.settings.db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            await conn.execute("PRAGMA foreign_keys=ON")
+            await configure_aiosqlite_connection(conn)
             yield conn
+
+    async def save_artifact_tx(
+        self,
+        conn: aiosqlite.Connection,
+        artifact: GeneratedArtifact,
+        *,
+        run_id: str | None = None,
+    ) -> None:
+        """Write metadata on a caller-owned SQLite transaction (no implicit commit)."""
+
+        now = utc_now_iso()
+        tenant_id, device_id, owner_id = _scope()
+        changed = await conn.execute(
+            """INSERT INTO artifacts
+               (artifact_id, artifact_type, title, file_path, mime_type, size_bytes,
+                generation_latency_ms, model, metadata_json, run_id, created_at, updated_at,
+                tenant_id, device_id, owner_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(tenant_id, owner_id, artifact_id) DO UPDATE SET
+                   artifact_type = excluded.artifact_type,
+                   title = excluded.title,
+                   file_path = excluded.file_path,
+                   mime_type = excluded.mime_type,
+                   size_bytes = excluded.size_bytes,
+                   generation_latency_ms = excluded.generation_latency_ms,
+                   model = excluded.model,
+                   metadata_json = excluded.metadata_json,
+                   run_id = COALESCE(excluded.run_id, artifacts.run_id),
+                   updated_at = excluded.updated_at
+               WHERE artifacts.tenant_id = excluded.tenant_id
+                 AND artifacts.owner_id = excluded.owner_id""",
+            (
+                artifact.artifact_id,
+                artifact.artifact_type,
+                artifact.title,
+                artifact.file_path,
+                artifact.mime_type,
+                artifact.size_bytes,
+                artifact.generation_latency_ms,
+                artifact.model,
+                json.dumps(artifact.metadata, ensure_ascii=False),
+                run_id,
+                now,
+                now,
+                tenant_id,
+                device_id,
+                owner_id,
+            ),
+        )
+        if changed.rowcount != 1:
+            raise PermissionError("artifact id is unavailable in this principal scope")
+
+    async def link_artifact_tx(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        artifact_id: str,
+        source: str,
+        meeting_id: str | None = None,
+        todo_id: str | None = None,
+        run_id: str | None = None,
+    ) -> ArtifactLinkRecord:
+        """Write one owner-scoped link on a caller-owned transaction."""
+
+        tenant_id, device_id, owner_id = _scope()
+        raw = "\x1f".join(
+            [
+                tenant_id,
+                owner_id,
+                artifact_id,
+                source,
+                meeting_id or "",
+                todo_id or "",
+                run_id or "",
+            ]
+        )
+        link_id = f"alink_{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:24]}"
+        now = utc_now_iso()
+        await conn.execute(
+            """INSERT INTO artifact_links
+               (link_id, artifact_id, source, meeting_id, todo_id, run_id, created_at,
+                tenant_id, device_id, owner_id)
+               SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+               WHERE EXISTS (SELECT 1 FROM artifacts
+                   WHERE artifact_id = ? AND tenant_id = ? AND owner_id = ?)
+               ON CONFLICT(tenant_id, owner_id, link_id) DO NOTHING""",
+            (
+                link_id,
+                artifact_id,
+                source,
+                meeting_id,
+                todo_id,
+                run_id,
+                now,
+                tenant_id,
+                device_id,
+                owner_id,
+                artifact_id,
+                tenant_id,
+                owner_id,
+            ),
+        )
+        cur = await conn.execute(
+            "SELECT * FROM artifact_links WHERE link_id = ? AND tenant_id = ? AND owner_id = ?",
+            (link_id, tenant_id, owner_id),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        if row is None:
+            raise RuntimeError(f"artifact link insert failed: {link_id}")
+        return _row_to_link(row)
 
     async def save_artifact(
         self,
@@ -65,13 +186,15 @@ class ArtifactRepository:
         run_id: str | None = None,
     ) -> GeneratedArtifact:
         now = utc_now_iso()
+        tenant_id, device_id, owner_id = _scope()
         async with self._conn() as conn:
             await conn.execute(
                 """INSERT INTO artifacts
                    (artifact_id, artifact_type, title, file_path, mime_type, size_bytes,
-                    generation_latency_ms, model, metadata_json, run_id, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(artifact_id) DO UPDATE SET
+                    generation_latency_ms, model, metadata_json, run_id, created_at, updated_at,
+                    tenant_id, device_id, owner_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant_id, owner_id, artifact_id) DO UPDATE SET
                        artifact_type = excluded.artifact_type,
                        title = excluded.title,
                        file_path = excluded.file_path,
@@ -81,7 +204,9 @@ class ArtifactRepository:
                        model = excluded.model,
                        metadata_json = excluded.metadata_json,
                        run_id = COALESCE(excluded.run_id, artifacts.run_id),
-                       updated_at = excluded.updated_at""",
+                       updated_at = excluded.updated_at
+                   WHERE artifacts.tenant_id = excluded.tenant_id
+                     AND artifacts.owner_id = excluded.owner_id""",
                 (
                     artifact.artifact_id,
                     artifact.artifact_type,
@@ -95,10 +220,16 @@ class ArtifactRepository:
                     run_id,
                     now,
                     now,
+                    tenant_id,
+                    device_id,
+                    owner_id,
                 ),
             )
             await conn.commit()
-        return await self.get_artifact(artifact.artifact_id) or artifact
+        saved = await self.get_artifact(artifact.artifact_id)
+        if saved is None:
+            raise PermissionError("artifact id is unavailable in this principal scope")
+        return saved
 
     async def link_artifact(
         self,
@@ -109,15 +240,44 @@ class ArtifactRepository:
         todo_id: str | None = None,
         run_id: str | None = None,
     ) -> ArtifactLinkRecord:
-        raw = "\x1f".join([artifact_id, source, meeting_id or "", todo_id or "", run_id or ""])
+        tenant_id, device_id, owner_id = _scope()
+        raw = "\x1f".join(
+            [
+                tenant_id,
+                owner_id,
+                artifact_id,
+                source,
+                meeting_id or "",
+                todo_id or "",
+                run_id or "",
+            ]
+        )
         link_id = f"alink_{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:24]}"
         now = utc_now_iso()
         async with self._conn() as conn:
             await conn.execute(
-                """INSERT OR IGNORE INTO artifact_links
-                   (link_id, artifact_id, source, meeting_id, todo_id, run_id, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (link_id, artifact_id, source, meeting_id, todo_id, run_id, now),
+                """INSERT INTO artifact_links
+                   (link_id, artifact_id, source, meeting_id, todo_id, run_id, created_at,
+                    tenant_id, device_id, owner_id)
+                   SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                   WHERE EXISTS (SELECT 1 FROM artifacts
+                       WHERE artifact_id = ? AND tenant_id = ? AND owner_id = ?)
+                   ON CONFLICT(tenant_id, owner_id, link_id) DO NOTHING""",
+                (
+                    link_id,
+                    artifact_id,
+                    source,
+                    meeting_id,
+                    todo_id,
+                    run_id,
+                    now,
+                    tenant_id,
+                    device_id,
+                    owner_id,
+                    artifact_id,
+                    tenant_id,
+                    owner_id,
+                ),
             )
             await conn.commit()
         link = await self.get_link(link_id)
@@ -126,30 +286,34 @@ class ArtifactRepository:
         return link
 
     async def get_artifact(self, artifact_id: str) -> GeneratedArtifact | None:
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
             cur = await conn.execute(
-                "SELECT * FROM artifacts WHERE artifact_id = ?",
-                (artifact_id,),
+                "SELECT * FROM artifacts WHERE artifact_id = ? AND tenant_id = ? AND owner_id = ?",
+                (artifact_id, tenant_id, owner_id),
             )
             row = await cur.fetchone()
             await cur.close()
         return _row_to_artifact(row) if row else None
 
     async def get_link(self, link_id: str) -> ArtifactLinkRecord | None:
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
             cur = await conn.execute(
-                "SELECT * FROM artifact_links WHERE link_id = ?",
-                (link_id,),
+                "SELECT * FROM artifact_links WHERE link_id = ? AND tenant_id = ? AND owner_id = ?",
+                (link_id, tenant_id, owner_id),
             )
             row = await cur.fetchone()
             await cur.close()
         return _row_to_link(row) if row else None
 
     async def list_artifacts(self, *, limit: int = 100) -> list[GeneratedArtifact]:
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
             cur = await conn.execute(
-                "SELECT * FROM artifacts ORDER BY created_at DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM artifacts WHERE tenant_id = ? AND owner_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (tenant_id, owner_id, limit),
             )
             rows = await cur.fetchall()
             await cur.close()
@@ -161,15 +325,20 @@ class ArtifactRepository:
         *,
         limit: int = 200,
     ) -> list[GeneratedArtifact]:
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
             cur = await conn.execute(
                 """SELECT DISTINCT a.*
                    FROM artifacts a
-                   JOIN artifact_links l ON l.artifact_id = a.artifact_id
+                   JOIN artifact_links l
+                     ON l.artifact_id = a.artifact_id
+                    AND l.tenant_id = a.tenant_id
+                    AND l.owner_id = a.owner_id
                    WHERE l.meeting_id = ?
+                     AND l.tenant_id = ? AND l.owner_id = ?
                    ORDER BY a.created_at DESC
                    LIMIT ?""",
-                (meeting_id, limit),
+                (meeting_id, tenant_id, owner_id, limit),
             )
             rows = await cur.fetchall()
             await cur.close()
@@ -182,35 +351,44 @@ class ArtifactRepository:
         *,
         limit: int = 50,
     ) -> list[GeneratedArtifact]:
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
             cur = await conn.execute(
                 """SELECT DISTINCT a.*
                    FROM artifacts a
-                   JOIN artifact_links l ON l.artifact_id = a.artifact_id
+                   JOIN artifact_links l
+                     ON l.artifact_id = a.artifact_id
+                    AND l.tenant_id = a.tenant_id
+                    AND l.owner_id = a.owner_id
                    WHERE l.meeting_id = ? AND l.todo_id = ?
+                     AND l.tenant_id = ? AND l.owner_id = ?
                    ORDER BY a.created_at DESC
                    LIMIT ?""",
-                (meeting_id, todo_id, limit),
+                (meeting_id, todo_id, tenant_id, owner_id, limit),
             )
             rows = await cur.fetchall()
             await cur.close()
         return [_row_to_artifact(row) for row in rows]
 
     async def list_links_for_artifact(self, artifact_id: str) -> list[ArtifactLinkRecord]:
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
             cur = await conn.execute(
-                "SELECT * FROM artifact_links WHERE artifact_id = ? ORDER BY created_at ASC",
-                (artifact_id,),
+                "SELECT * FROM artifact_links WHERE artifact_id = ? "
+                "AND tenant_id = ? AND owner_id = ? ORDER BY created_at ASC",
+                (artifact_id, tenant_id, owner_id),
             )
             rows = await cur.fetchall()
             await cur.close()
         return [_row_to_link(row) for row in rows]
 
     async def count_links(self, artifact_id: str) -> int:
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
             cur = await conn.execute(
-                "SELECT COUNT(*) FROM artifact_links WHERE artifact_id = ?",
-                (artifact_id,),
+                "SELECT COUNT(*) FROM artifact_links WHERE artifact_id = ? "
+                "AND tenant_id = ? AND owner_id = ?",
+                (artifact_id, tenant_id, owner_id),
             )
             row = await cur.fetchone()
             await cur.close()
@@ -218,16 +396,22 @@ class ArtifactRepository:
 
     async def unlink_meeting(self, meeting_id: str) -> list[GeneratedArtifact]:
         artifacts = await self.list_meeting_artifacts(meeting_id)
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
-            await conn.execute("DELETE FROM artifact_links WHERE meeting_id = ?", (meeting_id,))
+            await conn.execute(
+                "DELETE FROM artifact_links WHERE meeting_id = ? "
+                "AND tenant_id = ? AND owner_id = ?",
+                (meeting_id, tenant_id, owner_id),
+            )
             await conn.commit()
         return artifacts
 
     async def delete_artifact_metadata(self, artifact_id: str) -> bool:
+        tenant_id, _device_id, owner_id = _scope()
         async with self._conn() as conn:
             cur = await conn.execute(
-                "DELETE FROM artifacts WHERE artifact_id = ?",
-                (artifact_id,),
+                "DELETE FROM artifacts WHERE artifact_id = ? AND tenant_id = ? AND owner_id = ?",
+                (artifact_id, tenant_id, owner_id),
             )
             await conn.commit()
             return bool(cur.rowcount)

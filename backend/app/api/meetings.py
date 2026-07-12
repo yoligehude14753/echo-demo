@@ -16,21 +16,24 @@ P4-M_meeting_history 新增（2026-05-28）：
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import html
 import json
 import re
 import shutil
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+import aiosqlite
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
-from app.adapters.rag.bm25 import BM25Rag
 from app.adapters.stt import make_stt
 from app.api.deps import (
     get_artifact_repository,
@@ -38,21 +41,44 @@ from app.api.deps import (
     get_event_bus,
     get_llm_singleton,
     get_meeting_state,
+    get_quota_governor,
     get_repository,
+    get_scope_runtime,
+    get_session_store,
+    get_workflow_dispatcher,
+    peek_scope_runtime,
+    reset_scope_runtime_component_for_test,
 )
+from app.api.retrieval import get_rag
 from app.artifacts.repository import ArtifactRepository
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
+from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
 from app.schemas.artifact import GeneratedArtifact
+from app.schemas.events import EchoEvent
 from app.schemas.meeting import MeetingMinutes, MeetingSummary, TranscriptSegment
+from app.schemas.workflow import WorkflowRunCreate
+from app.security.context import current_principal
+from app.security.governor import PrincipalGovernor, QuotaReservation
+from app.security.headers import PRIVATE_NO_STORE_HEADERS, apply_private_no_store
+from app.security.scope import scoped_directory
+from app.security.sessions import SessionStore
+from app.upload import UploadTooLarge, read_limited_upload
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
+from app.workflows.kernel import WorkflowContext, WorkflowDispatcher, WorkflowExecutionError
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
-_pipeline: MeetingPipeline | None = None
+_share_ticket_tokens: dict[str, str] = {}
 _ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
+_SHARE_TICKET_TTL = timedelta(minutes=10)
+
+
+def _scope_key() -> tuple[str, str]:
+    principal = current_principal()
+    return principal.tenant_id, principal.owner_id
 
 
 class ClearMeetingOutputsRequest(BaseModel):
@@ -68,25 +94,32 @@ class ClearMeetingOutputsResponse(BaseModel):
     missing_artifact_ids: list[str]
 
 
+class MeetingShareTicketResponse(BaseModel):
+    path: str
+    expires_in_s: int | None
+
+
 def get_meeting_pipeline(
     settings: Settings = Depends(get_settings),
     llm: OpenAICompatibleLLM = Depends(get_llm_singleton),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
     repository: RepositoryPort = Depends(get_repository),
     diarizer: DiarizerPort = Depends(get_diarizer_singleton),
+    rag: RagPort = Depends(get_rag),
 ) -> MeetingPipeline:
-    global _pipeline  # noqa: PLW0603
-    if _pipeline is None:
-        _pipeline = MeetingPipeline(
+    runtime = get_scope_runtime(settings)
+    return runtime.get_or_create(
+        "meeting_pipeline",
+        lambda: MeetingPipeline(
             settings=settings,
             stt=make_stt(settings),
             diarizer=diarizer,
-            rag=BM25Rag(settings),
+            rag=rag,
             llm=llm,
             event_bus=event_bus,
             repository=repository,
-        )
-    return _pipeline
+        ),
+    )
 
 
 def get_meeting_pipeline_for_lifespan(
@@ -104,27 +137,425 @@ def get_meeting_pipeline_for_lifespan(
         get_llm_singleton as _get_llm,
     )
 
-    global _pipeline  # noqa: PLW0603
-    if _pipeline is None:
+    runtime = get_scope_runtime(settings)
+
+    def make_pipeline() -> MeetingPipeline:
         bus = _get_bus()
         llm = _get_llm(settings)
         diar = _get_diar(settings)
-        _pipeline = MeetingPipeline(
+        return MeetingPipeline(
             settings=settings,
             stt=make_stt(settings),
             diarizer=diar,
-            rag=BM25Rag(settings),
+            rag=get_rag(settings),
             llm=llm,
             event_bus=bus,
             repository=repository,
         )
-    return _pipeline
+
+    return runtime.get_or_create("meeting_pipeline", make_pipeline)
 
 
 def reset_meeting_pipeline() -> None:
     """测试用：清掉缓存的单例。"""
-    global _pipeline  # noqa: PLW0603
-    _pipeline = None
+    reset_scope_runtime_component_for_test("meeting_pipeline")
+
+
+def get_initialized_meeting_pipeline() -> MeetingPipeline | None:
+    """Return only the current principal's initialized pipeline, without creating one."""
+
+    runtime = peek_scope_runtime()
+    pipeline = runtime.get("meeting_pipeline") if runtime is not None else None
+    return pipeline if isinstance(pipeline, MeetingPipeline) else None
+
+
+def bind_meeting_workflow_handlers(
+    dispatcher: WorkflowDispatcher,
+    pipeline: MeetingPipeline,
+) -> None:
+    scope = _scope_key()
+
+    async def finalize_handler(context: WorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
+        meeting_id = str(payload["meeting_id"])
+        if context.cancel_event.is_set():
+            raise asyncio.CancelledError
+        if not pipeline.get_segments(meeting_id):
+            loaded = await pipeline.load_meeting_for_retry(meeting_id)
+            if not loaded:
+                raise MeetingPipelineError(f"meeting {meeting_id} has no segments to summarize")
+        title = str(payload["title"])
+        try:
+            minutes = await pipeline.finalize_meeting(meeting_id, title=title, commit=False)
+        except Exception as exc:
+            error = str(exc)[:500] or "unknown error"
+
+            async def write_failure(conn: aiosqlite.Connection) -> None:
+                principal = current_principal()
+                await conn.execute(
+                    """UPDATE meetings
+                       SET state = 'ended', ended_at = COALESCE(ended_at, ?),
+                           minutes_status = 'generation_failed', minutes_error = ?,
+                           minutes_cleared_at = NULL
+                       WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
+                    (
+                        datetime.now(UTC).isoformat(),
+                        error,
+                        meeting_id,
+                        principal.tenant_id,
+                        principal.owner_id,
+                    ),
+                )
+
+            await dispatcher.service.fail_run_atomic(
+                context.run_id,
+                error=error,
+                domain_writer=write_failure,
+                domain_events=[
+                    EchoEvent(
+                        type="minutes.failed", meeting_id=meeting_id, payload={"error": error}
+                    )
+                ],
+            )
+            raise
+
+        now = datetime.now(UTC).isoformat()
+        minutes_json = minutes.model_dump_json()
+
+        async def write_success(conn: aiosqlite.Connection) -> None:
+            principal = current_principal()
+            await conn.execute(
+                """UPDATE meetings
+                       SET state = 'finalized', title = ?, display_title = ?,
+                       ended_at = COALESCE(ended_at, ?), finalized_at = ?,
+                       minutes_json = ?, raw_transcript_ref = ?,
+                       minutes_status = 'ok', minutes_error = '', minutes_cleared_at = NULL,
+                       rag_projection_state = 'index_pending', rag_projection_error = NULL,
+                       rag_projected_at = NULL
+                   WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
+                (
+                    title,
+                    minutes.title,
+                    now,
+                    now,
+                    minutes_json,
+                    minutes.raw_transcript_ref,
+                    meeting_id,
+                    principal.tenant_id,
+                    principal.owner_id,
+                ),
+            )
+
+        output = {"meeting_id": meeting_id, "minutes": minutes.model_dump(mode="json")}
+        committed = await dispatcher.service.complete_run_atomic(
+            context.run_id,
+            output=output,
+            domain_writer=write_success,
+            domain_events=[
+                EchoEvent(
+                    type="meeting.ended",
+                    meeting_id=meeting_id,
+                    payload={"duration_sec": minutes.duration_sec},
+                ),
+                EchoEvent(
+                    type="minutes.ready",
+                    meeting_id=meeting_id,
+                    payload=minutes.model_dump(mode="json"),
+                ),
+                EchoEvent(
+                    type="tts.suggested",
+                    meeting_id=meeting_id,
+                    payload={
+                        "text": (f"会议{minutes.title}已结束，纪要已生成。{minutes.summary}")[:400],
+                        "kind": "minutes",
+                    },
+                ),
+            ],
+            message="会议纪要已生成",
+        )
+        if committed is None:
+            raise MeetingPipelineError("meeting workflow disappeared")
+        await pipeline.after_finalize_committed(meeting_id, minutes)
+        return output
+
+    dispatcher.registry.register(
+        "meeting.finalize",
+        finalize_handler,
+        scope=scope,
+        replace=True,
+    )
+
+
+def bind_share_workflow_handler(
+    dispatcher: WorkflowDispatcher,
+    sessions: SessionStore,
+) -> None:
+    async def share_handler(context: WorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
+        resource_type = str(payload["resource_type"])
+        resource_id = str(payload["resource_id"])
+        output: dict[str, Any] = {
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+        }
+        token_box: dict[str, str] = {}
+
+        async def write_ticket(conn: aiosqlite.Connection) -> None:
+            token, ticket_id, expires_at = await sessions.issue_resource_ticket_tx(
+                conn,
+                current_principal(),
+                resource_type=resource_type,
+                resource_id=resource_id,
+                ttl=_SHARE_TICKET_TTL,
+            )
+            token_box["token"] = token
+            output.update(ticket_id=ticket_id, expires_at=expires_at)
+
+        committed = await dispatcher.service.complete_run_atomic(
+            context.run_id,
+            output=output,
+            domain_writer=write_ticket,
+            domain_events=[],
+            message="分享票据已签发",
+        )
+        if committed is None or "token" not in token_box:
+            raise RuntimeError("share ticket workflow disappeared")
+        _share_ticket_tokens[context.run_id] = token_box["token"]
+        asyncio.get_running_loop().call_later(
+            30,
+            _share_ticket_tokens.pop,
+            context.run_id,
+            None,
+        )
+        return output
+
+    if dispatcher.registry.resolve("share.prepare") is None:
+        dispatcher.registry.register("share.prepare", share_handler)
+
+
+async def dispatch_resource_share_ticket(
+    dispatcher: WorkflowDispatcher,
+    sessions: SessionStore,
+    *,
+    resource_type: str,
+    resource_id: str,
+    source: str,
+) -> str:
+    bind_share_workflow_handler(dispatcher, sessions)
+    done = await dispatcher.execute(
+        WorkflowRunCreate(
+            kind="share.prepare",
+            source=source,
+            intent_text=f"Prepare read-only share for {resource_type} {resource_id}",
+            input={"resource_type": resource_type, "resource_id": resource_id},
+            timeout_s=30,
+        )
+    )
+    token = _share_ticket_tokens.pop(done.run_id, None)
+    if token is None:
+        raise RuntimeError("share workflow did not return its one-time token")
+    return token
+
+
+def bind_output_cleanup_workflow_handler(
+    dispatcher: WorkflowDispatcher,
+    _repository: RepositoryPort,
+    settings: Settings,
+    _artifact_repo: ArtifactRepository,
+) -> None:
+    principal = current_principal()
+    scope = (principal.tenant_id, principal.owner_id)
+
+    async def handler(context: WorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
+        meeting_id = str(payload["meeting_id"])
+        if context.cancel_event.is_set():
+            raise asyncio.CancelledError
+        clear_minutes = bool(payload.get("clear_minutes", True))
+        cleanup_artifacts: list[GeneratedArtifact] = []
+        output: dict[str, Any] = {
+            "meeting_id": meeting_id,
+            "minutes_cleared": clear_minutes,
+            "artifact_ids": [],
+            "artifacts_deleted": 0,
+            "missing_artifact_ids": [],
+            # Durable post-commit file cleanup intent. Startup recovery replays
+            # this list after a crash between SQLite commit and filesystem IO.
+            "file_cleanup_artifact_ids": [],
+        }
+
+        async def write_cleanup(conn: aiosqlite.Connection) -> None:
+            active = current_principal()
+            cur = await conn.execute(
+                """SELECT DISTINCT a.*
+                   FROM artifacts a
+                   JOIN artifact_links l
+                     ON l.artifact_id = a.artifact_id
+                    AND l.tenant_id = a.tenant_id
+                    AND l.owner_id = a.owner_id
+                   WHERE l.meeting_id = ?
+                     AND l.tenant_id = ? AND l.owner_id = ?
+                   ORDER BY a.artifact_id""",
+                (meeting_id, active.tenant_id, active.owner_id),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+            output["artifact_ids"] = [str(row["artifact_id"]) for row in rows]
+
+            await conn.execute(
+                "DELETE FROM artifact_links WHERE meeting_id = ? "
+                "AND tenant_id = ? AND owner_id = ?",
+                (meeting_id, active.tenant_id, active.owner_id),
+            )
+            for row in rows:
+                artifact_id = str(row["artifact_id"])
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM artifact_links "
+                    "WHERE artifact_id = ? AND tenant_id = ? AND owner_id = ?",
+                    (artifact_id, active.tenant_id, active.owner_id),
+                )
+                count_row = await cur.fetchone()
+                await cur.close()
+                if int(count_row[0] if count_row else 0) > 0:
+                    continue
+                await conn.execute(
+                    "DELETE FROM artifacts WHERE artifact_id = ? "
+                    "AND tenant_id = ? AND owner_id = ?",
+                    (artifact_id, active.tenant_id, active.owner_id),
+                )
+                cleanup_artifacts.append(
+                    GeneratedArtifact(
+                        artifact_id=artifact_id,
+                        artifact_type=str(row["artifact_type"]),
+                        title=str(row["title"] or ""),
+                        file_path=str(row["file_path"]),
+                        mime_type=str(row["mime_type"]),
+                        size_bytes=int(row["size_bytes"] or 0),
+                        generation_latency_ms=float(row["generation_latency_ms"] or 0),
+                        model=str(row["model"] or ""),
+                    )
+                )
+            output["file_cleanup_artifact_ids"] = [
+                artifact.artifact_id for artifact in cleanup_artifacts
+            ]
+            if clear_minutes:
+                await conn.execute(
+                    """UPDATE meetings SET
+                           state = CASE WHEN state = 'finalized' THEN 'ended' ELSE state END,
+                           minutes_json = NULL, minutes_status = NULL, minutes_error = NULL,
+                           display_title = NULL, finalized_at = NULL,
+                           minutes_cleared_at = CURRENT_TIMESTAMP,
+                           rag_projection_state = 'delete_pending',
+                           rag_projection_error = NULL, rag_projected_at = NULL
+                       WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
+                    (meeting_id, active.tenant_id, active.owner_id),
+                )
+
+        committed = await dispatcher.service.complete_run_atomic(
+            context.run_id,
+            output=output,
+            domain_writer=write_cleanup,
+            domain_events=[],
+            message="会议纪要与产物已清理",
+        )
+        if committed is None:
+            raise RuntimeError("meeting output cleanup workflow disappeared")
+
+        deleted = 0
+        missing: list[str] = []
+        cleanup_errors: dict[str, str] = {}
+        for artifact in cleanup_artifacts:
+            try:
+                if _delete_artifact_file(settings, artifact):
+                    deleted += 1
+                else:
+                    missing.append(artifact.artifact_id)
+            except OSError as exc:
+                cleanup_errors[artifact.artifact_id] = str(exc)[:300]
+        output.update(
+            artifacts_deleted=deleted,
+            missing_artifact_ids=missing,
+            file_cleanup_errors=cleanup_errors,
+        )
+        await dispatcher.service.merge_output(
+            context.run_id,
+            {
+                "artifacts_deleted": deleted,
+                "missing_artifact_ids": missing,
+                "file_cleanup_errors": cleanup_errors,
+            },
+            event_type="workflow.file_cleanup_projected",
+            message="产物文件清理投影已更新",
+        )
+        return output
+
+    dispatcher.registry.register(
+        "meeting.outputs.clear",
+        handler,
+        scope=scope,
+        replace=True,
+    )
+
+
+async def dispatch_meeting_finalize(
+    dispatcher: WorkflowDispatcher,
+    pipeline: MeetingPipeline,
+    repository: RepositoryPort,
+    *,
+    meeting_id: str,
+    title: str,
+    source: str,
+) -> MeetingMinutes:
+    bind_meeting_workflow_handlers(dispatcher, pipeline)
+    meeting = await repository.get_meeting(meeting_id)
+    if meeting is not None and meeting.minutes_json and meeting.minutes_status == "ok":
+        return MeetingMinutes.model_validate_json(meeting.minutes_json)
+
+    finalize_runs = [
+        item
+        for item in await dispatcher.service.list_runs(meeting_id=meeting_id, limit=200)
+        if item.kind == "meeting.finalize"
+    ]
+    latest = finalize_runs[0] if finalize_runs else None
+    active_key = f"meeting.finalize:{meeting_id}"
+    if latest is not None and not latest.is_terminal:
+        # Re-dispatching an active run through its permanent request key makes
+        # sure a request racing startup restore schedules the same run.
+        run = await dispatcher.dispatch(
+            WorkflowRunCreate(
+                kind="meeting.finalize",
+                source=latest.source,
+                title=latest.title,
+                intent_text=latest.intent_text,
+                meeting_id=meeting_id,
+                input=dict(latest.input),
+                timeout_s=latest.timeout_s,
+                idempotency_key=latest.idempotency_key,
+                active_key=latest.active_key or active_key,
+            )
+        )
+    elif latest is not None and latest.state != "succeeded":
+        retried = await dispatcher.retry(latest.run_id, reason="meeting minutes retry")
+        if retried is None:
+            raise MeetingPipelineError("meeting workflow retry was not created")
+        run = retried
+    else:
+        generation = len(finalize_runs) + 1
+        run = await dispatcher.dispatch(
+            WorkflowRunCreate(
+                kind="meeting.finalize",
+                source=source,
+                title=title,
+                intent_text=f"Finalize meeting {meeting_id}",
+                meeting_id=meeting_id,
+                input={"meeting_id": meeting_id, "title": title},
+                timeout_s=300,
+                idempotency_key=f"meeting.finalize:{meeting_id}:generation:{generation}",
+                active_key=active_key,
+            )
+        )
+    try:
+        done = await dispatcher.wait_succeeded(run.run_id)
+    except WorkflowExecutionError as exc:
+        raise MeetingPipelineError(str(exc)) from exc
+    return MeetingMinutes.model_validate(done.output["minutes"])
 
 
 def _split_artifact_ids(raw: str | None) -> list[str]:
@@ -163,10 +594,12 @@ def _artifact_build_dir(settings: Settings, artifact_id: str) -> Path | None:
     if not _ARTIFACT_ID_RE.fullmatch(artifact_id):
         return None
     base = Path(settings.skill_executor_build_dir).expanduser().resolve()
-    candidate = (base / artifact_id).resolve()
-    if candidate == base or base not in candidate.parents:
-        return None
-    return candidate
+    scoped_candidate = (scoped_directory(base).resolve() / artifact_id).resolve()
+    legacy_candidate = (base / artifact_id).resolve()
+    for candidate in (scoped_candidate, legacy_candidate):
+        if candidate != base and base in candidate.parents and candidate.exists():
+            return candidate
+    return scoped_candidate if base in scoped_candidate.parents else None
 
 
 def _artifact_download_info(settings: Settings, artifact_id: str) -> dict[str, object] | None:
@@ -232,11 +665,19 @@ def _delete_artifact_file(settings: Settings, artifact: GeneratedArtifact) -> bo
     if path is None or not path.exists():
         return False
     base = Path(settings.skill_executor_build_dir).expanduser().resolve()
-    build_dir = (base / artifact.artifact_id).resolve()
-    if path == build_dir or build_dir in path.parents:
-        shutil.rmtree(build_dir)
-    else:
-        path.unlink()
+    build_dirs = (
+        (scoped_directory(base).resolve() / artifact.artifact_id).resolve(),
+        (base / artifact.artifact_id).resolve(),
+    )
+    for build_dir in build_dirs:
+        if (
+            build_dir != base
+            and base in build_dir.parents
+            and (path == build_dir or build_dir in path.parents)
+        ):
+            shutil.rmtree(build_dir)
+            return True
+    path.unlink()
     return True
 
 
@@ -435,6 +876,8 @@ async def get_current_meeting(
     idle      → 返回最新 meeting 的 minutes_status（若用户刚结束一个会议，UI 据此决定显示什么）
     """
     response.headers["Cache-Control"] = "no-store"
+    await state.hydrate()
+    state.start_watchdog()
     cur = state.current
     if cur is not None:
         return {
@@ -464,6 +907,7 @@ async def manual_start_meeting(
     title: str | None = Form(None),
 ) -> dict[str, object]:
     """用户点击状态栏：手动开始会议。已在会议中则原样返回。"""
+    state.start_watchdog()
     cur = await state.manual_start(title=title)
     return {
         "mode": "in_meeting",
@@ -478,6 +922,7 @@ async def manual_end_meeting(
     state: Annotated[MeetingState, Depends(get_meeting_state)],
 ) -> dict[str, object]:
     """用户点击状态栏：手动结束会议（含 finalize 纪要）。"""
+    state.start_watchdog()
     ended = await state.manual_end()
     return {"mode": "idle", "meeting_id": ended}
 
@@ -581,7 +1026,10 @@ async def download_minutes_markdown(
     return Response(
         markdown,
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+        headers={
+            **PRIVATE_NO_STORE_HEADERS,
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+        },
     )
 
 
@@ -604,7 +1052,10 @@ async def share_meeting(
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     settings: Annotated[Settings, Depends(get_settings)],
     artifact_repo: Annotated[ArtifactRepository, Depends(get_artifact_repository)],
+    sessions: Annotated[SessionStore, Depends(get_session_store)],
+    dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
     artifact_ids: str | None = Query(None),
+    share: str | None = Query(None),
 ) -> HTMLResponse:
     """手机扫码保存会议资料页。
 
@@ -632,11 +1083,26 @@ async def share_meeting(
         except json.JSONDecodeError:
             summary = "会议纪要数据损坏，请回到 EchoDesk 重新生成。"
 
-    artifacts = [
-        info
-        for artifact in await artifact_repo.list_meeting_artifacts(meeting_id)
-        if (info := _artifact_download_info_from_record(settings, artifact)) is not None
-    ]
+    artifacts: list[dict[str, object]] = []
+    for artifact in await artifact_repo.list_meeting_artifacts(meeting_id):
+        info = _artifact_download_info_from_record(settings, artifact)
+        if info is None:
+            continue
+        if settings.public_demo_mode:
+            artifact_ticket = await dispatch_resource_share_ticket(
+                dispatcher,
+                sessions,
+                resource_type="artifact",
+                resource_id=artifact.artifact_id,
+                source="meeting_share_page",
+            )
+            info["download_url"] = f"{info['download_url']}?share={quote(artifact_ticket)}"
+        artifacts.append(info)
+    minutes_url = f"/meetings/{quote(meeting_id)}/minutes.md" if meeting.minutes_json else None
+    if minutes_url and settings.public_demo_mode:
+        if not share:
+            raise HTTPException(status_code=401, detail="share ticket required")
+        minutes_url = f"{minutes_url}?share={quote(share)}"
     return HTMLResponse(
         _share_html(
             meeting_id=meeting_id,
@@ -645,10 +1111,46 @@ async def share_meeting(
             sections=sections,
             decisions=decisions,
             artifacts=artifacts,
-            minutes_download_url=f"/meetings/{quote(meeting_id)}/minutes.md"
-            if meeting.minutes_json
-            else None,
-        )
+            minutes_download_url=minutes_url,
+        ),
+        headers={
+            **PRIVATE_NO_STORE_HEADERS,
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            ),
+            "X-Frame-Options": "DENY",
+        },
+    )
+
+
+@router.post("/{meeting_id}/share-ticket", response_model=MeetingShareTicketResponse)
+async def create_meeting_share_ticket(
+    meeting_id: str,
+    response: Response,
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    sessions: Annotated[SessionStore, Depends(get_session_store)],
+    dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
+) -> MeetingShareTicketResponse:
+    """Create a narrow URL token; never put the full device session in a QR code."""
+
+    apply_private_no_store(response.headers)
+    if await repository.get_meeting(meeting_id) is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    path = f"/meetings/{quote(meeting_id)}/share"
+    if not settings.public_demo_mode:
+        return MeetingShareTicketResponse(path=path, expires_in_s=None)
+    token = await dispatch_resource_share_ticket(
+        dispatcher,
+        sessions,
+        resource_type="meeting",
+        resource_id=meeting_id,
+        source="meeting_share_api",
+    )
+    return MeetingShareTicketResponse(
+        path=f"{path}?share={quote(token)}",
+        expires_in_s=int(_SHARE_TICKET_TTL.total_seconds()),
     )
 
 
@@ -659,6 +1161,7 @@ async def clear_meeting_outputs(
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     settings: Annotated[Settings, Depends(get_settings)],
     artifact_repo: Annotated[ArtifactRepository, Depends(get_artifact_repository)],
+    dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
 ) -> ClearMeetingOutputsResponse:
     """清理会议纪要与产物文件。
 
@@ -670,29 +1173,28 @@ async def clear_meeting_outputs(
     if meeting is None:
         raise HTTPException(status_code=404, detail="meeting not found")
 
-    artifacts = await artifact_repo.unlink_meeting(meeting_id)
-    artifact_ids = [artifact.artifact_id for artifact in artifacts]
-    deleted = 0
-    missing: list[str] = []
-    for artifact in artifacts:
-        if await artifact_repo.count_links(artifact.artifact_id) > 0:
-            continue
-        if _delete_artifact_file(settings, artifact):
-            deleted += 1
-        else:
-            missing.append(artifact.artifact_id)
-        await artifact_repo.delete_artifact_metadata(artifact.artifact_id)
-
-    if body.clear_minutes:
-        await repository.clear_meeting_outputs(meeting_id, clear_minutes=True)
-
-    return ClearMeetingOutputsResponse(
-        meeting_id=meeting_id,
-        minutes_cleared=body.clear_minutes,
-        artifact_ids=artifact_ids,
-        artifacts_deleted=deleted,
-        missing_artifact_ids=missing,
-    )
+    current_artifacts = await artifact_repo.list_meeting_artifacts(meeting_id)
+    digest = hashlib.sha256(
+        ("\0".join(sorted(item.artifact_id for item in current_artifacts))).encode()
+    ).hexdigest()
+    bind_output_cleanup_workflow_handler(dispatcher, repository, settings, artifact_repo)
+    try:
+        done = await dispatcher.execute(
+            WorkflowRunCreate(
+                kind="meeting.outputs.clear",
+                source="meeting_outputs_api",
+                intent_text=f"Clear outputs for meeting {meeting_id}",
+                meeting_id=meeting_id,
+                input={"meeting_id": meeting_id, "clear_minutes": body.clear_minutes},
+                timeout_s=120,
+                idempotency_key=(
+                    f"meeting.outputs.clear:{meeting_id}:{body.clear_minutes}:{digest}"
+                ),
+            )
+        )
+    except WorkflowExecutionError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ClearMeetingOutputsResponse.model_validate(done.output)
 
 
 @router.post("/{meeting_id}/start")
@@ -701,24 +1203,45 @@ async def start_meeting(
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
 ) -> dict[str, str]:
     """启动会议（low-level；建议走 /meetings/manual_start）。"""
-    await pipeline.start_meeting(meeting_id)
-    return {"meeting_id": meeting_id, "status": "started"}
+    active = await pipeline.start_meeting(meeting_id)
+    return {
+        "meeting_id": active.id,
+        "status": "started" if active.id == meeting_id else "active_reused",
+    }
 
 
 @router.post("/{meeting_id}/chunk", response_model=list[TranscriptSegment])
 async def add_chunk(
+    request: Request,
     meeting_id: str,
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
     audio: UploadFile = File(...),
     sample_rate: int = Form(16_000),
+    settings: Settings = Depends(get_settings),
+    governor: PrincipalGovernor = Depends(get_quota_governor),
 ) -> list[TranscriptSegment]:
-    audio_bytes = await audio.read()
+    if await repository.get_meeting(meeting_id) is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    try:
+        upload = await read_limited_upload(
+            audio,
+            max_bytes=int(settings.upload_max_file_mb * 1024 * 1024),
+            chunk_bytes=settings.upload_read_chunk_bytes,
+            governor=governor,
+            principal=current_principal(),
+            upload_reservation=getattr(request.state, "upload_quota_reservation", None),
+        )
+    except UploadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="audio upload too large") from exc
+    audio_bytes = upload.data
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="empty audio")
     try:
         return await pipeline.add_audio_chunk(meeting_id, audio_bytes, sample_rate=sample_rate)
     except MeetingPipelineError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        status_code = 409 if "not active" in str(e) or "already ended" in str(e) else 502
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
 
 
 @router.post("/{meeting_id}/finalize", response_model=MeetingMinutes)
@@ -726,6 +1249,7 @@ async def finalize(
     meeting_id: str,
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
     repository: Annotated[RepositoryPort, Depends(get_repository)],
+    dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
     title: str = Form(...),
 ) -> MeetingMinutes:
     """生成或重试生成会议纪要（幂等）。
@@ -737,30 +1261,32 @@ async def finalize(
       失败再次写 ``generation_failed`` + 新的 ``minutes_error``。
     - 用户视角：「重试生成纪要」按钮就是再 POST 一次 ``/meetings/{id}/finalize``。
     """
-    # 重试场景：pipeline 内存里没有这个 meeting 的 segments（重启 / 进程切换）
-    # 显式装载一次，避免 finalize 报「no segments」。
-    if not pipeline.get_segments(meeting_id):
-        rec = await repository.get_meeting(meeting_id)
-        if rec is None:
-            raise HTTPException(status_code=404, detail=f"meeting {meeting_id} not found")
-        loaded = await pipeline.load_meeting_for_retry(meeting_id)
-        if not loaded:
-            raise HTTPException(
-                status_code=400,
-                detail=f"meeting {meeting_id} has no segments to summarize",
-            )
+    rec = await repository.get_meeting(meeting_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"meeting {meeting_id} not found")
     try:
-        return await pipeline.finalize_meeting(meeting_id, title=title)
-    except MeetingPipelineError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        return await dispatch_meeting_finalize(
+            dispatcher,
+            pipeline,
+            repository,
+            meeting_id=meeting_id,
+            title=title,
+            source="meeting_api",
+        )
+    except MeetingPipelineError as exc:
+        status_code = 400 if "no segments" in str(exc) else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.post("/{meeting_id}/end")
 async def end_meeting(
     meeting_id: str,
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
 ) -> dict[str, str]:
     """结束会议叠加层（不生成纪要）；ambient 主链路继续。"""
+    if await repository.get_meeting(meeting_id) is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
     await pipeline.end_meeting(meeting_id)
     return {"meeting_id": meeting_id, "status": "ended"}
 
@@ -768,16 +1294,22 @@ async def end_meeting(
 @router.get("/{meeting_id}/segments", response_model=list[TranscriptSegment])
 async def list_segments(
     meeting_id: str,
-    pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
 ) -> list[TranscriptSegment]:
-    return pipeline.get_segments(meeting_id)
+    if await repository.get_meeting(meeting_id) is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    return await repository.list_meeting_segments(meeting_id)
 
 
 @router.post("/{meeting_id}/inject_segment", response_model=TranscriptSegment)
 async def inject_segment(
+    request: Request,
     meeting_id: str,
     seg: TranscriptSegment,
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+    repository: Annotated[RepositoryPort, Depends(get_repository)],
+    settings: Settings = Depends(get_settings),
+    governor: PrincipalGovernor = Depends(get_quota_governor),
 ) -> TranscriptSegment:
     """演示/兜底入口：当 STT 服务不可用时直接注入已知转写片段。
 
@@ -785,4 +1317,25 @@ async def inject_segment(
     - demo 录制：把预先准备的逐字稿喂进 pipeline，避开 STT 依赖
     - 离线回放：从 raw_transcript_ref 文件重放
     """
-    return await pipeline.append_segment(meeting_id, seg)
+    if await repository.get_meeting(meeting_id) is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    principal = current_principal()
+    stored_bytes = len(seg.model_dump_json().encode("utf-8"))
+    if stored_bytes > settings.meeting_inject_segment_max_bytes:
+        raise HTTPException(status_code=413, detail="transcript segment too large")
+
+    observed_body_bytes = int(getattr(request.state, "upload_body_bytes", stored_bytes))
+    upload_reservation = getattr(request.state, "upload_quota_reservation", None)
+    if isinstance(upload_reservation, QuotaReservation):
+        await upload_reservation.settle(observed_body_bytes)
+    else:
+        await governor.charge_upload_bytes(principal, observed_body_bytes)
+
+    storage_reservation = await governor.reserve_storage(principal, stored_bytes)
+    try:
+        return await pipeline.append_segment(meeting_id, seg)
+    except BaseException:
+        # The durable lifetime charge belongs only to a segment that reached
+        # the repository.  Network ingress remains charged even on failure.
+        await storage_reservation.release()
+        raise

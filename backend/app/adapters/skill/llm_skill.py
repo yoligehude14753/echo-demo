@@ -25,21 +25,24 @@ import shutil
 import subprocess
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from app.adapters.skill.node_executor import exec_node_to_artifact
+from app.adapters.skill.node_executor import exec_node_to_artifact, run_node_script
 from app.adapters.skill.prompts import get_skill_prompt
 from app.adapters.skill.python_executor import (
     ExecResult,
     exec_python_to_artifact,
     exec_text_to_file,
 )
+from app.artifacts.staging import WORKFLOW_BUILDING_DIR
 from app.config import Settings
 from app.ports.llm import LLMPort
 from app.schemas.artifact import SUPPORTED_KINDS, GeneratedArtifact, normalize_kind
 from app.schemas.llm import ChatMessage
+from app.security.scope import scoped_directory
 
 _CANONICAL_EXT: Final[dict[str, str]] = {
     "pptx": "pptx",
@@ -60,6 +63,63 @@ _ASSETS_DIR: Final[Path] = Path(__file__).resolve().parent / "assets"
 _PPT_IB_DECK_DIR: Final[Path] = _ASSETS_DIR / "ppt_ib_deck"
 _PPT_IB_MASTER: Final[Path] = _PPT_IB_DECK_DIR / "ib_master.pptx"
 _PPT_IB_RENDER_MJS: Final[Path] = _PPT_IB_DECK_DIR / "render.mjs"
+_PPT_IB_EXAMPLE_DATA: Final[Path] = _PPT_IB_DECK_DIR / "example_data.json"
+_PPT_NODE_DEPENDENCIES: Final[tuple[str, ...]] = (
+    "docxtemplater",
+    "pizzip",
+    "pptxgenjs",
+)
+
+
+def _missing_ppt_node_dependencies() -> list[str]:
+    node_modules = _PPT_IB_DECK_DIR / "node_modules"
+    return [name for name in _PPT_NODE_DEPENDENCIES if not (node_modules / name).is_dir()]
+
+
+def run_packaged_ppt_runtime_smoke(
+    output_dir: Path,
+    *,
+    node_bin: str,
+    electron_runtime: bool,
+    timeout_s: float = 60.0,
+) -> Path:
+    """用包内固定模板/依赖生成 PPT，证明安装态 Node runtime 可执行。"""
+
+    required_assets = (_PPT_IB_MASTER, _PPT_IB_RENDER_MJS, _PPT_IB_EXAMPLE_DATA)
+    missing_assets = [str(path) for path in required_assets if not path.is_file()]
+    missing_dependencies = _missing_ppt_node_dependencies()
+    if missing_assets or missing_dependencies:
+        raise RuntimeError(
+            "packaged PPT runtime assets incomplete: "
+            f"assets={missing_assets}, node_modules={missing_dependencies}"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "runtime-smoke.pptx"
+    rc, message = run_node_script(
+        node_bin=node_bin,
+        script_path=_PPT_IB_RENDER_MJS,
+        args=[
+            str(_PPT_IB_MASTER),
+            str(_PPT_IB_EXAMPLE_DATA),
+            str(output_path),
+        ],
+        cwd=output_dir,
+        node_modules_root=_PPT_IB_DECK_DIR,
+        electron_runtime=electron_runtime,
+        timeout_s=timeout_s,
+    )
+    if rc != 0 or not output_path.is_file() or output_path.stat().st_size <= 8_000:
+        raise RuntimeError(f"packaged PPT runtime smoke failed: rc={rc} {message[:600]}")
+    try:
+        with zipfile.ZipFile(output_path) as archive:
+            names = set(archive.namelist())
+    except zipfile.BadZipFile as exc:
+        raise RuntimeError("packaged PPT runtime smoke produced an invalid PPTX") from exc
+    if "ppt/slides/slide1.xml" not in names:
+        raise RuntimeError("packaged PPT runtime smoke produced no readable slide")
+    return output_path
+
 
 # PPT IB deck 27 字段 schema（顺序与 schema.md / example_data.json 对齐）
 _PPT_IB_DECK_FIELDS: Final[tuple[str, ...]] = (
@@ -104,6 +164,7 @@ _EMOJI_RE: Final[re.Pattern[str]] = re.compile(
     "\U00002700-\U000027bf"
     "]"
 )
+_ARTIFACT_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 
 
 class SkillError(RuntimeError):
@@ -297,10 +358,16 @@ class SkillExecutor:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._build_root = Path(settings.skill_executor_build_dir).expanduser()
-        self._node_modules_root = self._build_root.parent / "skill_node_deps"
         self._timeout_s = float(settings.skill_executor_timeout_s)
         self._max_tokens = settings.skill_executor_max_tokens
-        self._node_bin = settings.skill_node_bin
+        self._node_bin = settings.resolved_skill_node_bin
+        self._node_is_electron = settings.resolved_skill_node_is_electron
+        self._node_modules_root = (
+            _PPT_IB_DECK_DIR
+            if self._node_is_electron
+            else self._build_root.parent / "skill_node_deps"
+        )
+        self._allow_node_install = not self._node_is_electron
         self._npm_bin = "npm"
         self._use_legacy_html_pptx = bool(getattr(settings, "use_legacy_html_pptx", False))
 
@@ -311,6 +378,7 @@ class SkillExecutor:
         artifact_type: str,
         brief: str,
         extra_instructions: str | None = None,
+        artifact_id: str | None = None,
     ) -> GeneratedArtifact:
         if artifact_type.lower().strip() not in SUPPORTED_KINDS:
             raise SkillError(
@@ -320,37 +388,72 @@ class SkillExecutor:
         if not kind:
             raise SkillError(f"cannot normalize artifact_type: {artifact_type}")
 
-        artifact_id = f"{kind}-{uuid.uuid4().hex[:10]}"
-        build_dir = self._build_root / artifact_id
-        build_dir.mkdir(parents=True, exist_ok=True)
+        published_id = artifact_id or f"{kind}-{uuid.uuid4().hex[:10]}"
+        if not _ARTIFACT_ID_RE.fullmatch(published_id):
+            raise SkillError("invalid artifact_id")
+        scoped_build_root = scoped_directory(self._build_root)
+        published_dir = scoped_build_root / published_id
+        building_root = scoped_build_root / WORKFLOW_BUILDING_DIR
+        building_root.mkdir(parents=True, exist_ok=True)
+        build_dir = building_root / f"{published_id}-{uuid.uuid4().hex}"
+        build_dir.mkdir(parents=True)
 
-        # 高质量路径：默认 HTML 走 Kami one-pager；默认 PPT 走 ib_master JSON 渲染。
-        # use_legacy_html_pptx=True 时回滚到 _generate_via_default_pipeline。
-        if kind == "html" and not self._use_legacy_html_pptx:
-            return await self._generate_html_one_pager(
-                llm=llm,
-                brief=brief,
-                extra_instructions=extra_instructions,
-                artifact_id=artifact_id,
-                build_dir=build_dir,
-            )
-        if kind == "pptx" and not self._use_legacy_html_pptx:
-            return await self._generate_ib_pptx(
-                llm=llm,
-                brief=brief,
-                extra_instructions=extra_instructions,
-                artifact_id=artifact_id,
-                build_dir=build_dir,
-            )
+        try:
+            # 高质量路径：默认 HTML 走 Kami one-pager；默认 PPT 走 ib_master JSON 渲染。
+            # use_legacy_html_pptx=True 时回滚到 _generate_via_default_pipeline。
+            if kind == "html" and not self._use_legacy_html_pptx:
+                generated = await self._generate_html_one_pager(
+                    llm=llm,
+                    brief=brief,
+                    extra_instructions=extra_instructions,
+                    artifact_id=published_id,
+                    build_dir=build_dir,
+                )
+            elif kind == "pptx" and not self._use_legacy_html_pptx:
+                generated = await self._generate_ib_pptx(
+                    llm=llm,
+                    brief=brief,
+                    extra_instructions=extra_instructions,
+                    artifact_id=published_id,
+                    build_dir=build_dir,
+                )
+            else:
+                generated = await self._generate_via_default_pipeline(
+                    llm=llm,
+                    kind=kind,
+                    brief=brief,
+                    extra_instructions=extra_instructions,
+                    artifact_id=published_id,
+                    build_dir=build_dir,
+                )
 
-        return await self._generate_via_default_pipeline(
-            llm=llm,
-            kind=kind,
-            brief=brief,
-            extra_instructions=extra_instructions,
-            artifact_id=artifact_id,
-            build_dir=build_dir,
-        )
+            output = Path(generated.file_path).resolve(strict=True)
+            build_resolved = build_dir.resolve(strict=True)
+            if output.parent != build_resolved or output.stat().st_size <= 0:
+                raise SkillError("skill output escaped or is empty")
+            output_name = output.name
+            try:
+                build_dir.replace(published_dir)
+            except OSError:
+                # A second process restoring the same run may win publication.
+                # Reuse its complete deterministic output instead of publishing
+                # another random artifact directory.
+                if published_dir.is_symlink():
+                    raise
+                existing = published_dir / output_name
+                if not existing.is_file() or existing.stat().st_size <= 0:
+                    raise
+            published_output = published_dir / output_name
+            return generated.model_copy(
+                update={
+                    "artifact_id": published_id,
+                    "file_path": str(published_output.resolve(strict=True)),
+                    "size_bytes": published_output.stat().st_size,
+                }
+            )
+        finally:
+            if build_dir.exists():
+                shutil.rmtree(build_dir, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
     # 默认 / legacy 流水线：LLM → 剥围栏 → exec_for_kind → 产物
@@ -521,7 +624,7 @@ class SkillExecutor:
             raise SkillError(
                 "ppt_ib_deck assets 缺失，期望在 "
                 f"{_PPT_IB_DECK_DIR}（ib_master.pptx + render.mjs）。"
-                "请在 backend/app/adapters/skill/assets/ppt_ib_deck/ 跑 npm install。"
+                "请在 backend/app/adapters/skill/assets/ppt_ib_deck/ 跑 npm ci。"
             )
 
         sys_prompt = get_skill_prompt("pptx", legacy=False)
@@ -590,7 +693,6 @@ class SkillExecutor:
         前置检查 node 二进制 + 母版 + node_modules；缺一返回 ExecResult.success=False。
         """
         import asyncio
-        import os
 
         if not shutil.which(self._node_bin) and not Path(self._node_bin).is_file():
             return ExecResult(
@@ -599,14 +701,14 @@ class SkillExecutor:
                 stderr=f"node binary not executable: {self._node_bin}",
                 elapsed_s=0.0,
             )
-        deck_node_modules = _PPT_IB_DECK_DIR / "node_modules"
-        if not deck_node_modules.exists():
+        missing_dependencies = _missing_ppt_node_dependencies()
+        if missing_dependencies:
             return ExecResult(
                 success=False,
                 output_path=None,
                 stderr=(
-                    "ppt_ib_deck node_modules 不存在；请在 "
-                    f"{_PPT_IB_DECK_DIR} 跑 `npm install`（或跑 scripts/install-backend.sh）"
+                    "ppt_ib_deck 固定依赖不完整；请在 "
+                    f"{_PPT_IB_DECK_DIR} 跑 `npm ci`；missing={missing_dependencies}"
                 ),
                 elapsed_s=0.0,
             )
@@ -614,27 +716,19 @@ class SkillExecutor:
         t0 = time.monotonic()
 
         def _run() -> tuple[int, str]:
-            env = {
-                "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-                "HOME": str(Path.home()),
-                "NODE_PATH": str(deck_node_modules.resolve()),
-            }
-            proc = subprocess.run(
-                [
-                    self._node_bin,
-                    str(_PPT_IB_RENDER_MJS),
+            return run_node_script(
+                node_bin=self._node_bin,
+                script_path=_PPT_IB_RENDER_MJS,
+                args=[
                     str(_PPT_IB_MASTER),
                     str(data_path),
                     str(output_path),
                 ],
-                cwd=str(build_dir),
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_s,
-                env=env,
-                check=False,
+                cwd=build_dir,
+                node_modules_root=_PPT_IB_DECK_DIR,
+                electron_runtime=self._node_is_electron,
+                timeout_s=self._timeout_s,
             )
-            return proc.returncode, proc.stderr or proc.stdout
 
         try:
             rc, stderr = await asyncio.to_thread(_run)
@@ -706,6 +800,8 @@ class SkillExecutor:
                 node_bin=self._node_bin,
                 npm_bin=self._npm_bin,
                 timeout_s=self._timeout_s,
+                electron_runtime=self._node_is_electron,
+                allow_install=self._allow_node_install,
             )
             return ExecResult(
                 success=node_result.success,

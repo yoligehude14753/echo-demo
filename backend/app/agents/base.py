@@ -51,6 +51,7 @@ class AgentIntent:
     priority: int = 60
     runner_model: str | None = None
     runner_base_url: str | None = None
+    runner_operation_key: str | None = None
 
 
 @dataclass(slots=True)

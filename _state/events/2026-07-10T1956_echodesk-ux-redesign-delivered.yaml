@@ -1,0 +1,36 @@
+event_id: "E-20260710T1956-009"
+event_type: "add"
+timestamp: "2026-07-10T19:56:00+08:00"
+author: "agent/codex-ux-redesign"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-013"
+      claim: "EchoDesk's redesigned desktop UX now uses a unified Codex-like system font, separated navigation/workbench/inspector views, human-readable states, and tested responsive overflow handling."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-10T19:56:00+08:00"
+      observed_by: "agent/codex-ux-redesign"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "desktop/src/App.tsx"
+        - "desktop/src/index.css"
+        - "desktop/tests/e2e/ux-redesign.spec.ts"
+        - "desktop/tests/e2e/mobile-layout.spec.ts"
+        - "docs/0.3/ARCHITECTURE.md"
+      evidence: "Typecheck, lint, and production build passed; desktop E2E finished with 48 passed and scenarios with 25 passed. Responsive regression covers 411, 960, 1280, and TV 1920 layouts, long-text overflow, the system font stack, and hidden internal IDs."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3"
+        - "ux"
+        - "desktop"
+        - "responsive"
+        - "design-system"
+git_commit: null

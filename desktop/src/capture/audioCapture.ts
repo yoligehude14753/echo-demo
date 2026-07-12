@@ -17,10 +17,11 @@ import type { CaptureState } from "@/domain/session";
 import { isNativeMobile } from "@/runtime";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
-export type CaptureChunkHandler = (wav: Blob) => void;
+export type CaptureChunkHandler = (wav: Blob) => void | Promise<void>;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
 
 const RETRY_MS = 5_000;
+const NATIVE_RUNTIME_RETRY_LIMIT = 3;
 const TV_SILENT_INPUT_GRACE_MS = 30_000;
 const TV_SILENT_PEAK_THRESHOLD = 0.000002;
 
@@ -190,13 +191,18 @@ class AudioCapture {
   private audioCtx: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private proc: ScriptProcessorNode | null = null;
+  private nativePlugin: EchoAudioPlugin = EchoAudio;
   private nativeHandles: PluginListenerHandle[] = [];
   private nativeActive = false;
+  private nativeAttemptGeneration = 0;
+  private nativeRuntimeRetryAttempts = 0;
+  private nativeCleanup: Promise<void> = Promise.resolve();
   private nativeSilentChunks = 0;
   private buf: Float32Array[] = [];
   private accSamples = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private generation = 0;
   private silentInputSinceMs: number | null = null;
 
   getState(): CaptureState {
@@ -221,12 +227,27 @@ class AudioCapture {
   start(): void {
     if (this.running) return;
     this.running = true;
-    void this.boot();
+    this.generation += 1;
+    this.nativeRuntimeRetryAttempts = 0;
+    void this.boot(this.generation);
   }
 
   stop(): void {
+    if (
+      !this.running &&
+      this.stream === null &&
+      !this.nativeActive &&
+      this.nativeHandles.length === 0
+    ) {
+      return;
+    }
     this.running = false;
-    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.generation += 1;
+    this.nativeRuntimeRetryAttempts = 0;
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
     this.teardown();
     this.setState("initializing");
   }
@@ -255,20 +276,35 @@ class AudioCapture {
   }
 
   private teardownNative(): void {
-    if (!this.nativeActive && this.nativeHandles.length === 0) return;
+    this.nativeAttemptGeneration += 1;
+    const handles = this.nativeHandles;
+    const shouldStop = this.nativeActive || handles.length > 0;
+    const plugin = this.nativePlugin;
     this.nativeActive = false;
     this.nativeSilentChunks = 0;
-    for (const h of this.nativeHandles) {
-      void h.remove();
-    }
     this.nativeHandles = [];
-    void EchoAudio.stop().catch(() => undefined);
+    if (!shouldStop) return;
+
+    const previousCleanup = this.nativeCleanup;
+    this.nativeCleanup = (async () => {
+      await previousCleanup.catch(() => undefined);
+      await Promise.allSettled(handles.map((handle) => handle.remove()));
+      await plugin.stop().catch(() => undefined);
+    })();
   }
 
   private scheduleRetry(): void {
     if (!this.running) return;
     if (this.retryTimer) clearTimeout(this.retryTimer);
-    this.retryTimer = setTimeout(() => void this.boot(), RETRY_MS);
+    const generation = this.generation;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.boot(generation);
+    }, RETRY_MS);
+  }
+
+  private isCurrent(generation: number): boolean {
+    return this.running && this.generation === generation;
   }
 
   private observeInputHealth(input: Float32Array): boolean {
@@ -300,12 +336,41 @@ class AudioCapture {
     return false;
   }
 
-  private observeNativeInputHealth(event: EchoAudioChunkEvent): boolean {
+  private handleNativeFailure(
+    message: string,
+    generation: number,
+    attemptGeneration: number,
+  ): void {
+    if (
+      !this.isCurrent(generation) ||
+      this.nativeAttemptGeneration !== attemptGeneration
+    ) {
+      return;
+    }
+    const shouldRetry =
+      this.nativeRuntimeRetryAttempts < NATIVE_RUNTIME_RETRY_LIMIT;
+    if (shouldRetry) this.nativeRuntimeRetryAttempts += 1;
+    this.setState(
+      "error",
+      shouldRetry
+        ? message
+        : `${message}；自动恢复已达 ${NATIVE_RUNTIME_RETRY_LIMIT} 次上限，请检查麦克风后手动重试`,
+    );
+    this.teardownNative();
+    if (shouldRetry) this.scheduleRetry();
+  }
+
+  private observeNativeInputHealth(
+    event: EchoAudioChunkEvent,
+    generation: number,
+    attemptGeneration: number,
+  ): boolean {
     const rms = event.rms ?? 0;
     const peak = event.peak ?? 0;
     if (rms > NATIVE_DEAD_INPUT_RMS_THRESHOLD || peak > NATIVE_DEAD_INPUT_PEAK_THRESHOLD) {
       this.silentInputSinceMs = null;
       this.nativeSilentChunks = 0;
+      this.nativeRuntimeRetryAttempts = 0;
       if (this.state !== "capturing") {
         this.setState("capturing");
       }
@@ -322,12 +387,11 @@ class AudioCapture {
       return true;
     }
 
-    this.setState(
-      "error",
+    this.handleNativeFailure(
       "Android/TV 麦克风持续返回全静音；请确认电视麦克风已开启，或接入 USB/蓝牙会议麦克风",
+      generation,
+      attemptGeneration,
     );
-    this.teardownNative();
-    this.scheduleRetry();
     return false;
   }
 
@@ -363,17 +427,28 @@ class AudioCapture {
     this.emitChunk(payload);
   }
 
-  private async boot(): Promise<void> {
-    if (!this.running) return;
+  __setNativePluginForTest(plugin: EchoAudioPlugin): void {
+    if (!import.meta.env.DEV) {
+      throw new Error("Native audio plugin injection is available in dev/test only");
+    }
+    this.stop();
+    this.nativePlugin = plugin;
+    this.nativeRuntimeRetryAttempts = 0;
+  }
+
+  private async boot(generation: number): Promise<void> {
+    if (!this.isCurrent(generation)) return;
     this.setState("initializing");
     this.teardown();
     if (shouldUseNativeAudioRecord()) {
-      await this.bootNative();
+      await this.bootNative(generation);
       return;
     }
     try {
       await requestElectronMicAccess();
+      if (!this.isCurrent(generation)) return;
       let audioInputs = await listAudioInputDevices();
+      if (!this.isCurrent(generation)) return;
       let stream: MediaStream;
       try {
         stream = await getUserMediaWithTimeout(
@@ -396,6 +471,10 @@ class AudioCapture {
         } catch (fallbackError) {
           throw new Error(normalizeDesktopMicError(fallbackError, audioInputs));
         }
+      }
+      if (!this.isCurrent(generation)) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
       this.stream = stream;
 
@@ -421,51 +500,75 @@ class AudioCapture {
 
       this.setState("capturing");
     } catch (e) {
+      if (!this.isCurrent(generation)) return;
       const msg = e instanceof Error ? e.message : String(e);
       this.setState("error", msg);
       this.scheduleRetry();
     }
   }
 
-  private async bootNative(): Promise<void> {
+  private async bootNative(generation: number): Promise<void> {
+    await this.nativeCleanup.catch(() => undefined);
+    if (!this.isCurrent(generation)) return;
+    const plugin = this.nativePlugin;
+    const attemptGeneration = ++this.nativeAttemptGeneration;
+    const isActiveAttempt = (): boolean =>
+      this.isCurrent(generation) &&
+      this.nativeAttemptGeneration === attemptGeneration;
+
     try {
-      const chunkHandle = await EchoAudio.addListener("chunk", (event) => {
-        if (!this.running || !this.nativeActive) return;
+      const chunkHandle = await plugin.addListener("chunk", (event) => {
+        if (!this.nativeActive || !isActiveAttempt()) return;
         if (!event.base64) return;
-        if (!this.observeNativeInputHealth(event)) return;
+        if (!this.observeNativeInputHealth(event, generation, attemptGeneration)) return;
         this.emitChunk(blobFromBase64Wav(event.base64));
       });
-      const errorHandle = await EchoAudio.addListener("error", (event) => {
-        if (!this.running || !this.nativeActive) return;
+      if (!isActiveAttempt()) {
+        await chunkHandle.remove();
+        return;
+      }
+      this.nativeHandles.push(chunkHandle);
+
+      const errorHandle = await plugin.addListener("error", (event) => {
+        if (!this.nativeActive || !isActiveAttempt()) return;
         const msg =
           event.message ||
           "Android 原生录音失败，请接入 USB/蓝牙会议麦克风";
-        this.setState("error", msg);
-        this.teardownNative();
+        this.handleNativeFailure(msg, generation, attemptGeneration);
       });
-      this.nativeHandles = [chunkHandle, errorHandle];
-      await EchoAudio.start({
+      if (!isActiveAttempt()) {
+        await errorHandle.remove();
+        return;
+      }
+      this.nativeHandles.push(errorHandle);
+      this.nativeActive = true;
+      await plugin.start({
         sampleRate: CAPTURE_SAMPLE_RATE,
         chunkMs: 6000,
       });
-      this.nativeActive = true;
+      if (!isActiveAttempt()) {
+        this.teardownNative();
+        await plugin.stop().catch(() => undefined);
+        return;
+      }
       this.setState("capturing");
     } catch (e) {
-      this.teardownNative();
+      if (!this.isCurrent(generation)) return;
+      if (this.nativeAttemptGeneration !== attemptGeneration) return;
       const msg = e instanceof Error ? e.message : String(e);
       const noUsableInput =
         /silent PCM|every source returned silent|microphone sources/i.test(msg);
       const probeSummary = nativeSilentProbeSummary(msg);
-      this.setState(
-        "error",
-        noUsableInput
-          ? probeSummary
-            ? `电视没有提供有效麦克风输入（${probeSummary}）；请接入 USB/蓝牙会议麦克风后重新打开 EchoDesk`
-            : "电视没有提供有效麦克风输入；请接入 USB/蓝牙会议麦克风后重新打开 EchoDesk"
-          : `Android 原生录音不可用：${msg}。请接入 USB/蓝牙会议麦克风`,
-      );
-      if (!noUsableInput) {
-        this.scheduleRetry();
+      const errorMessage = noUsableInput
+        ? probeSummary
+          ? `电视没有提供有效麦克风输入（${probeSummary}）；请接入 USB/蓝牙会议麦克风后重新打开 EchoDesk`
+          : "电视没有提供有效麦克风输入；请接入 USB/蓝牙会议麦克风后重新打开 EchoDesk"
+        : `Android 原生录音不可用：${msg}。请接入 USB/蓝牙会议麦克风`;
+      if (noUsableInput) {
+        this.setState("error", errorMessage);
+        this.teardownNative();
+      } else {
+        this.handleNativeFailure(errorMessage, generation, attemptGeneration);
       }
     }
   }

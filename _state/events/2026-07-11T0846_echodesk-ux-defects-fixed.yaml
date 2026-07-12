@@ -1,0 +1,42 @@
+event_id: "E-20260711T0846-011"
+event_type: "add"
+timestamp: "2026-07-11T08:46:38+08:00"
+author: "agent/codex-ux-repair"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-015"
+      claim: "EchoDesk's four click-validation defects are fixed: onboarding replay resets, the 960px inspector closes accessibly, workspace focus is stable, and all update entry points block downgrades."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-11T08:46:38+08:00"
+      observed_by: "agent/codex-ux-repair"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "docs/0.3/UX_CLICK_VALIDATION_2026-07-10.md"
+        - "desktop/src/App.tsx"
+        - "desktop/src/runtime.ts"
+        - "desktop/src/components/OnboardingModal.tsx"
+        - "desktop/src/components/SettingsPanel.tsx"
+        - "desktop/tests/e2e/onboarding.spec.ts"
+        - "desktop/tests/e2e/ux-redesign.spec.ts"
+        - "desktop/tests/e2e/workspace-knowledge.spec.ts"
+        - "desktop/tests/e2e/public-demo-settings.spec.ts"
+      evidence: "Complete headed desktop E2E passed 49/49 and headed business scenarios passed 25/25. Tests assert onboarding replay starts on Welcome, the 960px inspector closes and restores focus, workspace settings focus is stable, and stale update metadata cannot expose, install, or open an older release. Typecheck, lint, production build, and diff checks passed."
+      supersedes:
+        - "F-ECHO-014"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3"
+        - "ux"
+        - "click-validation"
+        - "desktop"
+        - "accessibility"
+        - "update-safety"
+git_commit: null

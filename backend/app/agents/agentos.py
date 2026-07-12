@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 
@@ -11,6 +12,7 @@ from app.agents.base import AgentIntent, AgentSubmitResult
 from app.config import Settings
 
 _log = logging.getLogger("echodesk.agents.agentos")
+AGENTOS_SUBMIT_MAX_WALL_S = 50.0
 
 
 class AgentOSBackend:
@@ -29,9 +31,25 @@ class AgentOSBackend:
                 provider=self.name,
                 error="agent runner disabled",
             )
+        if not intent.echo_task_id:
+            return AgentSubmitResult(
+                task_id="",
+                accepted=False,
+                provider=self.name,
+                error="agent submit requires a stable echo task id",
+            )
+        operation_key = intent.runner_operation_key
+        if not operation_key:
+            return AgentSubmitResult(
+                task_id=intent.echo_task_id,
+                accepted=False,
+                provider=self.name,
+                error="agent submit requires a scoped operation key",
+            )
         runner_model = intent.runner_model or self._settings.llm_main_model
         runner_base_url = intent.runner_base_url or self._settings.llm_main_base_url
-        payload = {
+        payload: dict[str, object] = {
+            "operation_key": operation_key,
             "text": _compile_runner_prompt(intent),
             "speaker_id": intent.device_id,
             "conversation_id": intent.conversation_id,
@@ -47,12 +65,22 @@ class AgentOSBackend:
                 timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
                 trust_env=False,
             ) as client:
-                resp = await client.post(
-                    f"{self.base_url}/api/v1/integrations/echo/intent",
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
+                data: dict[str, object] | None = None
+                for attempt in range(2):
+                    try:
+                        resp = await client.post(
+                            f"{self.base_url}/api/v1/integrations/echo/intent",
+                            json=payload,
+                            headers={"Idempotency-Key": operation_key},
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
+                        break
+                    except httpx.HTTPError:
+                        if attempt == 1:
+                            raise
+                if data is None:
+                    raise httpx.DecodingError("agent runner response is empty")
         except httpx.HTTPError as exc:
             _log.warning("agentos submit failed: %s", exc)
             return AgentSubmitResult(
@@ -78,16 +106,33 @@ class AgentOSBackend:
             runner_base_url=self.base_url,
         )
 
-    async def cancel(self, runner_task_id: str) -> bool:
+    async def cancel(self, runner_task_id: str, *, operation_key: str) -> bool:
         if not self.enabled:
             return False
         try:
             async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
-                resp = await client.post(f"{self.base_url}/api/v1/tasks/{runner_task_id}/cancel")
-            return resp.status_code in (200, 202, 204)
+                try:
+                    resp = await client.post(
+                        f"{self.base_url}/api/v1/tasks/{runner_task_id}/cancel",
+                        headers={"Idempotency-Key": operation_key},
+                    )
+                    if resp.status_code in (200, 202, 204):
+                        return True
+                    if resp.status_code != 409:
+                        return False
+                except httpx.HTTPError:
+                    pass
+                state = await client.get(f"{self.base_url}/api/v1/tasks/{runner_task_id}")
+                state.raise_for_status()
+                return str(state.json().get("status") or "") == "cancelled"
         except httpx.HTTPError as exc:
             _log.warning("agentos cancel failed task=%s: %s", runner_task_id, exc)
             return False
+
+
+def submit_operation_key(*, tenant_id: str, owner_id: str, task_id: str) -> str:
+    material = f"v1\0{tenant_id}\0{owner_id}\0{task_id}\0submit".encode()
+    return f"agent-submit-{hashlib.sha256(material).hexdigest()}"
 
 
 def _compile_runner_prompt(intent: AgentIntent) -> str:

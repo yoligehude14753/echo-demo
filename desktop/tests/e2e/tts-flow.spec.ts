@@ -44,18 +44,18 @@ async function mockTtsDiag(
   );
 }
 
-test("健康场景：/tts/diag=ok → 顶栏显示『TTS』绿色态", async ({ page }) => {
+test("健康场景：/tts/diag=ok → 顶栏显示『语音播报』绿色态", async ({ page }) => {
   await mockTtsDiag(page, { ok: true, state: "ok" });
   await installEchoMock(page, { skipPaths: ["/tts/diag"] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const toggle = page.getByTestId("tts-toggle");
   await expect(toggle).toBeVisible();
-  await expect(toggle).toContainText(/^TTS$/);
+  await expect(toggle).toContainText(/^语音播报$/);
   await expect(toggle).toHaveAttribute("data-tts-state", "ok");
 });
 
-test("异常场景：/tts/diag=silent_output → 顶栏切『TTS 异常』+ Popover 显示原因", async ({
+test("异常场景：/tts/diag=silent_output → 顶栏切『播报异常』+ Popover 显示原因", async ({
   page,
 }) => {
   await mockTtsDiag(page, {
@@ -69,14 +69,14 @@ test("异常场景：/tts/diag=silent_output → 顶栏切『TTS 异常』+ Popo
 
   const toggle = page.getByTestId("tts-toggle");
   await expect(toggle).toHaveAttribute("data-tts-state", "unhealthy", { timeout: 10_000 });
-  await expect(toggle).toContainText("TTS 异常");
+  await expect(toggle).toContainText("播报异常");
 
-  // ModelServicePopover：点 模型服务标签 → 看到合成回环行
-  await page.getByTestId("pill-model-service").click();
+  // AI 引擎状态：打开诊断信息 → 看到合成回环行
+  await page.getByTestId("pill-ai-engine").click();
   const synth = page.getByTestId("tts-synth-status");
   await expect(synth).toBeVisible();
   await expect(synth).toHaveAttribute("data-tts-state", "silent_output");
-  await expect(synth).toContainText("silent_output");
+  await expect(synth).toContainText("未检测到可播放的声音");
 });
 
 test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async ({
@@ -108,7 +108,7 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
   // 触发 TTS：通过 WS 推一个 tts.suggested 事件（hook 会自动 fetch /tts/speak）
   await mock.publish({
     type: "tts.suggested",
-    seq: 100,
+    seq: 1,
     ts: new Date().toISOString(),
     payload: { text: "测试一下" },
   });
@@ -120,7 +120,7 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
   await expect(
     page
       .locator(".ant-message-error")
-      .filter({ hasText: /TTS 上游返回静音/ })
+      .filter({ hasText: /语音播报未检测到可播放的声音/ })
       .first(),
   ).toBeVisible({ timeout: 10_000 });
 
@@ -128,17 +128,34 @@ test("失败场景：/tts/speak 502 → message.error 且顶栏切异常", async
   await expect(toggle).toHaveAttribute("data-tts-state", "unhealthy", {
     timeout: 10_000,
   });
-  await expect(toggle).toContainText("TTS 异常");
+  await expect(toggle).toContainText("播报异常");
+
+  const speakRequests = (await mock.fetchLog()).filter(({ url }) =>
+    url.replace(/^https?:\/\/[^/]+/, "").includes("/tts/speak"),
+  );
+  expect(speakRequests).toHaveLength(1);
 });
 
-test("用户关 TTS：顶栏切『静音』+ 不再轮询 diag", async ({ page }) => {
+test("用户关闭语音播报：顶栏切『已静音』+ 后续入口不再请求 speak", async ({ page }) => {
   await mockTtsDiag(page, { ok: true, state: "ok" });
-  await installEchoMock(page, { skipPaths: ["/tts/diag"] });
+  const mock = await installEchoMock(page, { skipPaths: ["/tts/diag"] });
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const toggle = page.getByTestId("tts-toggle");
   await expect(toggle).toHaveAttribute("data-tts-state", "ok");
   await toggle.click();
   await expect(toggle).toHaveAttribute("data-tts-state", "disabled");
-  await expect(toggle).toContainText("静音");
+  await expect(toggle).toContainText("已静音");
+
+  await mock.publish({
+    type: "tts.suggested",
+    seq: 1,
+    ts: new Date().toISOString(),
+    payload: { text: "静音后不应请求" },
+  });
+  await page.waitForTimeout(100);
+  const speakRequests = (await mock.fetchLog()).filter(({ url }) =>
+    url.replace(/^https?:\/\/[^/]+/, "").includes("/tts/speak"),
+  );
+  expect(speakRequests).toHaveLength(0);
 });

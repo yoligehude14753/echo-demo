@@ -14,8 +14,9 @@
 
 import { useEffect, useState } from "react";
 import { Modal, Spin } from "antd";
-import { Github, FileText, FolderOpen, Info } from "lucide-react";
-import { apiUrl } from "@/runtime";
+import { AudioWaveform, Github, FileText, FolderOpen, Info } from "lucide-react";
+import { apiUrl, isPublicRuntime } from "@/runtime";
+import { apiTransport } from "@/session";
 
 const FRONTEND_VERSION = __APP_VERSION__;
 const REPO_URL = "https://github.com/yoligehude14753/echo-demo";
@@ -35,26 +36,37 @@ interface DataDirDTO {
 
 export default function AboutModal({ open, onClose }: Props): JSX.Element {
   const [backendVer, setBackendVer] = useState<string | null>(null);
-  const [backendPort, setBackendPort] = useState<number | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const publicRuntime = isPublicRuntime();
 
   useEffect(() => {
     if (!open) return;
+    setBackendVer(null);
+    setDataDir(null);
+    if (publicRuntime) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     (async () => {
       try {
         const [healthRes, dirRes] = await Promise.allSettled([
-          fetch(await apiUrl("/healthz/full")),
-          fetch(await apiUrl("/admin/data-dir")),
+          apiTransport(await apiUrl("/healthz/full"), {}, {
+            timeoutMs: 12_000,
+            throwHttpErrors: false,
+          }),
+          apiTransport(await apiUrl("/admin/data-dir"), {}, {
+            timeoutMs: 12_000,
+            throwHttpErrors: false,
+          }),
         ]);
         if (cancelled) return;
 
         if (healthRes.status === "fulfilled" && healthRes.value.ok) {
           const j = (await healthRes.value.json()) as HealthFullDTO;
           setBackendVer(j.backend?.version ?? "unknown");
-          setBackendPort(j.backend?.port ?? null);
         } else {
           setBackendVer("unreachable");
         }
@@ -69,7 +81,7 @@ export default function AboutModal({ open, onClose }: Props): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, publicRuntime]);
 
   return (
     <Modal
@@ -87,37 +99,46 @@ export default function AboutModal({ open, onClose }: Props): JSX.Element {
     >
       <div className="space-y-4 text-[13px]" data-testid="about-modal-body">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-accent/15 flex items-center justify-center text-accent text-xl font-semibold">
-            E
+          <div className="w-12 h-12 rounded-xl bg-ink-900 flex items-center justify-center text-white">
+            <AudioWaveform className="h-6 w-6" aria-hidden="true" />
           </div>
           <div>
             <div className="text-[15px] font-semibold text-ink-900 brand">
               EchoDesk
             </div>
             <div className="text-[11px] text-ink-500">
-              数字分身 / Another Me — 会议 + 办公本地助理
+              本地优先的会议与办公助理
             </div>
           </div>
         </div>
 
-        <div className="rounded border border-paper-300 bg-paper-100 p-3 space-y-1.5 font-mono text-[11px] text-ink-700">
+        <div className="rounded border border-paper-300 bg-paper-100 p-3 space-y-1.5 text-[11px] text-ink-700">
           <div className="flex justify-between">
-            <span className="text-ink-500">前端</span>
-            <span data-testid="about-frontend-version">v{FRONTEND_VERSION}</span>
+            <span className="text-ink-500">桌面应用</span>
+            <span className="tabular-nums" data-testid="about-frontend-version">v{FRONTEND_VERSION}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-ink-500">服务端</span>
-            <span data-testid="about-backend-version">
-              {loading && !backendVer ? <Spin size="small" /> : `v${backendVer ?? "-"}`}
-              {backendPort != null && (
-                <span className="ml-1 text-ink-400">:{backendPort}</span>
+            <span className="text-ink-500">
+              {publicRuntime ? "服务模式" : "本地服务"}
+            </span>
+            <span className="tabular-nums" data-testid="about-backend-version">
+              {publicRuntime ? (
+                "公共服务"
+              ) : loading && !backendVer ? (
+                <Spin size="small" />
+              ) : backendVer === "unreachable" ? (
+                "暂时无法连接"
+              ) : backendVer === "unknown" ? (
+                "版本未知"
+              ) : (
+                `v${backendVer ?? "-"}`
               )}
             </span>
           </div>
           {dataDir && (
             <div className="flex justify-between items-center gap-2">
               <span className="text-ink-500 shrink-0">数据目录</span>
-              <span className="truncate text-right" title={dataDir}>
+              <span className="truncate text-right font-mono" title={dataDir}>
                 {dataDir}
               </span>
             </div>
@@ -163,7 +184,7 @@ export default function AboutModal({ open, onClose }: Props): JSX.Element {
         </ul>
 
         <div className="text-[10px] text-ink-400 text-center pt-1">
-          © 2026 EchoDesk · Public demo · 客户端不内置模型密钥
+          © 2026 EchoDesk · 本地优先 · 客户端不内置模型密钥
         </div>
       </div>
     </Modal>

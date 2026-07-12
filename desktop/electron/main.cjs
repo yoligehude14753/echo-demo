@@ -7,6 +7,9 @@ const {
   ipcMain,
   systemPreferences,
   session,
+  safeStorage,
+  protocol,
+  net,
 } = require("electron");
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
@@ -14,6 +17,35 @@ const http = require("node:http");
 const https = require("node:https");
 const fs = require("node:fs");
 const os = require("node:os");
+const { randomBytes } = require("node:crypto");
+const backendConfig = require("../backend.config.json");
+const {
+  resolveBackendEndpoint,
+  resolveShareBackendBase,
+} = require("./backend-endpoint.cjs");
+const {
+  createManualBackendRestart,
+  stopBackendProcess,
+} = require("./backend-manual-restart.cjs");
+const {
+  electronNodeRuntimeEnvironment,
+} = require("./backend-runtime-env.cjs");
+const { createCredentialVault } = require("./credential-vault.cjs");
+const {
+  createPublicIdentitySessionManager,
+} = require("./public-identity-session.cjs");
+const {
+  APP_ENTRY_URL,
+  APP_HOST,
+  APP_SCHEME,
+  installAppProtocol,
+  registerAppScheme,
+} = require("./app-protocol.cjs");
+const { preferredReleaseAsset } = require("./release-assets.cjs");
+
+// Electron 要求 privileged scheme 在 app ready 前完成声明。打包态只从该
+// secure/standard origin 加载静态资源，不再使用具有 opaque Origin 的 file://。
+registerAppScheme(protocol);
 
 app.commandLine.appendSwitch("enable-media-stream");
 
@@ -29,11 +61,10 @@ try {
 
 const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
-const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8772", 10);
-const LOCAL_BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
-const PUBLIC_BACKEND_HOST =
-  normalizeHttpBase(process.env.ECHO_PUBLIC_BACKEND_BASE) ||
-  "https://echodesk.yoliyoli.uk";
+const BACKEND_ENDPOINT = resolveBackendEndpoint(backendConfig, process.env);
+const BACKEND_PORT = BACKEND_ENDPOINT.port;
+const LOCAL_BACKEND_HOST = BACKEND_ENDPOINT.localBase;
+const PUBLIC_BACKEND_HOST = BACKEND_ENDPOINT.publicBase;
 const RELEASE_OWNER = "yoligehude14753";
 const RELEASE_REPO = "echo-demo";
 const RELEASES_URL = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest`;
@@ -49,16 +80,15 @@ const AUTO_UPDATE_CHECK_INTERVAL_MS = Math.max(
 );
 const AUTO_UPDATE_DOWNLOAD_ENABLED =
   process.env.ECHODESK_DISABLE_AUTO_UPDATE_DOWNLOAD !== "1";
-const FORCE_LOCAL_BACKEND = process.env.ECHO_FORCE_LOCAL_BACKEND === "1";
-const PUBLIC_DEMO_MODE =
-  process.env.ECHO_PUBLIC_DEMO === "1" && !FORCE_LOCAL_BACKEND;
-const BACKEND_HOST = PUBLIC_DEMO_MODE ? PUBLIC_BACKEND_HOST : LOCAL_BACKEND_HOST;
-const BACKEND_BIND_HOST = process.env.ECHO_BACKEND_BIND_HOST || "127.0.0.1";
+const PUBLIC_DEMO_MODE = BACKEND_ENDPOINT.mode === "public";
+const BACKEND_HOST = BACKEND_ENDPOINT.backendBase;
+const BACKEND_BIND_HOST = BACKEND_ENDPOINT.bindHost;
+const ALLOW_PACKAGED_SOURCE_BACKEND =
+  process.env.ECHO_ALLOW_PACKAGED_SOURCE_BACKEND === "1";
 
 // 0.3 Desktop Pro 默认 local-first。public demo 仍保留，但必须由发布入口显式设置
 // ECHO_PUBLIC_DEMO=1；ECHO_FORCE_LOCAL_BACKEND=1 作为旧部署兼容开关并拥有更高优先级。
-const SPAWN_BACKEND =
-  !PUBLIC_DEMO_MODE && process.env.ECHO_SPAWN_BACKEND !== "0";
+const SPAWN_BACKEND = BACKEND_ENDPOINT.spawnBackend;
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
 // node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
@@ -78,6 +108,7 @@ const SIGKILL_GRACE_MS = 3000;
 
 // ---------- 运行时状态 ----------
 let backendProc = null;
+let backendLifecycleGeneration = 0;
 let mainWindow = null;
 let healthTimer = null;
 let externalHealthTimer = null;
@@ -114,24 +145,130 @@ function log(msg) {
   console.log(msg);
 }
 
-function normalizeHttpBase(raw) {
-  const value = String(raw || "").trim().replace(/\/+$/, "");
-  if (!value) return null;
-  return /^https?:\/\//i.test(value) ? value : `http://${value}`;
-}
-
 function isTrustedRenderer(webContents) {
   try {
     const url = webContents?.getURL?.() || "";
+    return isTrustedAppRendererUrl(url);
+  } catch {
+    return false;
+  }
+}
+
+const PUBLIC_CREDENTIAL_FILENAME = "public-device-credential.bin";
+
+function isTrustedAppRendererUrl(rawUrl) {
+  try {
+    const candidate = new URL(rawUrl);
+    if (IS_DEV) {
+      return candidate.origin === new URL(VITE_URL).origin;
+    }
     return (
-      url.startsWith("file://") ||
-      url.startsWith(VITE_URL) ||
-      url.startsWith(LOCAL_BACKEND_HOST) ||
-      url.startsWith(PUBLIC_BACKEND_HOST)
+      candidate.protocol === `${APP_SCHEME}:` &&
+      candidate.hostname === APP_HOST &&
+      !candidate.port &&
+      !candidate.username &&
+      !candidate.password &&
+      candidate.pathname === "/index.html"
     );
   } catch {
     return false;
   }
+}
+
+function assertCredentialIpcOrigin(event) {
+  const senderUrl = event.senderFrame?.url || event.sender?.getURL?.() || "";
+  if (!isTrustedAppRendererUrl(senderUrl)) {
+    throw new Error("credential IPC denied for untrusted renderer origin");
+  }
+}
+
+function publicCredentialPath() {
+  return path.join(app.getPath("userData"), PUBLIC_CREDENTIAL_FILENAME);
+}
+
+let publicCredentialVault = null;
+let publicIdentityManager = null;
+let publicSessionEnsurePromise = null;
+
+function credentialVault() {
+  if (publicCredentialVault === null) {
+    publicCredentialVault = createCredentialVault({
+      safeStorage,
+      target: publicCredentialPath(),
+      backendBase: BACKEND_HOST,
+      officialBackendBase: backendConfig.public.baseUrl,
+      enabled: PUBLIC_DEMO_MODE,
+      logger: (message) => log(`[credential] ${message}`),
+    });
+  }
+  return publicCredentialVault;
+}
+
+function clearPublicCredential() {
+  credentialVault().clear();
+  publicIdentityManager = null;
+  publicSessionEnsurePromise = null;
+}
+
+function newDeviceSecret() {
+  return randomBytes(32).toString("base64url");
+}
+
+async function postPublicIdentity(pathname, body, { token = null } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return await fetch(new URL(pathname, credentialVault().backendOrigin), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function publicIdentitySessionManager() {
+  if (publicIdentityManager === null) {
+    publicIdentityManager = createPublicIdentitySessionManager({
+      vault: credentialVault(),
+      request: postPublicIdentity,
+      newSecret: newDeviceSecret,
+      displayName: os.hostname(),
+    });
+  }
+  return publicIdentityManager;
+}
+
+async function renewPublicSessionFromCredential() {
+  return publicIdentitySessionManager().renew();
+}
+
+async function ensurePublicSessionInMain() {
+  if (!PUBLIC_DEMO_MODE) return null;
+  if (publicSessionEnsurePromise) return publicSessionEnsurePromise;
+  const pending = (async () => {
+    const session = await publicIdentitySessionManager().ensure();
+    if (session) return session;
+    const error = new Error(
+      "device identity is no longer valid; refusing to enroll a replacement owner",
+    );
+    error.code = "IDENTITY_LOST";
+    throw error;
+  })();
+  publicSessionEnsurePromise = pending;
+  try {
+    return await pending;
+  } finally {
+    if (publicSessionEnsurePromise === pending) publicSessionEnsurePromise = null;
+  }
+}
+
+async function rotatePublicCredential(sessionToken) {
+  return publicIdentitySessionManager().rotate(sessionToken);
 }
 
 function installMediaPermissionHandlers() {
@@ -755,21 +892,6 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function preferredReleaseAsset(assets) {
-  const names = (assets || []).map((asset) => asset.name || "");
-  const patterns =
-    process.platform === "darwin"
-      ? [/arm64\.dmg$/i, /arm64-mac\.zip$/i, /\.dmg$/i]
-      : process.platform === "win32"
-        ? [/Setup\.[\d.]+\.exe$/i, /\.exe$/i]
-        : [/\.AppImage$/i, /\.deb$/i];
-  for (const pattern of patterns) {
-    const name = names.find((n) => pattern.test(n));
-    if (name) return (assets || []).find((asset) => asset.name === name) || null;
-  }
-  return (assets || [])[0] || null;
-}
-
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(
@@ -1057,10 +1179,11 @@ function firstLanAddress() {
 }
 
 function shareBackendHost() {
-  const configured = normalizeHttpBase(process.env.ECHO_SHARE_BASE_URL);
-  if (configured) return configured;
-  if (PUBLIC_DEMO_MODE) return PUBLIC_BACKEND_HOST;
-  return `http://${firstLanAddress()}:${BACKEND_PORT}`;
+  return resolveShareBackendBase(BACKEND_ENDPOINT, {
+    shareBaseUrl: process.env.ECHO_SHARE_BASE_URL,
+    lanAddress: firstLanAddress(),
+    allowLan: !externalMode,
+  });
 }
 
 function projectRoot() {
@@ -1086,6 +1209,34 @@ function resolveBackendCwd() {
   }
   // 全找不到时退化用第一个（spawn 会失败，让上层走 handleBackendDeath）
   return cands[0];
+}
+
+function bundledBackendPath() {
+  const name = process.platform === "win32" ? "echodesk-backend.exe" : "echodesk-backend";
+  return path.join(process.resourcesPath, "backend", name);
+}
+
+function bundledBackendExecutable() {
+  if (!app.isPackaged) return null;
+  const candidate = bundledBackendPath();
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return candidate;
+  } catch (error) {
+    log(`[backend] bundled executable unavailable: ${candidate} (${error?.message ?? error})`);
+    return null;
+  }
+}
+
+function refusePackagedSourceFallback() {
+  if (!app.isPackaged || ALLOW_PACKAGED_SOURCE_BACKEND) return false;
+  emitStatus({
+    state: "bundled-backend-unavailable",
+    reason: "packaged backend is missing or not executable",
+    searched: [bundledBackendPath()],
+    help_url: "docs/INSTALL.md",
+  });
+  return true;
 }
 
 // ---------- Python 解析（P1.6） ----------
@@ -1307,6 +1458,16 @@ function killBackendProc() {
   }, SIGKILL_GRACE_MS);
 }
 
+function stopBackendProcForRestart() {
+  if (!backendProc || backendProc.exitCode !== null) {
+    backendProc = null;
+    return Promise.resolve();
+  }
+  const proc = backendProc;
+  backendProc = null;
+  return stopBackendProcess(proc, { graceMs: SIGKILL_GRACE_MS });
+}
+
 async function handleBackendDeath(reason) {
   if (shuttingDown) return;
   stopHealthWatcher();
@@ -1331,14 +1492,19 @@ async function handleBackendDeath(reason) {
     backoff_ms: backoff,
     reason,
   });
+  const lifecycleGeneration = backendLifecycleGeneration;
   setTimeout(() => {
-    if (shuttingDown) return;
+    if (shuttingDown || lifecycleGeneration !== backendLifecycleGeneration) return;
     spawnBackendAndWatch();
   }, backoff);
 }
 
 function spawnBackendAndWatch() {
   if (shuttingDown) return;
+  if (backendProc && backendProc.exitCode === null && !backendProc.killed) {
+    log("[backend] spawn ignored because a supervised child is already running");
+    return;
+  }
 
   if (!SPAWN_BACKEND) {
     externalMode = true;
@@ -1361,11 +1527,15 @@ function spawnBackendAndWatch() {
     return;
   }
 
-  // resolvePython 在 startBackend 已经跑过；这里防御性兜底
-  if (!pythonResolved || !pythonResolved.python) {
+  const bundledBackend = bundledBackendExecutable();
+  if (!bundledBackend && refusePackagedSourceFallback()) {
+    return;
+  }
+  // 开发/源码安装仍走 Python；打包安装优先运行随安装器携带的 backend executable。
+  if (!bundledBackend && (!pythonResolved || !pythonResolved.python)) {
     pythonResolved = resolvePython();
   }
-  if (!pythonResolved.python) {
+  if (!bundledBackend && !pythonResolved.python) {
     emitStatus({
       state: "python-not-found",
       searched: pythonResolved.searched,
@@ -1374,8 +1544,8 @@ function spawnBackendAndWatch() {
     return;
   }
 
-  const cwd = resolveBackendCwd();
-  if (!cwd || !fs.existsSync(path.join(cwd, "app", "main.py"))) {
+  const cwd = bundledBackend ? path.dirname(bundledBackend) : resolveBackendCwd();
+  if (!bundledBackend && (!cwd || !fs.existsSync(path.join(cwd, "app", "main.py")))) {
     emitStatus({
       state: "backend-source-not-found",
       searched: [
@@ -1388,12 +1558,17 @@ function spawnBackendAndWatch() {
     return;
   }
   emitStatus({ state: "starting" });
-  log(`[backend] spawn ${pythonResolved.python} -m uvicorn (cwd=${cwd})`);
-
-  try {
-    backendProc = spawn(
-      pythonResolved.python,
-      [
+  const executable = bundledBackend || pythonResolved.python;
+  const args = bundledBackend
+    ? [
+        "--host",
+        BACKEND_BIND_HOST,
+        "--port",
+        String(BACKEND_PORT),
+        "--log-level",
+        "info",
+      ]
+    : [
         "-m",
         "uvicorn",
         "app.main:app",
@@ -1403,11 +1578,29 @@ function spawnBackendAndWatch() {
         String(BACKEND_PORT),
         "--log-level",
         "info",
-      ],
+      ];
+  log(`[backend] spawn ${executable} ${args.join(" ")} (cwd=${cwd})`);
+
+  try {
+    backendProc = spawn(
+      executable,
+      args,
       {
         cwd,
         env: {
           ...process.env,
+          // The packaged app already contains a platform-correct Node runtime.
+          // The backend reuses it for deterministic PPT rendering instead of
+          // requiring users to install node/npm separately.
+          ...electronNodeRuntimeEnvironment(process.execPath),
+          // The supervisor-selected endpoint is authoritative for both the
+          // uvicorn socket and backend Settings/health/bootstrap diagnostics.
+          PORT: String(BACKEND_PORT),
+          PUBLIC_HTTP_URL:
+            process.env.PUBLIC_HTTP_URL || LOCAL_BACKEND_HOST,
+          PUBLIC_WS_URL:
+            process.env.PUBLIC_WS_URL ||
+            `${LOCAL_BACKEND_HOST.replace(/^http/, "ws")}/ws/echo`,
           // localhost 流量走代理会导致 uvicorn 自己 GET healthz 都失败
           HTTP_PROXY: "",
           HTTPS_PROXY: "",
@@ -1467,7 +1660,16 @@ function startBackend() {
     return;
   }
 
-  // P1.6: 启动第一步验证 Python 存在；找不到就直接 emit python-not-found
+  if (bundledBackendExecutable()) {
+    spawnBackendAndWatch();
+    return;
+  }
+
+  if (refusePackagedSourceFallback()) {
+    return;
+  }
+
+  // P1.6: 源码安装启动第一步验证 Python 存在；找不到就直接 emit python-not-found
   // 不 spawn uvicorn 是为了避免 ENOENT 太晚才暴露
   pythonResolved = resolvePython();
   if (!pythonResolved.python) {
@@ -1482,7 +1684,7 @@ function startBackend() {
   spawnBackendAndWatch();
 }
 
-function createWindow() {
+async function createWindow() {
   mainWindow = new BrowserWindow({
     title: IS_DEV ? "EchoDesk (dev)" : "EchoDesk",
     width: 1280,
@@ -1527,15 +1729,29 @@ function createWindow() {
     rendererReady = false;
   });
 
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (isTrustedAppRendererUrl(url)) return;
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
 
-  if (IS_DEV) {
-    mainWindow.loadURL(VITE_URL);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+  try {
+    if (IS_DEV) {
+      await mainWindow.loadURL(VITE_URL);
+    } else {
+      await mainWindow.loadURL(APP_ENTRY_URL);
+    }
+  } catch (error) {
+    const currentUrl = mainWindow?.webContents.getURL() || "";
+    const initialNavigationWasReloaded =
+      error?.code === "ERR_ABORTED" && isTrustedAppRendererUrl(currentUrl);
+    if (!initialNavigationWasReloaded) throw error;
+    log(`[renderer] initial navigation was replaced by a trusted reload: ${currentUrl}`);
   }
 }
 
@@ -1543,8 +1759,35 @@ function createWindow() {
 
 ipcMain.handle("echo:backend-host", () => BACKEND_HOST);
 ipcMain.handle("echo:share-backend-host", () => shareBackendHost());
+ipcMain.on("echo:backend-host-sync", (event) => {
+  event.returnValue = BACKEND_HOST;
+});
 ipcMain.on("echo:is-public-demo", (event) => {
   event.returnValue = PUBLIC_DEMO_MODE;
+});
+
+ipcMain.handle("credential:ensure-session", async (event) => {
+  assertCredentialIpcOrigin(event);
+  return ensurePublicSessionInMain();
+});
+
+ipcMain.handle("credential:renew-session", async (event) => {
+  assertCredentialIpcOrigin(event);
+  return renewPublicSessionFromCredential();
+});
+
+ipcMain.handle("credential:rotate", async (event, sessionToken) => {
+  assertCredentialIpcOrigin(event);
+  if (typeof sessionToken !== "string" || sessionToken.length < 20) {
+    throw new Error("valid session token required for credential rotation");
+  }
+  return rotatePublicCredential(sessionToken);
+});
+
+ipcMain.handle("credential:clear-public", async (event) => {
+  assertCredentialIpcOrigin(event);
+  clearPublicCredential();
+  return { cleared: true };
 });
 
 ipcMain.handle("echo:load-local-legacy-history", async () => {
@@ -1728,60 +1971,59 @@ ipcMain.handle("mic:open-system-prefs", async () => {
   }
 });
 
-// 让 renderer 在 degraded UI 上按钮触发一次干净重启：清 backoff 计数 + 重新 spawn
+// 让 renderer 在 degraded UI 上按钮触发一次干净重启。重新启动必须回到
+// spawnBackendAndWatch() 的 bundled-first 选择，打包安装不能依赖系统 Python。
+const manualRestartBackend = createManualBackendRestart({
+  isPublicDemo: () => PUBLIC_DEMO_MODE,
+  healthcheckOnce,
+  emitStatus,
+  resetRestartState: () => {
+    backendLifecycleGeneration += 1;
+    restartAttempts = 0;
+    externalMode = false;
+  },
+  stopHealthWatcher,
+  stopExternalHealthWatcher,
+  stopBackendProc: stopBackendProcForRestart,
+  spawnBackendAndWatch,
+  isShuttingDown: () => shuttingDown,
+});
+
 ipcMain.handle("backend:manual-restart", async () => {
   log("[backend] manual restart requested");
-  if (PUBLIC_DEMO_MODE) {
-    const ok = await healthcheckOnce();
-    emitStatus(
-      ok
-        ? { state: "ready", mode: "public-demo" }
-        : {
-            state: "degraded",
-            reason: "public backend unhealthy",
-            attempts: 0,
-            last_error: "healthz failed",
-          },
-    );
-    return { ok };
-  }
-  restartAttempts = 0;
-  externalMode = false;
-  stopHealthWatcher();
-  stopExternalHealthWatcher();
-  killBackendProc();
-  // 给端口一点时间释放（SIGTERM → close socket）
-  setTimeout(() => {
-    if (shuttingDown) return;
-    if (!pythonResolved || !pythonResolved.python) {
-      pythonResolved = resolvePython();
-    }
-    if (!pythonResolved.python) {
-      emitStatus({
-        state: "python-not-found",
-        searched: pythonResolved.searched,
-        help_url: "docs/INSTALL.md",
-      });
-      return;
-    }
-    spawnBackendAndWatch();
-  }, 500);
-  return { ok: true };
+  return manualRestartBackend();
 });
 
 // ---------- app 生命周期 ----------
 
-app.whenReady().then(() => {
-  installMediaPermissionHandlers();
-  // 主窗口先起，让用户看到 UI；backend 状态由 renderer 自己渲染（degraded UI 等）
-  createWindow();
-  startBackend();
-  scheduleStartupUpdateCheck();
+app.whenReady()
+  .then(async () => {
+    if (!IS_DEV) {
+      installAppProtocol(
+        protocol,
+        path.join(__dirname, "..", "dist"),
+        (url) => net.fetch(url),
+      );
+    }
+    installMediaPermissionHandlers();
+    // 主窗口先起，让用户看到 UI；backend 状态由 renderer 自己渲染（degraded UI 等）
+    await createWindow();
+    startBackend();
+    scheduleStartupUpdateCheck();
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        void createWindow().catch((error) => {
+          console.error("[app] failed to recreate the main window:", error);
+          app.quit();
+        });
+      }
+    });
+  })
+  .catch((error) => {
+    console.error("[app] secure renderer startup failed:", error);
+    app.quit();
   });
-});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

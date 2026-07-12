@@ -18,7 +18,17 @@
  */
 
 import { message } from "antd";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ttsDiag, ttsSpeak, TtsSpeakError, type TtsDiagResult } from "@/api";
 import { useStore } from "@/store";
 
@@ -77,13 +87,18 @@ export interface TtsController {
   refreshHealth(): Promise<void>;
 }
 
-export function useTtsPlayer(): TtsController {
+const TtsContext = createContext<TtsController | null>(null);
+
+function useTtsController(): TtsController {
   const [enabled, setEnabledState] = useState<boolean>(loadEnabled);
+  const enabledRef = useRef(enabled);
+  const generationRef = useRef(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [synthHealth, setSynthHealth] = useState<TtsDiagResult | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const activeAbortRef = useRef<AbortController | null>(null);
   const queueRef = useRef<string[]>([]);
   const inflightRef = useRef(false);
   const lastSeqRef = useRef<number>(0);
@@ -109,10 +124,10 @@ export function useTtsPlayer(): TtsController {
       // 成功 playNow 才有资格清。否则 silent_output 偶发场景里，diag
       // probe 走运 ok 一次就把 toggle 又"洗绿"，用户报错的体感丢失。
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[tts] health check failed", e);
       // /tts/diag 本身打不通 → 后端可能挂了；前端只 setLastError 不再 toast
       // （backend 健康有自己的 supervisor pill 显示）
-      setLastError(`TTS 健康检查失败：${msg}`);
+      setLastError("语音播报状态检查失败");
     }
   }, []);
 
@@ -132,8 +147,14 @@ export function useTtsPlayer(): TtsController {
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      const generation = generationRef.current;
+      const controller = new AbortController();
+      activeAbortRef.current = controller;
       try {
-        const pcm = await ttsSpeak(trimmed);
+        const pcm = await ttsSpeak(trimmed, undefined, {
+          signal: controller.signal,
+        });
+        if (!enabledRef.current || generation !== generationRef.current) return;
         const ctx = ensureCtx();
         const buffer = pcm16ToAudioBuffer(ctx, pcm, SAMPLE_RATE);
         const src = ctx.createBufferSource();
@@ -147,21 +168,21 @@ export function useTtsPlayer(): TtsController {
           src.start();
         });
       } catch (e) {
+        if (controller.signal.aborted) return;
         // 关键修复：以前这里只 console.warn 静默吞掉，用户看到顶栏 TTS 绿灯
         // 却什么都没听到——以为整个 TTS 完全失效。现在走 message.error +
         // setLastError + 触发 health 刷新，让 StatusBar 同步变红。
         const msg =
           e instanceof TtsSpeakError
             ? e.message
-            : e instanceof Error
-              ? `TTS 播放失败：${e.message}`
-              : `TTS 播放失败：${String(e)}`;
+            : "语音播报失败，请稍后重试";
         console.warn("[tts] play failed", e);
         reportError(msg);
         // 后端报 silent_output / upstream_error 时立刻刷一次 diag，让 StatusBar
         // 不必等下一个 30s 轮询周期。
         void refreshHealth();
       } finally {
+        if (activeAbortRef.current === controller) activeAbortRef.current = null;
         sourceRef.current = null;
         setIsSpeaking(false);
       }
@@ -185,17 +206,19 @@ export function useTtsPlayer(): TtsController {
 
   const speak = useCallback(
     async (text: string) => {
-      if (!enabled) return;
+      if (!enabledRef.current) return;
       const t = text.trim();
       if (!t) return;
       queueRef.current.push(t);
       void drain();
     },
-    [enabled, drain],
+    [drain],
   );
 
   const cancel = useCallback(() => {
     queueRef.current = [];
+    activeAbortRef.current?.abort();
+    activeAbortRef.current = null;
     try {
       sourceRef.current?.stop();
     } catch {
@@ -207,9 +230,13 @@ export function useTtsPlayer(): TtsController {
 
   const setEnabled = useCallback(
     (v: boolean) => {
+      enabledRef.current = v;
       setEnabledState(v);
       persistEnabled(v);
-      if (!v) cancel();
+      if (!v) {
+        generationRef.current += 1;
+        cancel();
+      }
     },
     [cancel],
   );
@@ -287,4 +314,17 @@ export function useTtsPlayer(): TtsController {
     }),
     [enabled, setEnabled, speak, cancel, isSpeaking, lastError, synthHealth, refreshHealth],
   );
+}
+
+export function TtsProvider({ children }: { children: ReactNode }): JSX.Element {
+  const controller = useTtsController();
+  return createElement(TtsContext.Provider, { value: controller }, children);
+}
+
+export function useTtsPlayer(): TtsController {
+  const controller = useContext(TtsContext);
+  if (controller === null) {
+    throw new Error("useTtsPlayer must be used within TtsProvider");
+  }
+  return controller;
 }

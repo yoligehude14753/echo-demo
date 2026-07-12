@@ -16,20 +16,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.repo.sqlite import SQLiteRepository
+from app.api.meetings import bind_meeting_workflow_handlers, dispatch_meeting_finalize
 from app.config import Settings
 from app.schemas.llm import ChatMessage, LLMResponse
 from app.schemas.meeting import TranscriptSegment
 from app.schemas.rag import RagChunk
+from app.schemas.workflow import WorkflowRunCreate
 from app.use_cases.auto_meeting_detector import AutoMeetingDetector
-from app.use_cases.meeting_pipeline import MeetingPipeline
+from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
+from app.workflows.kernel import WorkflowDispatcher
+from app.workflows.service import WorkflowService
 
 # ── stubs ──────────────────────────────────────────────────────────
 
@@ -96,6 +102,21 @@ class _LLM:
     async def chat_stream(self, _m: list[ChatMessage], **_kw: Any):  # type: ignore[no-untyped-def]
         raise NotImplementedError
         yield  # pragma: no cover
+
+
+class _BlockingLLM(_LLM):
+    """让测试在 handler 已进入 LLM、但尚未完成时触发 startup restore。"""
+
+    def __init__(self, response: str) -> None:
+        super().__init__([response])
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def chat(self, _msgs: list[ChatMessage], **_kw: Any) -> LLMResponse:
+        self.call_count += 1
+        self.started.set()
+        await self.release.wait()
+        return LLMResponse(content=self._responses.pop(0), model="stub")
 
 
 def _good_minutes_json() -> str:
@@ -211,6 +232,58 @@ async def test_manual_end_title_fallback_to_meeting_id_when_no_user_title(
 
 
 # ── 测试 2: 失败路径：LLM 失败不卡死 ────────────────────────────────────
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_manual_end_does_not_mark_generating_before_workflow_dispatch(
+    tmp_path: Path,
+) -> None:
+    """创建 durable workflow run 前不能提交不可恢复的 ``generating`` 状态。
+
+    如果进程恰好在状态写入和 workflow dispatch 之间退出，数据库里会留下一个
+    没有 run 可以 restore 的假进行中会议。callback 代表 workflow dispatch 边界：
+    它被调用时，会议必须仍保持可由 hydrate 恢复的 ``in_meeting`` 状态。
+    """
+    repo = SQLiteRepository(tmp_path / "echo.db")
+    await repo.init()
+    settings = Settings(storage_dir=tmp_path / "storage")
+    pipe = MeetingPipeline(
+        settings=settings,
+        stt=_STT([[TranscriptSegment(text="崩溃窗口回归", start_ms=0, end_ms=800)]]),
+        diarizer=_Diar(["spk-A"]),
+        rag=_Rag(),  # type: ignore[arg-type]
+        llm=_LLM([_good_minutes_json()]),  # type: ignore[arg-type]
+        repository=repo,
+    )
+    observed: dict[str, str | None] = {}
+
+    async def finalize_via_workflow(meeting_id: str, title: str) -> object:
+        before_dispatch = await repo.get_meeting(meeting_id)
+        assert before_dispatch is not None
+        observed["state"] = before_dispatch.state
+        observed["minutes_status"] = before_dispatch.minutes_status
+        return await pipe.finalize_meeting(meeting_id, title=title)
+
+    state = MeetingState(
+        pipeline=pipe,
+        detector=AutoMeetingDetector(),
+        repository=repo,
+        finalize_callback=finalize_via_workflow,
+    )
+    try:
+        cur = await state.manual_start(title="崩溃窗口回归")
+        await pipe.add_audio_chunk(cur.meeting_id, b"\x00" * 16_000)
+
+        assert await state.manual_end() == cur.meeting_id
+        assert observed == {"state": "in_meeting", "minutes_status": None}
+
+        completed = await repo.get_meeting(cur.meeting_id)
+        assert completed is not None
+        assert completed.state == "finalized"
+        assert completed.minutes_status == "ok"
+    finally:
+        await repo.aclose()
 
 
 @pytest.mark.unit
@@ -440,6 +513,214 @@ async def test_recover_stuck_minutes_retries_failed_meetings(tmp_path: Path) -> 
         assert rec.minutes_json is not None
         loaded = json.loads(rec.minutes_json)
         assert loaded["title"] == "历史卡死会议"
+    finally:
+        await repo.aclose()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_recover_stuck_minutes_skips_durable_user_clear_after_restart(
+    tmp_path: Path,
+) -> None:
+    """A deliberate minutes clear is not a stuck legacy failure after restart."""
+
+    db_path = tmp_path / "echo.db"
+    repo = SQLiteRepository(db_path)
+    await repo.init()
+    meeting_id = "m-explicitly-cleared"
+    await repo.create_meeting(meeting_id, started_at=datetime.now(UTC), title="用户清理纪要")
+    await repo.append_meeting_segment(
+        meeting_id,
+        TranscriptSegment(text="不应自动再生成", start_ms=0, end_ms=1000),
+        captured_at=datetime.now(UTC),
+    )
+    await repo.update_meeting_state(
+        meeting_id,
+        state="finalized",
+        minutes_json=_good_minutes_json(),
+        minutes_status="ok",
+    )
+    await repo.clear_meeting_outputs(meeting_id, clear_minutes=True)
+    cleared = await repo.get_meeting(meeting_id)
+    assert cleared is not None and cleared.minutes_cleared_at is not None
+    await repo.aclose()
+
+    restarted_repo = SQLiteRepository(db_path)
+    await restarted_repo.init()
+    llm = _LLM([_good_minutes_json()])
+    pipeline = MeetingPipeline(
+        settings=Settings(db_path=db_path, storage_dir=tmp_path / "storage"),
+        stt=_STT([]),
+        diarizer=_Diar([]),
+        rag=_Rag(),  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+        repository=restarted_repo,
+    )
+    state = MeetingState(
+        pipeline=pipeline,
+        detector=AutoMeetingDetector(),
+        repository=restarted_repo,
+    )
+    try:
+        assert await state.recover_stuck_minutes() == 0
+        assert llm.call_count == 0
+        still_cleared = await restarted_repo.get_meeting(meeting_id)
+        assert still_cleared is not None
+        assert still_cleared.minutes_json is None
+        assert still_cleared.minutes_cleared_at is not None
+    finally:
+        await restarted_repo.aclose()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_startup_recover_before_restore_reuses_unfinished_finalize_run(
+    tmp_path: Path,
+) -> None:
+    """recover 先调度、restore 后进入时，只能恢复同一 run 并生成一次纪要。"""
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    repo = SQLiteRepository(settings.db_path)
+    await repo.init()
+    meeting_id = "m-startup-dedupe"
+    await repo.create_meeting(meeting_id, started_at=datetime.now(UTC), title="启动恢复去重")
+    await repo.append_meeting_segment(
+        meeting_id,
+        TranscriptSegment(text="只应生成一次", start_ms=0, end_ms=800),
+        captured_at=datetime.now(UTC),
+    )
+    await repo.update_meeting_state(
+        meeting_id,
+        state="ended",
+        ended_at=datetime.now(UTC),
+        minutes_status="generation_failed",
+        minutes_error="process exited",
+    )
+
+    llm = _BlockingLLM(_good_minutes_json())
+    pipeline = MeetingPipeline(
+        settings=settings,
+        stt=_STT([]),
+        diarizer=_Diar([]),
+        rag=_Rag(),  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+        repository=repo,
+    )
+    workflow = WorkflowService(settings, InMemoryEventBus())
+    dispatcher = WorkflowDispatcher(workflow)
+    bind_meeting_workflow_handlers(dispatcher, pipeline)
+    original = await workflow.create_run(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="pre-crash",
+            title="启动恢复去重",
+            intent_text=f"Finalize meeting {meeting_id}",
+            meeting_id=meeting_id,
+            input={"meeting_id": meeting_id, "title": "启动恢复去重"},
+            timeout_s=300,
+            idempotency_key=f"meeting.finalize:{meeting_id}",
+        )
+    )
+
+    async def finalize_via_workflow(target_id: str, title: str) -> object:
+        return await dispatch_meeting_finalize(
+            dispatcher,
+            pipeline,
+            repo,
+            meeting_id=target_id,
+            title=title,
+            source="startup_recover",
+        )
+
+    state = MeetingState(
+        pipeline=pipeline,
+        detector=AutoMeetingDetector(),
+        repository=repo,
+        finalize_callback=finalize_via_workflow,
+    )
+    recover_task = asyncio.create_task(state.recover_stuck_minutes())
+    try:
+        await asyncio.wait_for(llm.started.wait(), timeout=1)
+        assert await dispatcher.restore_unfinished() == 1
+        llm.release.set()
+        assert await recover_task == 1
+
+        done = await dispatcher.wait(original.run_id)
+        assert done is not None
+        assert done.state == "succeeded"
+        assert llm.call_count == 1
+        runs = await workflow.list_runs(meeting_id=meeting_id)
+        assert [run.run_id for run in runs] == [original.run_id]
+    finally:
+        llm.release.set()
+        if not recover_task.done():
+            recover_task.cancel()
+        await repo.aclose()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_workflow_finalize_failure_creates_real_retry_attempt(tmp_path: Path) -> None:
+    """A terminal failed run must not poison the meeting's permanent request key."""
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    repo = SQLiteRepository(settings.db_path)
+    await repo.init()
+    meeting_id = "m-workflow-finalize-retry"
+    await repo.create_meeting(meeting_id, started_at=datetime.now(UTC), title="纪要真实重试")
+    await repo.append_meeting_segment(
+        meeting_id,
+        TranscriptSegment(text="第一次失败后应真正重试", start_ms=0, end_ms=800),
+        captured_at=datetime.now(UTC),
+    )
+    llm = _LLM([RuntimeError("provider unavailable"), _good_minutes_json()])
+    pipeline = MeetingPipeline(
+        settings=settings,
+        stt=_STT([]),
+        diarizer=_Diar([]),
+        rag=_Rag(),  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+        repository=repo,
+    )
+    workflow = WorkflowService(settings, InMemoryEventBus())
+    dispatcher = WorkflowDispatcher(workflow)
+    try:
+        with pytest.raises(MeetingPipelineError, match="provider unavailable"):
+            await dispatch_meeting_finalize(
+                dispatcher,
+                pipeline,
+                repo,
+                meeting_id=meeting_id,
+                title="纪要真实重试",
+                source="retry-test",
+            )
+
+        minutes = await dispatch_meeting_finalize(
+            dispatcher,
+            pipeline,
+            repo,
+            meeting_id=meeting_id,
+            title="纪要真实重试",
+            source="retry-test",
+        )
+
+        assert minutes.summary
+        assert llm.call_count == 2
+        runs = await workflow.list_runs(meeting_id=meeting_id)
+        assert len(runs) == 2
+        succeeded, failed = runs
+        assert succeeded.state == "succeeded"
+        assert succeeded.parent_run_id == failed.run_id
+        assert succeeded.attempt == 2
+        assert failed.state == "failed"
     finally:
         await repo.aclose()
 

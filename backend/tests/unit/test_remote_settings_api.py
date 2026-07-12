@@ -68,7 +68,7 @@ def test_get_remote_settings_returns_masked_keys(
     user_json.write_text(
         json.dumps(
             {
-                "yunwu_open_key": "sk-abcdef1234567890",
+                "llm_main_api_key": "sk-abcdef1234567890",
                 "llm_main_base_url": "https://custom.example/v1",
             },
             ensure_ascii=False,
@@ -90,7 +90,7 @@ def test_get_remote_settings_returns_masked_keys(
     # 7 个字段都在
     assert set(fields_by_key.keys()) == {
         "llm_main_base_url",
-        "yunwu_open_key",
+        "llm_main_api_key",
         "llm_fast_base_url",
         "stt_firered_url",
         "tts_qwen3_url",
@@ -104,11 +104,11 @@ def test_get_remote_settings_returns_masked_keys(
     assert llm_url["sensitive"] is False
     assert llm_url["source"] == "user"
 
-    # key 脱敏：sk-a***7890（首 4 / 末 4）
-    yunwu = fields_by_key["yunwu_open_key"]
-    assert yunwu["sensitive"] is True
-    assert yunwu["value"] == "sk-a***7890"
-    assert yunwu["source"] == "user"
+    # key 完全隐藏，不向 renderer 泄漏任何首尾片段
+    main_key = fields_by_key["llm_main_api_key"]
+    assert main_key["sensitive"] is True
+    assert main_key["value"] == "[REDACTED]"
+    assert main_key["source"] == "user"
 
     # 未被 user 覆盖的字段 source=default
     stt = fields_by_key["stt_firered_url"]
@@ -135,20 +135,20 @@ def test_patch_remote_settings_merges_to_config_json(
         json={
             "updates": {
                 "llm_main_base_url": "https://new.example/v1",
-                "yunwu_open_key": "sk-new-key-xxx",
+                "llm_main_api_key": "sk-new-key-xxx",
             }
         },
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert sorted(body["written_keys"]) == ["llm_main_base_url", "yunwu_open_key"]
+    assert sorted(body["written_keys"]) == ["llm_main_api_key", "llm_main_base_url"]
     assert body["restart_required"] is True
     assert body["skipped_keys"] == []
 
     # 文件内容：新写入 + 旧 voice 都在
     data = json.loads(user_json.read_text(encoding="utf-8"))
     assert data["llm_main_base_url"] == "https://new.example/v1"
-    assert data["yunwu_open_key"] == "sk-new-key-xxx"
+    assert data["llm_main_api_key"] == "sk-new-key-xxx"
     assert data["tts_qwen3_voice"] == "alice"
 
 
@@ -159,13 +159,13 @@ def test_patch_remote_settings_rejects_unknown_keys(
 ) -> None:
     r = client.patch(
         "/admin/settings/remote",
-        json={"updates": {"db_path": "/etc/passwd", "yunwu_open_key": "ok"}},
+        json={"updates": {"db_path": "/etc/passwd", "llm_main_api_key": "ok"}},
     )
     assert r.status_code == 422, r.text
     assert "db_path" in r.json()["detail"]
-    # 不应该有 partial write：config.json 不存在或不含 yunwu_open_key
+    # 不应该有 partial write：config.json 不存在或不含 llm_main_api_key
     user_json = isolated_user_dir / "config.json"
-    assert not user_json.exists() or "yunwu_open_key" not in json.loads(
+    assert not user_json.exists() or "llm_main_api_key" not in json.loads(
         user_json.read_text(encoding="utf-8")
     )
 
@@ -186,14 +186,14 @@ def test_patch_empty_updates_is_noop(
 
 @pytest.mark.unit
 def test_mask_short_key() -> None:
-    """直接测脱敏函数，短 key 走"首末各 1 字符" 分支。"""
+    """任何非空凭证都使用同一占位符，防止长度和首尾泄漏。"""
     from app.api.admin import _mask_secret
 
     assert _mask_secret("") == ""
-    assert _mask_secret("abc") == "a***c"
-    assert _mask_secret("abcd1234") == "a***4"  # 长度 8
-    assert _mask_secret("abcd12345") == "abcd***2345"  # 长度 9 → 走长 key 分支
-    assert _mask_secret("sk-1234567890abcd") == "sk-1***abcd"
+    assert _mask_secret("abc") == "[REDACTED]"
+    assert _mask_secret("abcd1234") == "[REDACTED]"
+    assert _mask_secret("abcd12345") == "[REDACTED]"
+    assert _mask_secret("sk-1234567890abcd") == "[REDACTED]"
 
 
 __all__: list[str] = []  # 让 ruff F401 不抱怨

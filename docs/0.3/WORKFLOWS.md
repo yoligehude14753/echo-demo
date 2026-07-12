@@ -1,7 +1,7 @@
 # EchoDesk 0.3 核心 Workflow
 
 日期：2026-07-09  
-状态：开发前设计  
+状态：当前实现映射；历史步骤已按 0.3.1 运行时校准
 
 ## 1. Workflow 总览
 
@@ -11,13 +11,14 @@
 Capture -> Meeting -> Minutes -> Todo -> Artifact -> Agent -> Share -> Diagnostics
 ```
 
-每条 workflow 都必须满足：
+每条 durable command 都必须满足：
 
-- 有 `workflow_run`。
-- 有可 replay 的 `workflow_events`。
+- 有 `workflow_run` 和可 replay 的 `workflow_events`。
 - 有明确 owner。
 - 有 Happy Path、Sad Path、Boundary Path。
 - UI 只展示投影，不作为事实源。
+
+Capture 上传与 Chat/RAG ask 等无副作用读流绑定请求或连接生命周期，不伪造 durable run；只有产生持久副作用的命令进入 Workflow Kernel。
 
 ## 2. 会议采集 Workflow
 
@@ -108,7 +109,7 @@ Boundary Path：
 Run：
 
 ```text
-kind = artifact_generate | agent_task
+kind = artifact.generate | agent_task
 origin = todo
 meeting_id = required
 todo_id = required
@@ -151,7 +152,7 @@ Boundary Path：
 Run：
 
 ```text
-kind = artifact_generate
+kind = artifact.generate
 origin = command | todo | agent
 ```
 
@@ -169,7 +170,7 @@ Sad Path：
 - LLM 失败：run failed，失败卡片可 retry。
 - 代码执行失败：run failed，保存错误摘要。
 - 产物文件写入失败：run failed，不产生 artifact metadata。
-- Todo 回写失败：artifact 仍成功，但 link 失败必须记录 warning event。
+- Artifact metadata、来源 link 与 terminal run/event 任一写入失败：同一 Unit of Work 整体回滚，不能留下“文件成功但来源丢失”的假成功。
 
 Boundary Path：
 
@@ -192,11 +193,11 @@ Boundary Path：
 - 会议结束后沉淀。
 - 用户提问。
 
-Run：
+Durable Run：
 
 ```text
-kind = rag_ingest | rag_query
-origin = upload | workspace | meeting | command
+kind = rag.ingest | rag.delete | workspace.scan | meeting projection
+origin = upload | workspace | meeting
 ```
 
 Happy Path：
@@ -204,8 +205,8 @@ Happy Path：
 1. ingest 创建 run。
 2. 解析文件。
 3. 写入 doc metadata 和 index。
-4. query 时记录引用来源。
-5. UI 显示答案和 citations。
+4. `/rag/ask` 作为 cancellable SSE 读流执行，不创建成功 run。
+5. 只有 `done` 终帧后 UI 才显示完整答案和 citations。
 
 Sad Path：
 
@@ -240,7 +241,7 @@ Run：
 ```text
 kind = agent_task
 origin = command | todo | retry
-runner = claude_code
+runner = claude_code | agentos
 ```
 
 Happy Path：
@@ -287,19 +288,19 @@ Boundary Path：
 - 导出会议 zip。
 - 诊断包导出。
 
-Run：
+仅持久导出创建 Run：
 
 ```text
-kind = export
-origin = share | admin | diagnostics
+kind = meeting.export | diagnostics.export
+origin = admin | diagnostics
 ```
 
 Happy Path：
 
-1. 用户选择分享或导出。
+1. 用户选择持久会议导出或诊断包导出；普通分享页准备与已有文件下载不伪造通用 export run。
 2. 后端读取 meeting、minutes、artifact_links。
 3. 生成分享页或 zip。
-4. 记录 export run。
+4. 记录对应的 `meeting.export` 或 `diagnostics.export` run。
 5. UI 显示下载/打开入口。
 
 Sad Path：

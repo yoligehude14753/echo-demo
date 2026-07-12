@@ -46,23 +46,27 @@ test("S03 · 设置面板：模型服务配置 + 数据目录 + 回放引导（P
     await expect(page.getByText("/Users/test/.echodesk").first()).toBeVisible();
   });
 
-  await test.step("模型服务表单：7 个字段渲染 + API Key 显示脱敏", async () => {
-    // antd Form.Item 的 name=key 会渲染 input
+  await test.step("模型服务表单：7 个字段可访问 + API Key 安全留空", async () => {
     const form = page.getByTestId("remote-settings-form");
-    await expect(form.locator("input[id='llm_main_base_url']")).toHaveValue(
-      "",
-    );
-    await expect(form.locator("input[id='stt_firered_url']")).toHaveValue(
-      "",
-    );
-    // sensitive 字段 placeholder 显示脱敏值
-    await expect(form.locator("input[id='yunwu_open_key']")).toBeVisible();
-    // 「user.json」标签应该出现在 yunwu_open_key 行（source=user）
-    await expect(page.getByText("user.json").first()).toBeVisible();
+    await expect(form.getByRole("textbox")).toHaveCount(7);
+    await expect(form.getByRole("textbox", { name: /^主 LLM Base URL/ })).toHaveValue("");
+    await expect(form.getByRole("textbox", { name: "STT URL" })).toHaveValue("");
+
+    // 通过 Form label 的可访问名称定位，不依赖 Ant Design 内部生成的 input id。
+    // user.json 与脱敏状态也是该字段标签的一部分。
+    const apiKey = form.getByRole("textbox", {
+      name: /^主 LLM API Key.*user\.json.*\[脱敏\]/,
+    });
+    await expect(apiKey).toBeVisible();
+    await expect(apiKey).toHaveAttribute("type", "password");
+    await expect(apiKey).toHaveValue("");
+    await expect(apiKey).toHaveAttribute("placeholder", "sk-...");
   });
 
   await test.step("修改 llm_main_base_url 并保存", async () => {
-    const input = page.getByTestId("remote-settings-form").locator("input[id='llm_main_base_url']");
+    const input = page
+      .getByTestId("remote-settings-form")
+      .getByRole("textbox", { name: /^主 LLM Base URL/ });
     await input.fill("https://model.example.com/v1");
     await page.getByTestId("save-remote-settings").click();
     // toast「已写入 1 项」
@@ -86,7 +90,7 @@ test("S03 · 设置面板：模型服务配置 + 数据目录 + 回放引导（P
         { timeout: 3_000 },
       )
       .toBe(true);
-    await expect(page.getByText(/已发送重启请求/)).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByText(/服务重启已开始/)).toBeVisible({ timeout: 3_000 });
   });
 
   await test.step("点「回放引导」→ 引导 Modal 再次显示（P3.1 验证）", async () => {

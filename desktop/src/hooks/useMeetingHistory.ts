@@ -15,8 +15,8 @@
  *    detail fetch；该状态下 TranscriptStream 显示 ambient feed，MinutesView /
  *    ArtifactPanel 显示空态。
  *
- * 4. **错误吞掉**：列表/详情 fetch 失败不 toast 不抛错；前端继续用事件流维护
- *    in-memory 视图（容错降级）。错误打 console.warn 便于调试。
+ * 4. **显式降级**：列表失败保留已有 in-memory 会议，并在列表呈现 error/degraded
+ *    与重试入口；详情失败保留卡片级重试。错误仍写 console.warn 便于诊断。
  */
 
 import { useEffect, useRef } from "react";
@@ -27,15 +27,27 @@ import {
   listMeetings,
   listWorkflowRuns,
 } from "@/api";
-import { shouldHideSharedPublicHistory } from "@/runtime";
 import { projectMinutesWithWorkflowRuns, useStore } from "@/store";
 
 export function useMeetingHistory(): void {
   const hydrateMeetings = useStore((s) => s.hydrateMeetings);
+  const rehydrateMeetings = useStore((s) => s.rehydrateMeetings);
+  const rehydrateRevision = useStore((s) => s.rehydrateRevision);
+  const rehydrateFenceSeq = useStore((s) => s.rehydrateFenceSeq);
   const upsertMeeting = useStore((s) => s.upsertMeeting);
   const applyEvent = useStore((s) => s.applyEvent);
   const markDetailLoaded = useStore((s) => s.markMeetingDetailLoaded);
+  const markDetailError = useStore((s) => s.markMeetingDetailError);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
+  const meetingListRetryRevision = useStore((s) => s.meetingListRetryRevision);
+  const startMeetingListLoad = useStore((s) => s.startMeetingListLoad);
+  const completeMeetingListLoad = useStore((s) => s.completeMeetingListLoad);
+  const failMeetingListLoad = useStore((s) => s.failMeetingListLoad);
+  const detailRetryRevision = useStore((s) =>
+    currentMeetingId
+      ? (s.meetingDetailRetryRevision[currentMeetingId] ?? 0)
+      : 0,
+  );
   // 用 ref 避开 selector 依赖闭包：currentMeetingId 频繁变化但我们只需当下读 1 次
   const detailLoadedRef = useRef<Record<string, boolean>>({});
   const meetingsRef = useRef<ReturnType<typeof useStore.getState>["meetings"]>(
@@ -58,8 +70,14 @@ export function useMeetingHistory(): void {
   // 退避序列 300ms / 800ms / 2s / 5s / 10s，总 ~18s 覆盖 cold start。
   // 任一次 200 OK 立即停；alive 守护 unmount 时早退。
   useEffect(() => {
-    if (shouldHideSharedPublicHistory()) return;
     let alive = true;
+    startMeetingListLoad();
+    const fenceSeq =
+      rehydrateRevision > 0
+        ? rehydrateFenceSeq
+        : useStore
+            .getState()
+            .events.reduce((max, event) => Math.max(max, event.seq ?? 0), 0);
     const delays = [0, 300, 800, 2000, 5000, 10_000];
     void (async (): Promise<void> => {
       for (let i = 0; i < delays.length && alive; i++) {
@@ -70,7 +88,12 @@ export function useMeetingHistory(): void {
         try {
           const list = await listMeetings(50);
           if (!alive) return;
-          hydrateMeetings(list);
+          if (rehydrateRevision > 0) {
+            rehydrateMeetings(list, fenceSeq);
+          } else {
+            hydrateMeetings(list);
+          }
+          completeMeetingListLoad();
           return; // 成功立即终止
         } catch (e) {
           if (i === delays.length - 1) {
@@ -78,6 +101,7 @@ export function useMeetingHistory(): void {
               "[meeting-history] listMeetings failed after retries:",
               e,
             );
+            failMeetingListLoad("历史会议暂时无法加载，请检查服务连接后重试");
           }
         }
       }
@@ -85,7 +109,16 @@ export function useMeetingHistory(): void {
     return () => {
       alive = false;
     };
-  }, [hydrateMeetings]);
+  }, [
+    hydrateMeetings,
+    rehydrateMeetings,
+    rehydrateRevision,
+    rehydrateFenceSeq,
+    meetingListRetryRevision,
+    startMeetingListLoad,
+    completeMeetingListLoad,
+    failMeetingListLoad,
+  ]);
 
   // 选中后按需拉 detail
   useEffect(() => {
@@ -95,10 +128,10 @@ export function useMeetingHistory(): void {
     void (async (): Promise<void> => {
       try {
         const [segs, minutes, arts, workflowRuns] = await Promise.all([
-          getMeetingTranscript(currentMeetingId).catch(() => []),
-          getMeetingMinutes(currentMeetingId).catch(() => null),
-          getMeetingArtifacts(currentMeetingId).catch(() => []),
-          listWorkflowRuns({ meeting_id: currentMeetingId, limit: 100 }).catch(() => []),
+          getMeetingTranscript(currentMeetingId),
+          getMeetingMinutes(currentMeetingId),
+          getMeetingArtifacts(currentMeetingId),
+          listWorkflowRuns({ meeting_id: currentMeetingId, limit: 100 }),
         ]);
         if (!alive) return;
         const cur = meetingsRef.current[currentMeetingId];
@@ -136,10 +169,20 @@ export function useMeetingHistory(): void {
         markDetailLoaded(currentMeetingId);
       } catch (e) {
         console.warn("[meeting-history] load detail failed:", e);
+        if (alive) {
+          markDetailError(currentMeetingId, "会议详情加载失败 · 点击重试");
+        }
       }
     })();
     return () => {
       alive = false;
     };
-  }, [applyEvent, currentMeetingId, upsertMeeting, markDetailLoaded]);
+  }, [
+    applyEvent,
+    currentMeetingId,
+    detailRetryRevision,
+    upsertMeeting,
+    markDetailLoaded,
+    markDetailError,
+  ]);
 }

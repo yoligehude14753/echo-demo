@@ -8,9 +8,22 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.3.1] – 2026-07-12
+
+EchoDesk 0.3.1 将运行时实现收敛到统一 Workflow Kernel、统一身份策略和统一桌面 API transport；这是源码与本地构建版本，尚未发布到公共 Release。
+
+### 新增与修复
+
+- public backend 使用服务端签发的 tenant/device/owner principal 隔离会议、RAG、产物、Workflow、Agent 与 WebSocket；宿主机执行能力只向本机或 host-admin 开放。
+- 同步业务统一走 Workflow Dispatcher 的成功/失败边界，SQLite domain write、run/event 与 transactional outbox 保持同事务。
+- 多 backend 实例独立消费共享 outbox；慢消费者明确断开重连，客户端 `server_resync` 执行 REST 全量 rehydrate。
+- 显式清除会议纪要写 durable tombstone，重启恢复不会把已删除纪要重新生成。
+- Desktop backend 请求统一使用 session-aware、可取消、带超时和结构化错误的 transport；Capture、Chat SSE、TTS 和会议详情失败路径均有反例测试。
+- Desktop、Backend、Android 与安装态测试版本统一为 `0.3.1`；xlsx 预览迁移到 ExcelJS，移除原 xlsx high-risk 依赖。
+
 ## [0.3.0] – 2026-07-10
 
-EchoDesk 0.3 正式版：完成 Workflow Core、历史恢复、本机安装与 AgentOS 工作流闭环。
+EchoDesk 0.3 源码包含 Workflow Kernel、历史恢复和本机安装链路；确定性门禁已通过，当前 live installed workflow 仍因主模型 provider 超时未完成复验。[F-ECHO-016]
 
 ### 新增与修复
 

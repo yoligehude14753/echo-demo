@@ -1,0 +1,31 @@
+event_id: "E-20260710T1926-008"
+event_type: "add"
+timestamp: "2026-07-10T19:26:00+08:00"
+author: "agent/codex-ux-redesign"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-012"
+      claim: "User requested a complete modern EchoDesk UX redesign with Codex-like system typography, clear semantics, consistent visuals and icons, and robust text overflow handling."
+      category: "intent"
+      volatility: "medium"
+      evidence_strength: "doc"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-10T19:26:00+08:00"
+      observed_by: "human/user"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "event:E-20260710T1926-008"
+      evidence: "The user explicitly requested a function-led, advanced and modern redesign, required Codex-like unified typography, and identified ambiguity, visual inconsistency, excessive fonts, low-quality symbols, and overflow as defects to remove."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3"
+        - "ux"
+        - "desktop"
+        - "design-system"
+git_commit: null

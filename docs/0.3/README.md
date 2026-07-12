@@ -1,88 +1,112 @@
 # EchoDesk 0.3 文档包
 
-日期：2026-07-10
-状态：`0.3.0` 正式版收尾与本机验收
-基线：`v0.2.50` / `e5574e9379e82f10057d5c84f401349c6f8e613b` [F-ECHO-001]  
+更新时间：2026-07-12 | 当前源码：`0.3.1`
 
-## 0.3 定位
+状态：确定性门禁、live GLM contract、packaged smoke 与真实安装态 GLM + AgentOS workflow 已通过；跨平台 CI、公开签名、Release 与公网切流按各自证据单独确认。
 
-EchoDesk 0.3 的目标是把现有功能从“功能堆叠 + 局部补丁”收束为统一 workflow 系统。[F-ECHO-002]
+## 1. 0.3 定位
 
-核心主线：
+EchoDesk 0.3 把原有“功能堆叠 + 局部状态”收束为本地优先、按 principal 隔离、可恢复的 workflow 系统：
 
 ```text
 会议输入 -> 知识沉淀 -> 任务执行 -> 产物生成 -> 分享归档 -> 诊断恢复
 ```
 
-Claude Code / AgentOS 接入不下线，正式纳入 `Agent Runner Workflow`。权限大不是问题；0.3 要解决的是状态追踪、事件 replay、取消、超时、重试、产物归档、历史恢复和测试门禁。
+Claude Code / AgentOS 保留 Full Access 主路径，但纳入 task、event、lease、cancel、timeout、retry、Artifact import 和恢复边界。Desktop UI 收束为 Session Navigation、Workbench、Inspector，统一字体、图标、状态、文案与响应式行为。
 
-## 文档索引
+## 2. 文档索引
 
-| 文档 | 用途 | 进入开发前状态 |
+| 文档 | 用途 | 状态 |
 |---|---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 0.3 治理后架构、模块边界、状态机 | 必读 |
-| [WORKFLOWS.md](WORKFLOWS.md) | 核心用户 workflow、Happy/Sad/Boundary 路径 | 必读 |
-| [DATA_MODEL_AND_CONTRACTS.md](DATA_MODEL_AND_CONTRACTS.md) | DB schema、REST、WS、IPC、事件契约 | 必读 |
-| [TEST_PLAN.md](TEST_PLAN.md) | 单测、集成、E2E、contract、release smoke 门禁 | 必读 |
-| [DEV_PLAN.md](DEV_PLAN.md) | PR 拆分、任务顺序、完成标准 | 必读 |
-| [PRE_DEV_CHECKLIST.md](PRE_DEV_CHECKLIST.md) | 开发前检查项和当前准备状态 | 每次开工前检查 |
+| [`../../PRD.md`](../../PRD.md) | 用户、范围、功能需求与验收 | 当前产品定义 |
+| [`../../METRICS.md`](../../METRICS.md) | 北极星、输入指标与护栏 | 当前指标定义 |
+| [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) | 总体架构、事务边界和已知 P2 | 当前实现快照 |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 0.3 模块与 UX 架构细化 | 当前实现快照 |
+| [`WORKFLOWS.md`](WORKFLOWS.md) | 核心用户 workflow 与异常路径 | 设计与实现参考 |
+| [`DATA_MODEL_AND_CONTRACTS.md`](DATA_MODEL_AND_CONTRACTS.md) | identity、DB、REST、WS、IPC 契约 | 当前实现快照 |
+| [`TEST_PLAN.md`](TEST_PLAN.md) | 测试层次、命令与 release gates | 当前门禁 |
+| [`DEV_PLAN.md`](DEV_PLAN.md) | 0.3 原始实施拆分 | 历史计划 |
+| [`PRE_DEV_CHECKLIST.md`](PRE_DEV_CHECKLIST.md) | 开发前检查 | 历史准入 |
+| [`UX_CLICK_VALIDATION_2026-07-10.md`](UX_CLICK_VALIDATION_2026-07-10.md) | 可见浏览器点击与缺陷修复证据 | 验收记录 |
 
-## 版本规则
+## 3. 已落地架构
 
-- `v0.2.50` 是冻结基线，不再继续解释为新功能线。[F-ECHO-001]
-- `0.3` 先做文档、架构、测试计划和 contract 准备，再进入实现。[F-ECHO-002]
-- 开始代码实现时，版本从 `0.3.0-alpha.1` 起步。
-- 任何来自旧实验线的能力必须先归入明确 workflow，再进入代码。
+### Principal 与 public 隔离
 
-## 0.3.0-alpha.2 修复范围
+- server-issued tenant、user(owner)、device、session 与 credential。
+- Meeting、segments、RAG、Artifact、Workflow、Agent、WebSocket 和 storage 按 tenant / owner scope。
+- session 支持 enroll、renew、claim、credential rotate、additional device 与 revoke。
+- admission、quota、resource ticket 与 host-admin policy fail closed。
 
-- 历史会议列表首屏直接使用 `/meetings` 返回的 `n_segments` / `n_speakers`，不再等用户点击详情后才从 `0` 更新。
-- 跨重启手动会议保留 24 小时续接窗口；超过上限仍为 `in_meeting` 时自动结束，避免顶栏累计数千分钟。
-- backend pytest 和安装 smoke 全面隔离 `~/.echodesk`、真实 DB 与本机 `.env`，测试不再污染用户数据。
-- 修复本机残留 `deploy-smoke` 会议：30 段转写与补生成纪要保留，错误运行态和结束时间已校正。
+### Workflow Kernel
 
-## 0.3.0 正式版收尾范围
+- durable run/event、idempotency、revision、deadline、cancel、retry 和 lineage。
+- domain write、run/event 和 transactional outbox 使用同一个 SQLite Unit of Work。
+- execution lease + fence + heartbeat 阻止多实例双执行。
+- per-consumer、scope lane 和 global lease recovery 处理 outbox 失败与慢消费者。
 
-- backend、desktop、Android / TV、安装资产和真实 E2E 统一使用无预发布后缀的 `0.3.0`。
-- Desktop Pro 主模型统一为 `deepseek-v4-flash`，状态栏只展示模型名，不主动显示供应商文案。
-- backend 安装流程加入 AgentOS / Claude Code runner 安装、LaunchAgent 托管、健康检查与卸载闭环。
-- AgentOS 工作目录收口到 `~/.echodesk/agentos`，与 EchoDesk 用户数据目录一致，不再使用独立的 `~/.agentos`。
-- 旧 `skill_build` 产物会在启动时自动补录到 `artifacts` / `artifact_links`，历史 outputs 不再依赖前端内存态。
+### RAG
 
-## 0.3.0-alpha.1 已落地范围
+- ingest/delete/workspace scan/meeting projection 是 durable workflow。
+- `/rag/ask` 是随连接取消的 SSE 读流，只有 `done` 终帧代表完成。
+- SQLite manifest 与 revision 是跨进程 commit point，JSON index 是可重建 cache。
+- Query、Ambient、Meeting 不再各自维护互相不可见的事实源。
 
-- Workflow Core：SQLite migration、`WorkflowService`、run/event replay、restore_unfinished、`/workflows/runs*` API、主 WS `workflow.event` / `workflow.snapshot`。
-- Artifact：artifact metadata 和 `artifact_links` 入库，`/artifacts`、`GET /meetings/{id}/artifacts`、分享页和 outputs 清理改以 DB link 为事实源。
-- Todo：artifact/todo 执行会创建 workflow run，前端从 workflow/todo 事件投影 running/failed/waiting_permission/done 状态。
-- Agent：Claude Code / AgentOS 保留 full access 主路径，旧 Agent task DTO/API 兼容，同时写 workflow_events，并把 Agent 产物导入统一 artifacts。
-- UI：outputs 面板统一恢复 artifacts/tasks，失败卡片接真实重试；Todo 行显示执行中、失败、等待授权等状态。
-- Contract gates：REST route、WS event、IPC channel、script matrix、workflow HTTP scenario 均有测试覆盖。
-- Desktop Pro：打包桌面端默认 local-first；public demo 由 `ECHO_PUBLIC_DEMO=1` 显式开启。
+### Meeting、Artifact 与 Agent
 
-## 2026-07-10 验收记录
+- 同 owner 单 active meeting；纪要清除使用 durable tombstone。
+- Artifact metadata、link 和文件 staging 有统一提交边界。
+- Agent raw event 持久化后再投影；bridge 支持 lease、backoff 和 failover。
+- Agent Artifact 使用 bounded streaming import/proxy。
+- terminal first-wins，晚到的冲突终态不覆盖已确认结果。
 
-- 本机 backend 安装到 `~/.echodesk/source/backend`，独立 venv、PPT Node 依赖、import 和 health smoke 通过。
-- `/Applications/EchoDesk.app` + `~/.echodesk/source/backend` 真实安装态 E2E 通过：Todo 首次超时失败、完整退出、失败态恢复、带 `retry_of` 重试成功、统一 artifact 入库/下载、真实 Claude Code Agent 产物导入、取消、超时及最终重启恢复。
-- 安装包未设置 `ECHO_FORCE_LOCAL_BACKEND` 时仍确认 `isPublicDemo=false`；独立 smoke 从安装目录启动 backend 并在退出后释放端口。
-- Backend 确定性门禁 `532 passed, 4 skipped, 20 deselected`；desktop scenarios `25 passed`；更新设置/顶栏 e2e `10 passed`；typecheck、lint、version check、production build 全部通过。
-- Yunwu `deepseek-v4-flash` 非流式与流式主模型请求均已真实通过；独立 fast gateway 的流式请求仍返回 HTTP 400，作为外部通道风险单列，不再用轻量健康探针代替业务调用结论。
-- macOS DMG/ZIP 与 app 已完成 ad-hoc 签名和本机校验；正式公开分发仍需 Developer ID 签名与 notarization。
+### Desktop / Android / TV
 
-## 不做什么
+- Electron 默认 local-first，自包含 backend；public 模式必须显式设置 `ECHO_PUBLIC_DEMO=1`。
+- renderer 使用 session-aware、可取消、带超时和结构化错误的 transport。
+- WebSocket 收到 resync 后通过 REST 全量 rehydrate。
+- Android / TV 使用设备身份桥接；公开资产必须由稳定 release 身份签名并校验。
 
-- 不把 Claude Code 从产品里删除。
-- 不因为权限大而弱化 Agent 能力。
-- 不继续用前端内存维护会议产物归属。
-- 不把 Todo 执行状态只藏在 `minutes_json` 里。
-- 不新增第二套主 WebSocket。
-- 不在 0.3 里继续用未登记的临时事件字段。
+## 4. UX 收口
 
-## 开发准入
+- 左侧：实时记录、会议搜索和历史会议。
+- 中间：转写 / 助手互斥切换，输入框 1–6 行自适应。
+- 右侧：会议纪要 / 工作产物互斥切换，失败项就近重试。
+- 全局使用同一套 Codex-like 系统字体和统一线性图标。
+- 普通界面隐藏内部 ID、供应商实现、原始异常类名与低层 workflow 事件。
+- 覆盖 411、960、1280、1920 viewport，长文本有明确换行或省略行为。
 
-进入开发前必须满足：
+## 5. 最终门禁证据
 
-- FactStore health-check 通过。
-- 本目录 6 份 0.3 文档存在。
-- `README.md` 能指向本 0.3 文档包。
-- `docs/GOVERNANCE_v0.2.50.md` 继续作为 0.2.50 基线说明存在。
-- 开发 PR 必须能对应 [DEV_PLAN.md](DEV_PLAN.md) 中的一项。
+| 门禁 | 结果 |
+|---|---|
+| Backend deterministic | `916 collected`；`18 live deselected`；`898 passed / 0 skipped`；coverage `87%`；pytest 自然退出 |
+| Live GLM product contract | `2 / 2 passed` |
+| Electron main-process contracts | `70 passed` |
+| Desktop Playwright E2E | `95 passed` |
+| Desktop scenarios | `29 passed` |
+| Installed GLM + AgentOS full workflow | `1 / 1 passed` |
+| Packaged local smoke | passed |
+
+安装态完整 workflow 覆盖真实模型、Artifact 超时注入、退出重启、失败恢复、retry lineage、Agent 执行与 Artifact import、取消、超时及最终持久化恢复。packaged smoke 只验证打包边界，不替代该完整路径。
+
+## 6. Agent 一致性状态
+
+1. Agent terminal HTTP read 已加入 Workflow read barrier；关联 Workflow 未修复并核对为相同终态前，不返回领先终态。
+2. migration 036 已加入 durable `agent_command_outbox`；`cancel_requested` 与 Agent/Workflow 状态、事件、outbox 同事务，远程取消由 fenced recovery worker 使用稳定 `Idempotency-Key` 执行与重放。
+
+## 7. 发布边界
+
+- 公开下载只以 GitHub Release 实际资产为准；CI artifact 和本机 `release/` 不等同于发布。
+- Windows 在 Authenticode 未配置前拒绝 public publish。
+- macOS ad-hoc 签名只用于本机验证，不等同于 Developer ID/notarization。
+- Android / TV debug 或临时签名只用于开发；公开 APK 必须使用稳定 release 身份。
+- public backend 切流需要隔离 smoke、客户端兼容、数据迁移与 rollback 验证。
+
+## 8. 不做什么
+
+- 不把 public backend 扩展为普通 principal 可调用的宿主机命令服务。
+- 不在 0.3.1 引入团队、邀请、角色或跨 tenant 分享。
+- 不把 Todo、Artifact 或 Agent 状态放回前端内存作为事实源。
+- 不用 health probe、mock E2E 或单条 smoke 代替真实业务 contract。
+- 不把已知 P2 写成已经解决。

@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import socket
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -72,16 +71,14 @@ def _host_port_from_url(url: str, default_port: int = 80) -> tuple[str, int]:
 
 async def _probe_tcp(host: str, port: int) -> ProbeResult:
     t0 = time.monotonic()
-    loop = asyncio.get_running_loop()
     try:
-        sock = await asyncio.wait_for(
-            loop.run_in_executor(
-                None, lambda: socket.create_connection((host, port), _PROBE_TIMEOUT_S)
-            ),
-            timeout=_PROBE_TIMEOUT_S + 1.0,
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=_PROBE_TIMEOUT_S,
         )
+        writer.close()
         with contextlib.suppress(OSError):
-            sock.close()
+            await writer.wait_closed()
         return ProbeResult(
             ok=True,
             latency_ms=round((time.monotonic() - t0) * 1000, 1),
@@ -147,22 +144,17 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
         )
     )
 
-    if not settings.yunwu_open_key:
-        probes.append(
-            (
-                "main_model",
-                asyncio.ensure_future(asyncio.sleep(0, ProbeResult(ok=None, reason="no_api_key"))),
-            )
+    probes.append(
+        (
+            "main_model",
+            asyncio.ensure_future(
+                _probe_openai_models(
+                    settings.llm_main_base_url,
+                    settings.resolved_llm_main_api_key,
+                )
+            ),
         )
-    else:
-        probes.append(
-            (
-                "main_model",
-                asyncio.ensure_future(
-                    _probe_openai_models(settings.llm_main_base_url, settings.yunwu_open_key)
-                ),
-            )
-        )
+    )
 
     if not settings.tavily_api_key:
         probes.append(
@@ -222,6 +214,9 @@ def _apply_probe_results(results: dict[str, ProbeResult]) -> None:
 
 async def _prober_loop(settings: Settings) -> None:
     """每 30s 跑一轮探针；异常不应该让循环退出。"""
+    # 给短生命周期 TestClient/CLI health check 一个可取消窗口；生产启动只延迟
+    # 250ms，却能避免 shutdown 时等待已经交给 DNS/TLS executor 的 15s 探针。
+    await asyncio.sleep(0.25)
     while True:
         try:
             results = await _probe_all(settings)

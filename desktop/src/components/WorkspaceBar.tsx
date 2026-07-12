@@ -6,10 +6,10 @@
  * - 操作：手动触发扫描 / 清空 workspace 索引
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Button, Modal, Tag, Tooltip, message } from "antd";
-import { FileText, FolderOpen, RefreshCw, Settings, Trash2 } from "lucide-react";
+import { FileText, Library, RefreshCw, Settings, Trash2 } from "lucide-react";
 
 import {
   type RagDocSummary,
@@ -32,6 +32,22 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
   const [scanning, setScanning] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const openSettingsAfterCloseRef = useRef(false);
+
+  const requestSettingsFromModal = useCallback(() => {
+    if (!onOpenSettings) return;
+    openSettingsAfterCloseRef.current = true;
+    setModalOpen(false);
+  }, [onOpenSettings]);
+
+  const handleModalOpenChange = useCallback(
+    (open: boolean) => {
+      if (open || !openSettingsAfterCloseRef.current) return;
+      openSettingsAfterCloseRef.current = false;
+      onOpenSettings?.();
+    },
+    [onOpenSettings],
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -54,7 +70,7 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
     setScanning(true);
     try {
       const r = await workspaceScan();
-      const text = `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped} · 删除 ${r.n_removed} · 失败 ${r.n_failed} · 耗时 ${r.duration_s}s`;
+      const text = `更新完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 未变更 ${r.n_skipped} · 移除 ${r.n_removed} · 失败 ${r.n_failed}`;
       if (r.n_failed > 0) {
         message.warning(text);
       } else {
@@ -62,8 +78,8 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
       }
       await refresh();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      message.error(`扫描失败：${msg}`);
+      console.error("[workspace] scan failed", e);
+      message.error("扫描失败，请检查目录权限后重试");
     } finally {
       setScanning(false);
     }
@@ -82,8 +98,8 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
           message.success(`已清除 ${r.n_removed} 个工作区文档`);
           await refresh();
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          message.error(`清空失败：${msg}`);
+          console.error("[workspace] clear index failed", e);
+          message.error("知识库清空失败，请重试");
         }
       },
     });
@@ -110,8 +126,8 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
           message.success("已从知识库移除");
           await refresh();
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          message.error(`删除失败：${msg}`);
+          console.error("[workspace] delete document failed", e);
+          message.error("文档移除失败，请重试");
           throw e;
         } finally {
           setDeletingDocId(null);
@@ -143,14 +159,14 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
         className="flex items-center gap-2 px-4 h-8 text-[11px] text-ink-600 border-b border-paper-300 bg-paper-100"
         data-testid="workspace-bar"
       >
-        <FolderOpen className="workspace-icon w-3 h-3" />
-        <span className="workspace-title font-medium">工作区</span>
+        <Library className="workspace-icon w-3 h-3" />
+        <span className="workspace-title font-medium">知识库</span>
 
         <Tooltip
           title={
             status?.authorized_dirs.length
               ? status.authorized_dirs.join("\n")
-              : "未配置；点击「配置工作区」添加目录，EchoDesk 会自动扫描入库"
+              : "还没有知识库目录；添加后 EchoDesk 会自动收录其中的文件"
           }
         >
           <Tag
@@ -175,70 +191,38 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
           </Tooltip>
         )}
 
-        <Tooltip title="工作区扫描入库的文档数">
+        <Tooltip title="已建立索引的工作区文档数">
           <Tag color={nIndexed > 0 ? "geekblue" : "default"} className="!m-0">
-            {nIndexed} 工作区文档
+            {nIndexed} 文档
           </Tag>
         </Tooltip>
 
-        <span className="text-ink-400">·</span>
-
-        <Tooltip title="用户上传 / 会议生成的文档（聊天框拖入即可）">
-          <span data-testid="workspace-upload-count">
-            上传 {nUploadDocs} · 会议 {nMeetingDocs} · 总计 {nDocsTotal}
-          </span>
-        </Tooltip>
+        <span className="sr-only" data-testid="workspace-upload-count">
+          上传 {nUploadDocs} · 会议 {nMeetingDocs} · 总计 {nDocsTotal}
+        </span>
 
         <div className="workspace-actions ml-auto flex items-center gap-1">
           <Button
             size="small"
             type="default"
-            icon={<Settings className="w-3 h-3" />}
-            onClick={() => {
-              if (onOpenSettings) {
-                onOpenSettings();
-              } else {
-                setModalOpen(true);
-              }
-            }}
+            icon={<Library className="w-3 h-3" />}
+            onClick={() => setModalOpen(true)}
             data-testid="workspace-config-btn"
+            aria-label="管理知识库"
           >
-            配置工作区
-          </Button>
-          <Button
-            size="small"
-            type="text"
-            icon={
-              <RefreshCw
-                className={`w-3 h-3 ${scanning ? "animate-spin" : ""}`}
-              />
-            }
-            onClick={() => void onScan()}
-            disabled={scanning || nDirs === 0}
-            data-testid="workspace-scan-btn"
-          >
-            {scanning ? "扫描中" : "扫描"}
-          </Button>
-          <Button
-            size="small"
-            type="text"
-            danger
-            icon={<Trash2 className="w-3 h-3" />}
-            onClick={() => void onClear()}
-            disabled={nIndexed === 0}
-            data-testid="workspace-clear-btn"
-          >
-            清空
+            <span>管理</span>
           </Button>
         </div>
       </div>
 
       <Modal
-        title="知识库 / 工作区文件"
+        title="管理知识库"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
+        afterOpenChange={handleModalOpenChange}
         footer={null}
         width={760}
+        destroyOnHidden
       >
         <div className="text-[13px] space-y-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -260,20 +244,42 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
             >
               刷新
             </Button>
+            <Button
+              size="small"
+              type="text"
+              icon={
+                <RefreshCw
+                  className={`w-3 h-3 ${scanning ? "animate-spin" : ""}`}
+                />
+              }
+              onClick={() => void onScan()}
+              disabled={scanning || nDirs === 0}
+              data-testid="workspace-scan-btn"
+            >
+              {scanning ? "更新中" : "更新索引"}
+            </Button>
             {onOpenSettings && (
               <Button
                 size="small"
                 type="text"
                 icon={<Settings className="w-3 h-3" />}
-                onClick={() => {
-                  setModalOpen(false);
-                  onOpenSettings();
-                }}
+                onClick={requestSettingsFromModal}
                 data-testid="workspace-open-settings"
               >
                 配置目录
               </Button>
             )}
+            <Button
+              size="small"
+              type="text"
+              danger
+              icon={<Trash2 className="w-3 h-3" />}
+              onClick={() => void onClear()}
+              disabled={nIndexed === 0}
+              data-testid="workspace-clear-btn"
+            >
+              清除工作区索引
+            </Button>
           </div>
 
           <div>
@@ -288,24 +294,17 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
                   size="small"
                   type="primary"
                   icon={<Settings className="w-3 h-3" />}
-                  onClick={() => {
-                    setModalOpen(false);
-                    onOpenSettings();
-                  }}
+                  onClick={requestSettingsFromModal}
                   data-testid="workspace-modal-add-dir"
                 >
                   去添加工作区目录
                 </Button>
               )}
             </div>
-            <div className="text-[11px] text-ink-500 mt-1.5">
-              开发者/私有部署也可以用环境变量
-              <span className="font-mono ml-1">WORKSPACE_DIRS</span> 批量配置。
-            </div>
           </div>
 
           <div>
-            <div className="font-medium mb-1">可扫描目录（{nDirs}）</div>
+            <div className="font-medium mb-1">已授权目录（{nDirs}）</div>
             {status?.authorized_dirs.length ? (
               <ul className="list-disc pl-5 text-[12px] space-y-1">
                 {status.authorized_dirs.map((d) => (
@@ -343,7 +342,7 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <div className="font-medium">已入库文档（{nDocsTotal}）</div>
+              <div className="font-medium">已收录文档（{nDocsTotal}）</div>
               <div className="text-[11px] text-ink-500">
                 上传 {nUploadDocs} · 会议 {nMeetingDocs} · 工作区 {nIndexed}
               </div>
@@ -381,7 +380,7 @@ function KnowledgeDocList({
   if (docs.length === 0) {
     return (
       <div className="border border-dashed border-paper-300 rounded-md p-4 text-center text-[12px] text-ink-500">
-        暂无已入库文档。拖文件到输入框，或在设置里添加工作区目录后扫描。
+        还没有收录文档。可将文件拖到输入框，或添加一个文件夹。
       </div>
     );
   }
@@ -401,18 +400,21 @@ function KnowledgeDocList({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-[12px] font-medium text-ink-800 truncate">
-                {doc.title || doc.doc_id}
+                {doc.title?.trim() || "未命名文档"}
               </span>
               <Tag color={sourceColor(doc.source)} className="!m-0 !text-[10px]">
                 {sourceLabel(doc.source)}
               </Tag>
-              <Tag className="!m-0 !text-[10px]">{doc.kind}</Tag>
+              <Tag className="!m-0 !text-[10px]">{documentKindLabel(doc.kind)}</Tag>
             </div>
-            <div className="mt-0.5 text-[11px] text-ink-500 truncate" title={doc.source_path ?? doc.doc_id}>
-              {doc.source_path ?? doc.doc_id}
+            <div
+              className="mt-0.5 text-[11px] text-ink-500 truncate"
+              title={doc.source_path ?? sourceLabel(doc.source)}
+            >
+              {doc.source_path ?? sourceLabel(doc.source)}
             </div>
             <div className="mt-0.5 text-[10px] text-ink-400">
-              {doc.n_chunks} chunks · {doc.doc_id}
+              已提取 {doc.n_chunks} 个内容片段
             </div>
           </div>
           <Button
@@ -422,7 +424,7 @@ function KnowledgeDocList({
             icon={<Trash2 className="w-3 h-3" />}
             loading={deletingDocId === doc.doc_id}
             onClick={() => onDelete(doc)}
-            aria-label={`删除知识库文档 ${doc.title || doc.doc_id}`}
+            aria-label={`删除知识库文档 ${doc.title?.trim() || "未命名文档"}`}
             data-testid={`knowledge-doc-delete-${doc.doc_id}`}
           />
         </div>
@@ -442,8 +444,29 @@ function sourceLabel(source: string): string {
     case "ambient":
       return "环境记忆";
     default:
-      return source || "未知";
+      return "其他";
   }
+}
+
+function documentKindLabel(kind: string): string {
+  const normalized = kind.toLocaleLowerCase();
+  const labels: Record<string, string> = {
+    meeting: "会议记录",
+    markdown: "Markdown",
+    md: "Markdown",
+    txt: "文本",
+    text: "文本",
+    doc: "Word",
+    docx: "Word",
+    xls: "Excel",
+    xlsx: "Excel",
+    ppt: "PPT",
+    pptx: "PPT",
+    pdf: "PDF",
+    html: "网页",
+    csv: "CSV",
+  };
+  return labels[normalized] ?? "文档";
 }
 
 function sourceColor(source: string): string {

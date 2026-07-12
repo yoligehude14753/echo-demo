@@ -1,0 +1,43 @@
+event_id: "E-20260712T0329-001"
+event_type: "add"
+timestamp: "2026-07-12T03:29:34+08:00"
+author: "agent/codex-android-tv-identity"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-018"
+      claim: "EchoDesk Android/TV identity now uses origin-bound Keystore storage, fail-closed 401/409 handling, crash-safe rotation, and explicit same-owner reconnect."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-12T03:29:34+08:00"
+      observed_by: "agent/codex-android-tv-identity"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "desktop/android/app/src/main/java/com/echodesk/app/AndroidIdentityVault.java"
+        - "desktop/android/app/src/main/java/com/echodesk/app/EchoIdentityPlugin.java"
+        - "desktop/android/app/src/androidTest/java/com/echodesk/app/AndroidIdentityVaultTest.java"
+        - "desktop/src/identityCredentialStore.ts"
+        - "desktop/src/session.ts"
+        - "desktop/src/components/IdentityStatus.tsx"
+        - "desktop/tests/e2e/identity-session-p0.spec.ts"
+        - "runtime:Android com.echodesk.app instrumentation => 6 passed"
+        - "runtime:TV com.echodesk.tv instrumentation => 6 passed"
+        - "runtime:desktop Playwright => 83 passed"
+      evidence: "Android and TV debug/test APKs were installed on an API 36 emulator and AndroidJUnitRunner completed 6/6 tests for each applicationId, covering encrypted persistence, origin AAD isolation, lost-marker recovery, and atomic rotation. Desktop typecheck, lint, production build, 18 focused identity Playwright tests, and the full 83-test Playwright suite passed. Static inspection found no localStorage/sessionStorage use in the identity store or native vault."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "android"
+        - "tv"
+        - "identity"
+        - "keystore"
+        - "origin-binding"
+        - "crash-recovery"
+git_commit: null

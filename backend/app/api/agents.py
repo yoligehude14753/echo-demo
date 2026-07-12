@@ -11,20 +11,33 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
+from app.agents.artifact_transfer import (
+    ArtifactContentLengthError,
+    ArtifactSizeLimitError,
+    validated_content_length,
+)
+from app.agents.artifact_transfer import (
+    bounded_artifact_body as _bounded_artifact_body,
+)
+from app.agents.artifact_transfer import (
+    close_artifact_stream as _close_artifact_proxy,
+)
 from app.agents.base import AgentIntent
 from app.agents.service import (
     PROFILE_FULL_ACCESS,
     RUNNER_CLAUDE_CODE,
     AgentRunnerGrant,
     AgentTaskRecord,
+    AgentTaskService,
     get_agent_task_service,
 )
-from app.api.deps import get_event_bus
+from app.api.deps import get_event_bus, require_admin_access
 from app.config import Settings, get_settings
+from app.security.headers import PRIVATE_NO_STORE_HEADERS
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -141,7 +154,7 @@ class GrantCreateResponse(BaseModel):
 def _service(
     settings: Settings = Depends(get_settings),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
-):
+) -> AgentTaskService:
     return get_agent_task_service(settings, event_bus)
 
 
@@ -155,11 +168,15 @@ def _encode_agentos_artifact_path(relpath: str) -> str:
     return "/".join(quote(part, safe="") for part in parts)
 
 
-@router.post("/tasks", response_model=AgentTaskDTO)
+@router.post(
+    "/tasks",
+    response_model=AgentTaskDTO,
+    dependencies=[Depends(require_admin_access)],
+)
 async def create_task(
     body: AgentTaskCreateRequest,
     settings: Settings = Depends(get_settings),
-    service=Depends(_service),
+    service: AgentTaskService = Depends(_service),
 ) -> AgentTaskDTO:
     if not body.text.strip():
         raise HTTPException(400, "text empty")
@@ -182,13 +199,19 @@ async def create_task(
 async def list_tasks(
     device_id: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
-    service=Depends(_service),
+    service: AgentTaskService = Depends(_service),
 ) -> list[AgentTaskDTO]:
-    return [AgentTaskDTO.from_record(r) for r in await service.list_tasks(device_id=device_id, limit=limit)]
+    return [
+        AgentTaskDTO.from_record(r)
+        for r in await service.list_tasks(device_id=device_id, limit=limit)
+    ]
 
 
 @router.get("/tasks/{task_id}", response_model=AgentTaskDTO)
-async def get_task(task_id: str, service=Depends(_service)) -> AgentTaskDTO:
+async def get_task(
+    task_id: str,
+    service: AgentTaskService = Depends(_service),
+) -> AgentTaskDTO:
     rec = await service.get_task(task_id)
     if rec is None:
         raise HTTPException(404, "task not found")
@@ -199,7 +222,7 @@ async def get_task(task_id: str, service=Depends(_service)) -> AgentTaskDTO:
 async def list_task_events(
     task_id: str,
     after_seq: int = Query(0, ge=0),
-    service=Depends(_service),
+    service: AgentTaskService = Depends(_service),
 ) -> AgentTaskEventsDTO:
     events, snapshot, last_seq = await service.list_events(task_id, after_seq=after_seq)
     if last_seq == 0 and not snapshot:
@@ -216,7 +239,8 @@ async def list_task_events(
 async def proxy_task_artifact(
     task_id: str,
     relpath: str,
-    service=Depends(_service),
+    service: AgentTaskService = Depends(_service),
+    settings: Settings = Depends(get_settings),
 ) -> Response:
     rec = await service.get_task(task_id)
     if rec is None or not rec.runner_task_id:
@@ -226,57 +250,78 @@ async def proxy_task_artifact(
     upstream_url = (
         f"{service.backend.base_url}/api/v1/tasks/{runner_task_id}/artifacts/{encoded_relpath}"
     )
+    client = httpx.AsyncClient(timeout=30.0, trust_env=False)
+    upstream: httpx.Response | None = None
     try:
-        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
-            upstream = await client.get(upstream_url)
-            upstream.raise_for_status()
+        request = client.build_request("GET", upstream_url)
+        upstream = await client.send(request, stream=True)
+        upstream.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        await _close_artifact_proxy(upstream, client)
         if exc.response.status_code == 404:
             raise HTTPException(404, "artifact not found") from exc
         raise HTTPException(502, "artifact proxy failed") from exc
     except httpx.HTTPError as exc:
+        await _close_artifact_proxy(upstream, client)
         raise HTTPException(502, "artifact proxy failed") from exc
 
-    headers: dict[str, str] = {}
+    try:
+        content_length = validated_content_length(
+            upstream,
+            max_bytes=settings.agent_artifact_proxy_max_bytes,
+        )
+    except ArtifactContentLengthError as exc:
+        await _close_artifact_proxy(upstream, client)
+        raise HTTPException(502, "artifact proxy returned invalid size") from exc
+    except ArtifactSizeLimitError as exc:
+        await _close_artifact_proxy(upstream, client)
+        raise HTTPException(413, "artifact exceeds proxy size limit") from exc
+
+    headers = dict(PRIVATE_NO_STORE_HEADERS)
     disposition = upstream.headers.get("content-disposition")
     if disposition:
         headers["content-disposition"] = disposition
-    return Response(
-        content=upstream.content,
+    if content_length is not None:
+        headers["content-length"] = str(content_length)
+    return StreamingResponse(
+        _bounded_artifact_body(
+            upstream,
+            client,
+            max_bytes=settings.agent_artifact_proxy_max_bytes,
+            chunk_bytes=settings.upload_read_chunk_bytes,
+        ),
         media_type=upstream.headers.get("content-type", "application/octet-stream"),
         headers=headers,
     )
 
 
-@router.post("/tasks/{task_id}/cancel", response_model=AgentTaskDTO)
-async def cancel_task(task_id: str, service=Depends(_service)) -> AgentTaskDTO:
+@router.post(
+    "/tasks/{task_id}/cancel",
+    response_model=AgentTaskDTO,
+    dependencies=[Depends(require_admin_access)],
+)
+async def cancel_task(
+    task_id: str,
+    service: AgentTaskService = Depends(_service),
+) -> AgentTaskDTO:
     rec = await service.cancel_task(task_id)
     if rec is None:
         raise HTTPException(404, "task not found")
     return AgentTaskDTO.from_record(rec)
 
 
-@router.post("/tasks/{task_id}/retry", response_model=AgentTaskDTO)
-async def retry_task(task_id: str, service=Depends(_service)) -> AgentTaskDTO:
-    rec = await service.get_task(task_id)
-    if rec is None:
+@router.post(
+    "/tasks/{task_id}/retry",
+    response_model=AgentTaskDTO,
+    dependencies=[Depends(require_admin_access)],
+)
+async def retry_task(
+    task_id: str,
+    service: AgentTaskService = Depends(_service),
+) -> AgentTaskDTO:
+    new_rec = await service.retry_task(task_id)
+    if new_rec is None:
         raise HTTPException(404, "task not found")
-    intent = AgentIntent(
-        text=rec.intent_text,
-        device_id=rec.device_id,
-        conversation_id=rec.conversation_id,
-        message_id=rec.message_id,
-        title=rec.title,
-        task_kind=rec.task_kind,
-        context=rec.envelope.get("context") if isinstance(rec.envelope.get("context"), dict) else {},
-        output_contract=(
-            rec.envelope.get("output_contract")
-            if isinstance(rec.envelope.get("output_contract"), dict)
-            else {}
-        ),
-        timeout_s=rec.timeout_s,
-    )
-    new_rec = await service.submit_task(intent)
     return AgentTaskDTO.from_record(new_rec)
 
 
@@ -284,7 +329,7 @@ async def retry_task(task_id: str, service=Depends(_service)) -> AgentTaskDTO:
 async def get_grant(
     device_id: str = Query(...),
     runner: str = Query(RUNNER_CLAUDE_CODE),
-    service=Depends(_service),
+    service: AgentTaskService = Depends(_service),
 ) -> GrantStatusDTO:
     if runner != RUNNER_CLAUDE_CODE:
         return GrantStatusDTO(grant=None)
@@ -292,8 +337,15 @@ async def get_grant(
     return GrantStatusDTO(grant=GrantDTO.from_grant(grant) if grant else None)
 
 
-@router.post("/grants/claude_code", response_model=GrantCreateResponse)
-async def create_grant(body: GrantCreateRequest, service=Depends(_service)) -> GrantCreateResponse:
+@router.post(
+    "/grants/claude_code",
+    response_model=GrantCreateResponse,
+    dependencies=[Depends(require_admin_access)],
+)
+async def create_grant(
+    body: GrantCreateRequest,
+    service: AgentTaskService = Depends(_service),
+) -> GrantCreateResponse:
     if body.permission_profile != PROFILE_FULL_ACCESS:
         raise HTTPException(400, "unsupported permission_profile")
     grant = await service.create_grant(
@@ -314,6 +366,9 @@ async def create_grant(body: GrantCreateRequest, service=Depends(_service)) -> G
     return GrantCreateResponse(grant=GrantDTO.from_grant(grant), resumed_task=resumed_task)
 
 
-@router.delete("/grants/{grant_id}")
-async def revoke_grant(grant_id: str, service=Depends(_service)) -> dict[str, bool]:
+@router.delete("/grants/{grant_id}", dependencies=[Depends(require_admin_access)])
+async def revoke_grant(
+    grant_id: str,
+    service: AgentTaskService = Depends(_service),
+) -> dict[str, bool]:
     return {"ok": await service.revoke_grant(grant_id)}

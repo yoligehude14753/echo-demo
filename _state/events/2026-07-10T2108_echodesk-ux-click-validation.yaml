@@ -1,0 +1,37 @@
+event_id: "E-20260710T2108-010"
+event_type: "add"
+timestamp: "2026-07-10T21:08:00+08:00"
+author: "agent/codex-ux-validation"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-014"
+      claim: "Computer-driven EchoDesk click validation completed: 25 headed scenarios passed; tests exposed workspace-focus instability, onboarding replay, and 960px inspector-close defects."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-10T21:08:00+08:00"
+      observed_by: "agent/codex-ux-validation"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "docs/0.3/UX_CLICK_VALIDATION_2026-07-10.md"
+        - "desktop/tests/e2e/workspace-knowledge.spec.ts"
+        - "desktop/src/components/OnboardingModal.tsx"
+        - "desktop/src/components/SettingsPanel.tsx"
+        - "desktop/src/App.tsx"
+        - "desktop/src/index.css"
+      evidence: "Visible browser clicks covered desktop, 960px, and 411px layouts. Headed E2E finished 46/48 with two focus failures, standard E2E rerun finished 47/48 with the same intermittent focus failure, and headed scenarios finished 25/25. Manual DOM checks confirmed onboarding replay remained on step 3 and the 960px inspector toggle remained expanded after close clicks."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3"
+        - "ux"
+        - "click-validation"
+        - "desktop"
+        - "responsive"
+git_commit: null

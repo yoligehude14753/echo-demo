@@ -221,9 +221,7 @@ async def _macos_say_fallback(text: str) -> SynthesisResult:
         )
         _, convert_err = await convert_proc.communicate()
         if convert_proc.returncode != 0:
-            raise TTSError(
-                convert_err.decode("utf-8", errors="ignore") or "afconvert failed"
-            )
+            raise TTSError(convert_err.decode("utf-8", errors="ignore") or "afconvert failed")
         audio = wav_path.read_bytes()
 
     pcm = _decode_to_pcm16k(audio, "audio/wav")

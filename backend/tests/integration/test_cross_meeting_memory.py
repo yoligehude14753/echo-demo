@@ -36,6 +36,7 @@ def _yunwu_alive() -> bool:
 
 pytestmark = [
     pytest.mark.integration,
+    pytest.mark.live,
     pytest.mark.skipif(not _yunwu_alive(), reason="Yunwu LLM 不可达"),
 ]
 

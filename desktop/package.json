@@ -1,14 +1,18 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "EchoDesk public demo desktop client",
   "author": "EchoDesk <support@yoliyoli.uk>",
   "homepage": "https://github.com/yoligehude14753/echo-demo",
   "private": false,
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
+    "dev:e2e:https": "node scripts/start-e2e-vite.cjs 5174",
     "build": "tsc -b && vite build",
     "preview": "vite preview --port 4173",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
@@ -17,13 +21,21 @@
     "electron:brand": "node electron/scripts/brand-dev-electron.cjs",
     "electron:dev": "npm run electron:brand && concurrently -k -n vite,electron -c blue,magenta \"vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_DEV=1 electron electron/main.cjs\"",
     "electron:start": "npm run electron:brand && cross-env ELECTRON_DEV=1 electron electron/main.cjs",
+    "test:electron": "node --test electron/tests/*.test.cjs",
     "postinstall": "node electron/scripts/brand-dev-electron.cjs || true",
-    "app:build": "npm run build && electron-builder --mac --dir",
-    "app:dist": "npm run build && electron-builder --mac",
-    "app:dist:mac": "npm run build && electron-builder --mac",
-    "app:dist:win": "npm run build && electron-builder --win nsis zip --x64",
-    "app:dist:linux": "npm run build && electron-builder --linux AppImage deb --x64",
-    "app:dist:android": "node scripts/build-android-debug.cjs",
+    "backend:build:mac": "node scripts/build-backend-mac.cjs",
+    "backend:build:linux": "node scripts/build-backend-linux.cjs",
+    "backend:build:win": "node scripts/build-backend-win.cjs",
+    "app:build:mac:test": "npm run backend:build:mac && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 --dir --publish never",
+    "app:dist": "npm run app:dist:mac",
+    "app:dist:mac": "node scripts/desktop-release-signing.cjs mac",
+    "app:dist:mac:adhoc": "npm run app:dist:mac:adhoc-test",
+    "app:dist:mac:adhoc-test": "npm run backend:build:mac && npm run build && cross-env ECHODESK_ADHOC_SIGN=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --arm64 --publish never",
+    "app:dist:win": "node scripts/desktop-release-signing.cjs windows",
+    "app:dist:win:unsigned-test": "npm run backend:build:win && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis zip --x64 --publish never",
+    "app:dist:linux": "npm run backend:build:linux && npm run build && electron-builder --linux AppImage deb --x64",
+    "app:build:android:development": "node scripts/build-android-debug.cjs",
+    "app:dist:android": "node scripts/build-android-release.cjs",
     "app:package:tv": "node scripts/package-tv-installer.cjs",
     "tv:smoke": "node scripts/tv-adb-smoke.cjs",
     "android:sync": "npm run build && cap sync android",
@@ -32,7 +44,10 @@
     "e2e:ui": "playwright test --ui",
     "e2e:real": "playwright test --config=playwright.real.config.ts",
     "demo:record": "playwright test --config=playwright.demo.config.ts",
-    "scenarios": "playwright test --config=playwright.scenarios.config.ts"
+    "scenarios": "playwright test --config=playwright.scenarios.config.ts",
+    "smoke:mac:dmg": "node scripts/macos-mounted-dmg-smoke.cjs",
+    "smoke:linux": "node scripts/linux-packaged-smoke.cjs",
+    "smoke:android:rotation": "node scripts/android-signing-rotation-smoke.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",
@@ -40,6 +55,7 @@
     "@types/qrcode": "^1.5.6",
     "antd": "^5.19.4",
     "electron-updater": "^6.8.9",
+    "exceljs": "4.4.0",
     "lucide-react": "^0.395.0",
     "mammoth": "^1.12.0",
     "qrcode": "^1.5.4",
@@ -47,7 +63,6 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "xlsx": "^0.18.5",
     "zustand": "^4.5.4"
   },
   "devDependencies": {
@@ -56,15 +71,15 @@
     "@types/node": "^20.14.10",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@typescript-eslint/eslint-plugin": "^7.16.0",
-    "@typescript-eslint/parser": "^7.16.0",
-    "@vitejs/plugin-legacy": "^5.4.3",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@typescript-eslint/eslint-plugin": "8.63.0",
+    "@typescript-eslint/parser": "8.63.0",
+    "@vitejs/plugin-legacy": "^7.2.1",
+    "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.19",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
-    "electron": "^31.3.0",
-    "electron-builder": "^24.13.3",
+    "electron": "43.1.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.2",
     "eslint-plugin-react-refresh": "^0.4.7",
@@ -72,8 +87,15 @@
     "tailwindcss": "^3.4.4",
     "terser": "^5.48.0",
     "typescript": "^5.5.3",
-    "vite": "^5.3.3",
+    "vite": "^7.3.1",
     "wait-on": "^7.2.0"
+  },
+  "overrides": {
+    "form-data": "4.0.6",
+    "joi": "17.13.4",
+    "js-yaml": "4.3.0",
+    "tmp": "0.2.7",
+    "uuid": "11.1.1"
   },
   "build": {
     "appId": "com.echodesk.app",
@@ -92,12 +114,21 @@
     "files": [
       "dist/**",
       "electron/**",
+      "!electron/tests/**",
+      "backend.config.json",
       "package.json"
     ],
+    "beforePack": "scripts/verify-bundled-backend.cjs",
     "afterPack": "scripts/after-pack-mac.cjs",
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "electron/icons/echodesk.icns",
+      "extraResources": [
+        {
+          "from": "../backend/dist/echodesk-backend",
+          "to": "backend/echodesk-backend"
+        }
+      ],
       "target": [
         "dmg",
         "zip"
@@ -105,6 +136,12 @@
     },
     "win": {
       "artifactName": "EchoDesk-${version}-win-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "../backend/dist/echodesk-backend.exe",
+          "to": "backend/echodesk-backend.exe"
+        }
+      ],
       "target": [
         {
           "target": "nsis",
@@ -124,6 +161,14 @@
       "category": "Utility",
       "icon": "electron/icons/echodesk.png",
       "maintainer": "EchoDesk <support@yoliyoli.uk>",
+      "executableName": "echodesk",
+      "artifactName": "EchoDesk-${version}-linux-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "../backend/dist/echodesk-backend",
+          "to": "backend/echodesk-backend"
+        }
+      ],
       "target": [
         {
           "target": "AppImage",

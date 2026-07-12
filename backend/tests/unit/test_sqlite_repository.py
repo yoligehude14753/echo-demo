@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -95,20 +96,53 @@ async def test_update_meeting_state_progression(repo: SQLiteRepository) -> None:
 @pytest.mark.asyncio
 async def test_list_meetings_filters_state(repo: SQLiteRepository) -> None:
     base = datetime.now(UTC)
-    await repo.create_meeting("a", started_at=base)
+    await repo.create_meeting("a", started_at=base - timedelta(minutes=2))
+    await repo.update_meeting_state("a", state="finalized", finalized_at=base)
     await repo.create_meeting("b", started_at=base - timedelta(minutes=1))
-    await repo.create_meeting("c", started_at=base - timedelta(minutes=2))
     await repo.update_meeting_state("b", state="finalized", finalized_at=base)
+    await repo.create_meeting("c", started_at=base)
 
     in_meeting = await repo.list_meetings(state="in_meeting")
-    assert {m.id for m in in_meeting} == {"a", "c"}
+    assert [m.id for m in in_meeting] == ["c"]
     final = await repo.list_meetings(state="finalized")
-    assert [m.id for m in final] == ["b"]
+    assert [m.id for m in final] == ["b", "a"]
 
     all_meetings = await repo.list_meetings()
     assert {m.id for m in all_meetings} == {"a", "b", "c"}
     # ORDER BY started_at DESC
-    assert all_meetings[0].id == "a"
+    assert all_meetings[0].id == "c"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_concurrent_repositories_return_one_authoritative_active_meeting(
+    tmp_path: Path,
+) -> None:
+    """Two connections racing from idle must converge on the same DB row."""
+
+    db_path = tmp_path / "concurrent-start.db"
+    repo_a = SQLiteRepository(db_path)
+    repo_b = SQLiteRepository(db_path)
+    await repo_a.init()
+    await repo_b.init()
+    release = asyncio.Event()
+
+    async def create(repo: SQLiteRepository, meeting_id: str):  # type: ignore[no-untyped-def]
+        await release.wait()
+        return await repo.create_meeting(meeting_id, started_at=datetime.now(UTC))
+
+    try:
+        task_a = asyncio.create_task(create(repo_a, "meeting-a"))
+        task_b = asyncio.create_task(create(repo_b, "meeting-b"))
+        release.set()
+        active_a, active_b = await asyncio.gather(task_a, task_b)
+
+        assert active_a.id == active_b.id
+        assert active_a.id in {"meeting-a", "meeting-b"}
+        persisted = await repo_a.list_meetings(state="in_meeting", limit=10)
+        assert [meeting.id for meeting in persisted] == [active_a.id]
+    finally:
+        await asyncio.gather(repo_a.aclose(), repo_b.aclose())
 
 
 @pytest.mark.unit

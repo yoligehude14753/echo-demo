@@ -3,6 +3,7 @@ import { Tooltip, message } from "antd";
 import { Mic, Square } from "lucide-react";
 import {
   endMeeting,
+  finalizeMeeting,
   getCurrentMeeting,
   manualEndMeeting,
   manualStartMeeting,
@@ -69,6 +70,10 @@ export default function MeetingStatusBar(): JSX.Element {
   );
   const markMeetingActive = useStore((s) => s.markMeetingActive);
   const markMeetingEnded = useStore((s) => s.markMeetingEnded);
+  const upsertMeeting = useStore((s) => s.upsertMeeting);
+  const currentMeeting = useStore((s) =>
+    s.currentMeetingId ? s.meetings[s.currentMeetingId] : undefined,
+  );
   const hideSharedPublicHistory = shouldHideSharedPublicHistory();
 
   const refresh = useCallback(async () => {
@@ -175,16 +180,42 @@ export default function MeetingStatusBar(): JSX.Element {
         if (hideSharedPublicHistory) {
           const meetingId = snap.meeting_id ?? currentMeetingId;
           if (meetingId) {
-            await endMeeting(meetingId).catch(() => undefined);
+            await endMeeting(meetingId);
             markMeetingEnded(meetingId);
+            upsertMeeting(meetingId, {
+              state: "ended",
+              minutes_status: "generating",
+              minutes_error: null,
+            });
+            setSnap({
+              mode: "idle",
+              meeting_id: null,
+              started_at: null,
+              started_by: null,
+            });
+            try {
+              const minutes = await finalizeMeeting(
+                meetingId,
+                currentMeeting?.title || "本机会议",
+              );
+              upsertMeeting(meetingId, {
+                state: "ended",
+                title: minutes.title,
+                minutes,
+                minutes_status: "ok",
+                minutes_error: null,
+              });
+              message.success("已结束本机会议并生成纪要");
+            } catch (e) {
+              console.error("[meeting-status] public finalize failed", e);
+              upsertMeeting(meetingId, {
+                state: "ended",
+                minutes_status: "generation_failed",
+                minutes_error: "纪要生成失败，请重试",
+              });
+              message.error("会议已结束，但纪要生成失败，请在纪要面板重试");
+            }
           }
-          setSnap({
-            mode: "idle",
-            meeting_id: null,
-            started_at: null,
-            started_by: null,
-          });
-          message.success("已结束本机会议");
           return;
         }
         const s = await manualEndMeeting();
@@ -195,18 +226,21 @@ export default function MeetingStatusBar(): JSX.Element {
         message.success("已结束会议，正在生成纪要…");
       }
     } catch (e) {
-      message.error(`操作失败：${e instanceof Error ? e.message : String(e)}`);
+      console.error("[meeting-status] meeting action failed", e);
+      message.error("会议状态更新失败，请重试");
     } finally {
       setBusy(false);
     }
   }, [
     busy,
+    currentMeeting?.title,
     currentMeetingId,
     hideSharedPublicHistory,
     markMeetingActive,
     markMeetingEnded,
     snap.meeting_id,
     snap.mode,
+    upsertMeeting,
   ]);
 
   const isMeeting = snap.mode === "in_meeting";
@@ -247,7 +281,7 @@ export default function MeetingStatusBar(): JSX.Element {
           <>
             <Square className="w-3 h-3 fill-current" />
             <span>会议中</span>
-            <span className="font-mono text-[11px] text-rose-600">
+            <span className="tabular-nums text-[11px] text-rose-600">
               {fmtElapsed(snap.started_at)}
             </span>
           </>
@@ -259,7 +293,8 @@ export default function MeetingStatusBar(): JSX.Element {
         ) : (
           <>
             <Mic className="w-3 h-3" />
-            <span>待机</span>
+            <span>开始会议</span>
+            <span className="sr-only">待机</span>
           </>
         )}
       </button>

@@ -31,6 +31,13 @@ _FORBIDDEN_IMPORTS = (
     "os.execvp",
 )
 
+# PyInstaller bundles do not contain a standalone Python interpreter.  In a
+# frozen process ``sys.executable`` points back to the EchoDesk backend binary,
+# so generated scripts must be routed through the hidden worker implemented by
+# ``backend/packaging/entrypoint.py`` instead of being passed to the ordinary
+# backend CLI as if the executable were ``python``.
+PACKAGED_PYTHON_WORKER_FLAG = "--echodesk-python-worker"
+
 
 def _is_safe_python(code: str) -> tuple[bool, str]:
     for tok in _FORBIDDEN_IMPORTS:
@@ -45,6 +52,19 @@ class ExecResult:
     output_path: Path | None
     stderr: str
     elapsed_s: float
+
+
+def _python_process_argv(script_path: Path) -> list[str]:
+    """Return the interpreter/worker argv for one generated Python script."""
+
+    resolved_script = script_path.resolve(strict=True)
+    if getattr(sys, "frozen", False):
+        return [
+            sys.executable,
+            PACKAGED_PYTHON_WORKER_FLAG,
+            str(resolved_script),
+        ]
+    return [sys.executable, str(resolved_script)]
 
 
 async def exec_python_to_artifact(
@@ -88,7 +108,7 @@ async def exec_python_to_artifact(
 
     def _run() -> tuple[int, str]:
         proc = subprocess.run(
-            [sys.executable, str(script_path)],
+            _python_process_argv(script_path),
             cwd=str(build_dir),
             capture_output=True,
             text=True,

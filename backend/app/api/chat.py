@@ -8,11 +8,12 @@ POST /chat
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.adapters.llm import LLMError
 from app.api.deps import aclose_llm_singleton, get_llm_singleton
@@ -21,13 +22,28 @@ from app.ports.llm import LLMPort
 from app.use_cases.ask_question import answer_question_once
 
 router = APIRouter(tags=["chat"])
+logger = logging.getLogger("echodesk.chat")
+MAX_CHAT_QUESTION_CHARS = 32_000
+MAX_MODEL_NAME_CHARS = 256
 
 __all__ = ["aclose_llm_singleton", "router"]
 
 
 class ChatRequest(BaseModel):
-    question: str
-    model: str | None = None
+    question: str = Field(min_length=1, max_length=MAX_CHAT_QUESTION_CHARS)
+    model: str | None = Field(default=None, max_length=MAX_MODEL_NAME_CHARS)
+
+
+def _generation_error_frame() -> bytes:
+    payload = json.dumps(
+        {
+            "type": "error",
+            "code": "answer_generation_failed",
+            "error": "暂时无法回复，请稍后重试",
+        },
+        ensure_ascii=False,
+    )
+    return f"event: error\ndata: {payload}\n\n".encode()
 
 
 def _resolve_model_alias(alias: str | None, settings: Settings) -> str | None:
@@ -48,9 +64,8 @@ async def _sse(stream: AsyncIterator[str]) -> AsyncIterator[bytes]:
             yield f"data: {payload}\n\n".encode()
         yield b"data: [DONE]\n\n"
     except LLMError as e:
-        err = json.dumps({"error": str(e)}, ensure_ascii=False)
-        yield f"data: {err}\n\n".encode()
-        yield b"data: [DONE]\n\n"
+        logger.warning("chat stream generation failed", exc_info=e)
+        yield _generation_error_frame()
 
 
 async def _single_answer_sse(
@@ -66,9 +81,8 @@ async def _single_answer_sse(
             yield f"data: {payload}\n\n".encode()
         yield b"data: [DONE]\n\n"
     except LLMError as e:
-        err = json.dumps({"error": str(e)}, ensure_ascii=False)
-        yield f"data: {err}\n\n".encode()
-        yield b"data: [DONE]\n\n"
+        logger.warning("chat answer generation failed", exc_info=e)
+        yield _generation_error_frame()
 
 
 @router.post("/chat")

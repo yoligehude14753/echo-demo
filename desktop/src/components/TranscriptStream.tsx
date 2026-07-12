@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { UserRound } from "lucide-react";
 import { listRecentAmbient, type AmbientSegment } from "@/api";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
@@ -18,23 +19,17 @@ function fmtClockShort(iso: string): string {
 }
 
 /**
- * 转写流主面板（v2 气泡布局，参考 Marvis 简化）。
+ * 转写流主面板。通过 view 明确隔离逐字稿与 AI 对话，避免两种信息混在同一流中。
  *
  * 数据源切换（P4 M_meeting_history，2026-05-28）：
- * - currentMeetingId === null（"待机时段"）→ 显示全局 ambient feed（3s 轮询）
+ * - currentMeetingId === null（"实时记录"）→ 显示全局 ambient feed（3s 轮询）
  * - currentMeetingId 已选 + 会议 ended/finalized → 显示 meeting.segments（DB 历史）
  * - currentMeetingId 已选 + 会议 in_meeting → 显示 ambient + 时间窗高亮（兼容当前
  *   ambient pipeline：会议中 chunk 既写 ambient_segments 也走 meeting overlay；
  *   两边内容一致但 ambient 更新更快，所以现场仍用 ambient）
  *
- * 视觉规则（来自用户 2026-05-27 反馈）：
- * - 所有"非用户手动输入"的文本（ambient 转写）→ 左侧气泡 + 头像在左
- * - 用户手动输入（未来：CommandBar 标注 self 的回话）→ 右侧气泡 + 头像在右
- *   当前 ambient 没有 is_self 字段 → 全部走左侧 lane，预留右侧给未来
- * - 头像 = 32×32 圆形彩色 + 居中数字（数字就是 remap 后的"说话人 N"序号）
- * - 时间默认隐藏，hover 整条 → 显示 HH:MM（精度到分够用）
- * - 同一说话人连续多条：合并头像（只在第一条显示），间距更紧（4px）；
- *   切换说话人时拉开间距（16px），更易扫读
+ * 新增的 echodesk-stream* 语义 class 让逐字稿可采用扁平记录样式，同时保留
+ * 现有 testid 与基础 utility class，便于分阶段迁移视觉层。
  */
 
 interface DisplaySegment {
@@ -42,6 +37,12 @@ interface DisplaySegment {
   captured_at: string;
   speaker_label: string | null;
   role?: "speaker" | "user" | "assistant";
+}
+
+export type TranscriptView = "transcript" | "assistant";
+
+interface TranscriptStreamProps {
+  view?: TranscriptView;
 }
 
 function ambientToDisplay(s: AmbientSegment): DisplaySegment {
@@ -130,7 +131,9 @@ function dedupeDisplaySegments(segments: DisplaySegment[]): DisplaySegment[] {
   return out;
 }
 
-export default function TranscriptStream(): JSX.Element {
+export default function TranscriptStream({
+  view = "transcript",
+}: TranscriptStreamProps): JSX.Element {
   const [ambient, setAmbient] = useState<AmbientSegment[]>([]);
   const events = useStore((s) => s.events);
   const localAmbient = useStore((s) => s.ambientSegments);
@@ -197,15 +200,14 @@ export default function TranscriptStream(): JSX.Element {
     return out.slice(-20);
   }, [events]);
 
-  const segs: DisplaySegment[] = useMemo(
-    () =>
-      dedupeDisplaySegments(
-        [...baseSegs, ...dialogSegs].sort((a, b) =>
-          a.captured_at.localeCompare(b.captured_at),
-        ),
+  const segs: DisplaySegment[] = useMemo(() => {
+    const source = view === "assistant" ? dialogSegs : baseSegs;
+    return dedupeDisplaySegments(
+      [...source].sort((a, b) =>
+        a.captured_at.localeCompare(b.captured_at),
       ),
-    [baseSegs, dialogSegs],
-  );
+    );
+  }, [baseSegs, dialogSegs, view]);
 
   const speakerDisplayMap = useMemo(
     () => buildSpeakerDisplayMap(segs),
@@ -213,16 +215,19 @@ export default function TranscriptStream(): JSX.Element {
   );
 
   const winStart =
-    !showMeetingHistory && meeting?.started_at
+    view === "transcript" && !showMeetingHistory && meeting?.started_at
       ? new Date(meeting.started_at).getTime()
       : null;
   const winEnd =
-    !showMeetingHistory && meeting?.ended_at
+    view === "transcript" && !showMeetingHistory && meeting?.ended_at
       ? new Date(meeting.ended_at).getTime()
       : null;
 
   // 仅当走 ambient 分支时才轮询；查看历史会议时省网络
   useEffect(() => {
+    if (view === "assistant") {
+      return undefined;
+    }
     if (localOnlyAmbient) {
       return undefined;
     }
@@ -244,9 +249,10 @@ export default function TranscriptStream(): JSX.Element {
       alive = false;
       clearInterval(t);
     };
-  }, [showMeetingHistory, localOnlyAmbient]);
+  }, [showMeetingHistory, localOnlyAmbient, view]);
 
   useEffect(() => {
+    if (view === "assistant") return;
     if (localOnlyAmbient) return;
     if (showMeetingHistory) return;
     if (!events.length) return;
@@ -260,7 +266,7 @@ export default function TranscriptStream(): JSX.Element {
         .then((r) => setAmbient(r))
         .catch(() => undefined);
     }
-  }, [events, showMeetingHistory, localOnlyAmbient]);
+  }, [events, showMeetingHistory, localOnlyAmbient, view]);
 
   // 提取布尔到变量：eslint react-hooks/exhaustive-deps 不支持复合表达式作为 dep
   const hasNoSegments = segs.length === 0;
@@ -283,24 +289,34 @@ export default function TranscriptStream(): JSX.Element {
   }, [segs.length]);
 
   if (segs.length === 0) {
+    if (view === "assistant") {
+      return (
+        <div className="echodesk-stream-empty echodesk-stream-empty--assistant flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
+          <div>还没有 AI 对话</div>
+          <div className="text-[10px] text-ink-300">
+            在下方输入问题，回答会显示在这里
+          </div>
+        </div>
+      );
+    }
     if (showMeetingHistory) {
       // 历史会议但 segments 为空：理论上不会走到（hook 触发了 fetch 才标 loaded）
       return (
         <div className="echodesk-transcript-empty flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
           <div>该会议未保存逐字稿</div>
           <div className="text-[10px] text-ink-300">
-            可能 STT 服务在该会议期间不可用
+            会议期间可能没有检测到可识别的语音
           </div>
         </div>
       );
     }
     return (
       <div className="echodesk-transcript-empty flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
-        <div>等待环境音转写…</div>
+        <div>准备接收语音</div>
         <div className="text-[10px] text-ink-300">
           {localOnlyAmbient
-            ? "公共演示模式只显示本机本次采集，不读取共享历史"
-            : "开口说话即可触发；环境静音/底噪会被自动过滤"}
+            ? "当前只显示这台设备的本次记录，不加载其他设备的历史"
+            : "开口后，转写内容会实时显示在这里；静音和底噪会自动过滤"}
         </div>
       </div>
     );
@@ -309,17 +325,19 @@ export default function TranscriptStream(): JSX.Element {
   return (
     <div
       ref={scrollerRef}
-      className="flex-1 min-h-0 overflow-y-auto px-6 py-4"
+      className={`echodesk-stream echodesk-stream--${view} flex-1 min-h-0 overflow-y-auto px-6 py-4`}
       data-testid="transcript-scroller"
       data-mode={
-        showMeetingHistory
+        view === "assistant"
+          ? "assistant"
+          : showMeetingHistory
           ? meeting?.state === "ended"
             ? "meeting-history"
             : "meeting-live-local"
           : "ambient"
       }
     >
-      <div className="max-w-3xl mx-auto">
+      <div className="echodesk-stream-list max-w-3xl mx-auto">
         {segs.map((s, idx) => {
           const displayIdx = s.speaker_label
             ? (speakerDisplayMap.get(s.speaker_label) ?? 0)
@@ -344,15 +362,15 @@ export default function TranscriptStream(): JSX.Element {
           const containerSpacing = sameSpeakerAsPrev ? "mt-1" : "mt-4";
           const displayLabel =
             isAssistant
-                ? "Echo"
-                : displayIdx > 0
-                  ? `说话人 ${displayIdx}`
-                  : "未识别";
+              ? "Echo"
+              : displayIdx > 0
+                ? `说话人 ${displayIdx}`
+                : "未识别";
 
           // 头像：32px 圆形，背景柔色 + 同色边框，居中数字
           const avatar = (
             <div
-              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none"
+              className="echodesk-stream-avatar shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none"
               style={{
                 color: c.fg,
                 background: c.bg,
@@ -362,12 +380,20 @@ export default function TranscriptStream(): JSX.Element {
                 isAssistant
                   ? displayLabel
                   : s.speaker_label
-                  ? `${displayLabel}（全局编号 ${s.speaker_label}）`
-                  : "未识别说话人"
+                    ? displayLabel
+                    : "未识别说话人"
               }
               data-testid="speaker-avatar"
             >
-              {isSelf ? "用户" : isAssistant ? "E" : displayIdx > 0 ? displayIdx : "?"}
+              {isSelf ? (
+                "用户"
+              ) : isAssistant ? (
+                "E"
+              ) : displayIdx > 0 ? (
+                displayIdx
+              ) : (
+                <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
             </div>
           );
           const avatarSpacer = (
@@ -377,7 +403,7 @@ export default function TranscriptStream(): JSX.Element {
           return (
             <div
               key={`${s.captured_at}-${idx}`}
-              className={`group flex gap-2 items-end ${containerSpacing} ${
+              className={`echodesk-stream-row echodesk-stream-row--${view} group flex gap-2 items-end ${containerSpacing} ${
                 isSelf ? "flex-row-reverse" : "flex-row"
               }`}
               data-testid="transcript-row"
@@ -390,7 +416,7 @@ export default function TranscriptStream(): JSX.Element {
               >
                 {!isSelf && !sameSpeakerAsPrev && (
                   <div
-                    className={`text-[11px] mb-0.5 px-1 ${
+                    className={`echodesk-stream-speaker text-[11px] mb-0.5 px-1 ${
                       isSelf ? "text-right" : "text-left"
                     }`}
                     style={{ color: c.fg }}
@@ -400,7 +426,7 @@ export default function TranscriptStream(): JSX.Element {
                   </div>
                 )}
                 <div
-                  className={`relative text-[14px] leading-6 px-3.5 py-2 rounded-2xl shadow-sm border break-words ${
+                  className={`echodesk-stream-message echodesk-stream-message--${view} relative text-[14px] leading-6 px-3.5 py-2 rounded-2xl shadow-sm border break-words ${
                     inWindow
                       ? "border-amber-300/70 ring-1 ring-amber-200/60"
                       : "border-paper-300"
@@ -476,16 +502,15 @@ export default function TranscriptStream(): JSX.Element {
                   ) : (
                     s.text
                   )}
-                  {/* hover 时显示时间（仅 HH:MM） */}
-                  <span
-                    className={`absolute top-1/2 -translate-y-1/2 text-[10px] text-ink-400 font-mono opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap select-none ${
-                      isSelf ? "right-full mr-2" : "left-full ml-2"
-                    }`}
-                    data-testid="transcript-time"
-                  >
-                    {fmtClockShort(s.captured_at)}
-                  </span>
                 </div>
+                <span
+                  className={`echodesk-stream-time mt-1 px-1 text-[10px] text-ink-400 tabular-nums whitespace-nowrap select-none ${
+                    isSelf ? "self-end text-right" : "self-start text-left"
+                  }`}
+                  data-testid="transcript-time"
+                >
+                  {fmtClockShort(s.captured_at)}
+                </span>
               </div>
             </div>
           );

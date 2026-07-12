@@ -4,10 +4,16 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("echo", {
   isElectron: true,
   isPublicDemo: ipcRenderer.sendSync("echo:is-public-demo") === true,
+  backendHost: ipcRenderer.sendSync("echo:backend-host-sync"),
   getBackendHost: () => ipcRenderer.invoke("echo:backend-host"),
   getShareBackendHost: () => ipcRenderer.invoke("echo:share-backend-host"),
   loadLocalLegacyHistory: () =>
     ipcRenderer.invoke("echo:load-local-legacy-history"),
+  ensurePublicSession: () => ipcRenderer.invoke("credential:ensure-session"),
+  renewPublicSession: () => ipcRenderer.invoke("credential:renew-session"),
+  rotatePublicCredential: (sessionToken) =>
+    ipcRenderer.invoke("credential:rotate", sessionToken),
+  clearPublicCredential: () => ipcRenderer.invoke("credential:clear-public"),
 
   // BackendSupervisor 状态推送（P1.5）
   // payload = {state, ...} 详见 main.cjs emitStatus

@@ -1,275 +1,260 @@
 # EchoDesk 0.3 数据模型与契约
 
-日期：2026-07-09  
-状态：开发前设计  
+版本：0.3.1 | 状态：实现快照 | 更新时间：2026-07-12
 
-## 1. 设计原则
+迁移范围：`001`–`037`
 
-1. 后端 SQLite 是 workflow 和 artifact 的事实源。
-2. 前端 store 只做视图缓存。
-3. WebSocket 只广播后端已确认事件。
-4. AgentOS raw event 不直接暴露给普通 UI。
-5. 任何可恢复长流程必须能通过 DB 重建最新状态。
+## 1. 数据原则
 
-## 2. 数据表草案
+1. SQLite 是 domain、identity、Workflow 和 RAG manifest 的持久事实源。
+2. public 资源使用 `(tenant_id, owner_id, logical_id)` 复合边界；客户端不能自行构造授权 scope。
+3. UI store、WebSocket replay buffer 和 BM25 JSON 文件都是可重建投影/cache。
+4. domain write、Workflow run/event 和 outbox 必须同事务提交。
+5. session token、device credential 等明文只在必要响应/客户端安全存储中存在，服务端持久化 hash 或受控记录。
+6. migration 文件内容由 checksum 保护；已应用 migration 发生漂移时 fail closed。
 
-### 2.1 workflow_runs
+## 2. Scope 与复合键
 
-```sql
-CREATE TABLE workflow_runs (
-    run_id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    state TEXT NOT NULL,
-    origin TEXT NOT NULL,
-    title TEXT NOT NULL,
-    meeting_id TEXT,
-    todo_id TEXT,
-    conversation_id TEXT,
-    message_id TEXT,
-    runner TEXT,
-    upstream_task_id TEXT,
-    input_json TEXT NOT NULL DEFAULT '{}',
-    output_json TEXT NOT NULL DEFAULT '{}',
-    error TEXT,
-    last_seq INTEGER NOT NULL DEFAULT 0,
-    timeout_s REAL NOT NULL DEFAULT 1800,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    finished_at TEXT
-);
+服务端 Principal：
+
+```text
+tenant_id + owner_id(user_id) + device_id + session_id + mode
 ```
 
-约束：
+核心资源的逻辑主键：
 
-- `kind` 允许值：`meeting_minutes`、`artifact_generate`、`agent_task`、`rag_ingest`、`rag_query`、`export`。
-- `state` 允许值：`pending`、`running`、`cancel_requested`、`succeeded`、`failed`、`timeout`、`cancelled`、`cancel_failed`。
-- `meeting_id`、`todo_id` 可空，但 Todo 触发时必须同时存在。
-- `upstream_task_id` 用于 AgentOS / Claude Code runner task id。
-
-### 2.2 workflow_events
-
-```sql
-CREATE TABLE workflow_events (
-    run_id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    event_type TEXT NOT NULL,
-    visibility TEXT NOT NULL DEFAULT 'user',
-    payload_json TEXT NOT NULL DEFAULT '{}',
-    raw_event_hash TEXT,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, seq),
-    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
-);
-
-CREATE UNIQUE INDEX idx_workflow_events_raw
-    ON workflow_events(run_id, raw_event_hash)
-    WHERE raw_event_hash IS NOT NULL;
-```
-
-约束：
-
-- `seq` 按 run 单调递增。
-- raw event 去重只基于同一 run。
-- `visibility` 允许值：`user`、`debug`、`hidden`。
-
-### 2.3 artifacts
-
-```sql
-CREATE TABLE artifacts (
-    artifact_id TEXT PRIMARY KEY,
-    run_id TEXT,
-    artifact_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    size_bytes INTEGER NOT NULL,
-    model TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE SET NULL
-);
-```
-
-约束：
-
-- 所有新 artifact 必须写入本表。
-- `file_path` 必须位于 `settings.storage_dir` 或明确允许的 build dir 下。
-- Agent 产物导入后也进入本表。
-
-### 2.4 artifact_links
-
-```sql
-CREATE TABLE artifact_links (
-    link_id TEXT PRIMARY KEY,
-    artifact_id TEXT NOT NULL,
-    source TEXT NOT NULL,
-    meeting_id TEXT,
-    todo_id TEXT,
-    run_id TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (artifact_id) REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
-    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE SET NULL
-);
-
-CREATE UNIQUE INDEX idx_artifact_links_dedupe
-    ON artifact_links(
-        artifact_id,
-        source,
-        COALESCE(meeting_id, ''),
-        COALESCE(todo_id, ''),
-        COALESCE(run_id, '')
-    );
-```
-
-约束：
-
-- `source` 允许值：`command`、`todo`、`agent`、`meeting`、`import`。
-- 会议产物查询只读 `artifact_links.meeting_id`。
-- 清理会议 outputs 只处理本会议 link 指向的 artifact。
-
-## 3. 后端服务接口
-
-### 3.1 WorkflowService
-
-```python
-class WorkflowService:
-    async def create_run(...)
-    async def start_run(run_id)
-    async def record_event(run_id, event_type, payload, visibility="user", raw_hash=None)
-    async def complete_run(run_id, output=None)
-    async def fail_run(run_id, error)
-    async def timeout_run(run_id, error)
-    async def request_cancel(run_id)
-    async def mark_cancelled(run_id)
-    async def mark_cancel_failed(run_id, error)
-    async def retry_run(run_id) -> new_run_id
-    async def list_runs(kind=None, meeting_id=None, limit=50)
-    async def list_events(run_id, after_seq=0)
-    async def restore_unfinished()
-```
-
-### 3.2 ArtifactRepository
-
-```python
-class ArtifactRepository:
-    async def save_artifact(...)
-    async def link_artifact(...)
-    async def list_artifacts(limit=100)
-    async def list_meeting_artifacts(meeting_id)
-    async def list_todo_artifacts(meeting_id, todo_id)
-    async def get_artifact(artifact_id)
-```
-
-## 4. REST Contract
-
-### 4.1 Workflow APIs
-
-| Method | Path | 用途 |
-|---|---|---|
-| `GET` | `/workflows/runs` | 列出 workflow runs |
-| `GET` | `/workflows/runs/{run_id}` | 获取 run |
-| `GET` | `/workflows/runs/{run_id}/events` | replay events |
-| `POST` | `/workflows/runs/{run_id}/cancel` | 请求取消 |
-| `POST` | `/workflows/runs/{run_id}/retry` | 基于旧 run 创建重试 |
-
-说明：
-
-- `/agents/*` 可以继续存在，但内部应委托 WorkflowService。
-- `/artifacts/*` 可以继续存在，但必须写 artifact DB。
-
-### 4.2 Artifact APIs
-
-| Method | Path | 0.3 要求 |
-|---|---|---|
-| `POST` | `/artifacts/generate` | 创建 `artifact_generate` run |
-| `GET` | `/artifacts` | 从 DB 列表返回 |
-| `GET` | `/artifacts/{artifact_id}/download` | 校验 DB + 文件路径 |
-| `GET` | `/meetings/{id}/artifacts` | 从 `artifact_links` 返回 |
-| `DELETE` | `/meetings/{id}/outputs` | 清理会议 link 指向的产物 |
-
-### 4.3 Agent APIs
-
-| Method | Path | 0.3 要求 |
-|---|---|---|
-| `POST` | `/agents/tasks` | 创建 `agent_task` run |
-| `GET` | `/agents/tasks` | 从 workflow runs 投影 |
-| `GET` | `/agents/tasks/{task_id}` | 兼容旧 task id，内部映射 run |
-| `GET` | `/agents/tasks/{task_id}/events` | 从 workflow events 返回 |
-| `POST` | `/agents/tasks/{task_id}/cancel` | 进入 `cancel_requested` |
-| `POST` | `/agents/tasks/{task_id}/retry` | 创建新 run |
-| `GET` | `/agents/tasks/{task_id}/artifacts/{path}` | 兼容代理，成功后可导入 artifacts |
-
-## 5. WebSocket Contract
-
-主路径仍为 `/ws/echo`。
-
-新增或统一事件：
-
-| 事件 | payload |
+| 资源 | 主键/边界 |
 |---|---|
-| `workflow.event` | `WorkflowEventDTO` |
-| `workflow.snapshot` | `WorkflowRunDTO` |
-| `artifact.ready` | `GeneratedArtifact` + `run_id` + links |
-| `artifact.failed` | `run_id` + artifact_type + error |
-| `agent.task.event` | 兼容旧 UI，来源为 workflow event 投影 |
-| `meeting.todo.updated` | meeting_id + todo_id + status + run_id |
+| meeting | `(tenant_id, owner_id, id)` |
+| speaker | `(tenant_id, owner_id, speaker_id)` |
+| workflow run | `(tenant_id, owner_id, run_id)` |
+| workflow event | `(tenant_id, owner_id, run_id, seq)` |
+| artifact | `(tenant_id, owner_id, artifact_id)` |
+| agent task | `(tenant_id, owner_id, task_id)` |
+| RAG document | `(tenant_id, owner_id, doc_id)` |
+| session/device | tenant/user/device/family 组合外键 |
 
-`WorkflowEventDTO`：
+`device_id` 记录来源设备，但 owner 是资源授权边界；同 owner 的已授权设备可以在服务端规则允许时访问同一用户资源。磁盘使用 tenant/owner 派生的 opaque scope directory，不直接使用 untrusted logical id。
 
-```json
-{
-  "run_id": "run_x",
-  "seq": 1,
-  "kind": "agent_task",
-  "state": "running",
-  "event_type": "agent.step_started",
-  "visibility": "user",
-  "payload": {},
-  "created_at": "2026-07-09T23:30:00+08:00"
-}
+## 3. Identity 与 Session 表
+
+| 表 | 责任 |
+|---|---|
+| `tenants` | tenant 状态与生命周期 |
+| `users` | tenant 内稳定 user；资源列仍使用 `owner_id` 命名 |
+| `devices` | 用户设备、状态和显示信息 |
+| `session_families` | 可续签/撤销的身份连续性边界 |
+| `device_credentials` | 设备凭证 hash、generation、有效期和撤销状态 |
+| `principal_sessions` | 短期 bearer session hash、family、generation、expiry |
+| `public_enrollments` | 首次/附加设备 enrollment challenge |
+| `public_enrollment_admissions` | peer/global admission 窗口记录 |
+| `resource_tickets` | 短期 owner-scoped 文件/分享访问票据 |
+| `principal_quota_ledger` | principal 当前资源与模型配额账本 |
+
+约束：
+
+- 一个 session family 同时只有一个 active session generation。
+- 一个 device credential family 同时只有一个 active credential generation。
+- renew、rotate、additional-device 和 revoke 必须验证当前有效身份。
+- session token 数据库只保存 hash；401/409/429 使用稳定错误类别。
+
+主要 REST：
+
+| Method | Path | 语义 |
+|---|---|---|
+| `POST` | `/session` | 兼容首次 enrollment |
+| `POST` | `/session/enroll` | 首次设备 enrollment |
+| `POST` | `/session/renew` | 使用 device credential 续签 session |
+| `POST` | `/session/claim` | claim legacy identity |
+| `POST` | `/session/credential/rotate` | 凭证 rotation |
+| `POST` | `/session/devices/enroll` | 附加设备 enrollment |
+| `POST` | `/session/revoke` | 撤销 session family 或 device |
+
+## 4. Meeting 与 Capture
+
+主要表：
+
+- `meetings`：state、时间、minutes、status/error、display title、tombstone、RAG projection state。
+- `meeting_segments`：owner-scoped transcript segment。
+- `meeting_speaker_labels`、`speakers`：会议标签和 owner-scoped speaker profile。
+- `ambient_segments`、`ambient_audio_files`：ambient 文本与文件 lifecycle。
+- `meeting_state_migration_audit`：single-active-meeting migration 审计。
+
+约束：
+
+- 同 tenant/owner 只有一个 `in_meeting` row。
+- segment/label 的复合外键不能指向其他 owner 的 meeting。
+- `minutes_cleared_at` 存在时，恢复流程不能重新写回已清除纪要。
+- `rag_projection_state/error/projected_at` 使 meeting RAG 投影可修复。
+
+主要 REST：`/meetings`、`/meetings/current`、manual start/end、meeting start/chunk/finalize/end、transcript、minutes、Artifact、share ticket、outputs clear，以及 `/capture/*`。
+
+## 5. Workflow 数据模型
+
+### `workflow_runs`
+
+关键字段：
+
+- identity：`tenant_id`、`owner_id`、`device_id`；
+- identity key：`run_id`、`kind`、`source`；
+- state：`pending`、`running`、`cancel_requested`、`succeeded`、`failed`、`timeout`、`cancelled`、`cancel_failed`；
+- relation：`meeting_id`、`todo_id`、`agent_task_id`、`parent_run_id`；
+- concurrency：`revision`、`idempotency_key`、`active_key`、`attempt`；
+- timing：`timeout_s`、`deadline_at`、`cancel_requested_at`、created/started/finished/updated；
+- payload：`input_json`、`output_json`、`error`。
+
+`idempotency_key` 和 `active_key` 的 unique index 都包含 tenant/owner scope。retry 创建新 run，不改写旧 run 的历史。
+
+### `workflow_events`
+
+主键为 `(tenant_id, owner_id, run_id, seq)`；包含 event type、当时 state、visibility、message、payload 与 created_at。`seq` 在同一 run 内单调递增。
+
+### `workflow_outbox`
+
+保存 commit 后要投影的 aggregate/event/payload、attempt、error 与 published timestamp。相关恢复表：
+
+- `workflow_outbox_consumers`：每个进程的 cursor 与 heartbeat；
+- `workflow_outbox_consumer_recovery`：兼容 row recovery；
+- `workflow_outbox_consumer_scope_recovery`：按 consumer + tenant/owner 压缩的 backoff lane；
+- `workflow_outbox_global_recovery_state`：全局 ancient-row cursor 与 lease/fence；
+- `workflow_outbox_global_scope_recovery`：失败 scope 的全局 watermark/backoff。
+
+### `execution_leases`
+
+记录 lease key、holder、fence token、expiry 与 heartbeat。Workflow Dispatcher 和 Agent bridge 只有持有有效 lease/fence 才能继续写投影。
+
+### Unit of Work 契约
+
+```text
+BEGIN IMMEDIATE
+  validate scope/state/revision/lease
+  domain writer
+  update workflow run
+  append workflow events
+  append outbox rows
+COMMIT
+publish committed outbox
 ```
 
-规则：
+异常必须 rollback；不能用两次独立 commit 模拟原子性。
 
-- WS event 必须能通过 REST replay 复原。
-- 前端收到 WS 只更新 store，不写事实。
-- `server_resync` 后前端必须重新拉取 current meeting、runs、artifacts。
+Workflow REST：
 
-## 6. IPC Contract
-
-0.3 不新增随意 IPC。需要新增时必须登记：
-
-| 域 | IPC | 0.3 状态 |
+| Method | Path | 语义 |
 |---|---|---|
-| artifact | `echo:open-artifact-in-system` | 保留 |
-| workspace | `workspace:*` | 保留，作为本地目录授权入口 |
-| updates | `updates:*` | 保留 |
-| mic | `mic:*` | 保留 |
-| backend | `backend:*` | 保留 |
+| `GET` | `/workflows/runs` | 当前 principal 的 runs |
+| `GET` | `/workflows/runs/{run_id}` | 当前 scope snapshot |
+| `GET` | `/workflows/runs/{run_id}/events` | `after_seq` replay |
+| `POST` | `/workflows/runs/{run_id}/cancel` | 进入取消协议 |
+| `POST` | `/workflows/runs/{run_id}/retry` | 创建新 attempt |
 
-门禁：
+## 6. Artifact 与 Todo
 
-- preload 暴露的 key 必须有 main handler。
-- renderer wrapper 必须覆盖 preload key。
-- 删除 IPC 必须改测试快照。
+### `artifacts`
 
-## 7. Migration 策略
+owner-scoped metadata：type、title、file path、MIME、size、latency、model、metadata、run id 与 timestamps。
 
-0.3 migration 原则：
+### `artifact_links`
 
-1. 新建表，不破坏旧表。
-2. 启动时扫描旧 `skill_build/{artifact_id}/output.*`，把可识别类型的真实文件补录进 `artifacts`。
-3. 旧目录含 `meta.json.meeting_id` 且会议存在时，写入 `artifact_links(source='legacy_skill_build_recovery')`。
-4. 没有 `meta.json.meeting_id` 时，才回退读取 `minutes_json.todos[*].artifact_id` 补会议 / todo 关系。
-5. 对旧全局 artifacts，仅保留 artifact metadata，不强造 meeting link。
-6. migration 必须幂等，重复启动不重复插入 metadata 或 link。
+把 Artifact 关联到 meeting、todo、run 和 source。UI 的工作产物列表、meeting outputs 和分享页都从 metadata/link 投影，不依赖前端内存。
 
-## 8. Contract Snapshot
+写入顺序：安全 staging -> 生成/验证 -> Unit of Work 登记 Artifact/link/run/event/outbox -> commit。失败时清理 staging，不留下已成功假象。
 
-开发前准备完成后，第一批实现 PR 必须补：
+REST：
 
-- REST route snapshot。
-- WS event type snapshot。
-- IPC key snapshot。
-- DB migration smoke。
-- Workflow state transition tests。
+| Method | Path | 语义 |
+|---|---|---|
+| `POST` | `/artifacts/generate` | 创建并等待 Artifact workflow |
+| `GET` | `/artifacts` | 当前 principal Artifact |
+| `GET` | `/artifacts/{artifact_id}/download` | scope + metadata + path 校验 |
+| `GET` | `/meetings/{id}/artifacts` | linked Artifact |
+| `DELETE` | `/meetings/{id}/outputs` | 原子清理本 meeting outputs |
+
+public 下载找不到 owner-scoped metadata 时返回 404；legacy build-directory fallback 仅限 local-first。
+
+## 7. Agent 数据模型
+
+| 表 | 责任 |
+|---|---|
+| `agent_tasks` | runner task、state、snapshot、grant、timeout、workflow link、bridge completion |
+| `agent_task_events` | raw/normalized event、hash 去重、projection marker |
+| `agent_runner_grants` | owner/device/runner/workspace Full Access grant |
+| `agent_command_outbox` | durable cancel command、稳定 operation key、fenced lease、attempt/outcome/backoff |
+
+Agent terminal first-wins。raw event 先持久化，bridge 再投影 Workflow；pending projection 和 bridge recovery index 支持重启接管。
+
+REST：task create/list/get/events/artifact proxy/cancel/retry，以及 grant status/create/revoke。创建 task、取消、重试和创建 grant 需要 admin/host capability；普通 public principal 无权调用。
+
+## 8. RAG 数据模型
+
+| 表 | 责任 |
+|---|---|
+| `rag_documents` | owner-scoped document manifest、source/path/hash/status |
+| `rag_content_owners` | content hash owner、size、doc、workflow、lifecycle、quota |
+| `bm25_index_state` | physical index key 的单调 revision |
+| `bm25_index_documents` | authoritative payload、scope、cache path/hash/revision |
+
+SQLite transaction 是跨进程提交点；JSON 文件是内容 hash 可验证、可重建 cache。实例读取 revision 后刷新 snapshot，不能把某个进程的内存 BM25 当全局事实源。
+
+REST：`POST /rag/ingest`、`GET /rag/stats`、`GET /rag/docs`、`DELETE /rag/docs/{doc_id}`、`POST /rag/ask`。
+
+`/rag/ask` 是 SSE：delta/citation 后必须有 `done` 才算完成；error/disconnect 取消上游，不创建虚假成功 run。
+
+## 9. WebSocket Contract
+
+主路径：`/ws/echo`，协议版本 `1.0`。
+
+public 模式首帧必须是有界 `client_hello`，bearer 放在 `auth` 对象中；服务端验证 origin、admission、session 和 quota 后才绑定 scope。主要协议事件：
+
+- `server_hello`：版本、epoch、max seq；
+- `server_ping`：15 秒心跳；
+- `server_resync`：历史 gap，需要 REST replace；
+- `server_sync`：gap fence 后的资源同步描述；
+- `workflow.event` / `workflow.snapshot`；
+- meeting、minutes、Artifact、Agent 等已提交 domain event。
+
+close code：`4401` 身份失效，`4408` 握手协议错误，`4409` 慢消费者，`4429` admission/quota。全局 scope stream 满载时，distinct principal scope 只进入有界 FIFO 候补；同 scope 最多一个候补。队列满、重复候补或等待超时仍返回 `4429`。public session 会周期 revalidate；失效后不能普通重连并沿用旧 owner。
+
+## 10. Electron IPC Contract
+
+IPC 只用于桌面本机能力，按域登记并由 contract test 对账：
+
+- backend endpoint/status/restart；
+- workspace grant/status/scan；
+- Artifact open/save；
+- update check/install/open；
+- microphone/system settings；
+- credential vault 和 public identity session。
+
+preload key、main handler 和 renderer wrapper 必须同时存在。public Web 内容不能通过导航串接到任意 IPC；Desktop local host capability 是明确的受信任边界。
+
+## 11. Migration 契约
+
+- migration catalog 按编号严格递增到 `037`。已越过高水位但从未执行过的 restored
+  historical `006`–`009` 记为 not-applicable，不倒序执行，也不伪造 `schema_version` 行。
+- `schema_version` 对实际执行且能对应当前文件的 migration 记录 version、migration
+  name 和 content SHA-256。已发布的 `005_speaker_label_user_set` 与当前
+  `005_agent_tasks` 是历史 version fork：保留原 description，name/hash 维持 NULL，
+  绝不把旧 schema 伪绑定到新文件。
+- 旧 global key 数据迁移到 composite key；无法安全归属的 row 进入 `migration_orphan_quarantine`。
+- migration 重跑幂等；checksum 不一致 fail closed。
+- archived 原版 `006`–`009` 已恢复进 catalog。走过该 lineage 的
+  conversations/memory 与 users/sessions/API key/billing 表在 `018` 原子改名为
+  `legacy_v6_*`、`legacy_v7_*`、`legacy_v8_*`；历史行、index、FK/view 引用保留，
+  active identity 只使用 tenant/user/device/session-family 表。
+- `033` 收口历史多 active meeting 并保留 audit。
+- `031` 建立 BM25 跨进程 revision；`034`/`035` 建立 scope/global outbox recovery。
+- `036` 建立 `agent_command_outbox`：`operation_key` 全局唯一，同一 owner/task/command type 只允许一条逻辑命令；`attempts`、`next_attempt_at`、`outcome` 和 `completed_at` 支持退避恢复与审计。
+- `037` 把两条 lineage 的 `ambient_segments` 收敛为同一 source/scope schema，并恢复
+  `speakers.label_user_set`。published v5 的非零值在 `013` rebuild transaction 内按
+  composite speaker key 快照并恢复；定义不兼容、未知 rebuild dependent 或行映射丢失均整体 rollback。
+
+## 12. Agent 一致性契约
+
+1. Agent `cancel_requested`、Workflow state/event/outbox 与 `agent_command_outbox` 在同一个 SQLite transaction 提交；任一步失败整体回滚。
+2. command worker 通过 `execution_leases` 的 holder/expiry/fence 跨实例竞争；崩溃重放复用同一个 `Idempotency-Key`，而不是生成新逻辑操作。
+3. Agent terminal HTTP read 必须先修复并核对关联 Workflow terminal；不一致时 fail closed，不把领先终态返回给客户端。
+4. Agent 与 Workflow 的冲突终态遵循 first-terminal-wins；完成先赢时 pending cancel command 以 `terminal_won` 完成且不调用远程 runner。
+5. Agent submit 用 scope-derived opaque key 和 `agent_submit` heartbeat lease；runner id 只通过 fenced CAS 绑定。AgentOS 将 key、request fingerprint、deterministic task id 持久化为 UNIQUE reservation。
+6. Agent terminal write 先在同一 transaction 仲裁 linked Workflow；cancel worker 的 terminal write 还必须在该 transaction 校验 command fence 并完成 command outbox。
+7. 已完成的无-runner cancel 后若收到晚到 runner id，command 以 `force_remote=1` 重开并真实发送 cancel；Agent 本地终态保持不变。

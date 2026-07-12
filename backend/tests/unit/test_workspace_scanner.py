@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from app.adapters.rag import BM25Rag
 from app.adapters.rag.workspace_scanner import WorkspaceScanner
 from app.config import Settings
+
+
+class _PdfPage:
+    def extract_text(self) -> str:
+        return "retryable PDF workspace content"
+
+
+class _PdfDocument:
+    def __init__(self) -> None:
+        self.pages = [_PdfPage()]
+
+    def __enter__(self) -> _PdfDocument:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
 
 
 def _make(tmp_path: Path, dirs: list[Path], **kw: object) -> tuple[BM25Rag, WorkspaceScanner]:
@@ -61,6 +78,25 @@ async def test_scan_indexes_supported_files(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_status_counts_authoritative_workspace_docs_not_stale_scan_state(
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    source = ws / "indexed.md"
+    source.write_text("authoritative workspace document", encoding="utf-8")
+    rag, scanner = _make(tmp_path, [ws])
+
+    await scanner.scan()
+    assert (await scanner.status())["n_indexed"] == 1
+
+    doc_id = str((await rag.list_docs())[0]["doc_id"])
+    await rag.delete(doc_id)
+    assert (await scanner.status())["n_indexed"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_scan_skips_unchanged_files(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -75,6 +111,45 @@ async def test_scan_skips_unchanged_files(tmp_path: Path) -> None:
     assert r2.n_added == 0
     assert r2.n_skipped == 1
     assert (await rag.list_docs())[0]["doc_id"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_failed_pdf_atomic_commit_does_not_advance_state_and_retries(
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    pdf = ws / "retry.pdf"
+    pdf.write_bytes(b"%PDF synthetic")
+    rag, scanner = _make(tmp_path, [ws])
+
+    with (
+        patch("pdfplumber.open", return_value=_PdfDocument()),
+        patch.object(
+            rag._store,
+            "_set_revision",
+            side_effect=RuntimeError("simulated manifest commit failure"),
+        ),
+    ):
+        failed = await scanner.scan()
+
+    assert failed.n_added == 0
+    assert failed.n_failed == 1
+    assert await rag.list_docs() == []
+    state_after_failure = scanner._load_state()
+    assert str(pdf.resolve()) not in state_after_failure
+
+    with patch("pdfplumber.open", return_value=_PdfDocument()):
+        retried = await scanner.scan()
+
+    assert retried.n_added == 1
+    assert retried.n_failed == 0
+    docs = await rag.list_docs()
+    assert len(docs) == 1
+    assert docs[0]["source"] == "workspace"
+    assert docs[0]["source_path"] == str(pdf.resolve())
+    assert str(pdf.resolve()) in scanner._load_state()
 
 
 @pytest.mark.asyncio

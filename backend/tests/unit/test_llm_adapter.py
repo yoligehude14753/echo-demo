@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from app.adapters.llm import LLMError, OpenAICompatibleLLM
 from app.adapters.llm.openai_compatible import (
+    BadRequestError,
     _is_reasoning,
     _strip_thinking,
     _ThinkStripper,
@@ -66,6 +68,35 @@ def test_fast_api_key_prefers_dedicated_key_and_main_endpoint_key() -> None:
     )
     assert dedicated.llm_fast_api_key == "dedicated-token"
     assert shared.llm_fast_api_key == "main-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_generic_main_api_key_works_without_yunwu_compat_key() -> None:
+    generic = Settings(
+        llm_main_provider="openai-compatible",
+        llm_main_model="GLM-5.2-NVFP4",
+        llm_main_base_url="http://model.example/v1",
+        llm_main_api_key="generic-main-token",
+        yunwu_open_key="",
+        llm_fast_model="GLM-5.2-NVFP4",
+        llm_fast_base_url="http://model.example/v1",
+    )
+    assert generic.resolved_llm_main_api_key == "generic-main-token"
+    assert generic.llm_fast_api_key == "generic-main-token"
+    llm = OpenAICompatibleLLM(generic)
+    try:
+        assert llm._main.api_key == "generic-main-token"
+    finally:
+        await llm.aclose()
+
+
+@pytest.mark.unit
+def test_legacy_yunwu_key_is_fallback_only() -> None:
+    legacy = Settings(llm_main_api_key="", yunwu_open_key="legacy-token")
+    preferred = Settings(llm_main_api_key="generic-token", yunwu_open_key="legacy-token")
+    assert legacy.resolved_llm_main_api_key == "legacy-token"
+    assert preferred.resolved_llm_main_api_key == "generic-token"
 
 
 @pytest.mark.asyncio
@@ -195,6 +226,32 @@ async def test_chat_stream_yields_chunks_with_mock(settings: Settings) -> None:
         async for chunk in llm.chat_stream([ChatMessage(role="user", content="hi")]):
             out.append(chunk)
         assert out == ["你", "好", "啊"]
+    finally:
+        await llm.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_reasoning_proxy_bad_request_retries_without_optional_extra_body(
+    settings: Settings,
+) -> None:
+    llm = OpenAICompatibleLLM(settings)
+    try:
+        fake_resp = MagicMock()
+        fake_resp.choices = [MagicMock(message=MagicMock(content="兼容成功"), finish_reason="stop")]
+        fake_resp.usage = None
+        request = httpx.Request("POST", "https://proxy.example/v1/chat/completions")
+        response = httpx.Response(400, request=request)
+        rejected = BadRequestError("unsupported extension", response=response, body={})
+        create = AsyncMock(side_effect=[rejected, fake_resp])
+        llm._main.chat.completions.create = create
+
+        result = await llm.chat([ChatMessage(role="user", content="hi")])
+
+        assert result.content == "兼容成功"
+        assert create.await_count == 2
+        assert "extra_body" in create.await_args_list[0].kwargs
+        assert "extra_body" not in create.await_args_list[1].kwargs
     finally:
         await llm.aclose()
 

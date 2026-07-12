@@ -12,6 +12,7 @@ import websockets
 
 from app.agents.claude_code_adapter import ClaudeCodeRunnerAdapter, RunnerEventContext
 from app.agents.events import TERMINAL_EVENTS, TERMINAL_STATES, EchoTaskEvent
+from app.runtime.execution_lease import LeaseOwnershipError
 
 _log = logging.getLogger("echodesk.agents.bridge")
 
@@ -22,6 +23,7 @@ class TaskEventRecorder(Protocol):
         event: EchoTaskEvent,
         *,
         raw_hash: str | None = None,
+        raw_kind: str | None = None,
     ) -> EchoTaskEvent | None: ...
 
 
@@ -63,6 +65,7 @@ class EchoTaskStreamBridge:
         message_id: str | None = None,
         title: str | None = None,
         adapter: ClaudeCodeRunnerAdapter | None = None,
+        result_terminal_seen: bool = False,
     ) -> None:
         self.task_id = task_id
         self.runner_task_id = runner_task_id
@@ -77,16 +80,18 @@ class EchoTaskStreamBridge:
             agentos_base_url=self.agentos_base_url,
         )
         self.adapter = adapter or ClaudeCodeRunnerAdapter()
+        self.result_terminal_seen = result_terminal_seen
 
     @property
     def ws_url(self) -> str:
         return agentos_ws_url(self.agentos_base_url, self.runner_task_id)
 
-    async def run(self) -> None:
+    async def run(self) -> bool:
+        """Consume until AgentOS confirms the post-result terminal tail."""
+
         backoff = 1.0
-        terminal = False
-        while not terminal:
-            result_terminal_seen = False
+        result_terminal_seen = self.result_terminal_seen
+        while True:
             try:
                 async with websockets.connect(
                     self.ws_url,
@@ -102,25 +107,39 @@ class EchoTaskStreamBridge:
                         event = self.adapter.translate(raw, context=self.context, raw_ref=digest)
                         if event is None:
                             continue
-                        stored = await self.recorder(event, raw_hash=digest)
-                        if stored and (
-                            stored.event in TERMINAL_EVENTS or stored.state in TERMINAL_STATES
+                        await self.recorder(
+                            event,
+                            raw_hash=digest,
+                            raw_kind=str(raw.get("kind") or ""),
+                        )
+                        is_terminal = (
+                            event.event in TERMINAL_EVENTS or event.state in TERMINAL_STATES
+                        )
+                        raw_kind = str(raw.get("kind") or "")
+                        if raw_kind == "result" and is_terminal:
+                            # AgentOS emits result before its final workspace scan.  Persist the
+                            # result but retain the bridge until the following terminal task_state.
+                            result_terminal_seen = True
+                            continue
+                        if (
+                            raw_kind == "task_state"
+                            and is_terminal
+                            and (
+                                result_terminal_seen
+                                or event.state
+                                in {
+                                    "cancelled",
+                                    "cancel_failed",
+                                }
+                            )
                         ):
-                            # AgentOS emits `result` before its final workspace scan, then sends
-                            # `artifact_change` and `task_state`. Keep consuming this connection
-                            # so freshly generated files are not lost from EchoDesk's archive.
-                            if raw.get("kind") == "result":
-                                result_terminal_seen = True
-                                continue
-                            terminal = True
-                            return
-                    if result_terminal_seen:
-                        return
+                            return True
+                _log.warning("agent bridge closed before tail task=%s", self.task_id)
             except asyncio.CancelledError:
                 raise
+            except LeaseOwnershipError:
+                raise
             except Exception as exc:
-                if terminal:
-                    return
                 _log.warning("agent bridge disconnected task=%s: %s", self.task_id, exc)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)

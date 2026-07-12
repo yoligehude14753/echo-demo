@@ -13,10 +13,13 @@ status 接口契约。
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
+from app.adapters.repo.migrator import run_migrations
+from app.api.deps import reset_deps_for_test
 from app.api.retrieval import reset_singletons as reset_rag
 from app.api.workspace import reset_singleton as reset_scanner
 from app.config import Settings, get_settings
@@ -45,11 +48,31 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
     reset_rag()
     reset_scanner()
+    reset_deps_for_test()
     get_settings.cache_clear()
     settings = _make_settings(tmp_path)
+    assert asyncio.run(run_migrations(settings.db_path)).errors == []
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: settings
     return TestClient(app)
+
+
+@pytest.mark.unit
+def test_scan_executes_as_durable_workflow(client: TestClient) -> None:
+    scanned = client.post("/workspace/scan")
+    assert scanned.status_code == 200, scanned.text
+    assert scanned.json()["n_total"] == 0
+
+    runs = client.get("/workflows/runs").json()
+    run = next(item for item in runs if item["kind"] == "workspace.scan")
+    assert run["state"] == "succeeded"
+    assert run["output"]["n_total"] == 0
+    events = client.get(f"/workflows/runs/{run['run_id']}/events").json()["events"]
+    assert [event["event_type"] for event in events] == [
+        "workflow.created",
+        "workflow.started",
+        "workflow.succeeded",
+    ]
 
 
 @pytest.mark.unit
@@ -67,6 +90,10 @@ def test_add_dir_persists_and_reflects_in_status(
     assert body["added"] is True
     assert body["path"] == str(target.resolve())
     assert str(target.resolve()) in body["configured_dirs"]
+    assert body["workflow_run_id"].startswith("run_")
+    run = client.get(f"/workflows/runs/{body['workflow_run_id']}")
+    assert run.status_code == 200
+    assert run.json()["kind"] == "workspace.scan"
 
     # 状态接口立即反映新目录（不需要 backend 重启）
     status = client.get("/workspace/status").json()

@@ -15,6 +15,7 @@ from app.adapters.skill.python_executor import _is_safe_python
 from app.config import Settings
 from app.schemas.artifact import SUPPORTED_KINDS, GeneratedArtifact, normalize_kind
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
+from app.security.scope import scoped_directory
 
 
 class FakeLLM:
@@ -504,6 +505,28 @@ async def test_txt_generation_minimal(tmp_path: Path) -> None:
     saved = Path(art.file_path).read_text(encoding="utf-8")
     assert "EchoDesk" in saved
     assert int(art.metadata["line_count"]) >= 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_executor_atomically_publishes_requested_artifact_id(tmp_path: Path) -> None:
+    skill = SkillExecutor(_settings(tmp_path))
+    body = "Crash-safe workflow artifact\n\n" + "durable content " * 50
+    artifact_id = "txt-run-01234567890123456789"
+
+    artifact = await skill.generate(
+        llm=FakeLLM(body),
+        artifact_type="txt",
+        brief="deterministic publish",
+        artifact_id=artifact_id,
+    )
+
+    assert artifact.artifact_id == artifact_id
+    scoped_build = scoped_directory(tmp_path / "skill_build")
+    assert Path(artifact.file_path).parent == scoped_build / artifact_id
+    assert Path(artifact.file_path).read_text(encoding="utf-8") == body.strip()
+    building = scoped_build / ".workflow-building"
+    assert list(building.iterdir()) == []
 
 
 @pytest.mark.asyncio

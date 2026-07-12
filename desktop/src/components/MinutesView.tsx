@@ -3,8 +3,6 @@ import { Button, Empty, Tag, Tooltip, message } from "antd";
 import {
   AlertCircle,
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
   Circle,
   Download,
   FileText,
@@ -56,6 +54,16 @@ function isFinalizedLike(state: string | undefined): boolean {
   return state === "ended" || state === "finalized";
 }
 
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  const remainingSeconds = total % 60;
+  return remainingSeconds > 0
+    ? `${minutes} 分 ${remainingSeconds} 秒`
+    : `${minutes} 分钟`;
+}
+
 function friendlyMinutesError(raw: string | null | undefined): {
   headline: string;
   hint: string;
@@ -72,23 +80,26 @@ function friendlyMinutesError(raw: string | null | undefined): {
   }
   if (/timeout|timed out/i.test(s)) {
     return {
-      headline: "LLM 调用超时",
-      hint: "模型服务当前响应较慢，稍后点击重新生成即可",
+      headline: "生成时间过长",
+      hint: "服务当前响应较慢，稍后点击重新生成即可",
     };
   }
   if (/connect refused|connection refused|read timed out/i.test(s)) {
     return {
-      headline: "连不上模型服务",
-      hint: "检查 Tailscale / 网络后点击重新生成",
+      headline: "暂时无法连接生成服务",
+      hint: "检查网络连接后点击重新生成",
     };
   }
   if (/rate limit|429/i.test(s)) {
     return {
-      headline: "触发了模型限流",
+      headline: "当前请求较多",
       hint: "稍等片刻后点击重新生成",
     };
   }
-  return { headline: "纪要生成失败", hint: "点击下方按钮重新生成；如反复失败请展开详情排查" };
+  return {
+    headline: "纪要生成失败",
+    hint: "点击下方按钮重新生成；如反复失败，请检查网络或服务设置",
+  };
 }
 
 /**
@@ -145,7 +156,8 @@ export default function MinutesView(): JSX.Element {
         });
       })
       .catch(() => {
-        // 网络错也不强转失败态，等 ws 事件再说
+        // 网络错不能永久占用 fetchedRef；后续重新选择或状态变化必须可重试。
+        fetchedRef.current.delete(currentId);
       });
   }, [currentId, meeting?.minutes, meeting?.minutes_status, meeting?.state, upsertMeeting]);
 
@@ -156,8 +168,8 @@ export default function MinutesView(): JSX.Element {
       await retryMinutesGeneration(currentId, meeting.title || currentId);
       message.success("已重新提交，等待 LLM 返回…");
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      message.error(`重试失败：${msg}`);
+      console.error("[minutes] retry failed", e);
+      message.error("重试失败，请稍后再试");
     } finally {
       setRetrying(false);
     }
@@ -249,13 +261,13 @@ export default function MinutesView(): JSX.Element {
               <>
                 会议进行中…
                 <br />
-                结束会议后由智能引擎自动产出
+                结束会议后会自动生成
               </>
             ) : (
               <>
                 纪要尚未生成
                 <br />
-                结束会议后由智能引擎自动产出
+                开始并结束会议后，纪要会自动出现在这里
               </>
             )}
           </span>
@@ -288,8 +300,8 @@ function MinutesGeneratingCard({
   let stage = "正在准备转写素材…";
   if (elapsed > 5) stage = "正在抽取会议要点…";
   if (elapsed > 30) stage = "正在整理决议与待办…";
-  if (elapsed > 60) stage = "模型还在思考，长会议通常需要 60–120 秒…";
-  if (elapsed > 150) stage = "比预期久了一点，若超过 3 分钟可点重试…";
+  if (elapsed > 60) stage = "仍在整理，长会议通常需要 1–2 分钟…";
+  if (elapsed > 150) stage = "比预期久一些，会继续在后台处理…";
 
   return (
     <div className="px-6 py-8 border-b border-paper-300">
@@ -305,7 +317,7 @@ function MinutesGeneratingCard({
         aria-live="polite"
       >
         <Loader2
-          className="w-14 h-14 text-rose-500/80 animate-spin mb-4"
+          className="w-14 h-14 text-accent/80 animate-spin mb-4"
           strokeWidth={1.5}
         />
         <div className="text-[13.5px] font-medium text-ink-800 mb-1.5">
@@ -333,9 +345,7 @@ function MinutesErrorCard({
   onRetry: () => void;
   shareAction?: ReactNode;
 }): JSX.Element {
-  const [showDetail, setShowDetail] = useState(false);
   const { headline, hint } = friendlyMinutesError(rawError);
-  const hasDetail = Boolean((rawError ?? "").trim());
   return (
     <div className="px-6 py-6 border-b border-paper-300">
       <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
@@ -370,31 +380,7 @@ function MinutesErrorCard({
           >
             重新生成纪要
           </Button>
-          {hasDetail && (
-            <Button
-              type="text"
-              size="small"
-              className="!text-rose-600 hover:!bg-rose-100/60 !px-2 inline-flex items-center"
-              onClick={() => setShowDetail((v) => !v)}
-              data-testid="minutes-error-toggle"
-            >
-              {showDetail ? (
-                <ChevronDown className="w-3 h-3 mr-0.5" />
-              ) : (
-                <ChevronRight className="w-3 h-3 mr-0.5" />
-              )}
-              {showDetail ? "收起详情" : "查看详情"}
-            </Button>
-          )}
         </div>
-        {showDetail && hasDetail && (
-          <pre
-            className="mt-2 max-h-32 overflow-auto rounded bg-rose-100/70 border border-rose-200 px-2 py-1.5 text-[11px] text-rose-900/80 leading-4 whitespace-pre-wrap break-words font-mono"
-            data-testid="minutes-error-detail"
-          >
-            {rawError}
-          </pre>
-        )}
       </div>
     </div>
   );
@@ -441,10 +427,10 @@ function MinutesBody({
         {m.title}
       </h2>
       <div className="text-[11px] text-ink-400 mb-4 flex items-center gap-1.5">
-        <span>时长 {Math.round(m.duration_sec)}s</span>
+        <span>时长 {formatDuration(m.duration_sec)}</span>
       </div>
 
-      <p className="text-[13.5px] text-ink-800 leading-7 mb-5">{m.summary}</p>
+      <p className="text-[13.5px] text-ink-800 leading-7 mb-5 break-words [overflow-wrap:anywhere]">{m.summary}</p>
 
       {m.sections.map((sec, i) => (
         <section key={i} className="mb-4">
@@ -455,7 +441,7 @@ function MinutesBody({
             {sec.bullets.map((b, j) => (
               <li key={j} className="flex gap-2 leading-6">
                 <span className="text-ink-400 shrink-0">·</span>
-                <span>{b}</span>
+                <span className="min-w-0 break-words [overflow-wrap:anywhere]">{b}</span>
               </li>
             ))}
           </ul>
@@ -471,7 +457,7 @@ function MinutesBody({
             {m.decisions.map((d, i) => (
               <span
                 key={i}
-                className="text-[12px] px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200"
+                className="max-w-full break-words [overflow-wrap:anywhere] text-[12px] px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200"
               >
                 {d}
               </span>
@@ -626,10 +612,12 @@ function MinutesTodoList({
           });
           if (cancelled) return;
           addArtifact(artifact);
-          message.success(`已自动执行会议待办：${artifact.title || artifact.artifact_id}`);
+          message.success(
+            `已完成会议待办：${artifact.title?.trim() || "未命名工作产物"}`,
+          );
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (!cancelled) message.error(`自动执行会议待办失败：${msg}`);
+          console.error("[minutes] automatic todo failed", e);
+          if (!cancelled) message.error("会议待办执行失败，可在纪要中重试");
         } finally {
           inFlightRef.current.delete(todo.id);
           setAutoRunning((prev) => {
@@ -733,7 +721,7 @@ function TodoRow({
       </div>
       <div className="flex-1 min-w-0">
         <div
-          className={`text-[13px] leading-5 text-ink-800 ${
+          className={`text-[13px] leading-5 text-ink-800 break-words [overflow-wrap:anywhere] ${
             done || cancelled ? "line-through text-ink-500" : ""
           }`}
         >
@@ -782,7 +770,7 @@ function TodoRow({
         </div>
       </div>
       {canExecute && (
-        <Tooltip title={`预填到指令栏：${todo.suggested_command}`}>
+        <Tooltip title="放入下方输入框，可在发送前修改">
           <Button
             type="default"
             size="small"

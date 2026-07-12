@@ -95,7 +95,9 @@ def _finish_step(snapshot: dict[str, Any], step: dict[str, Any]) -> None:
 
 def _complete_snapshot(snapshot: dict[str, Any], event: EchoTaskEvent) -> None:
     snapshot["status"] = "succeeded"
-    snapshot["final_text"] = event.message or snapshot.get("final_text") or snapshot.get("text_buffer")
+    snapshot["final_text"] = (
+        event.message or snapshot.get("final_text") or snapshot.get("text_buffer")
+    )
     snapshot["progress_text"] = "任务完成"
     snapshot["actions"] = []
     snapshot["permission"] = None
