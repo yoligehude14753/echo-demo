@@ -49,10 +49,10 @@ CI=1 NODE_ENV=test npm run scenarios
 
 当前本地源码与受控安装态证据 [F-ECHO-028]：
 
-- Electron main-process contracts：`176 / 176 passed`。
+- Electron main-process contracts：`177 / 177 passed`。
 - Playwright mock E2E：`150 passed`。
 - 业务 scenarios：`29 passed`。
-- release aggregate：`28 / 28 passed`；actionlint 与 action pins 通过。
+- release aggregate：`31 / 31 passed`；actionlint 与 action pins 通过。
 - Android / TV：current exact-SHA phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，另有 Capacitor `Hint 2`。debug APK 不可作为公开发布资产。
 - desktop 与内置 `ppt_ib_deck` 的 npm audit 均为 `0` finding。
 

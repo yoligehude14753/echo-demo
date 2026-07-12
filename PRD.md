@@ -186,8 +186,8 @@ Desktop Pro 是受信任的单机边界。LLM 生成代码在宿主机执行、E
 ## 11. v0.3.1 验收
 
 - Backend：`1045 collected`，`18 live deselected`，确定性 `1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors`，line coverage `87.46%`（终端显示 `87%`），进程自然退出；Ruff check、Ruff format `250 files`、mypy `128 source files`、compile 通过。
-- Electron main-process contracts：`176 / 176 passed`；Desktop E2E：`150 passed`；scenarios：`29 passed`。
-- Public isolation self-test 与双 principal 完整 smoke 通过；release aggregate `28 / 28 passed`，actionlint 与 action pins 通过。
+- Electron main-process contracts：`177 / 177 passed`；Desktop E2E：`150 passed`；scenarios：`29 passed`。
+- Public isolation self-test 与双 principal 完整 smoke 通过；release aggregate `31 / 31 passed`，actionlint 与 action pins 通过。
 - Android / TV current exact-SHA phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，另有 Capacitor `Hint 2`。debug APK 不可作为公开发布资产。
 - npm 两处审计为 `0`；Python six locks 均有效，runtime/dev/build 各保留同一项上游无 `fix_versions` 的 `torch` `CVE-2025-3000` 受控例外至 2026-08-12，lint/typecheck/audit-tool 为 `0`，不得把 Python 总体结果标成 clean 或零漏洞。
 

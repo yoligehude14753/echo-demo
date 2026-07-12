@@ -225,8 +225,8 @@ UI 采用 Session Navigation、Workbench、Inspector 三层结构。转写、助
 ## 11. 架构门禁证据
 
 - Backend：`1045 collected`，`18 live deselected`，确定性 `1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors`，line coverage `87.46%`（终端显示 `87%`），进程自然退出；Ruff check、Ruff format `250 files`、mypy `128 source files` 与 compile 通过。
-- Electron contracts：`176 / 176 passed`；Desktop E2E：`150 passed`；scenarios：`29 passed`。
-- public isolation self-test 与双 principal 完整 smoke 通过；release aggregate `28 / 28 passed`，actionlint 与 action pins 通过。
+- Electron contracts：`177 / 177 passed`；Desktop E2E：`150 passed`；scenarios：`29 passed`。
+- public isolation self-test 与双 principal 完整 smoke 通过；release aggregate `31 / 31 passed`，actionlint 与 action pins 通过。
 - Android / TV current exact-SHA phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列。debug APK 不可公开发布。
 - npm 两处为 `0` finding；Python six locks 均有效，runtime/dev/build 各有同一项上游无 `fix_versions` 的 `torch` `CVE-2025-3000`，受控例外至 2026-08-12，lint/typecheck/audit-tool 为 `0`。不得把该非零 Python 审计写成 clean 或零漏洞。
 

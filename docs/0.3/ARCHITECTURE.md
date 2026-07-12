@@ -199,7 +199,7 @@ public Electron transport 只接受精确无凭证 HTTPS origin；backend、vaul
 - Desktop 不混排转写、助手、纪要与产物。
 - 失败路径有反例测试和用户可执行恢复入口。
 
-当前本地源码证据：Backend `1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors`（`1045 collected`、`18 live deselected`、line coverage `87.46%`，终端显示 `87%`，自然退出），Ruff check / format `250 files` / mypy `128 source files` / compile 通过；Electron `176 / 176`；Desktop E2E `150`；scenarios `29`；public isolation self-test 与双 principal 完整 smoke 通过；release aggregate `28 / 28`、actionlint 和 action pins 通过 [F-ECHO-028]。
+当前本地源码证据：Backend `1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors`（`1045 collected`、`18 live deselected`、line coverage `87.46%`，终端显示 `87%`，自然退出），Ruff check / format `250 files` / mypy `128 source files` / compile 通过；Electron `177 / 177`；Desktop E2E `150`；scenarios `29`；public isolation self-test 与双 principal 完整 smoke 通过；release aggregate `31 / 31`、actionlint 和 action pins 通过 [F-ECHO-028]。
 
 Android / TV current exact-SHA phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)`、unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列；debug APK 不可公开发布。npm 两处为 `0` finding；Python runtime/dev/build 各保留同一项受控 `torch` `CVE-2025-3000` 至 2026-08-12，且上游无 `fix_versions`；lint/typecheck/audit-tool 为 `0`，不能宣称 Python 总体 clean 或零漏洞。
 

@@ -234,11 +234,11 @@ Backend: 1045 collected / 18 live deselected / 1027 selected / 1027 passed / 0 s
 Line coverage: 87.46% (terminal display: 87%)
 Backend process: natural exit
 Backend static: Ruff pass / format 250 / mypy 128 / compile pass
-Electron contracts: 176 / 176
+Electron contracts: 177 / 177
 Desktop E2E: 150
 Desktop scenarios: 29
 Public isolation: self-test + dual-principal full smoke passed
-Release aggregate: 28 / 28; actionlint + action pins passed
+Release aggregate: 31 / 31; actionlint + action pins passed
 Android / TV current exact-SHA: phone + TV builds / JVM 4 / instrumentation 6 / APK 0.3.1 (301) / unsigned fail-closed passed
 Android lint aggregate: Fatal 0 / Error 0 / Warning 0; Capacitor Hint 2; debug APK is not publishable
 Dependency audit: npm 0 + 0; Python six locks valid; runtime/dev/build each retain the same controlled torch CVE-2025-3000 with no upstream fix_versions

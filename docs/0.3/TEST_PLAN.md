@@ -226,7 +226,7 @@ CI=1 NODE_ENV=test npm run e2e
 CI=1 NODE_ENV=test npm run scenarios
 ```
 
-当前结果：Electron `176 / 176 passed`；E2E `150 passed`；scenarios `29 passed` [F-ECHO-028]。
+当前结果：Electron `177 / 177 passed`；E2E `150 passed`；scenarios `29 passed` [F-ECHO-028]。
 
 覆盖：
 
@@ -289,7 +289,7 @@ backend/.venv/bin/python scripts/public-isolation-smoke.py \
 
 任何平台“构建成功”都不能代替安装后启动、bundled backend、身份和持久化 smoke。
 
-Android / TV current exact-SHA：phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列。debug APK 不可作为公开发布资产。release aggregate `28 / 28 passed`，actionlint 与 action pins 通过 [F-ECHO-028]。
+Android / TV current exact-SHA：phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列。debug APK 不可作为公开发布资产。release aggregate `31 / 31 passed`，actionlint 与 action pins 通过 [F-ECHO-028]。
 
 依赖审计必须保留原始 exit code：desktop 与内置 `ppt_ib_deck` 的 npm audit 均为 `0` finding；Python six locks 均有效，runtime/dev/build 各仍报告同一项未修复且上游无 `fix_versions` 的 `torch` `CVE-2025-3000`，按 [`backend/SECURITY_DEPENDENCY_EXCEPTIONS.md`](../../backend/SECURITY_DEPENDENCY_EXCEPTIONS.md) 控制至 2026-08-12，lint/typecheck/audit-tool 为 `0`。不得把 Python 总体审计写成 clean 或零漏洞。
 
