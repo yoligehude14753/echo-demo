@@ -11,6 +11,10 @@ from app.adapters.repo.migrator import run_migrations
 from app.api import deps as deps_mod
 from app.config import Settings, get_settings
 from app.main import create_app
+from app.security.client_version import (
+    MINIMUM_PUBLIC_CLIENT_VERSION,
+    PUBLIC_CLIENT_VERSION_HEADER,
+)
 from app.security.sessions import (
     EnrollmentAdmissionLimitError,
     EnrollmentAdmissionPolicy,
@@ -338,7 +342,10 @@ def admission_http_client(
     deps_mod.reset_deps_for_test()
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: settings
-    with TestClient(app) as client:
+    with TestClient(
+        app,
+        headers={PUBLIC_CLIENT_VERSION_HEADER: MINIMUM_PUBLIC_CLIENT_VERSION},
+    ) as client:
         yield client, settings
     deps_mod.reset_deps_for_test()
 

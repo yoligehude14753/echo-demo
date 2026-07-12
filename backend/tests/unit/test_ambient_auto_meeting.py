@@ -82,7 +82,9 @@ class AmbientFakeRag(MeetingFakeRag):
         audio_ref: str,
         speaker_id: str | None = None,
         speaker_label: str | None = None,
+        operation_id: str | None = None,
     ) -> str:
+        _ = operation_id
         return "ambient-doc"
 
 

@@ -10,7 +10,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from app.adapters.repo.connection import configure_sqlite_connection
@@ -63,6 +63,17 @@ CREATE INDEX IF NOT EXISTS idx_bm25_index_documents_revision
     ON bm25_index_documents(index_key, updated_revision);
 CREATE INDEX IF NOT EXISTS idx_bm25_index_documents_scope
     ON bm25_index_documents(index_key, tenant_id, owner_id, doc_id);
+CREATE TABLE IF NOT EXISTS bm25_document_projection_fences (
+    index_key TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    doc_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK(generation >= 0),
+    operation TEXT NOT NULL CHECK(operation IN ('index', 'delete')),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (index_key, tenant_id, owner_id, doc_id),
+    FOREIGN KEY (index_key) REFERENCES bm25_index_state(index_key) ON DELETE CASCADE
+);
 """
 
 Payload = dict[str, Any]
@@ -408,6 +419,54 @@ class BM25IndexStore:
         with self._connect() as conn:
             return self._revision(conn)
 
+    def visible_meeting_documents(
+        self,
+        tenant_id: str,
+        owner_id: str,
+        generations: dict[str, int | None],
+    ) -> set[str]:
+        """Filter cached meeting docs against the authoritative current intent."""
+
+        if not generations:
+            return set()
+        with self._connect() as conn:
+            if not self._table_exists(conn, "meetings"):
+                return set(generations)
+            meeting_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(meetings)").fetchall()
+            }
+            if "rag_projection_generation" not in meeting_columns:
+                return set(generations)
+            rows = conn.execute(
+                """SELECT id, rag_projection_state, rag_projection_generation
+                   FROM meetings WHERE tenant_id = ? AND owner_id = ?""",
+                (tenant_id, owner_id),
+            ).fetchall()
+        by_doc_id = {f"meeting-{row['id']}": row for row in rows}
+        visible: set[str] = set()
+        for doc_id, payload_generation in generations.items():
+            row = by_doc_id.get(doc_id)
+            if row is None:
+                # Only unmanaged legacy indexes may predate a meeting row.
+                # A generation-bearing document without its authority row is
+                # orphaned and must fail closed.
+                if payload_generation is None:
+                    visible.add(doc_id)
+                continue
+            if str(row["rag_projection_state"] or "") in {
+                "delete_pending",
+                "delete_failed",
+                "deleted",
+            }:
+                continue
+            current_generation = int(row["rag_projection_generation"] or 0)
+            if payload_generation is None:
+                if current_generation == 0:
+                    visible.add(doc_id)
+            elif current_generation == payload_generation:
+                visible.add(doc_id)
+        return visible
+
     def _manifest_exists(
         self,
         conn: sqlite3.Connection,
@@ -562,7 +621,14 @@ class BM25IndexStore:
         doc_id: str,
         index_path: Path,
         mutator: PayloadMutator,
+        *,
+        projection_generation: int | None = None,
+        projection_operation: Literal["index", "delete"] | None = None,
     ) -> IndexMutation:
+        if (projection_generation is None) != (projection_operation is None):
+            raise ValueError("projection generation and operation must be provided together")
+        if projection_generation is not None and projection_generation < 0:
+            raise ValueError("projection generation must be non-negative")
         target = self._safe_index_path(index_path)
         try:
             with self._connect() as conn:
@@ -582,6 +648,40 @@ class BM25IndexStore:
                         )
                     existing = decoded
                     target = self._safe_index_path(str(row["index_path"]))
+                if projection_generation is not None and projection_operation is not None:
+                    fence = conn.execute(
+                        """SELECT generation, operation
+                           FROM bm25_document_projection_fences
+                           WHERE index_key = ? AND tenant_id = ? AND owner_id = ?
+                             AND doc_id = ?""",
+                        (self.index_key, tenant_id, owner_id, doc_id),
+                    ).fetchone()
+                    if fence is not None and (
+                        int(fence["generation"]) > projection_generation
+                        or (
+                            int(fence["generation"]) == projection_generation
+                            and str(fence["operation"]) != projection_operation
+                        )
+                    ):
+                        conn.commit()
+                        return IndexMutation(self._revision(conn), existing, False)
+                    conn.execute(
+                        """INSERT INTO bm25_document_projection_fences
+                           (index_key, tenant_id, owner_id, doc_id, generation, operation)
+                           VALUES (?, ?, ?, ?, ?, ?)
+                           ON CONFLICT(index_key, tenant_id, owner_id, doc_id) DO UPDATE SET
+                               generation = excluded.generation,
+                               operation = excluded.operation,
+                               updated_at = CURRENT_TIMESTAMP""",
+                        (
+                            self.index_key,
+                            tenant_id,
+                            owner_id,
+                            doc_id,
+                            projection_generation,
+                            projection_operation,
+                        ),
+                    )
                 proposed = mutator(existing)
                 revision = self._revision(conn)
                 if proposed is None:

@@ -745,7 +745,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=$SECRET_ENV_FILE
 EnvironmentFile=$runtime_env
-ExecStart=$working_dir/backend/.venv/bin/python -m uvicorn app.main:app --app-dir $working_dir/backend --host 127.0.0.1 --port $port --proxy-headers --forwarded-allow-ips=127.0.0.1,::1
+ExecStart=$working_dir/backend/.venv/bin/python -m uvicorn app.main:app --app-dir $working_dir/backend --host 127.0.0.1 --port $port --ws-max-size 4096 --proxy-headers --forwarded-allow-ips=127.0.0.1,::1
 Restart=$restart_policy
 RestartSec=3
 TimeoutStopSec=30

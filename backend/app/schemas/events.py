@@ -117,6 +117,8 @@ class ClientHello(BaseModel):
     type: Literal["client_hello"] = "client_hello"
     last_seq: int = 0
     stream_epoch: str | None = None
+    # Compatibility parsing owns the 64-character bound so every syntactically
+    # invalid/oversized public version fails with the same upgrade close code.
     client_version: str | None = None
     auth: ClientHelloAuth | None = None
     # Kept only for local/legacy clients. Public mode accepts ``auth`` above.

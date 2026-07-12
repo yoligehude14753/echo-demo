@@ -1120,7 +1120,16 @@ class AgentTaskService:
         if workflow_arbitrated:
             await self.workflow.flush_outbox()
         if projection_seq is not None:
-            await self._project_event(event.task_id, projection_seq, lease_token=lease_token)
+            try:
+                await self._project_event(event.task_id, projection_seq, lease_token=lease_token)
+            except LeaseOwnershipError:
+                if lease_token is not None:
+                    raise
+                _log.info(
+                    "agent event projection deferred after lease race task=%s seq=%s",
+                    event.task_id,
+                    projection_seq,
+                )
         return None if duplicate else stored
 
     async def _project_event(
@@ -1131,61 +1140,353 @@ class AgentTaskService:
         lease_token: LeaseToken | None,
     ) -> None:
         tenant_id, _device_id, owner_id = _scope()
-        if lease_token is not None:
-            await self._assert_task_lease(
-                lease_token,
-                tenant_id=tenant_id,
-                owner_id=owner_id,
-                task_id=task_id,
-            )
-        async with self._conn() as conn:
-            cur = await conn.execute(
-                """SELECT payload_json, projected_at FROM agent_task_events
-                   WHERE task_id = ? AND seq = ? AND tenant_id = ? AND owner_id = ?""",
-                (task_id, seq, tenant_id, owner_id),
-            )
-            event_row = await cur.fetchone()
-            await cur.close()
-            cur = await conn.execute(
-                "SELECT * FROM agent_tasks WHERE task_id = ? AND tenant_id = ? AND owner_id = ?",
-                (task_id, tenant_id, owner_id),
-            )
-            task_row = await cur.fetchone()
-            await cur.close()
-        if event_row is None or task_row is None or event_row["projected_at"] is not None:
+        claimed = await self._claim_event_projection(
+            task_id,
+            seq,
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            task_lease=lease_token,
+        )
+        if claimed is None:
             return
-        stored = EchoTaskEvent.model_validate_json(event_row["payload_json"])
-        rec = _row_to_record(task_row)
-        # Keep the user-visible agent stream behind the durable workflow
-        # projection.  Otherwise a renderer can observe a terminal Agent state
-        # and immediately read the linked workflow while it is still in
-        # cancel_requested/running (the packaged E2E exposed this race).
-        await self._project_workflow_event(rec, stored)
-        if stored.event != "task.terminal_ignored":
-            await self.event_bus.publish(
-                EchoEvent(type="agent.task.event", payload=stored.model_dump(mode="json"))
+        projection_lease, stored, rec = claimed
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_projection_lease(projection_lease),
+            name=f"agent-projection-heartbeat:{task_id}:{seq}",
+        )
+        try:
+            # Keep the user-visible agent stream behind the durable workflow
+            # projection.  Otherwise a renderer can observe a terminal Agent state
+            # and immediately read the linked workflow while it is still in
+            # cancel_requested/running (the packaged E2E exposed this race).
+            await self._project_workflow_event(
+                rec,
+                stored,
+                projection_lease=projection_lease,
+                projection_seq=seq,
             )
+            async with self._conn() as conn:
+                await conn.execute("BEGIN IMMEDIATE")
+                try:
+                    await self._assert_record_projection(
+                        projection_lease,
+                        rec,
+                        seq,
+                        conn=conn,
+                    )
+                    if stored.event != "task.terminal_ignored":
+                        await self.workflow.append_domain_event_in_transaction(
+                            conn,
+                            EchoEvent(
+                                type="agent.task.event",
+                                payload=stored.model_dump(mode="json"),
+                            ),
+                            aggregate_id=rec.task_id,
+                        )
+                    changed = await conn.execute(
+                        """UPDATE agent_task_events SET projected_at = ?
+                           WHERE task_id = ? AND seq = ? AND tenant_id = ? AND owner_id = ?
+                             AND projected_at IS NULL""",
+                        (utc_now_iso(), task_id, seq, tenant_id, owner_id),
+                    )
+                    if changed.rowcount != 1:
+                        await changed.close()
+                        raise LeaseOwnershipError(
+                            "agent event projection was completed by another fenced worker"
+                        )
+                    await changed.close()
+                    await conn.commit()
+                except BaseException:
+                    await conn.rollback()
+                    raise
+            try:
+                await self.workflow.flush_outbox()
+            except Exception as exc:
+                # The projection marker and both outboxes are already durable.  A
+                # failed eager delivery must not reopen the fenced transaction;
+                # the application-wide outbox poller will retry it.
+                _log.warning(
+                    "agent projected outbox flush deferred task=%s seq=%s error_type=%s",
+                    task_id,
+                    seq,
+                    type(exc).__name__,
+                )
+        finally:
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            try:
+                await self._lease_store.release(projection_lease)
+            except Exception as exc:
+                _log.warning(
+                    "agent projection lease release failed task=%s seq=%s error_type=%s",
+                    task_id,
+                    seq,
+                    type(exc).__name__,
+                )
+
+    async def _claim_event_projection(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        task_lease: LeaseToken | None,
+    ) -> tuple[LeaseToken, EchoTaskEvent, AgentTaskRecord] | None:
+        resource_id = self._projection_resource_id(task_id, seq)
         async with self._conn() as conn:
             await conn.execute("BEGIN IMMEDIATE")
             try:
-                if lease_token is not None:
+                if task_lease is not None:
                     await self._assert_task_lease(
-                        lease_token,
+                        task_lease,
                         tenant_id=tenant_id,
                         owner_id=owner_id,
                         task_id=task_id,
                         conn=conn,
                     )
-                await conn.execute(
-                    """UPDATE agent_task_events SET projected_at = ?
-                       WHERE task_id = ? AND seq = ? AND tenant_id = ? AND owner_id = ?
-                         AND projected_at IS NULL""",
-                    (utc_now_iso(), task_id, seq, tenant_id, owner_id),
+                cur = await conn.execute(
+                    """SELECT payload_json, projected_at FROM agent_task_events
+                       WHERE task_id = ? AND seq = ? AND tenant_id = ? AND owner_id = ?""",
+                    (task_id, seq, tenant_id, owner_id),
+                )
+                event_row = await cur.fetchone()
+                await cur.close()
+                cur = await conn.execute(
+                    """SELECT * FROM agent_tasks
+                       WHERE task_id = ? AND tenant_id = ? AND owner_id = ?""",
+                    (task_id, tenant_id, owner_id),
+                )
+                task_row = await cur.fetchone()
+                await cur.close()
+                if event_row is None or task_row is None or event_row["projected_at"] is not None:
+                    await conn.commit()
+                    return None
+                projection_lease = await self._lease_store.acquire(
+                    tenant_id=tenant_id,
+                    owner_id=owner_id,
+                    resource_kind="agent_projection",
+                    resource_id=resource_id,
+                    holder_id=f"{self._holder_id}:projection:{seq}",
+                    ttl_seconds=self._bridge_lease_ttl_seconds,
+                    conn=conn,
                 )
                 await conn.commit()
             except BaseException:
                 await conn.rollback()
                 raise
+        if projection_lease is None:
+            raise LeaseOwnershipError(
+                f"agent event projection is owned by another worker: {task_id} seq={seq}"
+            )
+        return (
+            projection_lease,
+            EchoTaskEvent.model_validate_json(event_row["payload_json"]),
+            _row_to_record(task_row),
+        )
+
+    @staticmethod
+    def _projection_resource_id(task_id: str, seq: int) -> str:
+        digest = hashlib.sha256(f"{task_id}\0{seq}".encode()).hexdigest()[:32]
+        return f"agent-projection-{digest}"
+
+    @staticmethod
+    def _workflow_delivery_key(
+        rec: AgentTaskRecord,
+        *,
+        event_type: str,
+        projection_seq: int,
+        subject: dict[str, Any] | None = None,
+    ) -> str:
+        material = json.dumps(
+            {
+                "task_id": rec.task_id,
+                "seq": projection_seq,
+                "event_type": event_type,
+                "subject": subject or {},
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(material.encode()).hexdigest()
+        return f"agent-delivery:{digest}"
+
+    async def _heartbeat_projection_lease(self, lease: LeaseToken) -> None:
+        while True:
+            await asyncio.sleep(self._bridge_heartbeat_seconds)
+            try:
+                renewed = await self._lease_store.renew(
+                    lease,
+                    ttl_seconds=self._bridge_lease_ttl_seconds,
+                )
+            except Exception as exc:
+                _log.warning(
+                    "agent projection lease heartbeat failed task=%s error_type=%s",
+                    lease.resource_id,
+                    type(exc).__name__,
+                )
+                return
+            if renewed is None:
+                _log.warning("agent projection lease lost resource=%s", lease.resource_id)
+                return
+
+    async def _assert_record_projection(
+        self,
+        token: LeaseToken,
+        rec: AgentTaskRecord,
+        seq: int,
+        *,
+        conn: aiosqlite.Connection | None = None,
+    ) -> None:
+        if (
+            token.tenant_id != rec.tenant_id
+            or token.owner_id != rec.owner_id
+            or token.resource_kind != "agent_projection"
+            or token.resource_id != self._projection_resource_id(rec.task_id, seq)
+        ):
+            raise LeaseOwnershipError("agent projection lease scope does not match event")
+        await self._lease_store.assert_owned(token, conn=conn)
+
+    async def _workflow_delivery_exists(
+        self,
+        rec: AgentTaskRecord,
+        *,
+        event_type: str,
+        projection_seq: int,
+        subject: dict[str, Any] | None = None,
+    ) -> bool:
+        if not rec.workflow_run_id:
+            return False
+        delivery_key = self._workflow_delivery_key(
+            rec,
+            event_type=event_type,
+            projection_seq=projection_seq,
+            subject=subject,
+        )
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """SELECT event_type, payload_json FROM workflow_events
+                   WHERE tenant_id = ? AND owner_id = ? AND run_id = ?
+                   ORDER BY seq ASC""",
+                (
+                    rec.tenant_id,
+                    rec.owner_id,
+                    rec.workflow_run_id,
+                ),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+        anchored = False
+        for row in rows:
+            payload = _json(row["payload_json"], {})
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("agent_delivery_key") == delivery_key:
+                return True
+            is_agent_anchor = payload.get("task_id") == rec.task_id and isinstance(
+                payload.get("seq"), int
+            )
+            if is_agent_anchor:
+                row_agent_seq = int(payload["seq"])
+                if row_agent_seq == projection_seq:
+                    anchored = True
+                    if row["event_type"] == event_type and not subject:
+                        return True
+                    continue
+                if anchored:
+                    break
+            if (
+                anchored
+                and row["event_type"] == event_type
+                and all(payload.get(key) == value for key, value in (subject or {}).items())
+            ):
+                return True
+        return False
+
+    async def _record_workflow_event_once(
+        self,
+        rec: AgentTaskRecord,
+        *,
+        event_type: str,
+        projection_seq: int,
+        subject: dict[str, Any] | None = None,
+        message: str | None,
+        payload: dict[str, Any],
+        visibility: str,
+        projection_lease: LeaseToken,
+    ) -> bool:
+        if not rec.workflow_run_id:
+            return False
+        delivery_key = self._workflow_delivery_key(
+            rec,
+            event_type=event_type,
+            projection_seq=projection_seq,
+            subject=subject,
+        )
+        async with self._conn() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self._assert_record_projection(
+                    projection_lease,
+                    rec,
+                    projection_seq,
+                    conn=conn,
+                )
+                inserted = await self.workflow.record_agent_delivery_once_in_transaction(
+                    conn,
+                    rec.workflow_run_id,
+                    delivery_key=delivery_key,
+                    event_type=event_type,
+                    message=message,
+                    payload=payload,
+                    visibility=visibility,  # type: ignore[arg-type]
+                )
+                await conn.commit()
+            except BaseException:
+                await conn.rollback()
+                raise
+        return inserted
+
+    async def _merge_workflow_output_once(
+        self,
+        rec: AgentTaskRecord,
+        *,
+        projection_seq: int,
+        patch: dict[str, Any],
+        event_type: str,
+        message: str,
+        projection_lease: LeaseToken,
+    ) -> bool:
+        if not rec.workflow_run_id:
+            return False
+        delivery_key = self._workflow_delivery_key(
+            rec,
+            event_type=event_type,
+            projection_seq=projection_seq,
+        )
+        async with self._conn() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self._assert_record_projection(
+                    projection_lease,
+                    rec,
+                    projection_seq,
+                    conn=conn,
+                )
+                inserted = await self.workflow.merge_agent_output_once_in_transaction(
+                    conn,
+                    rec.workflow_run_id,
+                    delivery_key=delivery_key,
+                    patch=patch,
+                    event_type=event_type,
+                    message=message,
+                )
+                await conn.commit()
+            except BaseException:
+                await conn.rollback()
+                raise
+        return inserted
 
     async def _assert_task_lease(
         self,
@@ -1249,6 +1550,9 @@ class AgentTaskService:
         self,
         rec: AgentTaskRecord,
         event: EchoTaskEvent,
+        *,
+        projection_lease: LeaseToken,
+        projection_seq: int,
     ) -> None:
         if not rec.workflow_run_id:
             return
@@ -1256,13 +1560,16 @@ class AgentTaskService:
         visibility = (
             event.visibility if event.visibility in {"user", "debug", "hidden"} else "debug"
         )
+        workflow_event_type = f"agent.{event.event}"
         if event.event == "task.terminal_ignored":
-            await self.workflow.record_event(
-                rec.workflow_run_id,
-                "agent.task.terminal_ignored",
+            await self._record_workflow_event_once(
+                rec,
+                event_type="agent.task.terminal_ignored",
+                projection_seq=projection_seq,
                 message=event.message,
                 payload=payload,
                 visibility="debug",
+                projection_lease=projection_lease,
             )
             return
         state = event.state
@@ -1274,27 +1581,40 @@ class AgentTaskService:
         ):
             # Runner may collapse started+completed into one terminal event. Preserve
             # the strict workflow state machine by materializing pending -> running first.
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
             await self.workflow.start_run(rec.workflow_run_id)
-        await self.workflow.record_event(
-            rec.workflow_run_id,
-            f"agent.{event.event}",
+        await self._record_workflow_event_once(
+            rec,
+            event_type=workflow_event_type,
+            projection_seq=projection_seq,
             message=event.message,
             payload=payload,
             visibility=visibility,
+            projection_lease=projection_lease,
         )
         if event.event == "task.artifact_updated" and event.artifacts:
-            await self._import_agent_artifacts(rec, event.artifacts)
-            await self.workflow.merge_output(
-                rec.workflow_run_id,
-                {
-                    "agent_task_id": rec.task_id,
-                    "runner_task_id": event.runner_task_id or rec.runner_task_id,
-                    "artifacts": event.artifacts,
-                },
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
+            await self._import_agent_artifacts(
+                rec,
+                event.artifacts,
+                projection_lease=projection_lease,
+                projection_seq=projection_seq,
+            )
+            output_patch = {
+                "agent_task_id": rec.task_id,
+                "runner_task_id": event.runner_task_id or rec.runner_task_id,
+                "artifacts": event.artifacts,
+            }
+            await self._merge_workflow_output_once(
+                rec,
+                projection_seq=projection_seq,
+                patch=output_patch,
                 event_type="agent.artifacts_projected",
                 message="Agent 产物已写入统一投影",
+                projection_lease=projection_lease,
             )
         if state == AgentTaskState.SUCCEEDED.value:
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
             await self.workflow.complete_run(
                 rec.workflow_run_id,
                 output={
@@ -1305,12 +1625,14 @@ class AgentTaskService:
                 message=event.message or "任务完成",
             )
         elif state == AgentTaskState.FAILED.value:
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
             await self.workflow.fail_run(
                 rec.workflow_run_id,
                 error=event.message or "任务失败",
                 payload={"agent_task_id": rec.task_id},
             )
         elif state == AgentTaskState.TIMEOUT.value:
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
             await self.workflow.timeout_run(
                 rec.workflow_run_id,
                 error=event.message or "任务超时",
@@ -1320,18 +1642,24 @@ class AgentTaskService:
             AgentTaskState.CANCEL_FAILED.value,
         }:
             await self._project_workflow_cancel_terminal(
-                rec.workflow_run_id,
+                rec,
                 cancel_state=state,
                 message=event.message,
+                projection_lease=projection_lease,
+                projection_seq=projection_seq,
             )
 
     async def _project_workflow_cancel_terminal(
         self,
-        run_id: str,
+        rec: AgentTaskRecord,
         *,
         cancel_state: str,
         message: str | None,
+        projection_lease: LeaseToken,
+        projection_seq: int,
     ) -> None:
+        assert rec.workflow_run_id is not None
+        run_id = rec.workflow_run_id
         current = await self.workflow.get_run(run_id)
         if current is not None and current.state == cancel_state:
             return
@@ -1341,16 +1669,22 @@ class AgentTaskService:
                 if cancel_state == AgentTaskState.CANCELLED.value
                 else "Agent Runner 取消失败"
             )
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
             await self.workflow.request_cancel(run_id, reason=reason)
         if cancel_state == AgentTaskState.CANCELLED.value:
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
             await self.workflow.mark_cancelled(run_id, message=message or "任务已取消")
         else:
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
             await self.workflow.mark_cancel_failed(run_id, error=message or "取消失败")
 
     async def _import_agent_artifacts(
         self,
         rec: AgentTaskRecord,
         artifacts: list[dict[str, Any]],
+        *,
+        projection_lease: LeaseToken,
+        projection_seq: int,
     ) -> None:
         if not rec.workflow_run_id or not rec.runner_task_id:
             return
@@ -1363,13 +1697,22 @@ class AgentTaskService:
             cache_rel = _cache_relpath(rec.task_id, relpath)
             if not encoded or cache_rel is None:
                 await self._record_artifact_import_failure(
-                    rec.workflow_run_id,
+                    rec,
                     relpath=relpath,
                     reason="invalid_path",
                     message="Agent 产物路径不合法",
+                    projection_lease=projection_lease,
+                    projection_seq=projection_seq,
                 )
                 continue
             artifact_id = _agent_artifact_id(rec.task_id, relpath)
+            if await self._workflow_delivery_exists(
+                rec,
+                event_type="agent.artifact_imported",
+                projection_seq=projection_seq,
+                subject={"artifact_id": artifact_id},
+            ):
+                continue
             cache_path = (self.settings.storage_dir / cache_rel).expanduser().resolve()
             upstream_url = (
                 f"{self.backend.base_url}/api/v1/tasks/"
@@ -1380,6 +1723,8 @@ class AgentTaskService:
                 relpath=relpath,
                 upstream_url=upstream_url,
                 cache_path=cache_path,
+                projection_lease=projection_lease,
+                projection_seq=projection_seq,
             )
             if download is None:
                 continue
@@ -1403,9 +1748,21 @@ class AgentTaskService:
                         "legacy_url": str(item.get("url") or ""),
                     },
                 )
+                delivery_key = self._workflow_delivery_key(
+                    rec,
+                    event_type="agent.artifact_imported",
+                    projection_seq=projection_seq,
+                    subject={"artifact_id": artifact.artifact_id},
+                )
                 async with self._conn() as conn:
                     await conn.execute("BEGIN IMMEDIATE")
                     try:
+                        await self._assert_record_projection(
+                            projection_lease,
+                            rec,
+                            projection_seq,
+                            conn=conn,
+                        )
                         await self.artifact_repo.save_artifact_tx(
                             conn,
                             artifact,
@@ -1419,11 +1776,50 @@ class AgentTaskService:
                             todo_id=run.todo_id,
                             run_id=rec.workflow_run_id,
                         )
+                        imported = await self.workflow.record_agent_delivery_once_in_transaction(
+                            conn,
+                            rec.workflow_run_id,
+                            delivery_key=delivery_key,
+                            event_type="agent.artifact_imported",
+                            message="Agent 产物已归档",
+                            payload={
+                                "artifact_id": artifact.artifact_id,
+                                "relpath": relpath,
+                                "link_id": link.link_id,
+                            },
+                            visibility="debug",
+                        )
+                        if imported:
+                            await self.workflow.append_domain_event_in_transaction(
+                                conn,
+                                EchoEvent(
+                                    type="artifact.ready",
+                                    meeting_id=run.meeting_id,
+                                    payload={
+                                        **artifact.model_dump(mode="json"),
+                                        "run_id": rec.workflow_run_id,
+                                        "agent_task_id": rec.task_id,
+                                        "links": [
+                                            {
+                                                "link_id": link.link_id,
+                                                "source": link.source,
+                                                "meeting_id": link.meeting_id,
+                                                "todo_id": link.todo_id,
+                                                "run_id": link.run_id,
+                                            }
+                                        ],
+                                    },
+                                ),
+                                aggregate_id=artifact.artifact_id,
+                            )
                         await conn.commit()
                     except BaseException:
                         await conn.rollback()
                         raise
+            except LeaseOwnershipError:
+                raise
             except Exception as exc:
+                await self._assert_record_projection(projection_lease, rec, projection_seq)
                 with suppress(OSError):
                     cache_path.unlink(missing_ok=True)
                 _log.warning(
@@ -1432,44 +1828,13 @@ class AgentTaskService:
                     type(exc).__name__,
                 )
                 await self._record_artifact_import_failure(
-                    rec.workflow_run_id,
+                    rec,
                     relpath=relpath,
                     reason="registration_failed",
+                    projection_lease=projection_lease,
+                    projection_seq=projection_seq,
                 )
                 continue
-
-            saved = artifact
-            await self.workflow.record_event(
-                rec.workflow_run_id,
-                "agent.artifact_imported",
-                message="Agent 产物已归档",
-                payload={
-                    "artifact_id": saved.artifact_id,
-                    "relpath": relpath,
-                    "link_id": link.link_id,
-                },
-                visibility="debug",
-            )
-            await self.event_bus.publish(
-                EchoEvent(
-                    type="artifact.ready",
-                    meeting_id=run.meeting_id,
-                    payload={
-                        **saved.model_dump(mode="json"),
-                        "run_id": rec.workflow_run_id,
-                        "agent_task_id": rec.task_id,
-                        "links": [
-                            {
-                                "link_id": link.link_id,
-                                "source": link.source,
-                                "meeting_id": link.meeting_id,
-                                "todo_id": link.todo_id,
-                                "run_id": link.run_id,
-                            }
-                        ],
-                    },
-                )
-            )
 
     async def _download_agent_artifact(
         self,
@@ -1478,10 +1843,13 @@ class AgentTaskService:
         relpath: str,
         upstream_url: str,
         cache_path: Path,
+        projection_lease: LeaseToken,
+        projection_seq: int,
     ) -> ArtifactDownloadResult | None:
         assert rec.workflow_run_id is not None
         reason = "transfer_failed"
         try:
+            await self._assert_record_projection(projection_lease, rec, projection_seq)
             return await download_artifact_to_path(
                 upstream_url,
                 cache_path,
@@ -1492,6 +1860,8 @@ class AgentTaskService:
             reason = "size_limit_exceeded"
         except ArtifactContentLengthError:
             reason = "invalid_content_length"
+        except LeaseOwnershipError:
+            raise
         except httpx.HTTPError:
             reason = "upstream_unavailable"
         except OSError:
@@ -1503,26 +1873,34 @@ class AgentTaskService:
                 type(exc).__name__,
             )
         await self._record_artifact_import_failure(
-            rec.workflow_run_id,
+            rec,
             relpath=relpath,
             reason=reason,
+            projection_lease=projection_lease,
+            projection_seq=projection_seq,
         )
         return None
 
     async def _record_artifact_import_failure(
         self,
-        workflow_run_id: str,
+        rec: AgentTaskRecord,
         *,
         relpath: str,
         reason: str,
         message: str = "Agent 产物导入失败",
+        projection_lease: LeaseToken,
+        projection_seq: int,
     ) -> None:
-        await self.workflow.record_event(
-            workflow_run_id,
-            "agent.artifact_import_failed",
+        assert rec.workflow_run_id is not None
+        await self._record_workflow_event_once(
+            rec,
+            event_type="agent.artifact_import_failed",
+            projection_seq=projection_seq,
+            subject={"relpath": relpath, "reason": reason},
             message=message,
             payload={"relpath": relpath, "reason": reason},
             visibility="debug",
+            projection_lease=projection_lease,
         )
 
     async def _read_task(self, task_id: str) -> AgentTaskRecord | None:
@@ -1849,12 +2227,15 @@ class AgentTaskService:
                 await self.recover_cancel_commands_once()
                 recoverable = await self._list_recoverable_tasks()
                 for rec in recoverable:
+                    if await self._has_pending_event_projection(rec):
+                        await self._replay_pending_for_task(rec)
+                    current = await self.get_task(rec.task_id) or rec
                     if (
-                        rec.runner_task_id
-                        and rec.bridge_completed_at is None
-                        and rec.state != AgentTaskState.WAITING_PERMISSION
+                        current.runner_task_id
+                        and current.bridge_completed_at is None
+                        and current.state != AgentTaskState.WAITING_PERMISSION
                     ):
-                        self._start_bridge_if_retry_due(rec)
+                        self._start_bridge_if_retry_due(current)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -2265,6 +2646,19 @@ class AgentTaskService:
             await self._replay_pending_projections(rec, lease)
         finally:
             await self._lease_store.release(lease)
+
+    async def _has_pending_event_projection(self, rec: AgentTaskRecord) -> bool:
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """SELECT 1 FROM agent_task_events
+                   WHERE tenant_id = ? AND owner_id = ? AND task_id = ?
+                     AND projected_at IS NULL
+                   LIMIT 1""",
+                (rec.tenant_id, rec.owner_id, rec.task_id),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+        return row is not None
 
     async def _reconcile_workflow_projection(self, rec: AgentTaskRecord) -> None:
         """Repair workflow projection from authoritative agent_tasks after a crash."""

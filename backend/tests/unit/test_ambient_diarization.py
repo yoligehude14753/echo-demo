@@ -60,6 +60,7 @@ class FakeRag:
         audio_ref: str,
         speaker_id: str | None = None,
         speaker_label: str | None = None,
+        operation_id: str | None = None,
     ) -> str:
         self.ingested.append(
             {
@@ -68,6 +69,7 @@ class FakeRag:
                 "audio_ref": audio_ref,
                 "speaker_id": speaker_id,
                 "speaker_label": speaker_label,
+                "operation_id": operation_id,
             }
         )
         return f"ambient-doc-{len(self.ingested)}"

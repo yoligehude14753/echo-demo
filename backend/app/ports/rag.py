@@ -35,7 +35,14 @@ class RagPort(Protocol):
         返回 doc_id。
         """
 
-    async def ingest_meeting(self, meeting_id: str, transcript: str, title: str) -> str:
+    async def ingest_meeting(
+        self,
+        meeting_id: str,
+        transcript: str,
+        title: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> str:
         """会议结束后把纪要+逐字稿入库。返回 doc_id。"""
 
     async def ingest_ambient_segment(
@@ -46,15 +53,31 @@ class RagPort(Protocol):
         audio_ref: str,
         speaker_id: str | None = None,
         speaker_label: str | None = None,
+        operation_id: str | None = None,
     ) -> str:
         """ambient 主链路：按日追加 STT 文本段。返回 doc_id（ambient-YYYYMMDD）。
 
         speaker_id/speaker_label 走 metadata，便于 RAG 检索时定位说话人。
+        operation_id 来自 durable ambient row；恢复重放时复用它以覆盖而非追加。
         """
+
+    async def contains_ambient_segment(
+        self,
+        text: str,
+        *,
+        captured_at: str,
+        audio_ref: str,
+    ) -> bool:
+        """Match pre-operation-ID ambient evidence inside the current principal scope."""
 
     async def query(self, query: str, *, top_k: int = 5) -> list[RagChunk]: ...
 
-    async def delete(self, doc_id: str) -> None: ...
+    async def delete(
+        self,
+        doc_id: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> None: ...
 
     async def find_by_source_path(self, source_path: str) -> str | None:
         """按原始绝对路径查 doc_id；不存在返回 None。"""

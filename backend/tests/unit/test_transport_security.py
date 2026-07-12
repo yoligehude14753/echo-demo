@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from app.adapters.repo.migrator import run_migrations
 from app.api import deps as deps_mod
 from app.config import OFFICIAL_ELECTRON_ORIGIN, Settings, get_settings
 from app.main import create_app
@@ -14,11 +18,48 @@ from app.security.access import (
     PreAuthAdmission,
     PreAuthAdmissionError,
 )
+from app.security.client_version import (
+    MINIMUM_PUBLIC_CLIENT_VERSION,
+    PUBLIC_CLIENT_VERSION_HEADER,
+)
 from app.security.paths import route_scope_path
 from app.security.sessions import SessionStore
 from app.upload.ingress import UploadIngressMiddleware
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+
+SUPPORTED_CLIENT_HEADERS = {
+    PUBLIC_CLIENT_VERSION_HEADER: MINIMUM_PUBLIC_CLIENT_VERSION,
+}
+
+
+class _SlowJsonBody(httpx.AsyncByteStream):
+    def __init__(
+        self,
+        payload: bytes,
+        *,
+        entered: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self._payload = payload
+        self._entered = entered
+        self._release = release
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        midpoint = max(1, len(self._payload) // 2)
+        self._entered.set()
+        yield self._payload[:midpoint]
+        await self._release.wait()
+        yield self._payload[midpoint:]
+
+
+def _enrollment_body(label: str) -> bytes:
+    return json.dumps(
+        {
+            "enrollment_id": f"{label}-enrollment-" + "e" * 40,
+            "device_secret": f"{label}-device-" + "s" * 40,
+        }
+    ).encode()
 
 
 @pytest.mark.unit
@@ -62,10 +103,66 @@ def test_cors_wraps_identity_policy_errors(
     monkeypatch.setattr("app.main.get_settings", lambda: settings)
     deps_mod.reset_deps_for_test()
     app = create_app()
-    response = TestClient(app).get("/meetings", headers={"Origin": origin})
+    response = TestClient(app, headers=SUPPORTED_CLIENT_HEADERS).get(
+        "/meetings", headers={"Origin": origin}
+    )
 
     assert response.status_code == 401
     assert response.headers["access-control-allow-origin"] == origin
+
+    upgrade = TestClient(app).get("/meetings", headers={"Origin": origin})
+    assert upgrade.status_code == 426
+    assert upgrade.headers["x-echodesk-minimum-client-version"] == "0.3.1"
+    exposed = upgrade.headers["access-control-expose-headers"].lower()
+    assert "x-echodesk-minimum-client-version" in exposed
+
+
+@pytest.mark.unit
+def test_public_remote_peer_bypasses_lan_share_gate_but_not_session_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "public-remote-peer.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        skill_executor_build_dir=tmp_path / "skills",
+        public_demo_mode=True,
+        lan_full_api_enabled=False,
+        workspace_scan_on_startup=False,
+        tts_enabled=False,
+        diarizer_enabled=False,
+        web_search_enabled=False,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    deps_mod.reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    with TestClient(
+        app,
+        headers=SUPPORTED_CLIENT_HEADERS,
+        client=("203.0.113.42", 43100),
+    ) as client:
+        unauthenticated = client.get("/meetings")
+        assert unauthenticated.status_code == 401
+        assert unauthenticated.json()["error"]["code"] == "session_required"
+
+        enrolled = client.post(
+            "/session/enroll",
+            json={
+                "enrollment_id": "remote-proxy-enrollment-" + "e" * 40,
+                "device_secret": "remote-proxy-device-" + "s" * 40,
+            },
+        )
+        assert enrolled.status_code == 201, enrolled.text
+        authorized = client.get(
+            "/meetings",
+            headers={"Authorization": f"Bearer {enrolled.json()['token']}"},
+        )
+        assert authorized.status_code == 200, authorized.text
+    deps_mod.reset_deps_for_test()
 
 
 @pytest.mark.unit
@@ -259,7 +356,7 @@ def test_explicit_http_origin_requires_allowlist_while_missing_origin_remains_co
         calls += 1
         return {"ok": True}
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=SUPPORTED_CLIENT_HEADERS) as client:
         for origin in ("https://evil.example", "", "null", f"{allowed_origin},https://evil"):
             denied = client.post("/transport-origin-probe", headers={"Origin": origin})
             assert denied.status_code == 403
@@ -303,7 +400,7 @@ def test_public_allowed_origin_still_receives_cors_and_can_enroll(
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: settings
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=SUPPORTED_CLIENT_HEADERS) as client:
         response = client.post(
             "/session/enroll",
             headers={"Origin": origin},
@@ -341,7 +438,7 @@ def test_official_electron_origin_keeps_public_session_boundary(
     app.dependency_overrides[get_settings] = lambda: settings
     origin_headers = {"Origin": OFFICIAL_ELECTRON_ORIGIN}
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=SUPPORTED_CLIENT_HEADERS) as client:
         unauthenticated_http = client.get("/meetings", headers=origin_headers)
         assert unauthenticated_http.status_code == 401
         assert (
@@ -349,7 +446,7 @@ def test_official_electron_origin_keeps_public_session_boundary(
         )
 
         with client.websocket_connect("/ws/echo", headers=origin_headers) as websocket:
-            websocket.send_json({"type": "client_hello", "last_seq": 0})
+            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.1"})
             with pytest.raises(WebSocketDisconnect) as unauthenticated_ws:
                 websocket.receive_json()
         assert unauthenticated_ws.value.code == 4401
@@ -380,6 +477,7 @@ def test_official_electron_origin_keeps_public_session_boundary(
                 {
                     "type": "client_hello",
                     "last_seq": 0,
+                    "client_version": "0.3.1",
                     "auth": {"type": "bearer", "token": enrolled.json()["token"]},
                 }
             )
@@ -441,6 +539,350 @@ async def test_preauth_admission_bounds_global_and_peer_concurrency_and_rate() -
 
 
 @pytest.mark.unit
+def test_session_body_admission_is_limited_to_credential_post_routes() -> None:
+    for path in (
+        "/session",
+        "/session/enroll",
+        "/session/renew",
+        "/session/credential/rotate",
+    ):
+        assert AccessPolicy.is_session_body_admission_route("POST", path) is True
+
+    for method, path in (
+        ("GET", "/session/enroll"),
+        ("POST", "/session/claim"),
+        ("POST", "/meetings"),
+    ):
+        assert AccessPolicy.is_session_body_admission_route(method, path) is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_session_body_peer_cap_reserves_global_slot_after_pool_is_reduced(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "session-body-reduced-global.db",
+        public_demo_mode=True,
+        preauth_http_global_concurrent=2,
+        preauth_http_peer_concurrent=4,
+        preauth_http_global_requests_per_window=100,
+        preauth_http_peer_requests_per_window=100,
+        upload_global_concurrent_requests=4,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    policy = AccessPolicy(settings, SessionStore(settings.db_path))
+
+    first_peer_lease = await policy.admit_session_body(
+        method="POST",
+        path="/session/enroll",
+        client_key="peer-a",
+    )
+    assert first_peer_lease is not None
+    with pytest.raises(PreAuthAdmissionError) as same_peer:
+        await policy.admit_session_body(
+            method="POST",
+            path="/session/enroll",
+            client_key="peer-a",
+        )
+    assert same_peer.value.reason == "capacity"
+
+    other_peer_lease = await policy.admit_session_body(
+        method="POST",
+        path="/session/enroll",
+        client_key="peer-b",
+    )
+    assert other_peer_lease is not None
+    await first_peer_lease.release()
+    await other_peer_lease.release()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_path", ["/session/enroll", "/session"])
+async def test_anonymous_session_slow_body_is_fair_per_peer_without_blocking_authenticated_http(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_path: str,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "session-body-fairness.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        skill_executor_build_dir=tmp_path / "skills",
+        public_demo_mode=True,
+        preauth_http_global_concurrent=4,
+        preauth_http_peer_concurrent=1,
+        preauth_http_global_requests_per_window=100,
+        preauth_http_peer_requests_per_window=100,
+        upload_global_concurrent_requests=2,
+        request_body_timeout_s=2,
+        workspace_scan_on_startup=False,
+        tts_enabled=False,
+        diarizer_enabled=False,
+        web_search_enabled=False,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    result = await run_migrations(settings.db_path)
+    assert result.errors == []
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    deps_mod.reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    @app.get("/authenticated-peer-probe")
+    async def authenticated_peer_probe() -> dict[str, bool]:
+        return {"ok": True}
+
+    same_peer_transport = httpx.ASGITransport(
+        app=app,
+        client=("203.0.113.7", 50000),
+    )
+    other_peer_transport = httpx.ASGITransport(
+        app=app,
+        client=("203.0.113.8", 50001),
+    )
+    request_headers = {
+        **SUPPORTED_CLIENT_HEADERS,
+        "Content-Type": "application/json",
+    }
+    first_entered = asyncio.Event()
+    first_release = asyncio.Event()
+    other_entered = asyncio.Event()
+    other_release = asyncio.Event()
+
+    try:
+        async with (
+            httpx.AsyncClient(
+                transport=same_peer_transport,
+                base_url="http://testserver",
+                headers=SUPPORTED_CLIENT_HEADERS,
+            ) as same_peer,
+            httpx.AsyncClient(
+                transport=other_peer_transport,
+                base_url="http://testserver",
+                headers=SUPPORTED_CLIENT_HEADERS,
+            ) as other_peer,
+        ):
+            enrolled = await same_peer.post(
+                "/session/enroll",
+                content=_enrollment_body("authenticated-probe"),
+                headers=request_headers,
+            )
+            assert enrolled.status_code == 201, enrolled.text
+            bearer = enrolled.json()["token"]
+
+            first_task = asyncio.create_task(
+                same_peer.post(
+                    session_path,
+                    content=_SlowJsonBody(
+                        _enrollment_body("slow-first"),
+                        entered=first_entered,
+                        release=first_release,
+                    ),
+                    headers=request_headers,
+                )
+            )
+            await asyncio.wait_for(first_entered.wait(), timeout=1)
+
+            same_peer_second = await same_peer.post(
+                session_path,
+                content=_enrollment_body("same-peer-second"),
+                headers=request_headers,
+            )
+
+            other_task = asyncio.create_task(
+                other_peer.post(
+                    session_path,
+                    content=_SlowJsonBody(
+                        _enrollment_body("slow-other"),
+                        entered=other_entered,
+                        release=other_release,
+                    ),
+                    headers=request_headers,
+                )
+            )
+            await asyncio.wait_for(other_entered.wait(), timeout=1)
+
+            authenticated = await same_peer.get(
+                "/authenticated-peer-probe",
+                headers={"Authorization": f"Bearer {bearer}"},
+            )
+
+            first_release.set()
+            other_release.set()
+            first_response, other_response = await asyncio.gather(first_task, other_task)
+
+        assert same_peer_second.status_code == 429, same_peer_second.text
+        assert same_peer_second.json()["detail"] == ("pre-auth session body capacity exceeded")
+        assert authenticated.status_code == 200, authenticated.text
+        assert first_response.status_code == 201, first_response.text
+        assert other_response.status_code == 201, other_response.text
+    finally:
+        first_release.set()
+        other_release.set()
+        deps_mod.reset_deps_for_test()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelled_anonymous_session_body_releases_peer_fairness_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "session-body-cancel.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        skill_executor_build_dir=tmp_path / "skills",
+        public_demo_mode=True,
+        preauth_http_global_concurrent=2,
+        preauth_http_peer_concurrent=1,
+        preauth_http_global_requests_per_window=100,
+        preauth_http_peer_requests_per_window=100,
+        upload_global_concurrent_requests=2,
+        request_body_timeout_s=2,
+        workspace_scan_on_startup=False,
+        tts_enabled=False,
+        diarizer_enabled=False,
+        web_search_enabled=False,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    result = await run_migrations(settings.db_path)
+    assert result.errors == []
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    deps_mod.reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.9", 50002))
+    request_headers = {
+        **SUPPORTED_CLIENT_HEADERS,
+        "Content-Type": "application/json",
+    }
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=SUPPORTED_CLIENT_HEADERS,
+        ) as client:
+            blocked_task = asyncio.create_task(
+                client.post(
+                    "/session/enroll",
+                    content=_SlowJsonBody(
+                        _enrollment_body("cancelled"),
+                        entered=entered,
+                        release=release,
+                    ),
+                    headers=request_headers,
+                )
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            blocked_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await blocked_task
+
+            recovered = await client.post(
+                "/session/enroll",
+                content=_enrollment_body("after-cancel"),
+                headers=request_headers,
+            )
+
+        assert recovered.status_code == 201, recovered.text
+    finally:
+        release.set()
+        deps_mod.reset_deps_for_test()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancel_after_session_body_parse_releases_peer_fairness_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "session-body-post-parse-cancel.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        skill_executor_build_dir=tmp_path / "skills",
+        public_demo_mode=True,
+        preauth_http_global_concurrent=2,
+        preauth_http_peer_concurrent=1,
+        preauth_http_global_requests_per_window=100,
+        preauth_http_peer_requests_per_window=100,
+        upload_global_concurrent_requests=2,
+        workspace_scan_on_startup=False,
+        tts_enabled=False,
+        diarizer_enabled=False,
+        web_search_enabled=False,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    result = await run_migrations(settings.db_path)
+    assert result.errors == []
+    original_enroll = AccessPolicy.enroll_public_device
+    handler_entered = asyncio.Event()
+    keep_handler_open = asyncio.Event()
+
+    async def stalled_enroll(
+        _policy: AccessPolicy,
+        **_kwargs: object,
+    ) -> object:
+        # Reaching the endpoint proves Starlette already consumed and parsed
+        # the complete JSON body.  Cancellation here exercises the ownership
+        # window after body parsing but before any response exists.
+        handler_entered.set()
+        await keep_handler_open.wait()
+        raise AssertionError("cancelled enrollment handler resumed unexpectedly")
+
+    monkeypatch.setattr(AccessPolicy, "enroll_public_device", stalled_enroll)
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    deps_mod.reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.10", 50003))
+    request_headers = {
+        **SUPPORTED_CLIENT_HEADERS,
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=SUPPORTED_CLIENT_HEADERS,
+        ) as client:
+            cancelled = asyncio.create_task(
+                client.post(
+                    "/session",
+                    content=_enrollment_body("post-parse-cancelled"),
+                    headers=request_headers,
+                )
+            )
+            await asyncio.wait_for(handler_entered.wait(), timeout=1)
+            cancelled.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled
+
+            monkeypatch.setattr(
+                AccessPolicy,
+                "enroll_public_device",
+                original_enroll,
+            )
+            recovered = await client.post(
+                "/session",
+                content=_enrollment_body("post-parse-recovered"),
+                headers=request_headers,
+            )
+
+        assert recovered.status_code == 201, recovered.text
+    finally:
+        keep_handler_open.set()
+        deps_mod.reset_deps_for_test()
+
+
+@pytest.mark.unit
 def test_forged_bearer_failures_are_limited_before_principal_quota(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -465,7 +907,7 @@ def test_forged_bearer_failures_are_limited_before_principal_quota(
     app.dependency_overrides[get_settings] = lambda: settings
     forged = {"Authorization": "Bearer forged-access-token"}
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=SUPPORTED_CLIENT_HEADERS) as client:
         assert client.get("/meetings", headers=forged).status_code == 401
         assert client.get("/meetings", headers=forged).status_code == 401
         limited = client.get("/meetings", headers=forged)
@@ -656,7 +1098,7 @@ def test_allowed_websocket_origin_connects_and_public_failures_are_rate_limited(
     public_app.dependency_overrides[get_settings] = lambda: public_settings
     with TestClient(public_app) as client:
         with client.websocket_connect("/ws/echo") as websocket:
-            websocket.send_json({"type": "client_hello", "last_seq": 0})
+            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.1"})
             with pytest.raises(WebSocketDisconnect) as unauthorized:
                 websocket.receive_json()
         assert unauthorized.value.code == 4401

@@ -9,11 +9,12 @@ import multiprocessing
 import sqlite3
 import threading
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
 from app.adapters.rag import BM25Rag, RagError
-from app.adapters.rag.bm25 import _ScopeIndexSnapshot, _tokenize_cn_en
+from app.adapters.rag.bm25 import _IndexedChunk, _ScopeIndexSnapshot, _tokenize_cn_en
 from app.adapters.rag.index_store import BM25IndexStoreError
 from app.adapters.repo.migrator import run_migrations
 from app.config import Settings
@@ -107,6 +108,199 @@ async def test_delete_removes_chunks(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_meeting_projection_generation_fences_both_race_directions(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    principal = Principal("tenant-a", "device-a", "owner-a", "session-a", "public")
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute(
+            """INSERT INTO meetings
+               (id, state, started_at, tenant_id, device_id, owner_id,
+                rag_projection_state, rag_projection_generation)
+               VALUES ('race', 'finalized', '2026-07-12T00:00:00+00:00',
+                       'tenant-a', 'device-a', 'owner-a', 'indexed', 2)"""
+        )
+
+    rag = BM25Rag(settings)
+    token = bind_principal(principal)
+    try:
+        await rag.ingest_meeting(
+            "race",
+            "new generation survives stale delete",
+            "generation 2",
+            projection_generation=2,
+        )
+        await rag.delete("meeting-race", projection_generation=1)
+        assert [doc["doc_id"] for doc in await rag.list_docs()] == ["meeting-race"]
+        assert [hit.text for hit in await rag.query("survives")] == [
+            "new generation survives stale delete"
+        ]
+
+        with sqlite3.connect(settings.db_path) as conn:
+            conn.execute(
+                """UPDATE meetings
+                   SET rag_projection_state = 'delete_pending',
+                       rag_projection_generation = 3
+                   WHERE id = 'race' AND tenant_id = 'tenant-a' AND owner_id = 'owner-a'"""
+            )
+        await rag.delete("meeting-race", projection_generation=3)
+        await rag.ingest_meeting(
+            "race",
+            "stale finalize must not resurrect",
+            "generation 2 stale",
+            projection_generation=2,
+        )
+        assert await rag.list_docs() == []
+        assert await rag.query("resurrect") == []
+    finally:
+        reset_principal(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_failed_meeting_delete_is_immediately_query_invisible_and_scope_safe(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    principal_a = Principal("tenant-a", "device-a", "owner-a", "session-a", "public")
+    principal_b = Principal("tenant-b", "device-b", "owner-b", "session-b", "public")
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.executemany(
+            """INSERT INTO meetings
+               (id, state, started_at, tenant_id, device_id, owner_id,
+                rag_projection_state, rag_projection_generation)
+               VALUES ('shared', 'finalized', '2026-07-12T00:00:00+00:00',
+                       ?, ?, ?, 'indexed', 1)""",
+            [
+                (principal_a.tenant_id, principal_a.device_id, principal_a.owner_id),
+                (principal_b.tenant_id, principal_b.device_id, principal_b.owner_id),
+            ],
+        )
+
+    rag = BM25Rag(settings)
+    token_a = bind_principal(principal_a)
+    try:
+        await rag.ingest_meeting(
+            "shared",
+            "alpha meeting secret",
+            "A",
+            projection_generation=1,
+        )
+    finally:
+        reset_principal(token_a)
+    token_b = bind_principal(principal_b)
+    try:
+        await rag.ingest_meeting(
+            "shared",
+            "beta meeting evidence",
+            "B",
+            projection_generation=1,
+        )
+    finally:
+        reset_principal(token_b)
+
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute(
+            """UPDATE meetings
+               SET rag_projection_state = 'delete_failed',
+                   rag_projection_generation = 2,
+                   rag_projection_error = 'disk unavailable'
+               WHERE id = 'shared' AND tenant_id = 'tenant-a' AND owner_id = 'owner-a'"""
+        )
+
+    token_a = bind_principal(principal_a)
+    try:
+        # The generation-1 file still exists physically, but the committed
+        # delete intent is the read authority and therefore fails closed.
+        assert await rag.list_docs() == []
+        assert rag.stats()["n_docs"] == 0
+        assert rag.stats()["n_chunks"] == 0
+        assert await rag.query("alpha secret") == []
+    finally:
+        reset_principal(token_a)
+    token_b = bind_principal(principal_b)
+    try:
+        assert [doc["doc_id"] for doc in await rag.list_docs()] == ["meeting-shared"]
+        assert rag.stats()["n_docs"] == 1
+        assert [hit.text for hit in await rag.query("beta evidence")] == ["beta meeting evidence"]
+    finally:
+        reset_principal(token_b)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_malformed_meeting_projection_generation_fails_closed_on_every_read(
+    tmp_path: Path,
+) -> None:
+    rag = BM25Rag(_settings(tmp_path))
+    scope = ("legacy-local", "legacy-local")
+    snapshot = _ScopeIndexSnapshot(
+        scope=scope,
+        revision=1,
+        chunks=(
+            _IndexedChunk(
+                doc_id="meeting-corrupt",
+                doc_title="corrupt",
+                chunk_id="meeting-corrupt-c0000",
+                text="must remain invisible",
+                metadata=(
+                    ("kind", "meeting"),
+                    ("projection_generation", cast(str, ["not", "scalar"])),
+                ),
+                tokens=("must", "remain", "invisible"),
+            ),
+        ),
+        ambient_fingerprints=frozenset(),
+    )
+    with (
+        patch.object(rag, "_snapshot_for_scope", return_value=snapshot),
+        patch.object(rag._store, "visible_meeting_documents", return_value=set()),
+    ):
+        assert await rag.query("invisible") == []
+        assert await rag.list_docs() == []
+        assert rag.stats()["n_docs"] == 0
+        assert rag.stats()["n_chunks"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_direct_bm25_adapter_before_migrations_keeps_upgrade_chain_valid(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    BM25Rag(settings)
+
+    result = await run_migrations(settings.db_path)
+
+    assert result.errors == []
+    with sqlite3.connect(settings.db_path) as conn:
+        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 38
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'bm25_document_projection_fences'"
+            ).fetchone()[0]
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_reingest_meeting_replaces_old_chunks(tmp_path: Path) -> None:
     rag = BM25Rag(_settings(tmp_path))
     await rag.ingest_meeting("m001", "version A content", "t")
@@ -158,6 +352,41 @@ async def test_ingest_ambient_segment_appends_by_day(tmp_path: Path) -> None:
     hits = await rag.query("Nvidia 预算")
     assert hits
     assert hits[0].metadata.get("kind") == "ambient"
+
+    assert await rag.contains_ambient_segment(
+        "刚才讨论了 Q3 预算",
+        captured_at="2026-05-27T10:00:00Z",
+        audio_ref="/tmp/a.wav",
+    )
+    # Retention-cleared rows intentionally match without rescanning every
+    # chunk; the immutable snapshot owns an O(1) reconciliation index.
+    assert await rag.contains_ambient_segment(
+        "刚才讨论了 Q3 预算",
+        captured_at="2026-05-27T10:00:00+00:00",
+        audio_ref="",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ingest_ambient_segment_replay_is_idempotent_by_operation_id(
+    tmp_path: Path,
+) -> None:
+    rag = BM25Rag(_settings(tmp_path))
+    kwargs = {
+        "captured_at": "2026-05-27T10:00:00+00:00",
+        "audio_ref": "/tmp/replay.wav",
+        "operation_id": "ambient-segment:42",
+    }
+
+    await rag.ingest_ambient_segment("旧的孔雀石内容", **kwargs)
+    await rag.ingest_ambient_segment("新的孔雀石内容", **kwargs)
+
+    ambient = next(doc for doc in await rag.list_docs() if doc["doc_id"] == "ambient-20260527")
+    assert ambient["n_chunks"] == 1
+    hits = await rag.query("孔雀石", top_k=5)
+    assert [hit.text for hit in hits] == ["新的孔雀石内容"]
+    assert hits[0].metadata["operation_id"] == "ambient-segment:42"
 
 
 @pytest.mark.asyncio

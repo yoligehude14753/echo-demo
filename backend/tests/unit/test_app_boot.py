@@ -34,6 +34,7 @@ def test_bootstrap_payload(client: TestClient) -> None:
     assert body["schema_version"] == 1
     assert body["api_version"] == "0.3"
     assert body["session_required"] is False
+    assert "minimum_client_version" not in body
     assert body["capabilities"] == {
         "principal_sessions": True,
         "owner_isolation": True,

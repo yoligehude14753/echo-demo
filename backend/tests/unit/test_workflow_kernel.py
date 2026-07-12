@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import weakref
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
@@ -11,6 +13,12 @@ from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.repo.migrator import run_migrations
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.api import deps as deps_mod
+from app.api.meetings import (
+    ClearMeetingOutputsRequest,
+    clear_meeting_outputs,
+    dispatch_meeting_finalize,
+)
+from app.artifacts.repository import ArtifactRepository
 from app.config import Settings
 from app.main import _bind_workflow_handlers_for_current_principal
 from app.schemas.workflow import WorkflowRunCreate
@@ -119,6 +127,43 @@ async def test_dispatcher_runs_registered_handler_and_dedupes_active_request(
 
 
 @pytest.mark.unit
+async def test_start_flush_failure_still_executes_handler(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatcher, registry = await _kernel(tmp_path)
+    called = asyncio.Event()
+
+    async def handle(_context: WorkflowContext, _payload: dict[str, object]) -> dict[str, object]:
+        called.set()
+        return {"handled": True}
+
+    async def fail_flush(*, limit: int = 500) -> int:
+        _ = limit
+        raise RuntimeError("simulated kernel eager publish failure")
+
+    registry.register("test.flush-start", handle)
+    monkeypatch.setattr(dispatcher.service, "flush_outbox", fail_flush)
+    run = await dispatcher.dispatch(
+        WorkflowRunCreate(
+            kind="test.flush-start",
+            source="test",
+            intent_text="handler survives start publish failure",
+        )
+    )
+    await asyncio.wait_for(called.wait(), timeout=1)
+    done = await asyncio.wait_for(dispatcher.wait(run.run_id), timeout=2)
+    assert done is not None and done.state == "succeeded"
+    assert done.output == {"handled": True}
+    assert [event.event_type for event in await dispatcher.service.list_events(run.run_id)] == [
+        "workflow.created",
+        "workflow.started",
+        "workflow.succeeded",
+    ]
+    await dispatcher.aclose()
+
+
+@pytest.mark.unit
 async def test_execute_returns_only_successful_terminal_record(tmp_path: Path) -> None:
     dispatcher, registry = await _kernel(tmp_path)
 
@@ -154,6 +199,369 @@ async def test_execute_raises_typed_error_with_durable_failed_record(tmp_path: P
     assert caught.value.state == "failed"
     assert caught.value.run is not None
     assert caught.value.run.error == "handler exploded"
+
+
+@pytest.mark.unit
+async def test_two_dispatchers_wait_for_post_domain_tail_and_take_over_without_recommit(  # noqa: PLR0915 - explicit two-dispatcher crash orchestration
+    tmp_path: Path,
+) -> None:
+    first, first_registry, second, second_registry = await _shared_dispatchers(tmp_path)
+    meeting_id = "meeting-post-domain-takeover"
+    async with aiosqlite.connect(str(first.service.settings.db_path)) as conn:
+        await conn.execute(
+            """INSERT INTO meetings
+               (id, state, started_at, tenant_id, device_id, owner_id)
+               VALUES (?, 'ended', '2026-07-13T00:00:00+00:00',
+                       'legacy-local', 'legacy-local', 'legacy-local')""",
+            (meeting_id,),
+        )
+        await conn.commit()
+
+    domain_committed = asyncio.Event()
+    never_finish_tail = asyncio.Event()
+    domain_calls = 0
+    takeover_tail_calls = 0
+
+    async def interrupted_handler(
+        context: WorkflowContext,
+        _payload: dict[str, object],
+    ) -> dict[str, object]:
+        nonlocal domain_calls
+        current = await first.service.get_run(context.run_id)
+        assert current is not None
+        output = dict(current.output)
+        if "domain_commit" not in output:
+            output = {"domain_commit": {"kind": "test.post-domain"}}
+
+            async def write_domain(conn: aiosqlite.Connection) -> None:
+                nonlocal domain_calls
+                domain_calls += 1
+                cur = await conn.execute(
+                    """UPDATE meetings
+                       SET rag_projection_generation = rag_projection_generation + 1
+                       WHERE id = ?
+                       RETURNING rag_projection_generation""",
+                    (meeting_id,),
+                )
+                row = await cur.fetchone()
+                await cur.close()
+                assert row is not None
+                output["domain_commit"]["generation"] = int(row[0])  # type: ignore[index]
+
+            committed = await first.service.commit_run_progress_atomic(
+                context.run_id,
+                output=output,
+                domain_writer=write_domain,
+                domain_events=[],
+            )
+            assert committed is not None and committed.state == "running"
+        domain_committed.set()
+        await never_finish_tail.wait()
+        return output
+
+    async def takeover_handler(
+        context: WorkflowContext,
+        _payload: dict[str, object],
+    ) -> dict[str, object]:
+        nonlocal takeover_tail_calls
+        current = await second.service.get_run(context.run_id)
+        assert current is not None
+        assert current.output["domain_commit"] == {
+            "kind": "test.post-domain",
+            "generation": 1,
+        }
+        takeover_tail_calls += 1
+        return {**current.output, "post_commit_complete": True}
+
+    first_registry.register("test.post-domain", interrupted_handler)
+    second_registry.register("test.post-domain", takeover_handler)
+    run = await first.dispatch(
+        WorkflowRunCreate(
+            kind="test.post-domain",
+            source="test",
+            intent_text="commit domain then project tail",
+        )
+    )
+    await asyncio.wait_for(domain_committed.wait(), timeout=2)
+    active = await first.service.get_run(run.run_id)
+    assert active is not None and active.state == "running"
+
+    second_wait = asyncio.create_task(second.wait(run.run_id))
+    completed, pending = await asyncio.wait({second_wait}, timeout=0)
+    assert completed == set()
+    assert pending == {second_wait}
+
+    await first.aclose()
+    done = await asyncio.wait_for(second_wait, timeout=2)
+    assert done is not None and done.state == "succeeded"
+    assert done.output["post_commit_complete"] is True
+    assert domain_calls == 1
+    assert takeover_tail_calls == 1
+    async with aiosqlite.connect(str(first.service.settings.db_path)) as conn:
+        row = await (
+            await conn.execute(
+                "SELECT rag_projection_generation FROM meetings WHERE id = ?",
+                (meeting_id,),
+            )
+        ).fetchone()
+    assert row == (1,)
+    await second.aclose()
+
+
+@pytest.mark.unit
+async def test_second_dispatcher_finalize_waits_for_active_post_domain_tail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, first_registry, second, _second_registry = await _shared_dispatchers(tmp_path)
+    repository = SQLiteRepository(first.service.settings.db_path)
+    await repository.init()
+    meeting_id = "meeting-finalize-active-tail"
+    await repository.create_meeting(
+        meeting_id,
+        started_at=datetime(2026, 7, 13, tzinfo=UTC),
+        title="入口等待",
+    )
+    await repository.update_meeting_state(
+        meeting_id,
+        state="ended",
+        ended_at=datetime(2026, 7, 13, 0, 1, tzinfo=UTC),
+    )
+    minutes = {
+        "meeting_id": meeting_id,
+        "title": "入口等待",
+        "duration_sec": 60,
+        "summary": "第二实例必须等待 tail",
+        "sections": [],
+        "decisions": [],
+        "todos": [],
+        "action_items": [],
+    }
+    domain_committed = asyncio.Event()
+    release_tail = asyncio.Event()
+
+    async def first_handler(
+        context: WorkflowContext,
+        _payload: dict[str, object],
+    ) -> dict[str, object]:
+        output: dict[str, object] = {
+            "meeting_id": meeting_id,
+            "minutes": minutes,
+            "domain_commit": {"kind": "meeting.finalize"},
+        }
+
+        async def write_minutes(conn: aiosqlite.Connection) -> None:
+            cur = await conn.execute(
+                """UPDATE meetings
+                   SET state = 'finalized', finalized_at = CURRENT_TIMESTAMP,
+                       minutes_json = ?, minutes_status = 'ok', minutes_error = '',
+                       rag_projection_state = 'indexed',
+                       rag_projection_generation = rag_projection_generation + 1
+                   WHERE id = ?
+                   RETURNING rag_projection_generation""",
+                (json.dumps(minutes, ensure_ascii=False), meeting_id),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+            assert row is not None
+            output["domain_commit"]["rag_projection_generation"] = int(row[0])  # type: ignore[index]
+
+        committed = await first.service.commit_run_progress_atomic(
+            context.run_id,
+            output=output,
+            domain_writer=write_minutes,
+            domain_events=[],
+        )
+        assert committed is not None and committed.state == "running"
+        domain_committed.set()
+        await release_tail.wait()
+        output["post_commit_complete"] = True
+        return output
+
+    first_registry.register("meeting.finalize", first_handler)
+    run = await first.dispatch(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="test",
+            intent_text="finalize with paused tail",
+            meeting_id=meeting_id,
+            input={"meeting_id": meeting_id, "title": "入口等待"},
+            active_key=f"meeting.finalize:{meeting_id}",
+        )
+    )
+    await asyncio.wait_for(domain_committed.wait(), timeout=2)
+
+    waiting = asyncio.Event()
+    original_wait = second.wait_succeeded
+
+    async def observed_wait(run_id: str) -> WorkflowRunRecord:
+        waiting.set()
+        return await original_wait(run_id)
+
+    monkeypatch.setattr(second, "wait_succeeded", observed_wait)
+    second_request = asyncio.create_task(
+        dispatch_meeting_finalize(
+            second,
+            object(),  # type: ignore[arg-type]
+            repository,
+            meeting_id=meeting_id,
+            title="入口等待",
+            source="second-instance",
+        )
+    )
+    await asyncio.wait_for(waiting.wait(), timeout=2)
+    completed, pending = await asyncio.wait({second_request}, timeout=0)
+    assert completed == set()
+    assert pending == {second_request}
+
+    release_tail.set()
+    result = await asyncio.wait_for(second_request, timeout=2)
+    assert result.summary == "第二实例必须等待 tail"
+    assert (await first.service.get_run(run.run_id)).state == "succeeded"  # type: ignore[union-attr]
+    assert (
+        len(
+            [
+                item
+                for item in await first.service.list_runs(meeting_id=meeting_id)
+                if item.kind == "meeting.finalize"
+            ]
+        )
+        == 1
+    )
+    await first.aclose()
+    await second.aclose()
+    await repository.aclose()
+
+
+@pytest.mark.unit
+async def test_second_dispatcher_cleanup_waits_for_active_tail_and_reuses_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, first_registry, second, _second_registry = await _shared_dispatchers(tmp_path)
+    settings = first.service.settings
+    repository = SQLiteRepository(settings.db_path)
+    await repository.init()
+    meeting_id = "meeting-cleanup-active-tail"
+    await repository.create_meeting(
+        meeting_id,
+        started_at=datetime(2026, 7, 13, tzinfo=UTC),
+        title="清理入口等待",
+    )
+    await repository.update_meeting_state(
+        meeting_id,
+        state="finalized",
+        finalized_at=datetime(2026, 7, 13, 0, 1, tzinfo=UTC),
+        minutes_json=json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "title": "清理入口等待",
+                "duration_sec": 60,
+                "summary": "清理 tail 未完成",
+            },
+            ensure_ascii=False,
+        ),
+        minutes_status="ok",
+    )
+    domain_committed = asyncio.Event()
+    release_tail = asyncio.Event()
+
+    async def first_handler(
+        context: WorkflowContext,
+        _payload: dict[str, object],
+    ) -> dict[str, object]:
+        output: dict[str, object] = {
+            "meeting_id": meeting_id,
+            "minutes_cleared": True,
+            "artifact_ids": [],
+            "artifacts_deleted": 0,
+            "missing_artifact_ids": [],
+            "file_cleanup_artifact_ids": [],
+            "file_cleanup_targets": [],
+            "domain_commit": {"kind": "meeting.outputs.clear"},
+        }
+
+        async def write_clear(conn: aiosqlite.Connection) -> None:
+            cur = await conn.execute(
+                """UPDATE meetings
+                   SET state = 'ended', finalized_at = NULL, minutes_json = NULL,
+                       minutes_status = NULL, minutes_error = NULL,
+                       minutes_cleared_at = CURRENT_TIMESTAMP,
+                       rag_projection_state = 'deleted',
+                       rag_projection_generation = rag_projection_generation + 1
+                   WHERE id = ?
+                   RETURNING rag_projection_generation""",
+                (meeting_id,),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+            assert row is not None
+            output["domain_commit"]["rag_projection_generation"] = int(row[0])  # type: ignore[index]
+
+        committed = await first.service.commit_run_progress_atomic(
+            context.run_id,
+            output=output,
+            domain_writer=write_clear,
+            domain_events=[],
+        )
+        assert committed is not None and committed.state == "running"
+        domain_committed.set()
+        await release_tail.wait()
+        output["post_commit_complete"] = True
+        return output
+
+    first_registry.register("meeting.outputs.clear", first_handler)
+    run = await first.dispatch(
+        WorkflowRunCreate(
+            kind="meeting.outputs.clear",
+            source="test",
+            intent_text="clear with paused tail",
+            meeting_id=meeting_id,
+            input={"meeting_id": meeting_id, "clear_minutes": True},
+            idempotency_key="cleanup-paused-tail",
+            active_key=f"meeting.outputs.clear:{meeting_id}",
+        )
+    )
+    await asyncio.wait_for(domain_committed.wait(), timeout=2)
+
+    waiting = asyncio.Event()
+    original_wait = second.wait_succeeded
+
+    async def observed_wait(run_id: str) -> WorkflowRunRecord:
+        waiting.set()
+        return await original_wait(run_id)
+
+    monkeypatch.setattr(second, "wait_succeeded", observed_wait)
+    second_request = asyncio.create_task(
+        clear_meeting_outputs(
+            meeting_id,
+            ClearMeetingOutputsRequest(clear_minutes=True),
+            repository,
+            settings,
+            ArtifactRepository(settings),
+            second,
+            object(),  # type: ignore[arg-type]
+        )
+    )
+    await asyncio.wait_for(waiting.wait(), timeout=2)
+    completed, pending = await asyncio.wait({second_request}, timeout=0)
+    assert completed == set()
+    assert pending == {second_request}
+
+    release_tail.set()
+    result = await asyncio.wait_for(second_request, timeout=2)
+    assert result.meeting_id == meeting_id
+    assert result.minutes_cleared is True
+    assert (await first.service.get_run(run.run_id)).state == "succeeded"  # type: ignore[union-attr]
+    cleanup_runs = [
+        item
+        for item in await first.service.list_runs(meeting_id=meeting_id)
+        if item.kind == "meeting.outputs.clear"
+    ]
+    assert [item.run_id for item in cleanup_runs] == [run.run_id]
+    await first.aclose()
+    await second.aclose()
+    await repository.aclose()
 
 
 @pytest.mark.unit
@@ -465,6 +873,51 @@ async def test_restore_unfinished_replays_each_principal_in_its_own_scope(tmp_pa
         finally:
             reset_principal(token)
     assert sorted(seen) == [("owner-a", "0"), ("owner-b", "1")]
+
+
+@pytest.mark.unit
+async def test_restore_record_event_flush_failure_still_schedules_handler(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatcher, registry = await _kernel(tmp_path)
+    called = asyncio.Event()
+
+    async def handle(_context: WorkflowContext, _payload: dict[str, object]) -> dict[str, object]:
+        called.set()
+        return {"restored": True}
+
+    registry.register("test.restore-flush", handle)
+    run = await dispatcher.service.create_run(
+        WorkflowRunCreate(
+            kind="test.restore-flush",
+            source="test",
+            intent_text="restore survives record publish failure",
+        )
+    )
+
+    async def skip_initial_drain(*, batch_size: int = 500) -> int:
+        _ = batch_size
+        return 0
+
+    async def fail_flush(*, limit: int = 500) -> int:
+        _ = limit
+        raise RuntimeError("simulated restore event publish failure")
+
+    monkeypatch.setattr(dispatcher.service, "drain_outbox", skip_initial_drain)
+    monkeypatch.setattr(dispatcher.service, "flush_outbox", fail_flush)
+    assert await dispatcher.restore_unfinished() == 1
+    await asyncio.wait_for(called.wait(), timeout=1)
+    done = await asyncio.wait_for(dispatcher.wait(run.run_id), timeout=2)
+    assert done is not None and done.state == "succeeded"
+    assert done.output == {"restored": True}
+    assert [event.event_type for event in await dispatcher.service.list_events(run.run_id)] == [
+        "workflow.created",
+        "workflow.restored",
+        "workflow.started",
+        "workflow.succeeded",
+    ]
+    await dispatcher.aclose()
 
 
 @pytest.mark.unit

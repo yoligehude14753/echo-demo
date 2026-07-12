@@ -318,7 +318,7 @@ step8_smoke() {
         rm -rf "$smoke_home"
         return
     fi
-    "$VENV_PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$port" --log-level warning > /tmp/echodesk-install-smoke.log 2>&1 &
+    "$VENV_PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$port" --ws-max-size 4096 --log-level warning > /tmp/echodesk-install-smoke.log 2>&1 &
     local spid=$!
     local i=0
     while [ $i -lt 30 ]; do

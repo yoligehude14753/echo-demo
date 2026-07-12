@@ -60,6 +60,7 @@ async def test_bind_all_is_reachable_from_second_interface(
         port=port,
         log_level="warning",
         lifespan="off",
+        ws_max_size=4096,
     )
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())

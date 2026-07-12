@@ -11,6 +11,10 @@ from app.adapters.skill import SkillError, SkillExecutor
 from app.api import deps as deps_mod
 from app.config import Settings
 from app.main import create_app
+from app.security.client_version import (
+    MINIMUM_PUBLIC_CLIENT_VERSION,
+    PUBLIC_CLIENT_VERSION_HEADER,
+)
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
@@ -52,7 +56,10 @@ def public_meta_client(
     app = create_app()
     app.dependency_overrides[deps_mod.get_settings] = lambda: settings
     try:
-        with TestClient(app) as client:
+        with TestClient(
+            app,
+            headers={PUBLIC_CLIENT_VERSION_HEADER: MINIMUM_PUBLIC_CLIENT_VERSION},
+        ) as client:
             yield client
     finally:
         deps_mod.reset_deps_for_test()
@@ -103,6 +110,7 @@ def test_public_anonymous_meta_is_minimal(public_meta_client: TestClient) -> Non
     bootstrap = public_meta_client.get("/bootstrap").json()
     assert bootstrap["ws_path"] == "/ws/echo"
     assert bootstrap["session_required"] is True
+    assert bootstrap["minimum_client_version"] == "0.3.1"
     assert bootstrap["capabilities"]["ws_stream_epoch"] is True
     assert bootstrap["capabilities"]["ws_hello_bearer"] is True
     for sensitive in ("backend_version", "app_version", "ws_url", "http_url"):

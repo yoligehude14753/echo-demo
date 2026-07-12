@@ -201,15 +201,15 @@ async def test_terminal_agent_event_is_published_after_workflow_projection(
     assert rec.workflow_run_id is not None
 
     observed_workflow_states: list[str | None] = []
-    publish = bus.publish
+    publish_to = bus.publish_to
 
-    async def observe_then_publish(event: Any) -> None:
+    async def observe_then_publish(scope: tuple[str, str], event: Any) -> None:
         if event.type == "agent.task.event" and event.payload.get("state") == "cancelled":
             run = await service.workflow.get_run(rec.workflow_run_id or "")
             observed_workflow_states.append(run.state if run else None)
-        await publish(event)
+        await publish_to(scope, event)
 
-    bus.publish = observe_then_publish  # type: ignore[method-assign]
+    bus.publish_to = observe_then_publish  # type: ignore[method-assign]
     cancelled = await service.cancel_task(rec.task_id)
 
     assert cancelled is not None

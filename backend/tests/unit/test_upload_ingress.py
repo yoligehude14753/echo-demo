@@ -310,6 +310,90 @@ async def test_asgi_guard_times_out_slow_body_and_releases_capacity() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_completed_body_deadline_does_not_abort_long_streaming_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        request_body_timeout_s=0.01,
+        upload_global_concurrent_requests=1,
+        upload_global_inflight_bytes=1024 * 1024,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    middleware: UploadIngressMiddleware
+
+    async def downstream(scope: object, receive: object, send: object) -> None:
+        del scope
+        body = await receive()  # type: ignore[operator]
+        assert body == {
+            "type": "http.request",
+            "body": b'{"question":"stream"}',
+            "more_body": False,
+        }
+        # The upload lease must be available while the SSE response remains
+        # open; otherwise a few long streams exhaust global upload capacity.
+        concurrent = await middleware.limiter.acquire(0)
+        await concurrent.release()
+        await send(  # type: ignore[operator]
+            {"type": "http.response.start", "status": 200, "headers": []}
+        )
+        disconnected = await receive()  # type: ignore[operator]
+        assert disconnected["type"] == "http.disconnect"
+        await send(  # type: ignore[operator]
+            {"type": "http.response.body", "body": b"done", "more_body": False}
+        )
+
+    middleware = UploadIngressMiddleware(downstream, settings=settings)
+    calls = 0
+    wait_for_calls = 0
+    real_wait_for = asyncio.wait_for
+
+    async def tracked_wait_for(
+        awaitable: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        nonlocal wait_for_calls
+        wait_for_calls += 1
+        timeout_s = args[0] if args else kwargs["timeout"]
+        return await real_wait_for(awaitable, timeout=float(timeout_s))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(asyncio, "wait_for", tracked_wait_for)
+
+    async def receive() -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "type": "http.request",
+                "body": b'{"question":"stream"}',
+                "more_body": False,
+            }
+        return {"type": "http.disconnect"}
+
+    sent: list[dict[str, object]] = []
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/rag/ask",
+        "headers": [(b"content-length", b"21")],
+        "state": {},
+    }
+    await middleware(scope, receive, send)  # type: ignore[arg-type]
+
+    assert calls == 2
+    assert wait_for_calls == 1
+    assert sent == [
+        {"type": "http.response.start", "status": 200, "headers": []},
+        {"type": "http.response.body", "body": b"done", "more_body": False},
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_asgi_guard_cancellation_releases_global_count_and_bytes() -> None:
     settings = Settings(
         request_body_max_bytes=16 * 1024,

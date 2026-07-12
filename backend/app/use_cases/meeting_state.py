@@ -247,7 +247,10 @@ class MeetingState:
         stuck = [
             m
             for m in meetings
-            if (not m.minutes_json) and m.minutes_status != "ok" and m.minutes_cleared_at is None
+            if (not m.minutes_json)
+            and m.minutes_status != "ok"
+            and m.minutes_cleared_at is None
+            and m.minutes_generation_cancelled_at is None
         ]
         if not stuck:
             return 0
@@ -349,28 +352,6 @@ class MeetingState:
             },
         )
         return cur.meeting_id
-
-    async def _mark_meeting_ended_for_generation(
-        self,
-        meeting_id: str,
-        *,
-        ended_at: datetime,
-    ) -> None:
-        """会议生命周期先落库结束，纪要可继续后台生成。"""
-        if self._repo is None:
-            return
-        try:
-            await self._repo.update_meeting_state(
-                meeting_id,
-                state="ended",
-                ended_at=ended_at,
-                minutes_status="generating",
-                minutes_error="",
-            )
-        except Exception as e:
-            logger.warning(
-                "mark meeting ended before minutes generation failed for %s: %s", meeting_id, e
-            )
 
     async def _resolve_title(self, meeting_id: str) -> str:
         """优先取 repo 里 user 启动时落库的 title；缺则回退 ``"会议 <id>"``。
@@ -520,8 +501,6 @@ class MeetingState:
                 return
             self._current = None
         title = await self._resolve_title(meeting_id)
-        ended_at = datetime.now(UTC)
-        await self._mark_meeting_ended_for_generation(meeting_id, ended_at=ended_at)
         try:
             await self._finalize(meeting_id, title)
         except Exception as e:

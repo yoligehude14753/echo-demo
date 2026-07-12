@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -57,6 +58,18 @@ class ArtifactLinkRecord:
     created_at: str
 
 
+class ArtifactFileUnavailableError(RuntimeError):
+    """The local artifact disappeared before its metadata write lock was acquired."""
+
+
+def _assert_artifact_file_available(artifact: GeneratedArtifact) -> None:
+    path = Path(artifact.file_path).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.is_file():
+        raise ArtifactFileUnavailableError("artifact file is unavailable for registration")
+
+
 class ArtifactRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -77,6 +90,12 @@ class ArtifactRepository:
     ) -> None:
         """Write metadata on a caller-owned SQLite transaction (no implicit commit)."""
 
+        # Promote a caller's deferred transaction before checking the file.
+        # Cleanup uses the same SQLite write lock around its protected-path
+        # snapshot and deletion, so a file removed while this writer waited
+        # cannot be registered afterwards as a missing artifact.
+        await conn.execute("UPDATE artifacts SET updated_at = updated_at WHERE 0")
+        _assert_artifact_file_available(artifact)
         now = utc_now_iso()
         tenant_id, device_id, owner_id = _scope()
         changed = await conn.execute(
@@ -188,6 +207,8 @@ class ArtifactRepository:
         now = utc_now_iso()
         tenant_id, device_id, owner_id = _scope()
         async with self._conn() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            _assert_artifact_file_available(artifact)
             await conn.execute(
                 """INSERT INTO artifacts
                    (artifact_id, artifact_type, title, file_path, mime_type, size_bytes,

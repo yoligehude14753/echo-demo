@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,25 @@ from app.ports.repository import (
 from app.schemas.meeting import TranscriptSegment
 from app.security.context import current_principal
 
+_RAG_PROJECTION_RETRY_BASE_S = 5.0
+_RAG_PROJECTION_RETRY_MAX_S = 3600.0
+_MEETING_RAG_PROJECTION_SOURCE_STATES: dict[
+    RagProjectionState,
+    tuple[RagProjectionState, ...],
+] = {
+    "indexed": ("index_pending", "index_failed", "indexed"),
+    "index_failed": ("index_pending", "index_failed"),
+    "deleted": ("delete_pending", "delete_failed", "deleted"),
+    "delete_failed": ("delete_pending", "delete_failed"),
+}
+_AMBIENT_RAG_PROJECTION_SOURCE_STATES: dict[
+    RagProjectionState,
+    tuple[RagProjectionState, ...],
+] = {
+    "indexed": ("reconcile_pending", "index_pending", "index_failed", "indexed"),
+    "index_failed": ("reconcile_pending", "index_pending", "index_failed"),
+}
+
 
 def _to_iso(dt: datetime) -> str:
     return dt.isoformat()
@@ -51,6 +70,14 @@ def _from_iso(s: str | None) -> datetime | None:
     if not s:
         return None
     return datetime.fromisoformat(s)
+
+
+def _rag_projection_retry_at(attempts: int) -> datetime:
+    delay_s = min(
+        _RAG_PROJECTION_RETRY_MAX_S,
+        _RAG_PROJECTION_RETRY_BASE_S * (2 ** min(max(0, attempts - 1), 10)),
+    )
+    return datetime.now(UTC) + timedelta(seconds=delay_s)
 
 
 def _scope() -> tuple[str, str, str]:
@@ -145,7 +172,10 @@ class SQLiteRepository(RepositoryPort):
                     "SELECT id, title, state, started_at, ended_at, finalized_at, "
                     "auto_started, minutes_json, raw_transcript_ref, "
                     "minutes_status, minutes_error, display_title, minutes_cleared_at, "
-                    "rag_projection_state, rag_projection_error, rag_projected_at "
+                    "rag_projection_state, rag_projection_error, rag_projected_at, "
+                    "rag_projection_attempts, rag_projection_next_retry_at, "
+                    "rag_projection_generation, minutes_generation_run_id, "
+                    "minutes_generation_cancelled_at "
                     "FROM meetings WHERE tenant_id = ? AND owner_id = ? "
                     "AND state = 'in_meeting' ORDER BY started_at DESC, id DESC LIMIT 1",
                     (tenant_id, owner_id),
@@ -160,7 +190,7 @@ class SQLiteRepository(RepositoryPort):
                 raise
         return _meeting_from_row(row)
 
-    async def update_meeting_state(
+    async def update_meeting_state(  # noqa: PLR0912,PLR0915 - sparse update contract
         self,
         meeting_id: str,
         *,
@@ -176,7 +206,7 @@ class SQLiteRepository(RepositoryPort):
         rag_projection_state: RagProjectionState | None = None,
         rag_projection_error: str | None = None,
         rag_projected_at: datetime | None = None,
-    ) -> None:
+    ) -> int | None:
         tenant_id, _device_id, owner_id = _scope()
         # 用动态 SET 列表，避免空字段误改
         fields: list[str] = ["state = ?"]
@@ -202,6 +232,9 @@ class SQLiteRepository(RepositoryPort):
             # Any explicit generation attempt supersedes an older user-clear
             # tombstone. This keeps subsequent failed attempts recoverable.
             fields.append("minutes_cleared_at = NULL")
+            fields.append("minutes_generation_cancelled_at = NULL")
+            if minutes_status in {"ok", "generation_failed"}:
+                fields.append("minutes_generation_run_id = NULL")
         if minutes_error is not None:
             fields.append("minutes_error = ?")
             values.append(minutes_error)
@@ -211,6 +244,20 @@ class SQLiteRepository(RepositoryPort):
         if rag_projection_state is not None:
             fields.append("rag_projection_state = ?")
             values.append(rag_projection_state)
+            if rag_projection_state in {
+                "index_pending",
+                "delete_pending",
+                "indexed",
+                "deleted",
+            }:
+                fields.extend(
+                    [
+                        "rag_projection_attempts = 0",
+                        "rag_projection_next_retry_at = NULL",
+                    ]
+                )
+            if rag_projection_state in {"index_pending", "delete_pending"}:
+                fields.append("rag_projection_generation = rag_projection_generation + 1")
         if rag_projection_error is not None:
             fields.append("rag_projection_error = ?")
             values.append(rag_projection_error)
@@ -220,12 +267,16 @@ class SQLiteRepository(RepositoryPort):
         values.extend((meeting_id, tenant_id, owner_id))
         async with self._lock:
             conn = self._require_conn()
-            await conn.execute(
+            cur = await conn.execute(
                 f"UPDATE meetings SET {', '.join(fields)} "
-                "WHERE id = ? AND tenant_id = ? AND owner_id = ?",
+                "WHERE id = ? AND tenant_id = ? AND owner_id = ? "
+                "RETURNING rag_projection_generation",
                 values,
             )
+            row = await cur.fetchone()
+            await cur.close()
             await conn.commit()
+        return int(row[0]) if row is not None else None
 
     async def get_meeting(self, meeting_id: str) -> MeetingRecord | None:
         tenant_id, _device_id, owner_id = _scope()
@@ -235,7 +286,10 @@ class SQLiteRepository(RepositoryPort):
                 "SELECT id, title, state, started_at, ended_at, finalized_at, "
                 "auto_started, minutes_json, raw_transcript_ref, "
                 "minutes_status, minutes_error, display_title, minutes_cleared_at, "
-                "rag_projection_state, rag_projection_error, rag_projected_at "
+                "rag_projection_state, rag_projection_error, rag_projected_at, "
+                "rag_projection_attempts, rag_projection_next_retry_at, "
+                "rag_projection_generation, minutes_generation_run_id, "
+                "minutes_generation_cancelled_at "
                 "FROM meetings WHERE id = ? AND tenant_id = ? AND owner_id = ?",
                 (meeting_id, tenant_id, owner_id),
             )
@@ -258,7 +312,10 @@ class SQLiteRepository(RepositoryPort):
                 "SELECT id, title, state, started_at, ended_at, finalized_at, "
                 "auto_started, minutes_json, raw_transcript_ref, "
                 "minutes_status, minutes_error, display_title, minutes_cleared_at, "
-                "rag_projection_state, rag_projection_error, rag_projected_at FROM meetings "
+                "rag_projection_state, rag_projection_error, rag_projected_at, "
+                "rag_projection_attempts, rag_projection_next_retry_at, "
+                "rag_projection_generation, minutes_generation_run_id, "
+                "minutes_generation_cancelled_at FROM meetings "
                 "WHERE tenant_id = ? AND owner_id = ?"
             )
             args: tuple[object, ...] = (tenant_id, owner_id)
@@ -290,7 +347,11 @@ class SQLiteRepository(RepositoryPort):
                 "display_title = NULL, finalized_at = NULL, "
                 "minutes_cleared_at = CURRENT_TIMESTAMP, "
                 "rag_projection_state = 'delete_pending', rag_projection_error = NULL, "
-                "rag_projected_at = NULL "
+                "rag_projected_at = NULL, rag_projection_attempts = 0, "
+                "rag_projection_next_retry_at = NULL, "
+                "rag_projection_generation = rag_projection_generation + 1, "
+                "minutes_generation_run_id = NULL, "
+                "minutes_generation_cancelled_at = NULL "
                 "WHERE id = ? AND tenant_id = ? AND owner_id = ?",
                 (meeting_id, tenant_id, owner_id),
             )
@@ -303,24 +364,65 @@ class SQLiteRepository(RepositoryPort):
         state: RagProjectionState,
         error: str | None = None,
         projected_at: datetime | None = None,
-    ) -> None:
+        retry_backoff: bool = False,
+        expected_generation: int | None = None,
+    ) -> bool:
         tenant_id, _device_id, owner_id = _scope()
         async with self._lock:
             conn = self._require_conn()
-            await conn.execute(
-                """UPDATE meetings
-                   SET rag_projection_state = ?, rag_projection_error = ?, rag_projected_at = ?
-                   WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
-                (
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                attempts = 0
+                next_retry_at: datetime | None = None
+                if retry_backoff and state in {"index_failed", "delete_failed"}:
+                    cur = await conn.execute(
+                        "SELECT rag_projection_attempts FROM meetings "
+                        "WHERE id = ? AND tenant_id = ? AND owner_id = ?",
+                        (meeting_id, tenant_id, owner_id),
+                    )
+                    row = await cur.fetchone()
+                    await cur.close()
+                    attempts = int(row[0] if row else 0) + 1
+                    next_retry_at = _rag_projection_retry_at(attempts)
+                where_generation = (
+                    " AND rag_projection_generation = ?" if expected_generation is not None else ""
+                )
+                allowed_source_states = _MEETING_RAG_PROJECTION_SOURCE_STATES.get(state)
+                where_state = ""
+                if allowed_source_states:
+                    placeholders = ", ".join("?" for _ in allowed_source_states)
+                    where_state = f" AND rag_projection_state IN ({placeholders})"
+                values: list[object] = [
                     state,
                     (error or "")[:500] or None,
                     _to_iso(projected_at) if projected_at is not None else None,
+                    attempts,
+                    _to_iso(next_retry_at) if next_retry_at is not None else None,
                     meeting_id,
                     tenant_id,
                     owner_id,
-                ),
-            )
-            await conn.commit()
+                ]
+                if expected_generation is not None:
+                    values.append(expected_generation)
+                if allowed_source_states:
+                    values.extend(allowed_source_states)
+                changed = await conn.execute(
+                    """UPDATE meetings
+                       SET rag_projection_state = ?, rag_projection_error = ?,
+                           rag_projected_at = ?, rag_projection_attempts = ?,
+                           rag_projection_next_retry_at = ?
+                       WHERE id = ? AND tenant_id = ? AND owner_id = ?"""
+                    + where_generation
+                    + where_state,
+                    values,
+                )
+                updated = changed.rowcount == 1
+                await changed.close()
+                await conn.commit()
+                return updated
+            except BaseException:
+                await conn.rollback()
+                raise
 
     async def list_meetings_needing_rag_projection(
         self,
@@ -328,20 +430,29 @@ class SQLiteRepository(RepositoryPort):
         limit: int = 100,
     ) -> list[MeetingRecord]:
         tenant_id, _device_id, owner_id = _scope()
+        now = _to_iso(datetime.now(UTC))
         async with self._lock:
             conn = self._require_conn()
             cur = await conn.execute(
                 """SELECT id, title, state, started_at, ended_at, finalized_at,
                           auto_started, minutes_json, raw_transcript_ref,
                           minutes_status, minutes_error, display_title, minutes_cleared_at,
-                          rag_projection_state, rag_projection_error, rag_projected_at
+                          rag_projection_state, rag_projection_error, rag_projected_at,
+                          rag_projection_attempts, rag_projection_next_retry_at,
+                          rag_projection_generation, minutes_generation_run_id,
+                          minutes_generation_cancelled_at
                    FROM meetings
                    WHERE tenant_id = ? AND owner_id = ?
                      AND rag_projection_state IN (
                          'index_pending', 'index_failed', 'delete_pending', 'delete_failed'
                      )
-                   ORDER BY started_at ASC LIMIT ?""",
-                (tenant_id, owner_id, limit),
+                     AND (
+                         rag_projection_next_retry_at IS NULL
+                         OR rag_projection_next_retry_at <= ?
+                     )
+                   ORDER BY COALESCE(rag_projection_next_retry_at, ''), started_at ASC
+                   LIMIT ?""",
+                (tenant_id, owner_id, now, limit),
             )
             rows = await cur.fetchall()
             await cur.close()
@@ -350,6 +461,7 @@ class SQLiteRepository(RepositoryPort):
     async def list_meeting_rag_projection_scopes(self) -> list[tuple[str, str, str]]:
         """Internal startup repair scopes; request-facing reads remain principal scoped."""
 
+        now = _to_iso(datetime.now(UTC))
         async with self._lock:
             conn = self._require_conn()
             cur = await conn.execute(
@@ -358,8 +470,50 @@ class SQLiteRepository(RepositoryPort):
                    WHERE rag_projection_state IN (
                        'index_pending', 'index_failed', 'delete_pending', 'delete_failed'
                    )
+                     AND (
+                         rag_projection_next_retry_at IS NULL
+                         OR rag_projection_next_retry_at <= ?
+                     )
                    GROUP BY tenant_id, owner_id
-                   ORDER BY tenant_id, owner_id"""
+                   ORDER BY tenant_id, owner_id""",
+                (now,),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+        return [(str(row[0]), str(row[1]), str(row[2])) for row in rows]
+
+    async def list_rag_projection_scopes(self) -> list[tuple[str, str, str]]:
+        """Return every principal scope with due meeting or ambient work."""
+
+        now = _to_iso(datetime.now(UTC))
+        async with self._lock:
+            conn = self._require_conn()
+            cur = await conn.execute(
+                """SELECT tenant_id, MIN(device_id), owner_id
+                   FROM (
+                       SELECT tenant_id, device_id, owner_id
+                       FROM meetings
+                       WHERE rag_projection_state IN (
+                           'index_pending', 'index_failed', 'delete_pending', 'delete_failed'
+                       )
+                         AND (
+                             rag_projection_next_retry_at IS NULL
+                             OR rag_projection_next_retry_at <= ?
+                         )
+                       UNION ALL
+                       SELECT tenant_id, device_id, owner_id
+                       FROM ambient_segments
+                       WHERE rag_projection_state IN (
+                           'reconcile_pending', 'index_pending', 'index_failed'
+                       )
+                         AND (
+                             rag_projection_next_retry_at IS NULL
+                             OR rag_projection_next_retry_at <= ?
+                         )
+                   ) AS due_projection
+                   GROUP BY tenant_id, owner_id
+                   ORDER BY tenant_id, owner_id""",
+                (now, now),
             )
             rows = await cur.fetchall()
             await cur.close()
@@ -595,8 +749,8 @@ class SQLiteRepository(RepositoryPort):
             cur = await conn.execute(
                 "INSERT INTO ambient_segments "
                 "(audio_ref, text, speaker_id, speaker_label, duration_ms, captured_at, "
-                "tenant_id, device_id, owner_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "tenant_id, device_id, owner_id, rag_projection_state) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'index_pending')",
                 (
                     audio_ref,
                     text,
@@ -635,7 +789,9 @@ class SQLiteRepository(RepositoryPort):
         async with self._lock:
             conn = self._require_conn()
             cur = await conn.execute(
-                "SELECT id, audio_ref, text, speaker_id, speaker_label, duration_ms, captured_at "
+                "SELECT id, audio_ref, text, speaker_id, speaker_label, duration_ms, captured_at, "
+                "rag_projection_state, rag_projection_error, rag_projected_at, "
+                "rag_projection_attempts, rag_projection_next_retry_at "
                 f"FROM ambient_segments {where} ORDER BY captured_at DESC LIMIT ?",
                 args,
             )
@@ -650,8 +806,120 @@ class SQLiteRepository(RepositoryPort):
                 speaker_label=r[4],
                 duration_ms=r[5],
                 captured_at=_from_iso(r[6]) or datetime.fromtimestamp(0),
+                rag_projection_state=r[7],
+                rag_projection_error=r[8],
+                rag_projected_at=_from_iso(r[9]),
+                rag_projection_attempts=int(r[10]),
+                rag_projection_next_retry_at=_from_iso(r[11]),
             )
             for r in rows
+        ]
+
+    async def set_ambient_rag_projection(
+        self,
+        segment_id: int,
+        *,
+        state: RagProjectionState,
+        error: str | None = None,
+        projected_at: datetime | None = None,
+        retry_backoff: bool = False,
+    ) -> bool:
+        tenant_id, _device_id, owner_id = _scope()
+        async with self._lock:
+            conn = self._require_conn()
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                attempts = 0
+                next_retry_at: datetime | None = None
+                if retry_backoff and state == "index_failed":
+                    cur = await conn.execute(
+                        "SELECT rag_projection_attempts FROM ambient_segments "
+                        "WHERE id = ? AND tenant_id = ? AND owner_id = ?",
+                        (segment_id, tenant_id, owner_id),
+                    )
+                    row = await cur.fetchone()
+                    await cur.close()
+                    attempts = int(row[0] if row else 0) + 1
+                    next_retry_at = _rag_projection_retry_at(attempts)
+                allowed_source_states = _AMBIENT_RAG_PROJECTION_SOURCE_STATES.get(state)
+                where_state = ""
+                if allowed_source_states:
+                    placeholders = ", ".join("?" for _ in allowed_source_states)
+                    where_state = f" AND rag_projection_state IN ({placeholders})"
+                values: list[object] = [
+                    state,
+                    (error or "")[:500] or None,
+                    _to_iso(projected_at) if projected_at is not None else None,
+                    attempts,
+                    _to_iso(next_retry_at) if next_retry_at is not None else None,
+                    segment_id,
+                    tenant_id,
+                    owner_id,
+                ]
+                if allowed_source_states:
+                    values.extend(allowed_source_states)
+                changed = await conn.execute(
+                    """UPDATE ambient_segments
+                       SET rag_projection_state = ?, rag_projection_error = ?,
+                           rag_projected_at = ?, rag_projection_attempts = ?,
+                           rag_projection_next_retry_at = ?
+                       WHERE id = ? AND tenant_id = ? AND owner_id = ?"""
+                    + where_state,
+                    values,
+                )
+                updated = changed.rowcount == 1
+                await changed.close()
+                await conn.commit()
+                return updated
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def list_ambient_segments_needing_rag_projection(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[AmbientSegmentRecord]:
+        tenant_id, _device_id, owner_id = _scope()
+        now = _to_iso(datetime.now(UTC))
+        async with self._lock:
+            conn = self._require_conn()
+            cur = await conn.execute(
+                """SELECT id, audio_ref, text, speaker_id, speaker_label, duration_ms,
+                          captured_at, rag_projection_state, rag_projection_error,
+                          rag_projected_at, rag_projection_attempts,
+                          rag_projection_next_retry_at
+                   FROM ambient_segments
+                   WHERE tenant_id = ? AND owner_id = ?
+                     AND rag_projection_state IN (
+                         'reconcile_pending', 'index_pending', 'index_failed'
+                     )
+                     AND (
+                         rag_projection_next_retry_at IS NULL
+                         OR rag_projection_next_retry_at <= ?
+                     )
+                   ORDER BY COALESCE(rag_projection_next_retry_at, ''), captured_at, id
+                   LIMIT ?""",
+                (tenant_id, owner_id, now, limit),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+        return [
+            AmbientSegmentRecord(
+                id=row[0],
+                audio_ref=row[1],
+                text=row[2],
+                speaker_id=row[3],
+                speaker_label=row[4],
+                duration_ms=row[5],
+                captured_at=_from_iso(row[6]) or datetime.fromtimestamp(0),
+                rag_projection_state=row[7],
+                rag_projection_error=row[8],
+                rag_projected_at=_from_iso(row[9]),
+                rag_projection_attempts=int(row[10]),
+                rag_projection_next_retry_at=_from_iso(row[11]),
+            )
+            for row in rows
         ]
 
     async def count_ambient_segments(self) -> int:
@@ -837,7 +1105,8 @@ class SQLiteRepository(RepositoryPort):
 
 def _meeting_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> MeetingRecord:
     # 长度兼容：旧 schema 9 列；migration 003 → 11 列；migration 004 → 12 列
-    # migration 017 → 13 列（显式清理纪要 tombstone）；migration 026 → 16 列。
+    # migration 017 → 13 列（显式清理纪要 tombstone）；migration 026 → 16 列；
+    # migration 038 → 21 列（投影退避、generation fence 与 workflow marker）。
     return MeetingRecord(
         id=row[0],
         title=row[1],
@@ -855,6 +1124,11 @@ def _meeting_from_row(row: aiosqlite.Row | tuple[Any, ...]) -> MeetingRecord:
         rag_projection_state=row[13] if len(row) > 13 else None,
         rag_projection_error=row[14] if len(row) > 14 else None,
         rag_projected_at=_from_iso(row[15]) if len(row) > 15 else None,
+        rag_projection_attempts=int(row[16]) if len(row) > 16 else 0,
+        rag_projection_next_retry_at=_from_iso(row[17]) if len(row) > 17 else None,
+        rag_projection_generation=int(row[18]) if len(row) > 18 else 0,
+        minutes_generation_run_id=row[19] if len(row) > 19 else None,
+        minutes_generation_cancelled_at=_from_iso(row[20]) if len(row) > 20 else None,
     )
 
 

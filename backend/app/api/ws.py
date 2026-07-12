@@ -35,16 +35,22 @@ from app.security import (
     route_scope_path,
 )
 from app.security.access import PreAuthAdmissionError
+from app.security.client_version import (
+    MINIMUM_PUBLIC_CLIENT_VERSION,
+    is_supported_public_client,
+)
 from app.security.context import bind_principal, reset_principal
 from app.security.governor import PrincipalGovernor, QuotaExceeded
+from app.security.public_projection import project_client_dict, server_private_roots
 
 router = APIRouter(tags=["ws"])
 logger = logging.getLogger(__name__)
 
 _HELLO_TIMEOUT_S = 3.0
-_MAX_HELLO_BYTES = 4096
+_MAX_CLIENT_FRAME_BYTES = 4096
 _AUTH_CLOSE_CODE = 4401
 _PROTOCOL_CLOSE_CODE = 4408
+_UPGRADE_CLOSE_CODE = 4426
 _SLOW_CONSUMER_CLOSE_CODE = 4409
 _ADMISSION_CLOSE_CODE = 4429
 _TEMPORARY_FAILURE_CLOSE_CODE = 1013
@@ -56,8 +62,8 @@ class _Handshake:
     legacy_ping: bool = False
 
 
-class _HandshakeProtocolError(RuntimeError):
-    """The bounded first-frame handshake is missing or malformed."""
+class _ClientFrameProtocolError(RuntimeError):
+    """One bounded client frame is missing, oversized, or malformed."""
 
 
 class _WebSocketSendTimeout(RuntimeError):
@@ -85,7 +91,7 @@ async def _close_websocket(
         )
 
 
-def _decode_hello_frame(frame: Mapping[str, Any]) -> str:
+def _decode_client_frame(frame: Mapping[str, Any], *, frame_name: str) -> str:
     if frame["type"] == "websocket.disconnect":
         code = frame.get("code")
         raise WebSocketDisconnect(code=code if isinstance(code, int) else 1000)
@@ -93,17 +99,17 @@ def _decode_hello_frame(frame: Mapping[str, Any]) -> str:
     if raw is None:
         raw = frame.get("bytes")
     if isinstance(raw, bytes):
-        if len(raw) > _MAX_HELLO_BYTES:
-            raise _HandshakeProtocolError("client_hello too large")
+        if len(raw) > _MAX_CLIENT_FRAME_BYTES:
+            raise _ClientFrameProtocolError(f"{frame_name} too large")
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise _HandshakeProtocolError("client_hello must be UTF-8 JSON") from exc
+            raise _ClientFrameProtocolError(f"{frame_name} must be UTF-8") from exc
     if isinstance(raw, str):
-        if len(raw.encode("utf-8")) > _MAX_HELLO_BYTES:
-            raise _HandshakeProtocolError("client_hello too large")
+        if len(raw.encode("utf-8")) > _MAX_CLIENT_FRAME_BYTES:
+            raise _ClientFrameProtocolError(f"{frame_name} too large")
         return raw
-    raise _HandshakeProtocolError("client_hello frame required")
+    raise _ClientFrameProtocolError(f"{frame_name} payload required")
 
 
 async def _wait_client_hello(
@@ -115,19 +121,19 @@ async def _wait_client_hello(
         frame = await asyncio.wait_for(websocket.receive(), timeout=_HELLO_TIMEOUT_S)
     except TimeoutError:
         if require_hello:
-            raise _HandshakeProtocolError("client_hello timeout") from None
+            raise _ClientFrameProtocolError("client_hello timeout") from None
         return _Handshake(ClientHello())
-    message = _decode_hello_frame(frame)
+    message = _decode_client_frame(frame, frame_name="client_hello")
     if message.strip() == "ping":
         if require_hello:
-            raise _HandshakeProtocolError("client_hello required")
+            raise _ClientFrameProtocolError("client_hello required")
         return _Handshake(ClientHello(client_version="legacy"), legacy_ping=True)
     try:
         payload = json.loads(message)
         hello = ClientHello.model_validate(payload)
     except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
         if require_hello:
-            raise _HandshakeProtocolError("invalid client_hello") from exc
+            raise _ClientFrameProtocolError("invalid client_hello") from exc
         return _Handshake(ClientHello())
     return _Handshake(hello)
 
@@ -139,6 +145,8 @@ async def _authenticate(
     policy: AccessPolicy,
 ) -> Principal:
     if settings.public_demo_mode:
+        if not is_supported_public_client(handshake.hello.client_version):
+            raise AccessPolicyError("client upgrade required", status_code=426)
         auth = handshake.hello.auth
         if auth is None:
             raise AccessPolicyError("client_hello bearer required", status_code=401)
@@ -254,11 +262,42 @@ async def _send_ping(
     )
 
 
+async def _receive_authenticated_client_frame(
+    websocket: WebSocket,
+    bus: InMemoryEventBus,
+    *,
+    admit_frame: Callable[[], Awaitable[None]] | None,
+    revalidate: Callable[[], Awaitable[None]] | None,
+    send_timeout_s: float,
+) -> None:
+    frame = await websocket.receive()
+    message = _decode_client_frame(frame, frame_name="client frame")
+    if admit_frame is not None:
+        await admit_frame()
+    if message.strip() == "ping":
+        await _send_ping(websocket, bus, send_timeout_s=send_timeout_s)
+        return
+    try:
+        payload = json.loads(message)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(payload, dict):
+        return
+    if payload.get("type") != "client_ping":
+        return
+    if revalidate is not None:
+        await revalidate()
+    await _send_ping(websocket, bus, send_timeout_s=send_timeout_s)
+
+
 async def _run_stream(
     websocket: WebSocket,
     bus: InMemoryEventBus,
     subscription: FencedEventSubscription,
     *,
+    principal: Principal,
+    private_roots: tuple[str, ...] = (),
+    admit_frame: Callable[[], Awaitable[None]] | None = None,
     revalidate: Callable[[], Awaitable[None]] | None = None,
     revalidate_interval_s: float = WS_SERVER_PING_INTERVAL_S,
     send_timeout_s: float,
@@ -267,7 +306,15 @@ async def _run_stream(
         async for event in subscription:
             await _send_text(
                 websocket,
-                event.model_dump_json(),
+                json.dumps(
+                    project_client_dict(
+                        event.model_dump(mode="json"),
+                        principal,
+                        private_roots=private_roots,
+                    ),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
                 timeout_s=send_timeout_s,
             )
 
@@ -284,18 +331,13 @@ async def _run_stream(
 
     async def receiver() -> None:
         while True:
-            message = await websocket.receive_text()
-            if message.strip() == "ping":
-                await _send_ping(websocket, bus, send_timeout_s=send_timeout_s)
-                continue
-            try:
-                payload = json.loads(message)
-            except json.JSONDecodeError:
-                continue
-            if payload.get("type") == "client_ping":
-                if revalidate is not None:
-                    await revalidate()
-                await _send_ping(websocket, bus, send_timeout_s=send_timeout_s)
+            await _receive_authenticated_client_frame(
+                websocket,
+                bus,
+                admit_frame=admit_frame,
+                revalidate=revalidate,
+                send_timeout_s=send_timeout_s,
+            )
 
     tasks = [
         asyncio.create_task(sender(), name="ws-sender"),
@@ -316,6 +358,10 @@ async def _run_stream(
                 close_code = _SLOW_CONSUMER_CLOSE_CODE
             except _WebSocketSendTimeout:
                 close_code = _TEMPORARY_FAILURE_CLOSE_CODE
+            except _ClientFrameProtocolError:
+                close_code = _PROTOCOL_CLOSE_CODE
+            except QuotaExceeded:
+                close_code = _ADMISSION_CLOSE_CODE
             except SessionError:
                 close_code = _AUTH_CLOSE_CODE
             except (RuntimeError, WebSocketDisconnect):
@@ -326,6 +372,20 @@ async def _run_stream(
         await asyncio.gather(*tasks, return_exceptions=True)
         await subscription.aclose()
     return close_code
+
+
+def _handshake_close_details(
+    exc: _ClientFrameProtocolError | AccessPolicyError | SessionError,
+) -> tuple[int, str]:
+    if isinstance(exc, _ClientFrameProtocolError):
+        return _PROTOCOL_CLOSE_CODE, "invalid client_hello"
+    if isinstance(exc, SessionError):
+        return _AUTH_CLOSE_CODE, "client_hello bearer required"
+    if exc.status_code == 403:
+        return 4403, exc.detail
+    if exc.status_code == 426:
+        return _UPGRADE_CLOSE_CODE, (f"client upgrade required:{MINIMUM_PUBLIC_CLIENT_VERSION}")
+    return _AUTH_CLOSE_CODE, exc.detail
 
 
 async def _open_authenticated_websocket(
@@ -369,14 +429,8 @@ async def _open_authenticated_websocket(
         return principal, handshake
     except WebSocketDisconnect:
         return None
-    except (_HandshakeProtocolError, AccessPolicyError, SessionError) as exc:
-        if isinstance(exc, _HandshakeProtocolError):
-            code, reason = _PROTOCOL_CLOSE_CODE, "invalid client_hello"
-        elif isinstance(exc, AccessPolicyError):
-            code = 4403 if exc.status_code == 403 else _AUTH_CLOSE_CODE
-            reason = exc.detail
-        else:
-            code, reason = _AUTH_CLOSE_CODE, "client_hello bearer required"
+    except (_ClientFrameProtocolError, AccessPolicyError, SessionError) as exc:
+        code, reason = _handshake_close_details(exc)
         await _close_websocket(
             websocket,
             code=code,
@@ -390,7 +444,7 @@ async def _open_authenticated_websocket(
 
 
 @router.websocket("/ws/echo")
-async def ws_echo(
+async def ws_echo(  # noqa: PLR0912 - keep close-code and cleanup paths explicit
     websocket: WebSocket,
     bus: InMemoryEventBus = Depends(get_event_bus),
     settings: Settings = Depends(get_settings),
@@ -440,10 +494,16 @@ async def ws_echo(
         async def revalidate() -> None:
             await policy.sessions.assert_active_principal(principal)
 
+        async def admit_frame() -> None:
+            await governor.admit_websocket_frame(principal)
+
         close_code = await _run_stream(
             websocket,
             bus,
             subscription,
+            principal=principal,
+            private_roots=server_private_roots(settings),
+            admit_frame=admit_frame if principal.mode == "public" else None,
             revalidate=revalidate if principal.mode == "public" else None,
             revalidate_interval_s=settings.ws_auth_revalidate_interval_s,
             send_timeout_s=settings.ws_send_timeout_s,
@@ -454,6 +514,10 @@ async def ws_echo(
             close_reason = "websocket send timeout"
         elif close_code == _AUTH_CLOSE_CODE:
             close_reason = "session no longer active"
+        elif close_code == _PROTOCOL_CLOSE_CODE:
+            close_reason = "invalid client frame"
+        elif close_code == _ADMISSION_CLOSE_CODE:
+            close_reason = "websocket frame rate exceeded"
     except WebSocketDisconnect:
         return
     finally:

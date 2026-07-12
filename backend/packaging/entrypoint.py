@@ -13,6 +13,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
+# The frozen executable boundary must disable TorchScript before PyInstaller
+# can load any collected application module.  ``app.__init__`` repeats this
+# guard for source installs; keeping it here makes the packaged ordering an
+# explicit invariant rather than relying on the current import graph.
+os.environ["PYTORCH_JIT"] = "0"
+
 PACKAGED_PYTHON_WORKER_FLAG = "--echodesk-python-worker"
 ARTIFACT_RUNTIME_SMOKE_FLAG = "--artifact-runtime-smoke"
 
@@ -306,6 +312,7 @@ def _server_parser() -> argparse.ArgumentParser:
         default=int(os.getenv("ECHO_BACKEND_PORT", "8769")),
     )
     parser.add_argument("--log-level", default="info")
+    parser.add_argument("--ws-max-size", type=int, choices=(4096,), default=4096)
     return parser
 
 
@@ -334,6 +341,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         log_level=server_args.log_level,
         access_log=False,
         factory=False,
+        ws_max_size=server_args.ws_max_size,
     )
     return 0
 

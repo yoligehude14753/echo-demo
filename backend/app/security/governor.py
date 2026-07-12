@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
+from collections import OrderedDict, deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -132,6 +134,8 @@ class PrincipalGovernor:
         self._now = now or (lambda: datetime.now(UTC))
         self._active: dict[tuple[str, str, LeaseMetric], int] = {}
         self._active_lock = asyncio.Lock()
+        self._websocket_frames: OrderedDict[tuple[str, str], deque[float]] = OrderedDict()
+        self._websocket_frame_lock = asyncio.Lock()
 
     @staticmethod
     def _scope(principal: Principal) -> tuple[str, str]:
@@ -304,6 +308,34 @@ class PrincipalGovernor:
             "websockets",
             self.settings.quota_websocket_connections,
         )
+
+    async def admit_websocket_frame(self, principal: Principal) -> None:
+        """Rate-limit authenticated client frames across one principal's sockets."""
+
+        if not self._is_governed(principal):
+            return
+        now = time.monotonic()
+        cutoff = now - 1.0
+        key = self._scope(principal)
+        async with self._websocket_frame_lock:
+            for stale_key, frames in list(self._websocket_frames.items()):
+                while frames and frames[0] <= cutoff:
+                    frames.popleft()
+                if not frames:
+                    self._websocket_frames.pop(stale_key, None)
+            frames = self._websocket_frames.setdefault(key, deque())
+            self._websocket_frames.move_to_end(key)
+            limit = self.settings.ws_client_frames_per_second
+            if len(frames) >= limit:
+                raise QuotaExceeded(
+                    "websocket_frames",
+                    limit=limit,
+                    used=len(frames),
+                    retry_after_s=1,
+                )
+            frames.append(now)
+            while len(self._websocket_frames) > self.settings.ws_scope_max_streams:
+                self._websocket_frames.popitem(last=False)
 
     async def reserve_upload(
         self,

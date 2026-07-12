@@ -7,14 +7,16 @@ import math
 import os
 import socket
 from collections import OrderedDict
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, TypeAlias
 from uuid import uuid4
 
+import aiosqlite
+
 from app.runtime.execution_lease import LeaseOwnershipError, LeaseToken
-from app.schemas.workflow import WorkflowRunCreate
+from app.schemas.workflow import WorkflowRunCreate, WorkflowState
 from app.security.context import bind_principal, current_principal, reset_principal
 from app.workflows.service import (
     WorkflowRunRecord,
@@ -34,6 +36,9 @@ class WorkflowContext:
 
 WorkflowHandler: TypeAlias = Callable[
     [WorkflowContext, dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]
+]
+WorkflowTerminalProjector: TypeAlias = Callable[
+    [aiosqlite.Connection, WorkflowRunRecord, WorkflowState], Awaitable[None]
 ]
 WorkflowScopePreparer: TypeAlias = Callable[[], None]
 
@@ -68,6 +73,9 @@ class WorkflowHandlerRegistry:
             raise ValueError("workflow handler scope bound must be positive")
         self.max_scopes = max_scopes
         self._handlers: dict[tuple[str, str | None, str | None], WorkflowHandler] = {}
+        self._terminal_projectors: dict[
+            tuple[str, str | None, str | None], WorkflowTerminalProjector
+        ] = {}
         self._scopes: OrderedDict[tuple[str, str], None] = OrderedDict()
 
     def _touch_scope(self, scope: tuple[str, str]) -> None:
@@ -82,6 +90,8 @@ class WorkflowHandlerRegistry:
     def _drop_scope_handlers(self, scope: tuple[str, str]) -> None:
         for key in [key for key in self._handlers if key[1:] == scope]:
             self._handlers.pop(key, None)
+        for key in [key for key in self._terminal_projectors if key[1:] == scope]:
+            self._terminal_projectors.pop(key, None)
 
     def register(
         self,
@@ -112,6 +122,38 @@ class WorkflowHandlerRegistry:
                 self._scopes.move_to_end(scope)
                 return scoped
         return self._handlers.get((kind, None, None))
+
+    def register_terminal_projector(
+        self,
+        kind: str,
+        projector: WorkflowTerminalProjector,
+        *,
+        scope: tuple[str, str] | None = None,
+        replace: bool = False,
+    ) -> None:
+        normalized = kind.strip()
+        if not normalized:
+            raise ValueError("workflow terminal projector kind must not be empty")
+        key = (normalized, *(scope or (None, None)))
+        if key in self._terminal_projectors and not replace:
+            raise ValueError(
+                f"workflow terminal projector already registered: {normalized} scope={scope}"
+            )
+        if scope is not None:
+            self._touch_scope(scope)
+        self._terminal_projectors[key] = projector
+
+    def resolve_terminal_projector(
+        self,
+        kind: str,
+        scope: tuple[str, str] | None = None,
+    ) -> WorkflowTerminalProjector | None:
+        if scope is not None:
+            scoped = self._terminal_projectors.get((kind, *scope))
+            if scoped is not None:
+                self._scopes.move_to_end(scope)
+                return scoped
+        return self._terminal_projectors.get((kind, None, None))
 
     def unregister_scope(self, scope: tuple[str, str]) -> None:
         self._drop_scope_handlers(scope)
@@ -155,6 +197,21 @@ class WorkflowDispatcher:
 
     async def dispatch(self, body: WorkflowRunCreate) -> WorkflowRunRecord:
         run = await self.service.create_run(body)
+        await self._ensure_scheduled(run)
+        return run
+
+    async def dispatch_atomic(
+        self,
+        body: WorkflowRunCreate,
+        *,
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[None]],
+        run_id: str | None = None,
+    ) -> WorkflowRunRecord:
+        run = await self.service.create_run_atomic(
+            body,
+            domain_writer=domain_writer,
+            run_id=run_id,
+        )
         await self._ensure_scheduled(run)
         return run
 
@@ -204,6 +261,10 @@ class WorkflowDispatcher:
             principal = current_principal()
             scope = (principal.tenant_id, principal.owner_id)
             handler = self.registry.resolve(claimed_run.kind, scope)
+            terminal_projector = self.registry.resolve_terminal_projector(
+                claimed_run.kind,
+                scope,
+            )
             scope_lease: WorkflowScopeLease | None = None
             try:
                 if handler is not None and self._scope_lease_factory is not None:
@@ -213,7 +274,14 @@ class WorkflowDispatcher:
                 await self.service.release_run_lease(lease)
                 raise
             task = asyncio.create_task(
-                self._execute(claimed_run, cancel_event, lease, handler, scope_lease),
+                self._execute(
+                    claimed_run,
+                    cancel_event,
+                    lease,
+                    handler,
+                    terminal_projector,
+                    scope_lease,
+                ),
                 name=f"workflow:{claimed_run.kind}:{run.run_id}",
             )
             self._tasks[run.run_id] = task
@@ -236,6 +304,7 @@ class WorkflowDispatcher:
         cancel_event: asyncio.Event,
         lease: LeaseToken,
         handler: WorkflowHandler | None,
+        terminal_projector: WorkflowTerminalProjector | None,
         scope_lease: WorkflowScopeLease | None,
     ) -> None:
         lease_context = bind_workflow_execution_lease(lease)
@@ -246,17 +315,34 @@ class WorkflowDispatcher:
             self._heartbeat_lease(run.run_id, lease, cancel_event, lease_lost),
             name=f"workflow-heartbeat:{run.run_id}",
         )
+
+        def terminal_writer(
+            state: WorkflowState,
+        ) -> Callable[[aiosqlite.Connection], Awaitable[None]] | None:
+            if terminal_projector is None:
+                return None
+
+            async def write(conn: aiosqlite.Connection) -> None:
+                await terminal_projector(conn, run, state)
+
+            return write
+
         try:
             if handler is None:
                 await self.service.fail_run(
-                    run.run_id, error=f"workflow handler not registered: {run.kind}"
+                    run.run_id,
+                    error=f"workflow handler not registered: {run.kind}",
+                    domain_writer=terminal_writer("failed"),
                 )
                 return
             current = await self.service.get_run(run.run_id)
             if current is None or current.is_terminal:
                 return
             if current.state == "cancel_requested":
-                await self.service.mark_cancelled(run.run_id)
+                await self.service.mark_cancelled(
+                    run.run_id,
+                    domain_writer=terminal_writer("cancelled"),
+                )
                 return
             if current.state == "pending":
                 current = await self.service.start_run(run.run_id)
@@ -305,7 +391,10 @@ class WorkflowDispatcher:
                 return
             if cancel_wait in done or cancel_event.is_set():
                 await self._stop_handler(handler_task)
-                await self.service.mark_cancelled(run.run_id)
+                await self.service.mark_cancelled(
+                    run.run_id,
+                    domain_writer=terminal_writer("cancelled"),
+                )
                 return
             if heartbeat_task in done:
                 # A normal heartbeat exit means another actor made the run
@@ -342,17 +431,27 @@ class WorkflowDispatcher:
         except TimeoutError:
             cancel_event.set()
             with contextlib.suppress(LeaseOwnershipError):
-                await self.service.timeout_run(run.run_id)
+                await self.service.timeout_run(
+                    run.run_id,
+                    domain_writer=terminal_writer("timeout"),
+                )
         except asyncio.CancelledError:
             cancel_event.set()
             if not self._closing:
                 current = await self.service.get_run(run.run_id)
                 if current is not None and current.state == "cancel_requested":
                     with contextlib.suppress(LeaseOwnershipError):
-                        await self.service.mark_cancelled(run.run_id)
+                        await self.service.mark_cancelled(
+                            run.run_id,
+                            domain_writer=terminal_writer("cancelled"),
+                        )
         except Exception as exc:
             with contextlib.suppress(LeaseOwnershipError):
-                await self.service.fail_run(run.run_id, error=str(exc))
+                await self.service.fail_run(
+                    run.run_id,
+                    error=str(exc),
+                    domain_writer=terminal_writer("failed"),
+                )
         finally:
             if handler_task is not None:
                 await self._stop_handler(handler_task)
@@ -526,8 +625,19 @@ class WorkflowDispatcher:
         await asyncio.gather(task, return_exceptions=True)
         return await self.service.get_run(run_id)
 
-    async def retry(self, run_id: str, *, reason: str | None = None) -> WorkflowRunRecord | None:
-        retry = await self.service.retry_run(run_id, reason=reason)
+    async def retry(
+        self,
+        run_id: str,
+        *,
+        reason: str | None = None,
+        domain_writer: Callable[[aiosqlite.Connection, WorkflowRunRecord], Awaitable[None]]
+        | None = None,
+    ) -> WorkflowRunRecord | None:
+        retry = await self.service.retry_run(
+            run_id,
+            reason=reason,
+            domain_writer=domain_writer,
+        )
         if retry is not None:
             await self._ensure_scheduled(retry)
         return retry

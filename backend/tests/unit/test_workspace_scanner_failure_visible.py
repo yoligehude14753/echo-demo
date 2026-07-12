@@ -96,8 +96,9 @@ async def test_ingest_failures_increment_n_failed_with_visible_logs(
     real_ingest = rag.ingest_file
 
     async def flaky_ingest(file_path: str, *args: Any, **kw: Any) -> str:
-        if Path(file_path).name in bad_names:
-            raise RuntimeError(f"模拟 markitdown OCR 子进程崩溃: {Path(file_path).name}")
+        source_name = Path(str(kw.get("source_path") or file_path)).name
+        if source_name in bad_names:
+            raise RuntimeError(f"模拟 markitdown OCR 子进程崩溃: {source_name}")
         return await real_ingest(file_path, *args, **kw)
 
     caplog.set_level(logging.WARNING, logger="echodesk.workspace")

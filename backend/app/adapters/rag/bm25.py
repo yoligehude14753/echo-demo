@@ -20,6 +20,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,14 @@ class _ScopeIndexSnapshot:
     scope: tuple[str, str]
     revision: int
     chunks: tuple[_IndexedChunk, ...]
+    ambient_fingerprints: frozenset[tuple[str, str, str]]
+
+
+def _normalize_captured_at(value: str) -> str:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        return value
 
 
 class BM25Rag:
@@ -221,10 +230,24 @@ class BM25Rag:
                     doc_id,
                     len(raw_chunks),
                 )
+        ambient_fingerprints: set[tuple[str, str, str]] = set()
+        for indexed_chunk in chunks:
+            metadata = dict(indexed_chunk.metadata)
+            if metadata.get("kind") != "ambient":
+                continue
+            captured_at = _normalize_captured_at(metadata.get("captured_at", ""))
+            text = indexed_chunk.text.strip()
+            audio_ref = metadata.get("audio_ref", "").strip()
+            ambient_fingerprints.add((captured_at, text, audio_ref))
+            # Retention may clear audio_ref from the authoritative DB after a
+            # legacy chunk was indexed; captured_at + text remains a valid
+            # reconciliation key for that bounded migration path.
+            ambient_fingerprints.add((captured_at, text, ""))
         return _ScopeIndexSnapshot(
             scope=scope,
             revision=int(durable_snapshot.revision),
             chunks=tuple(chunks),
+            ambient_fingerprints=frozenset(ambient_fingerprints),
         )
 
     def _snapshot_for_scope(
@@ -285,10 +308,17 @@ class BM25Rag:
         scope_hash = hashlib.sha256(f"{tenant_id}\0{owner_id}".encode()).hexdigest()[:16]
         return self._index_dir / f"{scope_hash}--{doc_id}.json"
 
-    def _persist_doc(self, doc_id: str, doc_title: str, chunks: list[RagChunk]) -> None:
+    def _persist_doc(
+        self,
+        doc_id: str,
+        doc_title: str,
+        chunks: list[RagChunk],
+        *,
+        projection_generation: int | None = None,
+    ) -> None:
         principal = current_principal()
         tenant_id, owner_id = principal.tenant_id, principal.owner_id
-        payload = {
+        payload: dict[str, Any] = {
             "doc_id": doc_id,
             "doc_title": doc_title,
             "tenant_id": tenant_id,
@@ -296,8 +326,21 @@ class BM25Rag:
             "device_id": principal.device_id,
             "chunks": [{**c.model_dump(), "tokens": _tokenize_cn_en(c.text)} for c in chunks],
         }
+        if projection_generation is not None:
+            payload["projection_generation"] = projection_generation
         target = self._index_file(doc_id)
-        self._store.replace_document(payload, target)
+        if projection_generation is None:
+            self._store.replace_document(payload, target)
+        else:
+            self._store.mutate_document(
+                tenant_id,
+                owner_id,
+                doc_id,
+                target,
+                lambda _existing: payload,
+                projection_generation=projection_generation,
+                projection_operation="index",
+            )
         self._load_index(force=True, scope=(tenant_id, owner_id))
 
     @staticmethod
@@ -471,31 +514,58 @@ class BM25Rag:
         self._persist_doc(doc_id, title, chunks)
         return doc_id
 
-    async def ingest_meeting(self, meeting_id: str, transcript: str, title: str) -> str:
+    async def ingest_meeting(
+        self,
+        meeting_id: str,
+        transcript: str,
+        title: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> str:
         async with self._lock:
-            return await asyncio.to_thread(self._ingest_meeting_sync, meeting_id, transcript, title)
+            return await asyncio.to_thread(
+                self._ingest_meeting_sync,
+                meeting_id,
+                transcript,
+                title,
+                projection_generation,
+            )
 
-    def _ingest_meeting_sync(self, meeting_id: str, transcript: str, title: str) -> str:
+    def _ingest_meeting_sync(
+        self,
+        meeting_id: str,
+        transcript: str,
+        title: str,
+        projection_generation: int | None = None,
+    ) -> str:
         self._reload_if_stale()
         doc_id = f"meeting-{meeting_id}"
         chunks: list[RagChunk] = []
         for j, sub in enumerate(
             self._chunk_text(transcript, self._chunk_size, self._chunk_overlap)
         ):
+            metadata = {"kind": "meeting", "meeting_id": meeting_id}
+            if projection_generation is not None:
+                metadata["projection_generation"] = str(projection_generation)
             chunks.append(
                 RagChunk(
                     doc_id=doc_id,
                     doc_title=title,
                     chunk_id=f"{doc_id}-c{j:04d}",
                     text=sub,
-                    metadata=_scoped_metadata({"kind": "meeting", "meeting_id": meeting_id}),
+                    metadata=_scoped_metadata(metadata),
                 )
             )
 
         if not chunks:
             raise RagError(f"meeting transcript empty: {meeting_id}")
 
-        self._persist_doc(doc_id, title, chunks)
+        self._persist_doc(
+            doc_id,
+            title,
+            chunks,
+            projection_generation=projection_generation,
+        )
         return doc_id
 
     async def ingest_ambient_segment(
@@ -506,6 +576,7 @@ class BM25Rag:
         audio_ref: str,
         speaker_id: str | None = None,
         speaker_label: str | None = None,
+        operation_id: str | None = None,
     ) -> str:
         async with self._lock:
             return await asyncio.to_thread(
@@ -515,6 +586,7 @@ class BM25Rag:
                 audio_ref,
                 speaker_id,
                 speaker_label,
+                operation_id,
             )
 
     def _ingest_ambient_segment_sync(
@@ -524,6 +596,7 @@ class BM25Rag:
         audio_ref: str,
         speaker_id: str | None = None,
         speaker_label: str | None = None,
+        operation_id: str | None = None,
     ) -> str:
         """按日追加 ambient STT 段（主链路记忆层）。"""
         self._reload_if_stale()
@@ -536,6 +609,16 @@ class BM25Rag:
             raw_chunks: list[Any] = []
             if payload is not None and isinstance(payload.get("chunks"), list):
                 raw_chunks = list(payload["chunks"])
+            if operation_id is not None:
+                raw_chunks = [
+                    item
+                    for item in raw_chunks
+                    if not (
+                        isinstance(item, dict)
+                        and isinstance(item.get("metadata"), dict)
+                        and item["metadata"].get("operation_id") == operation_id
+                    )
+                ]
             seq = len(raw_chunks)
             metadata: dict[str, str] = {
                 "kind": "ambient",
@@ -549,10 +632,17 @@ class BM25Rag:
                 metadata["speaker_id"] = speaker_id
             if speaker_label is not None:
                 metadata["speaker_label"] = speaker_label
+            if operation_id is not None:
+                metadata["operation_id"] = operation_id
+            chunk_suffix = (
+                hashlib.sha256(operation_id.encode()).hexdigest()[:16]
+                if operation_id is not None
+                else f"{seq:04d}"
+            )
             chunk = RagChunk(
                 doc_id=doc_id,
                 doc_title=title,
-                chunk_id=f"{doc_id}-c{seq:04d}",
+                chunk_id=f"{doc_id}-c{chunk_suffix}",
                 text=text.strip(),
                 metadata=metadata,
             )
@@ -579,26 +669,91 @@ class BM25Rag:
         )
         return doc_id
 
+    async def contains_ambient_segment(
+        self,
+        text: str,
+        *,
+        captured_at: str,
+        audio_ref: str,
+    ) -> bool:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._contains_ambient_segment_sync,
+                text,
+                captured_at,
+                audio_ref,
+            )
+
+    def _contains_ambient_segment_sync(
+        self,
+        text: str,
+        captured_at: str,
+        audio_ref: str,
+    ) -> bool:
+        """Reconcile v37 rows using fields written by every legacy ambient ingest."""
+
+        expected_text = text.strip()
+        expected_audio_ref = audio_ref.strip()
+        expected_captured_at = _normalize_captured_at(captured_at)
+        snapshot = self._snapshot_for_scope(_scope())
+        return (
+            expected_captured_at,
+            expected_text,
+            expected_audio_ref,
+        ) in snapshot.ambient_fingerprints
+
     async def query(self, query: str, *, top_k: int = 5) -> list[RagChunk]:
         async with self._lock:
             return await asyncio.to_thread(self._query_sync, query, top_k)
 
+    def _visible_chunks_for_scope(
+        self,
+        snapshot: _ScopeIndexSnapshot,
+        scope: tuple[str, str],
+    ) -> tuple[_IndexedChunk, ...]:
+        """Apply the durable meeting projection authority to every read view."""
+
+        meeting_generations: dict[str, int | None] = {}
+        for chunk in snapshot.chunks:
+            metadata = dict(chunk.metadata)
+            if metadata.get("kind") != "meeting":
+                continue
+            raw_generation = metadata.get("projection_generation")
+            if raw_generation is None:
+                meeting_generations[chunk.doc_id] = None
+            else:
+                try:
+                    meeting_generations[chunk.doc_id] = int(raw_generation)
+                except (TypeError, ValueError):
+                    meeting_generations[chunk.doc_id] = -1
+        visible_meetings = self._store.visible_meeting_documents(
+            scope[0],
+            scope[1],
+            meeting_generations,
+        )
+        return tuple(
+            chunk
+            for chunk in snapshot.chunks
+            if dict(chunk.metadata).get("kind") != "meeting" or chunk.doc_id in visible_meetings
+        )
+
     def _query_sync(self, query: str, top_k: int) -> list[RagChunk]:
         scope = _scope()
         snapshot = self._snapshot_for_scope(scope)
-        if not snapshot.chunks:
+        chunks = self._visible_chunks_for_scope(snapshot, scope)
+        if not chunks:
             return []
         tokens = _tokenize_cn_en(query)
         if not tokens:
             return []
         from rank_bm25 import BM25Okapi
 
-        scores = BM25Okapi([chunk.tokens for chunk in snapshot.chunks]).get_scores(tokens)
+        scores = BM25Okapi([chunk.tokens for chunk in chunks]).get_scores(tokens)
         # 小语料下 BM25 idf 可能给负权重，但 ranking 仍然有意义 → 不过滤分数
         ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[: top_k or self._top_k]
         out: list[RagChunk] = []
         for idx, score in ranked:
-            chunk = snapshot.chunks[idx]
+            chunk = chunks[idx]
             out.append(
                 RagChunk(
                     doc_id=chunk.doc_id,
@@ -611,11 +766,16 @@ class BM25Rag:
             )
         return out
 
-    async def delete(self, doc_id: str) -> None:
+    async def delete(
+        self,
+        doc_id: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> None:
         async with self._lock:
-            await asyncio.to_thread(self._delete_sync, doc_id)
+            await asyncio.to_thread(self._delete_sync, doc_id, projection_generation)
 
-    def _delete_sync(self, doc_id: str) -> None:
+    def _delete_sync(self, doc_id: str, projection_generation: int | None = None) -> None:
         self._reload_if_stale()
         tenant_id, owner_id = _scope()
         self._store.mutate_document(
@@ -624,15 +784,19 @@ class BM25Rag:
             doc_id,
             self._index_file(doc_id, (tenant_id, owner_id)),
             lambda _payload: None,
+            projection_generation=projection_generation,
+            projection_operation="delete" if projection_generation is not None else None,
         )
         self._load_index(force=True, scope=(tenant_id, owner_id))
 
     def stats(self) -> dict[str, Any]:
         """诊断用。"""
-        snapshot = self._snapshot_for_scope(_scope())
-        doc_ids = {chunk.doc_id for chunk in snapshot.chunks}
+        scope = _scope()
+        snapshot = self._snapshot_for_scope(scope)
+        chunks = self._visible_chunks_for_scope(snapshot, scope)
+        doc_ids = {chunk.doc_id for chunk in chunks}
         return {
-            "n_chunks": len(snapshot.chunks),
+            "n_chunks": len(chunks),
             "n_docs": len(doc_ids),
             "revision": snapshot.revision,
             "ts": time.time(),
@@ -644,9 +808,10 @@ class BM25Rag:
             return await asyncio.to_thread(self._list_docs_sync)
 
     def _list_docs_sync(self) -> list[dict[str, object]]:
-        snapshot = self._snapshot_for_scope(_scope())
+        scope = _scope()
+        snapshot = self._snapshot_for_scope(scope)
         agg: dict[str, dict[str, Any]] = {}
-        for chunk in snapshot.chunks:
+        for chunk in self._visible_chunks_for_scope(snapshot, scope):
             metadata = dict(chunk.metadata)
             doc = agg.setdefault(
                 chunk.doc_id,

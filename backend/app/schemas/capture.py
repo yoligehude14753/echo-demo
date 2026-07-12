@@ -22,7 +22,9 @@ class CaptureChunkResult(BaseModel):
 
     ambient_stored: bool = False
     ambient_text: str | None = None
-    audio_ref: str = ""
+    # Internal/local responses retain the durable file reference. Public
+    # transports project it to null because it is a server filesystem path.
+    audio_ref: str | None = ""
     speaker_id: str | None = None
     speaker_label: str | None = None
     meeting_id: str | None = None  # 当前 chunk 被叠加进的 meeting（手动 / 自动 / 无）

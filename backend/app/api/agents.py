@@ -37,7 +37,9 @@ from app.agents.service import (
 )
 from app.api.deps import get_event_bus, require_admin_access
 from app.config import Settings, get_settings
+from app.security.context import current_principal
 from app.security.headers import PRIVATE_NO_STORE_HEADERS
+from app.security.public_projection import project_client_dict, server_private_roots
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -151,6 +153,39 @@ class GrantCreateResponse(BaseModel):
     resumed_task: AgentTaskDTO | None = None
 
 
+def _task_dto(rec: AgentTaskRecord, settings: Settings) -> AgentTaskDTO:
+    dto = AgentTaskDTO.from_record(rec)
+    return AgentTaskDTO.model_validate(
+        project_client_dict(
+            dto.model_dump(mode="json"),
+            current_principal(),
+            private_roots=server_private_roots(settings),
+        )
+    )
+
+
+def _task_events_dto(
+    task_id: str,
+    *,
+    events: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+    last_seq: int,
+    settings: Settings,
+) -> AgentTaskEventsDTO:
+    return AgentTaskEventsDTO.model_validate(
+        project_client_dict(
+            {
+                "task_id": task_id,
+                "events": events,
+                "snapshot": snapshot,
+                "last_seq": last_seq,
+            },
+            current_principal(),
+            private_roots=server_private_roots(settings),
+        )
+    )
+
+
 def _service(
     settings: Settings = Depends(get_settings),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
@@ -192,7 +227,7 @@ async def create_task(
         timeout_s=body.timeout_s or settings.agent_task_timeout_s,
     )
     rec = await service.submit_task(intent)
-    return AgentTaskDTO.from_record(rec)
+    return _task_dto(rec, settings)
 
 
 @router.get("/tasks", response_model=list[AgentTaskDTO])
@@ -200,10 +235,10 @@ async def list_tasks(
     device_id: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     service: AgentTaskService = Depends(_service),
+    settings: Settings = Depends(get_settings),
 ) -> list[AgentTaskDTO]:
     return [
-        AgentTaskDTO.from_record(r)
-        for r in await service.list_tasks(device_id=device_id, limit=limit)
+        _task_dto(r, settings) for r in await service.list_tasks(device_id=device_id, limit=limit)
     ]
 
 
@@ -211,11 +246,12 @@ async def list_tasks(
 async def get_task(
     task_id: str,
     service: AgentTaskService = Depends(_service),
+    settings: Settings = Depends(get_settings),
 ) -> AgentTaskDTO:
     rec = await service.get_task(task_id)
     if rec is None:
         raise HTTPException(404, "task not found")
-    return AgentTaskDTO.from_record(rec)
+    return _task_dto(rec, settings)
 
 
 @router.get("/tasks/{task_id}/events", response_model=AgentTaskEventsDTO)
@@ -223,15 +259,17 @@ async def list_task_events(
     task_id: str,
     after_seq: int = Query(0, ge=0),
     service: AgentTaskService = Depends(_service),
+    settings: Settings = Depends(get_settings),
 ) -> AgentTaskEventsDTO:
     events, snapshot, last_seq = await service.list_events(task_id, after_seq=after_seq)
     if last_seq == 0 and not snapshot:
         raise HTTPException(404, "task not found")
-    return AgentTaskEventsDTO(
-        task_id=task_id,
+    return _task_events_dto(
+        task_id,
         events=[e.model_dump(mode="json") for e in events],
         snapshot=snapshot,
         last_seq=last_seq,
+        settings=settings,
     )
 
 
@@ -303,11 +341,12 @@ async def proxy_task_artifact(
 async def cancel_task(
     task_id: str,
     service: AgentTaskService = Depends(_service),
+    settings: Settings = Depends(get_settings),
 ) -> AgentTaskDTO:
     rec = await service.cancel_task(task_id)
     if rec is None:
         raise HTTPException(404, "task not found")
-    return AgentTaskDTO.from_record(rec)
+    return _task_dto(rec, settings)
 
 
 @router.post(
@@ -318,11 +357,12 @@ async def cancel_task(
 async def retry_task(
     task_id: str,
     service: AgentTaskService = Depends(_service),
+    settings: Settings = Depends(get_settings),
 ) -> AgentTaskDTO:
     new_rec = await service.retry_task(task_id)
     if new_rec is None:
         raise HTTPException(404, "task not found")
-    return AgentTaskDTO.from_record(new_rec)
+    return _task_dto(new_rec, settings)
 
 
 @router.get("/grants", response_model=GrantStatusDTO)
@@ -345,6 +385,7 @@ async def get_grant(
 async def create_grant(
     body: GrantCreateRequest,
     service: AgentTaskService = Depends(_service),
+    settings: Settings = Depends(get_settings),
 ) -> GrantCreateResponse:
     if body.permission_profile != PROFILE_FULL_ACCESS:
         raise HTTPException(400, "unsupported permission_profile")
@@ -356,8 +397,9 @@ async def create_grant(
     resumed_task = None
     if body.resume_task_id:
         try:
-            resumed_task = AgentTaskDTO.from_record(
-                await service.resume_with_grant(body.resume_task_id, grant)
+            resumed_task = _task_dto(
+                await service.resume_with_grant(body.resume_task_id, grant),
+                settings,
             )
         except KeyError as exc:
             raise HTTPException(404, "task not found") from exc

@@ -1,7 +1,7 @@
 """FastAPI 入口：仅做装配，不写业务逻辑。
 
 启动（canonical）：
-    cd backend && uvicorn app.main:app --host 127.0.0.1 --port 8769
+    cd backend && uvicorn app.main:app --host 127.0.0.1 --port 8769 --ws-max-size 4096
 
 注：8769 是 EchoDesk 统一端口（P1.1 Phase 1 收口），main.cjs / runtime.ts
 / vite.config / playwright 配置 / install-backend.sh 都对齐这个值。改前先
@@ -78,11 +78,17 @@ from app.security import (
     route_scope_path,
 )
 from app.security.access import PreAuthAdmissionError
+from app.security.client_version import (
+    MINIMUM_PUBLIC_CLIENT_VERSION,
+    PUBLIC_CLIENT_UPGRADE_URL,
+    PUBLIC_CLIENT_VERSION_HEADER,
+    PUBLIC_MINIMUM_CLIENT_VERSION_HEADER,
+)
 from app.security.context import bind_principal, reset_principal
 from app.security.deployment_gate import DeploymentGateMiddleware
 from app.security.errors import InternalHTTPException
 from app.security.governor import PrincipalGovernor, QuotaExceeded, QuotaReservation
-from app.security.headers import PRIVATE_NO_STORE_HEADERS
+from app.security.headers import PRIVATE_NO_STORE_HEADERS, apply_private_no_store
 from app.security.redaction import RedactingFormatter, install_redaction_filter
 from app.upload import UploadIngressMiddleware, upload_body_limit
 
@@ -91,6 +97,10 @@ logger = logging.getLogger("echodesk")
 
 class _StreamingBodyResponse(Protocol):
     body_iterator: AsyncIterator[Any]
+
+
+class _AsyncReleaseLease(Protocol):
+    async def release(self) -> None: ...
 
 
 def _setup_logging(level: str) -> None:
@@ -260,11 +270,13 @@ def _bind_workflow_handlers_for_current_principal(
         settings,
         get_artifact_repository(settings),
     )
+    pipeline = get_meeting_pipeline_for_lifespan(settings, repository)
     bind_output_cleanup_workflow_handler(
         dispatcher,
         repository,
         settings,
         get_artifact_repository(settings),
+        pipeline,
     )
     bind_artifact_workflow_handler(
         dispatcher,
@@ -274,7 +286,6 @@ def _bind_workflow_handlers_for_current_principal(
         event_bus=bus,
         artifact_repo=get_artifact_repository(settings),
     )
-    pipeline = get_meeting_pipeline_for_lifespan(settings, repository)
     bind_meeting_workflow_handlers(dispatcher, pipeline)
 
 
@@ -289,7 +300,9 @@ async def _repair_meeting_rag_projections_once(
 ) -> tuple[int, int]:
     """Repair every persisted principal scope without widening request reads."""
 
-    scope_loader = getattr(repository, "list_meeting_rag_projection_scopes", None)
+    scope_loader = getattr(repository, "list_rag_projection_scopes", None)
+    if scope_loader is None:
+        scope_loader = getattr(repository, "list_meeting_rag_projection_scopes", None)
     if scope_loader is None:
         return 0, 0
     attempted = 0
@@ -608,6 +621,10 @@ def _request_scope_path(request: Request) -> str:
     return route_scope_path(request.scope)
 
 
+def _is_session_path(path: str) -> bool:
+    return path == "/session" or path.startswith("/session/")
+
+
 async def _reserve_request_upload(
     request: Request,
     *,
@@ -739,6 +756,7 @@ def _install_transport_guards(app: FastAPI, settings: Settings) -> None:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[PUBLIC_MINIMUM_CLIENT_VERSION_HEADER, "Link"],
     )
     app.add_middleware(
         TrustedHostMiddleware,
@@ -833,6 +851,29 @@ def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
             headers=PRIVATE_NO_STORE_HEADERS,
         )
 
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+        path = _request_scope_path(request)
+        protect_private_response = settings.public_demo_mode or _is_session_path(path)
+        logger.error(
+            "unhandled request error suppressed: path=%s type=%s",
+            path,
+            type(exc).__name__,
+            exc_info=exc,
+        )
+        if protect_private_response:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "internal_error",
+                        "message": "请求未能完成，请稍后重试",
+                    }
+                },
+                status_code=500,
+                headers=PRIVATE_NO_STORE_HEADERS,
+            )
+        return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
+
 
 def _bootstrap_payload(settings: Settings) -> dict[str, object]:
     capabilities: dict[str, object] = {
@@ -853,7 +894,9 @@ def _bootstrap_payload(settings: Settings) -> dict[str, object]:
         "session_path": "/session",
         "capabilities": capabilities,
     }
-    if not settings.public_demo_mode:
+    if settings.public_demo_mode:
+        response["minimum_client_version"] = MINIMUM_PUBLIC_CLIENT_VERSION
+    else:
         response.update(
             {
                 "backend_version": __version__,
@@ -875,29 +918,75 @@ async def _resolve_request_principal(
     policy_path: str,
 ) -> Principal | JSONResponse:
     client_key = access_policy.client_host(request.client)
+    preauth_lease = None
+    session_body_lease = None
     try:
-        preauth_lease = await access_policy.admit_http(client_key)
-    except PreAuthAdmissionError as exc:
-        return JSONResponse(
-            {"detail": exc.detail},
-            status_code=exc.status_code,
-            headers={"Retry-After": str(exc.retry_after_s)},
-        )
-    try:
+        try:
+            session_body_lease = await access_policy.admit_session_body(
+                method=request.method,
+                path=policy_path,
+                client_key=client_key,
+            )
+            preauth_lease = await access_policy.admit_http(client_key)
+        except PreAuthAdmissionError as exc:
+            return JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers={"Retry-After": str(exc.retry_after_s)},
+            )
         try:
             access_policy.require_allowed_origin(
                 request.headers.getlist("origin"),
                 client_host=client_key,
             )
-            return await access_policy.resolve_http_principal(
+            principal = await access_policy.resolve_http_principal(
                 method=request.method,
                 path=policy_path,
                 client_host=client_key,
                 authorization=request.headers.get("Authorization", ""),
                 x_echo_admin_token=request.headers.get("X-Echo-Admin-Token", ""),
                 share_token=request.query_params.get("share", ""),
+                client_version=request.headers.get(PUBLIC_CLIENT_VERSION_HEADER, ""),
             )
+            if session_body_lease is not None:
+                request.state.session_body_admission_lease = session_body_lease
+                session_body_lease = None
+            return principal
         except AccessPolicyError as exc:
+            if exc.status_code == 426:
+                return JSONResponse(
+                    {
+                        "detail": exc.detail,
+                        "error": {
+                            "code": "client_upgrade_required",
+                            "minimum_client_version": MINIMUM_PUBLIC_CLIENT_VERSION,
+                            "upgrade_url": PUBLIC_CLIENT_UPGRADE_URL,
+                        },
+                    },
+                    status_code=exc.status_code,
+                    headers={
+                        **PRIVATE_NO_STORE_HEADERS,
+                        PUBLIC_MINIMUM_CLIENT_VERSION_HEADER: (MINIMUM_PUBLIC_CLIENT_VERSION),
+                        "Link": f'<{PUBLIC_CLIENT_UPGRADE_URL}>; rel="upgrade"',
+                    },
+                )
+            if exc.status_code == 401 and exc.detail == "session required":
+                return JSONResponse(
+                    {
+                        "detail": exc.detail,
+                        "error": {
+                            "code": "session_required",
+                            "minimum_client_version": MINIMUM_PUBLIC_CLIENT_VERSION,
+                            "upgrade_url": PUBLIC_CLIENT_UPGRADE_URL,
+                        },
+                    },
+                    status_code=exc.status_code,
+                    headers={
+                        **PRIVATE_NO_STORE_HEADERS,
+                        PUBLIC_MINIMUM_CLIENT_VERSION_HEADER: (MINIMUM_PUBLIC_CLIENT_VERSION),
+                        "Link": f'<{PUBLIC_CLIENT_UPGRADE_URL}>; rel="upgrade"',
+                    },
+                )
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         except SessionError:
             return JSONResponse(
@@ -907,6 +996,8 @@ async def _resolve_request_principal(
     finally:
         if preauth_lease is not None:
             await preauth_lease.release()
+        if session_body_lease is not None:
+            await session_body_lease.release()
 
 
 def create_app() -> FastAPI:  # noqa: PLR0915 - application composition root
@@ -931,6 +1022,11 @@ def create_app() -> FastAPI:  # noqa: PLR0915 - application composition root
             return resolved
         principal = resolved
         request.state.principal = principal
+        session_body_admission_lease: _AsyncReleaseLease | None = getattr(
+            request.state,
+            "session_body_admission_lease",
+            None,
+        )
         context_token = bind_principal(principal)
         runtime_lease = None
         quota_context = governor.request(
@@ -993,6 +1089,8 @@ def create_app() -> FastAPI:  # noqa: PLR0915 - application composition root
         finally:
             if quota_entered:
                 await quota_context.__aexit__(None, None, None)
+            if session_body_admission_lease is not None:
+                await session_body_admission_lease.release()
             await _release_request_leases(request, runtime_lease)
             # A meeting/task reaching a terminal state does not terminate the
             # principal runtime. Diarizer, speaker registry, ambient capture and
@@ -1022,6 +1120,16 @@ def create_app() -> FastAPI:  # noqa: PLR0915 - application composition root
         return PlainTextResponse("EchoDesk LAN share only", status_code=403)
 
     _install_transport_guards(app, settings)
+
+    @app.middleware("http")
+    async def protect_session_responses(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        response = await call_next(request)
+        if _is_session_path(_request_scope_path(request)):
+            apply_private_no_store(response.headers)
+        return response
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:

@@ -168,8 +168,16 @@ class _BodyGuard:
         self._observed = 0
         self._failure: RuntimeError | None = None
         self._response_started = False
+        self._body_complete = False
 
     async def receive(self) -> Message:
+        # After the final http.request frame, Starlette's StreamingResponse
+        # keeps calling receive() only to observe client disconnects. That is
+        # response lifetime, not upload lifetime: applying the request-body
+        # deadline here would tear down every SSE response that is quiet longer
+        # than request_body_timeout_s.
+        if self._body_complete:
+            return await self._receive()
         remaining_s = self._deadline - asyncio.get_running_loop().time()
         if remaining_s <= 0:
             self._failure = RequestBodyTimeout()
@@ -191,6 +199,12 @@ class _BodyGuard:
         except UploadIngressCapacityExceeded as exc:
             self._failure = exc
             raise
+        if not message.get("more_body", False):
+            self._body_complete = True
+            # Capacity describes bodies currently arriving, not long-lived
+            # response streams. Release as soon as the complete body is owned;
+            # run() keeps the idempotent finally release for all early exits.
+            await self._lease.release()
         return message
 
     async def send(self, message: Message) -> None:

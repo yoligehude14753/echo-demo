@@ -9,11 +9,44 @@ import json
 from pathlib import Path
 
 import pytest
+from app.config import Settings
 from app.config_io import (
     load_user_config_json,
     user_config_path,
     write_user_config_json,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.mark.unit
+def test_env_example_tracks_current_defaults_and_keeps_admin_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    values = {
+        key: value
+        for line in (REPO_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+        for key, value in [line.split("=", maxsplit=1)]
+    }
+    fields = Settings.model_fields
+
+    assert values["DIARIZER_MATCH_THRESHOLD"] == str(fields["diarizer_match_threshold"].default)
+    assert "DIARIZER_MIN_AUDIO_BYTES" not in values
+    assert values["LLM_FAST_PROVIDER"] == fields["llm_fast_provider"].default
+    assert values["LLM_FAST_MODEL"] == fields["llm_fast_model"].default
+    assert values["LLM_FAST_BASE_URL"] == fields["llm_fast_base_url"].default
+    assert values["WORKSPACE_MAX_FILE_MB"] == str(int(fields["workspace_max_file_mb"].default))
+    assert values["ALLOWED_ORIGINS"] == fields["allowed_origins"].default
+    assert "WEB_ARBITRATION_MODEL" not in values
+    assert "web_arbitration_model" not in fields
+    assert values["DEBUG_TOKEN"] == ""
+
+    monkeypatch.delenv("DEBUG_TOKEN", raising=False)
+    monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
+    loaded = Settings(_env_file=REPO_ROOT / ".env.example")  # type: ignore[call-arg]
+    assert loaded.debug_token == ""
 
 
 @pytest.fixture

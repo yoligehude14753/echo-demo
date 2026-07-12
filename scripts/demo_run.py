@@ -6,7 +6,7 @@
 
 跑法：
   cd backend
-  uvicorn app.main:app --port 8769 &
+  uvicorn app.main:app --port 8769 --ws-max-size 4096 &
   cd ..
   python scripts/demo_run.py
 
@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import suppress
 
 import httpx
 import websockets
@@ -52,14 +53,12 @@ async def collect_ws_events(stop_evt: asyncio.Event, sink: list[dict]) -> None:
         while not stop_evt.is_set():
             try:
                 msg = await asyncio.wait_for(ws.recv(), timeout=0.5)
-            except (TimeoutError, asyncio.TimeoutError):
+            except TimeoutError:
                 continue
             except websockets.exceptions.ConnectionClosed:
                 return
-            try:
+            with suppress(json.JSONDecodeError):
                 sink.append(json.loads(msg))
-            except json.JSONDecodeError:
-                pass
 
 
 async def run_meeting_demo(client: httpx.AsyncClient, meeting_id: str) -> dict:
@@ -78,9 +77,7 @@ async def run_meeting_demo(client: httpx.AsyncClient, meeting_id: str) -> dict:
             "speaker_id": speakers[i],
             "speaker_label": None,
         }
-        r = await client.post(
-            f"{BASE}/meetings/{meeting_id}/inject_segment", json=seg
-        )
+        r = await client.post(f"{BASE}/meetings/{meeting_id}/inject_segment", json=seg)
         r.raise_for_status()
         cursor += 2800
         print(f"  → inject_segment #{i + 1} ok", flush=True)
@@ -91,9 +88,7 @@ async def run_meeting_demo(client: httpx.AsyncClient, meeting_id: str) -> dict:
     )
     r.raise_for_status()
     minutes = r.json()
-    print(
-        f"  ✓ 纪要: summary={minutes['summary'][:80]!r}", flush=True
-    )
+    print(f"  ✓ 纪要: summary={minutes['summary'][:80]!r}", flush=True)
     print(
         f"    sections={len(minutes['sections'])} decisions={len(minutes['decisions'])} "
         f"action_items={len(minutes['action_items'])}",
@@ -148,7 +143,7 @@ async def main() -> int:
         stop.set()
         try:
             await asyncio.wait_for(ws_task, timeout=3.0)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             ws_task.cancel()
 
     types = [e.get("type") for e in sink]

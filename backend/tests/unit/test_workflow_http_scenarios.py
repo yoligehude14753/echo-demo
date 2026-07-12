@@ -12,8 +12,16 @@ from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.repo.migrator import run_migrations
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.api.artifacts import get_skill
-from app.api.deps import get_llm_singleton, get_repository, reset_deps_for_test
+from app.api.deps import (
+    get_llm_singleton,
+    get_repository,
+    get_workflow_dispatcher,
+    get_workflow_service,
+    reset_deps_for_test,
+)
 from app.api.retrieval import get_rag, get_web
+from app.api.workflows import _agent_service
+from app.api.workflows import router as workflows_router
 from app.config import Settings, get_settings
 from app.main import create_app
 from app.schemas.artifact import GeneratedArtifact
@@ -23,7 +31,9 @@ from app.schemas.workflow import WorkflowRunCreate
 from app.security.models import local_principal
 from app.security.scope import scoped_directory
 from app.upload.ownership import claim_rag_content, stage_rag_content_blob
+from app.workflows.kernel import WorkflowDispatcher
 from app.workflows.service import WorkflowService
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -115,6 +125,52 @@ class _FailingAnswerLLM(_FakeLLM):
 
 
 @pytest.mark.unit
+async def test_workflow_retry_active_key_conflict_is_http_409(tmp_path: Path) -> None:
+    settings = Settings(
+        db_path=tmp_path / "workflow-retry-409.db",
+        storage_dir=tmp_path / "storage",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    service = WorkflowService(settings, InMemoryEventBus())
+    dispatcher = WorkflowDispatcher(service)
+    active_key = "workflow:http-retry-conflict"
+    parent = await service.create_run(
+        WorkflowRunCreate(
+            kind="rag.query",
+            source="test",
+            intent_text="failed parent",
+            active_key=active_key,
+        )
+    )
+    await service.start_run(parent.run_id)
+    await service.fail_run(parent.run_id, error="failed")
+    fresh = await service.create_run(
+        WorkflowRunCreate(
+            kind="rag.query",
+            source="fresh",
+            intent_text="fresh active winner",
+            active_key=active_key,
+        )
+    )
+    app = FastAPI()
+    app.include_router(workflows_router)
+    dummy_agents = object()
+    app.dependency_overrides[get_workflow_service] = lambda: service
+    app.dependency_overrides[get_workflow_dispatcher] = lambda: dispatcher
+    app.dependency_overrides[_agent_service] = lambda: dummy_agents
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        f"/workflows/runs/{parent.run_id}/retry",
+        json={"reason": "late retry"},
+    )
+
+    assert response.status_code == 409
+    assert "won retry race" in response.json()["detail"]
+    assert (await service.get_active_by_active_key(active_key)).run_id == fresh.run_id  # type: ignore[union-attr]
+
+
+@pytest.mark.unit
 async def test_artifact_generate_http_writes_workflow_and_meeting_link(tmp_path: Path) -> None:
     reset_deps_for_test()
     db_path = tmp_path / "echo.db"
@@ -168,6 +224,9 @@ async def test_artifact_generate_http_writes_workflow_and_meeting_link(tmp_path:
         )
         assert r.status_code == 200, r.text
         artifact_id = r.json()["artifact_id"]
+        local_file_path = r.json()["file_path"]
+        assert isinstance(local_file_path, str)
+        assert Path(local_file_path).is_file()
 
         runs = client.get("/workflows/runs?meeting_id=mtg-http").json()
         assert len(runs) == 1
@@ -176,6 +235,7 @@ async def test_artifact_generate_http_writes_workflow_and_meeting_link(tmp_path:
 
         artifacts = client.get("/meetings/mtg-http/artifacts").json()
         assert [item["artifact_id"] for item in artifacts] == [artifact_id]
+        assert artifacts[0]["file_path"] == local_file_path
         minutes = client.get("/meetings/mtg-http/minutes").json()
         assert minutes["todos"][0]["status"] == "done"
         assert minutes["todos"][0]["artifact_id"] == artifact_id

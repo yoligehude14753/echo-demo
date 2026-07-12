@@ -18,7 +18,11 @@ from app.schemas.workflow import WorkflowRunCreate
 from app.security import Principal
 from app.security.context import bind_principal, reset_principal
 from app.workflows import service as workflow_service_module
-from app.workflows.service import InvalidWorkflowTransition, WorkflowService
+from app.workflows.service import (
+    InvalidWorkflowTransition,
+    WorkflowConflictError,
+    WorkflowService,
+)
 
 
 async def _service(
@@ -145,6 +149,211 @@ async def test_workflow_retry_preserves_parent_reference(tmp_path: Path) -> None
 
     old_events = await service.list_events(run.run_id)
     assert old_events[-1].event_type == "workflow.retry_created"
+
+
+@pytest.mark.unit
+async def test_concurrent_retry_without_parent_idempotency_creates_one_child(
+    tmp_path: Path,
+) -> None:
+    first, _bus = await _service(tmp_path)
+    second = WorkflowService(first.settings, InMemoryEventBus())
+    run = await first.create_run(
+        WorkflowRunCreate(
+            kind="artifact.generate",
+            source="artifact_api",
+            intent_text="没有客户端幂等键的失败任务",
+        )
+    )
+    await first.start_run(run.run_id)
+    await first.fail_run(run.run_id, error="boom")
+
+    retries = await asyncio.gather(
+        first.retry_run(run.run_id, reason="first caller"),
+        second.retry_run(run.run_id, reason="second caller"),
+    )
+
+    assert retries[0] is not None and retries[1] is not None
+    assert retries[0].run_id == retries[1].run_id
+    assert retries[0].idempotency_key == f"workflow.retry:{run.run_id}:2"
+    runs = await first.list_runs()
+    assert len(runs) == 2
+    parent_events = await first.list_events(run.run_id)
+    assert [event.event_type for event in parent_events].count("workflow.retry_created") == 1
+
+
+@pytest.mark.unit
+async def test_fresh_active_run_wins_retry_race_without_lineage_impersonation(
+    tmp_path: Path,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    active_key = "meeting.finalize:retry-race-fresh"
+    parent = await service.create_run(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="test",
+            intent_text="failed generation",
+            active_key=active_key,
+        )
+    )
+    await service.start_run(parent.run_id)
+    await service.fail_run(parent.run_id, error="provider down")
+    fresh = await service.create_run(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="explicit-fresh",
+            intent_text="new explicit generation",
+            idempotency_key="fresh-generation",
+            active_key=active_key,
+        )
+    )
+
+    with pytest.raises(WorkflowConflictError, match="won retry race"):
+        await service.retry_run(parent.run_id, reason="late retry")
+
+    assert fresh.parent_run_id is None
+    assert fresh.state == "pending"
+    assert len(await service.list_runs()) == 2
+    assert all(
+        event.event_type != "workflow.retry_created"
+        for event in await service.list_events(parent.run_id)
+    )
+
+
+@pytest.mark.unit
+async def test_retry_child_wins_active_key_and_fresh_request_joins_lineage(
+    tmp_path: Path,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    active_key = "meeting.finalize:retry-race-child"
+    parent = await service.create_run(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="test",
+            intent_text="failed generation",
+            active_key=active_key,
+        )
+    )
+    await service.start_run(parent.run_id)
+    await service.fail_run(parent.run_id, error="provider down")
+
+    child = await service.retry_run(parent.run_id, reason="retry wins")
+    assert child is not None
+    fresh = await service.create_run(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="explicit-fresh",
+            intent_text="concurrent fresh generation",
+            active_key=active_key,
+        )
+    )
+
+    assert fresh.run_id == child.run_id
+    assert child.parent_run_id == parent.run_id
+    assert child.active_key == active_key
+    parent_events = await service.list_events(parent.run_id)
+    assert [event.event_type for event in parent_events].count("workflow.retry_created") == 1
+
+
+@pytest.mark.unit
+async def test_two_instances_race_retry_against_fresh_active_run_atomically(
+    tmp_path: Path,
+) -> None:
+    retry_service, _bus = await _service(tmp_path)
+    fresh_service = WorkflowService(retry_service.settings, InMemoryEventBus())
+    active_key = "meeting.finalize:true-concurrent-race"
+    parent = await retry_service.create_run(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="test",
+            intent_text="failed generation before a true concurrent race",
+            active_key=active_key,
+        )
+    )
+    await retry_service.start_run(parent.run_id)
+    await retry_service.fail_run(parent.run_id, error="provider down")
+    barrier = asyncio.Barrier(2)
+
+    async def retry_at_barrier() -> object:
+        await barrier.wait()
+        return await retry_service.retry_run(parent.run_id, reason="concurrent retry")
+
+    async def create_fresh_at_barrier() -> object:
+        await barrier.wait()
+        return await fresh_service.create_run(
+            WorkflowRunCreate(
+                kind="meeting.finalize",
+                source="fresh-request",
+                intent_text="concurrent fresh generation",
+                idempotency_key="concurrent-fresh-generation",
+                active_key=active_key,
+            )
+        )
+
+    retry_result, fresh_result = await asyncio.gather(
+        retry_at_barrier(),
+        create_fresh_at_barrier(),
+        return_exceptions=True,
+    )
+    assert not isinstance(fresh_result, BaseException)
+    runs = await retry_service.list_runs()
+    active = [run for run in runs if not run.is_terminal and run.active_key == active_key]
+    assert len(active) == 1
+    parent_events = await retry_service.list_events(parent.run_id)
+    retry_event_count = [event.event_type for event in parent_events].count(
+        "workflow.retry_created"
+    )
+    with sqlite3.connect(retry_service.settings.db_path) as conn:
+        retry_outbox_count = conn.execute(
+            """SELECT COUNT(*) FROM workflow_outbox
+               WHERE aggregate_id = ? AND event_type = 'workflow.event'
+                 AND payload_json LIKE '%workflow.retry_created%'""",
+            (parent.run_id,),
+        ).fetchone()[0]
+
+    if isinstance(retry_result, WorkflowConflictError):
+        assert fresh_result.run_id == active[0].run_id  # type: ignore[union-attr]
+        assert fresh_result.parent_run_id is None  # type: ignore[union-attr]
+        assert retry_event_count == 0
+        assert retry_outbox_count == 0
+    else:
+        assert not isinstance(retry_result, BaseException)
+        assert retry_result is not None
+        assert retry_result.run_id == fresh_result.run_id  # type: ignore[union-attr]
+        assert retry_result.run_id == active[0].run_id
+        assert retry_result.parent_run_id == parent.run_id
+        assert retry_event_count == 1
+        assert retry_outbox_count == 1
+
+
+@pytest.mark.unit
+async def test_retry_child_and_parent_event_roll_back_in_one_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    run = await service.create_run(
+        WorkflowRunCreate(kind="rag.query", source="test", intent_text="atomic retry")
+    )
+    await service.start_run(run.run_id)
+    await service.fail_run(run.run_id, error="boom")
+    original_append = service._append_event_tx
+
+    async def crash_on_parent_retry(*args: object, **kwargs: object) -> object:
+        event_type = str(args[2])
+        if event_type == "workflow.retry_created":
+            raise RuntimeError("crash before retry commit")
+        return await original_append(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(service, "_append_event_tx", crash_on_parent_retry)
+
+    with pytest.raises(RuntimeError, match="crash before retry commit"):
+        await service.retry_run(run.run_id)
+
+    assert len(await service.list_runs()) == 1
+    assert all(
+        event.event_type != "workflow.retry_created"
+        for event in await service.list_events(run.run_id)
+    )
 
 
 @pytest.mark.unit
@@ -322,6 +531,150 @@ async def test_workflow_transaction_rolls_back_run_when_event_insert_crashes(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("terminal_state", ["cancelled", "timeout"])
+async def test_atomic_finalize_start_prevents_terminal_run_from_reviving_meeting(
+    tmp_path: Path,
+    terminal_state: str,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    meeting_id = f"meeting-{terminal_state}"
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        await conn.execute(
+            """INSERT INTO meetings
+               (id, state, started_at, tenant_id, device_id, owner_id)
+               VALUES (?, 'in_meeting', '2026-07-12T00:00:00+00:00',
+                       'legacy-local', 'legacy-local', 'legacy-local')""",
+            (meeting_id,),
+        )
+        await conn.commit()
+
+    async def mark_generation_started(conn: aiosqlite.Connection) -> None:
+        await conn.execute(
+            """UPDATE meetings
+               SET state = 'ended', ended_at = '2026-07-12T00:01:00+00:00',
+                   minutes_status = 'generating'
+               WHERE id = ? AND tenant_id = 'legacy-local' AND owner_id = 'legacy-local'""",
+            (meeting_id,),
+        )
+
+    run = await service.create_run_atomic(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="meeting_state",
+            intent_text=f"Finalize {meeting_id}",
+            meeting_id=meeting_id,
+        ),
+        domain_writer=mark_generation_started,
+    )
+    if terminal_state == "cancelled":
+        await service.request_cancel(run.run_id)
+        terminal = await service.mark_cancelled(run.run_id)
+    else:
+        terminal = await service.timeout_run(run.run_id)
+
+    assert terminal is not None and terminal.state == terminal_state
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        row = await (
+            await conn.execute(
+                "SELECT state, minutes_status FROM meetings WHERE id = ?",
+                (meeting_id,),
+            )
+        ).fetchone()
+    assert row == ("ended", "generating")
+
+
+@pytest.mark.unit
+async def test_atomic_finalize_start_rolls_back_run_event_and_meeting_on_crash(
+    tmp_path: Path,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    meeting_id = "meeting-start-crash"
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        await conn.execute(
+            """INSERT INTO meetings
+               (id, state, started_at, tenant_id, device_id, owner_id)
+               VALUES (?, 'in_meeting', '2026-07-12T00:00:00+00:00',
+                       'legacy-local', 'legacy-local', 'legacy-local')""",
+            (meeting_id,),
+        )
+        await conn.commit()
+
+    async def crash_after_marker(conn: aiosqlite.Connection) -> None:
+        await conn.execute(
+            "UPDATE meetings SET state = 'ended' WHERE id = ?",
+            (meeting_id,),
+        )
+        raise RuntimeError("crash before workflow/domain commit")
+
+    with pytest.raises(RuntimeError, match="crash before workflow/domain commit"):
+        await service.create_run_atomic(
+            WorkflowRunCreate(
+                kind="meeting.finalize",
+                source="meeting_state",
+                intent_text="atomic crash",
+                meeting_id=meeting_id,
+            ),
+            domain_writer=crash_after_marker,
+        )
+
+    assert await service.list_runs() == []
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        row = await (
+            await conn.execute("SELECT state FROM meetings WHERE id = ?", (meeting_id,))
+        ).fetchone()
+    assert row == ("in_meeting",)
+
+
+@pytest.mark.unit
+async def test_atomic_finalize_marker_survives_post_commit_flush_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    meeting_id = "meeting-start-flush-failure"
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        await conn.execute(
+            """INSERT INTO meetings
+               (id, state, started_at, tenant_id, device_id, owner_id)
+               VALUES (?, 'in_meeting', '2026-07-13T00:00:00+00:00',
+                       'legacy-local', 'legacy-local', 'legacy-local')""",
+            (meeting_id,),
+        )
+        await conn.commit()
+
+    async def write_marker(conn: aiosqlite.Connection) -> None:
+        await conn.execute(
+            "UPDATE meetings SET minutes_status = 'generating' WHERE id = ?",
+            (meeting_id,),
+        )
+
+    async def fail_flush(*, limit: int = 500) -> int:
+        _ = limit
+        raise RuntimeError("simulated create atomic publish failure")
+
+    monkeypatch.setattr(service, "flush_outbox", fail_flush)
+    run = await service.create_run_atomic(
+        WorkflowRunCreate(
+            kind="meeting.finalize",
+            source="test",
+            intent_text="atomic marker survives publish failure",
+            meeting_id=meeting_id,
+        ),
+        domain_writer=write_marker,
+    )
+
+    assert run.state == "pending"
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        marker = await (
+            await conn.execute("SELECT minutes_status FROM meetings WHERE id = ?", (meeting_id,))
+        ).fetchone()
+    assert marker == ("generating",)
+    assert [event.event_type for event in await service.list_events(run.run_id)] == [
+        "workflow.created"
+    ]
+
+
+@pytest.mark.unit
 async def test_domain_write_and_terminal_outbox_roll_back_together_on_crash(tmp_path: Path) -> None:
     service, _bus = await _service(tmp_path)
     run = await service.create_run(
@@ -361,6 +714,186 @@ async def test_domain_write_and_terminal_outbox_roll_back_together_on_crash(tmp_
             ).fetchone()[0]
             == 0
         )
+
+
+@pytest.mark.unit
+async def test_active_progress_commit_survives_eager_outbox_flush_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    meeting_id = "meeting-progress-flush-failure"
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        await conn.execute(
+            """INSERT INTO meetings
+               (id, state, started_at, tenant_id, device_id, owner_id)
+               VALUES (?, 'ended', '2026-07-13T00:00:00+00:00',
+                       'legacy-local', 'legacy-local', 'legacy-local')""",
+            (meeting_id,),
+        )
+        await conn.commit()
+    run = await service.create_run(
+        WorkflowRunCreate(
+            kind="meeting.outputs.clear",
+            source="test",
+            intent_text="commit before eager publish",
+            meeting_id=meeting_id,
+        )
+    )
+    await service.start_run(run.run_id)
+
+    async def write_domain(conn: aiosqlite.Connection) -> None:
+        await conn.execute(
+            "UPDATE meetings SET rag_projection_generation = 1 WHERE id = ?",
+            (meeting_id,),
+        )
+
+    async def fail_flush(*, limit: int = 500) -> int:
+        _ = limit
+        raise RuntimeError("simulated post-commit publish failure")
+
+    monkeypatch.setattr(service, "flush_outbox", fail_flush)
+    committed = await service.commit_run_progress_atomic(
+        run.run_id,
+        output={"domain_commit": {"kind": "meeting.outputs.clear", "generation": 1}},
+        domain_writer=write_domain,
+        domain_events=[],
+    )
+
+    assert committed is not None and committed.state == "running"
+    assert committed.output["domain_commit"]["generation"] == 1
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        meeting_row = await (
+            await conn.execute(
+                "SELECT rag_projection_generation FROM meetings WHERE id = ?",
+                (meeting_id,),
+            )
+        ).fetchone()
+        unpublished = await (
+            await conn.execute("SELECT COUNT(*) FROM workflow_outbox WHERE published_at IS NULL")
+        ).fetchone()
+    assert meeting_row == (1,)
+    assert unpublished is not None and int(unpublished[0]) > 0
+
+
+@pytest.mark.unit
+async def test_inline_completion_returns_committed_run_when_eager_flush_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    meeting_id = "meeting-inline-flush-failure"
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        await conn.execute(
+            """INSERT INTO meetings
+               (id, state, started_at, tenant_id, device_id, owner_id)
+               VALUES (?, 'ended', '2026-07-13T00:00:00+00:00',
+                       'legacy-local', 'legacy-local', 'legacy-local')""",
+            (meeting_id,),
+        )
+        await conn.commit()
+
+    async def write_domain(conn: aiosqlite.Connection) -> None:
+        await conn.execute(
+            "UPDATE meetings SET title = 'inline committed' WHERE id = ?",
+            (meeting_id,),
+        )
+
+    async def fail_flush(*, limit: int = 500) -> int:
+        _ = limit
+        raise RuntimeError("simulated inline post-commit publish failure")
+
+    monkeypatch.setattr(service, "flush_outbox", fail_flush)
+    done = await service.complete_new_run_atomic(
+        WorkflowRunCreate(
+            kind="share.prepare",
+            source="test",
+            intent_text="inline commit before eager publish",
+            meeting_id=meeting_id,
+        ),
+        output={"resource_type": "meeting", "resource_id": meeting_id},
+        domain_writer=write_domain,
+    )
+
+    assert done.state == "succeeded"
+    assert [event.event_type for event in await service.list_events(done.run_id)] == [
+        "workflow.created",
+        "workflow.succeeded",
+    ]
+    async with aiosqlite.connect(str(service.settings.db_path)) as conn:
+        meeting_row = await (
+            await conn.execute("SELECT title FROM meetings WHERE id = ?", (meeting_id,))
+        ).fetchone()
+    assert meeting_row == ("inline committed",)
+
+
+@pytest.mark.unit
+async def test_merge_output_returns_committed_patch_when_eager_flush_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    run = await service.create_run(
+        WorkflowRunCreate(
+            kind="meeting.outputs.clear",
+            source="test",
+            intent_text="persist tail marker before eager publish",
+        )
+    )
+    await service.start_run(run.run_id)
+
+    async def fail_flush(*, limit: int = 500) -> int:
+        _ = limit
+        raise RuntimeError("simulated tail marker publish failure")
+
+    monkeypatch.setattr(service, "flush_outbox", fail_flush)
+    updated = await service.merge_output(
+        run.run_id,
+        {"post_commit_complete": True},
+        event_type="workflow.tail_committed",
+    )
+
+    assert updated is not None and updated.state == "running"
+    assert updated.output["post_commit_complete"] is True
+    persisted = await service.get_run(run.run_id)
+    assert persisted is not None and persisted.output["post_commit_complete"] is True
+    assert [event.event_type for event in await service.list_events(run.run_id)][-1] == (
+        "workflow.tail_committed"
+    )
+
+
+@pytest.mark.unit
+async def test_record_event_and_retry_survive_post_commit_flush_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _bus = await _service(tmp_path)
+    parent = await service.create_run(
+        WorkflowRunCreate(kind="artifact.generate", source="test", intent_text="retry durable")
+    )
+    await service.start_run(parent.run_id)
+    await service.fail_run(parent.run_id, error="provider down")
+
+    async def fail_flush(*, limit: int = 500) -> int:
+        _ = limit
+        raise RuntimeError("simulated event/retry publish failure")
+
+    monkeypatch.setattr(service, "flush_outbox", fail_flush)
+    restored = await service.record_event(
+        parent.run_id,
+        "workflow.restored",
+        message="durable before eager publish",
+    )
+    retry = await service.retry_run(parent.run_id, reason="post-commit publish failed")
+
+    assert restored is not None and restored.event_type == "workflow.restored"
+    assert retry is not None and retry.parent_run_id == parent.run_id
+    assert retry.state == "pending"
+    parent_events = [event.event_type for event in await service.list_events(parent.run_id)]
+    assert parent_events[-2:] == ["workflow.restored", "workflow.retry_created"]
+    assert [event.event_type for event in await service.list_events(retry.run_id)] == [
+        "workflow.created"
+    ]
 
 
 @pytest.mark.unit
@@ -1485,7 +2018,7 @@ async def test_v35_upgrade_drains_existing_sparse_rows_in_order(tmp_path: Path) 
         )
         await conn.commit()
     upgraded = await run_migrations(db_path)
-    assert upgraded.errors == [] and upgraded.applied == [35, 36, 37]
+    assert upgraded.errors == [] and upgraded.applied == [35, 36, 37, 38]
 
     settings = Settings(
         db_path=db_path,

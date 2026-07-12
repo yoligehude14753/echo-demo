@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import aiosqlite
 import pytest
-from app.adapters.repo.migrator import run_migrations
+from app.adapters.rag import BM25Rag
+from app.adapters.repo.migrator import _DEFAULT_MIGRATIONS_DIR, run_migrations
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.config import Settings
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
@@ -50,26 +54,60 @@ class FakeDiarizer:
 class FakeRag:
     def __init__(self) -> None:
         self.ingested: list[tuple[str, str, str]] = []
+        self.ingest_generations: list[int | None] = []
+        self.ambient_ingested: list[tuple[str, str | None]] = []
         self.deleted: list[str] = []
+        self.delete_generations: list[int | None] = []
         self.fail_ingest = False
+        self.fail_ambient_ingest = False
         self.fail_delete = False
 
     async def ingest_pdf(self, file_path: str, doc_title: str | None = None) -> str:
         return "pdf-doc-id"
 
-    async def ingest_meeting(self, meeting_id: str, transcript: str, title: str) -> str:
+    async def ingest_meeting(
+        self,
+        meeting_id: str,
+        transcript: str,
+        title: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> str:
         if self.fail_ingest:
             raise RuntimeError("temporary RAG ingest failure")
         self.ingested.append((meeting_id, transcript, title))
+        self.ingest_generations.append(projection_generation)
         return f"meeting-doc-{meeting_id}"
+
+    async def ingest_ambient_segment(
+        self,
+        text: str,
+        *,
+        captured_at: str,
+        audio_ref: str,
+        speaker_id: str | None = None,
+        speaker_label: str | None = None,
+        operation_id: str | None = None,
+    ) -> str:
+        _ = (captured_at, audio_ref, speaker_id, speaker_label)
+        if self.fail_ambient_ingest:
+            raise RuntimeError("temporary ambient RAG ingest failure")
+        self.ambient_ingested.append((text, operation_id))
+        return "ambient-test"
 
     async def query(self, query: str, *, top_k: int = 5) -> list[RagChunk]:
         return []
 
-    async def delete(self, doc_id: str) -> None:
+    async def delete(
+        self,
+        doc_id: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> None:
         if self.fail_delete:
             raise RuntimeError("temporary RAG delete failure")
         self.deleted.append(doc_id)
+        self.delete_generations.append(projection_generation)
 
 
 class FakeLLM:
@@ -254,13 +292,320 @@ async def test_meeting_rag_projection_failure_is_durable_and_repaired_after_rest
     delete_failed = await repo.get_meeting("m-rag-repair")
     assert delete_failed is not None
     assert delete_failed.rag_projection_state == "delete_failed"
+    assert delete_failed.rag_projection_attempts == 1
+    assert delete_failed.rag_projection_next_retry_at is not None
     recovered_rag.fail_delete = False
+    await repo.set_meeting_rag_projection("m-rag-repair", state="delete_pending")
     assert await restarted.repair_rag_projections() == (1, 1)
     deleted = await repo.get_meeting("m-rag-repair")
     assert deleted is not None
     assert deleted.rag_projection_state == "deleted"
     assert recovered_rag.deleted == ["meeting-m-rag-repair"]
     await repo.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ambient_rag_projection_is_durable_backed_off_and_repairable(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "ambient-projection.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    repo = SQLiteRepository(settings.db_path)
+    await repo.init()
+    captured_at = datetime(2026, 7, 12, 9, 0, tzinfo=UTC)
+    segment_id = await repo.append_ambient_segment(
+        audio_ref="/tmp/ambient-repair.wav",
+        text="需要恢复的环境记忆",
+        captured_at=captured_at,
+    )
+    pending = await repo.list_ambient_segments(limit=10)
+    assert pending[0].rag_projection_state == "index_pending"
+
+    failing_rag = FakeRag()
+    failing_rag.fail_ambient_ingest = True
+    pipeline = MeetingPipeline(
+        settings=settings,
+        stt=FakeSTT([]),
+        diarizer=FakeDiarizer([]),
+        rag=failing_rag,
+        llm=FakeLLM("{}"),
+        repository=repo,
+    )
+    assert await pipeline.repair_rag_projections() == (1, 0)
+    failed = (await repo.list_ambient_segments(limit=10))[0]
+    assert failed.id == segment_id
+    assert failed.rag_projection_state == "index_failed"
+    assert failed.rag_projection_attempts == 1
+    assert failed.rag_projection_next_retry_at is not None
+
+    await repo.set_ambient_rag_projection(segment_id, state="index_pending")
+    recovered_rag = FakeRag()
+    restarted = MeetingPipeline(
+        settings=settings,
+        stt=FakeSTT([]),
+        diarizer=FakeDiarizer([]),
+        rag=recovered_rag,
+        llm=FakeLLM("{}"),
+        repository=repo,
+    )
+    assert await restarted.repair_rag_projections() == (1, 1)
+    repaired = (await repo.list_ambient_segments(limit=10))[0]
+    assert repaired.rag_projection_state == "indexed"
+    assert repaired.rag_projection_error is None
+    assert repaired.rag_projected_at is not None
+    assert recovered_rag.ambient_ingested == [
+        ("需要恢复的环境记忆", f"ambient-segment:{segment_id}")
+    ]
+    await repo.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.parametrize("side_effect_fails", [False, True])
+async def test_stale_index_repair_cannot_overwrite_newer_delete_intent(
+    tmp_path: Path,
+    side_effect_fails: bool,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "stale-index.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    repo = SQLiteRepository(settings.db_path)
+    await repo.init()
+    meeting_id = "stale-index-repair"
+    await repo.create_meeting(meeting_id, started_at=datetime.now(UTC), title="旧索引")
+    await repo.append_meeting_segment(
+        meeting_id,
+        TranscriptSegment(text="旧纪要内容", start_ms=0, end_ms=800),
+        captured_at=datetime.now(UTC),
+    )
+    minutes_json = json.dumps(
+        {
+            "meeting_id": meeting_id,
+            "title": "旧索引",
+            "duration_sec": 1,
+            "summary": "旧纪要内容",
+            "sections": [],
+            "decisions": [],
+            "action_items": [],
+        },
+        ensure_ascii=False,
+    )
+    await repo.update_meeting_state(
+        meeting_id,
+        state="finalized",
+        minutes_json=minutes_json,
+        minutes_status="ok",
+        rag_projection_state="index_pending",
+    )
+    loaded = await repo.get_meeting(meeting_id)
+    assert loaded is not None
+    stale_generation = loaded.rag_projection_generation
+    rag = FakeRag()
+
+    async def race_ingest(
+        target_id: str,
+        transcript: str,
+        title: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> str:
+        _ = transcript, title
+        assert target_id == meeting_id
+        assert projection_generation == stale_generation
+        await repo.clear_meeting_outputs(meeting_id)
+        if side_effect_fails:
+            raise RuntimeError("stale index failed after clear")
+        return f"meeting-{meeting_id}"
+
+    rag.ingest_meeting = race_ingest  # type: ignore[method-assign]
+    pipeline = MeetingPipeline(
+        settings=settings,
+        stt=FakeSTT([]),
+        diarizer=FakeDiarizer([]),
+        rag=rag,
+        llm=FakeLLM("{}"),
+        repository=repo,
+    )
+    try:
+        assert await pipeline.repair_rag_projections() == (1, 0)
+        current = await repo.get_meeting(meeting_id)
+        assert current is not None
+        assert current.rag_projection_generation == stale_generation + 1
+        assert current.rag_projection_state == "delete_pending"
+        assert current.rag_projection_error is None
+    finally:
+        await repo.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.parametrize("side_effect_fails", [False, True])
+async def test_stale_delete_repair_cannot_overwrite_newer_finalize_intent(
+    tmp_path: Path,
+    side_effect_fails: bool,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "stale-delete.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    repo = SQLiteRepository(settings.db_path)
+    await repo.init()
+    meeting_id = "stale-delete-repair"
+    await repo.create_meeting(meeting_id, started_at=datetime.now(UTC), title="清理后重生")
+    await repo.clear_meeting_outputs(meeting_id)
+    loaded = await repo.get_meeting(meeting_id)
+    assert loaded is not None
+    stale_generation = loaded.rag_projection_generation
+    rag = FakeRag()
+
+    async def race_delete(
+        doc_id: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> None:
+        assert doc_id == f"meeting-{meeting_id}"
+        assert projection_generation == stale_generation
+        await repo.update_meeting_state(
+            meeting_id,
+            state="finalized",
+            minutes_json=json.dumps(
+                {
+                    "meeting_id": meeting_id,
+                    "title": "新纪要",
+                    "duration_sec": 1,
+                    "summary": "新一代内容",
+                    "sections": [],
+                    "decisions": [],
+                    "action_items": [],
+                },
+                ensure_ascii=False,
+            ),
+            minutes_status="ok",
+            rag_projection_state="index_pending",
+        )
+        if side_effect_fails:
+            raise RuntimeError("stale delete failed after finalize")
+
+    rag.delete = race_delete  # type: ignore[method-assign]
+    pipeline = MeetingPipeline(
+        settings=settings,
+        stt=FakeSTT([]),
+        diarizer=FakeDiarizer([]),
+        rag=rag,
+        llm=FakeLLM("{}"),
+        repository=repo,
+    )
+    try:
+        assert await pipeline.repair_rag_projections() == (1, 0)
+        current = await repo.get_meeting(meeting_id)
+        assert current is not None
+        assert current.rag_projection_generation == stale_generation + 1
+        assert current.rag_projection_state == "index_pending"
+        assert current.rag_projection_error is None
+        assert current.minutes_status == "ok"
+    finally:
+        await repo.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_v37_ambient_reconciliation_repairs_crash_gap_without_legacy_duplicate(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v37-ambient.db"
+    v37_catalog = tmp_path / "migrations-v37"
+    v37_catalog.mkdir()
+    for source in _DEFAULT_MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"):
+        if int(source.name.split("_", 1)[0]) <= 37:
+            shutil.copy2(source, v37_catalog / source.name)
+    assert (await run_migrations(db_path, migrations_dir=v37_catalog)).current_version == 37
+    captured_at = "2026-07-12T09:00:00+00:00"
+    async with aiosqlite.connect(db_path) as conn:
+        indexed_cur = await conn.execute(
+            """INSERT INTO ambient_segments
+               (audio_ref, text, captured_at, tenant_id, device_id, owner_id)
+               VALUES (?, ?, ?, 'legacy-local', 'legacy-local', 'legacy-local')""",
+            ("/legacy/already-indexed.wav", "legacy evidence already indexed", captured_at),
+        )
+        indexed_id = int(indexed_cur.lastrowid or 0)
+        missing_cur = await conn.execute(
+            """INSERT INTO ambient_segments
+               (audio_ref, text, captured_at, tenant_id, device_id, owner_id)
+               VALUES (?, ?, ?, 'legacy-local', 'legacy-local', 'legacy-local')""",
+            ("/legacy/crash-gap.wav", "legacy evidence missing projection", captured_at),
+        )
+        missing_id = int(missing_cur.lastrowid or 0)
+        await conn.commit()
+
+    settings = Settings(
+        db_path=db_path,
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    rag = BM25Rag(settings)
+    await rag.ingest_ambient_segment(
+        "legacy evidence already indexed",
+        captured_at=captured_at,
+        audio_ref="/legacy/already-indexed.wav",
+    )
+    # v37 audio retention can clear the DB path after indexing. Reconciliation
+    # must still use captured_at + normalized text and avoid a duplicate.
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute(
+            "UPDATE ambient_segments SET audio_ref = '' WHERE id = ?",
+            (indexed_id,),
+        )
+        await conn.commit()
+
+    migration = await run_migrations(db_path)
+    assert migration.errors == [] and migration.current_version == 38
+    repo = SQLiteRepository(db_path)
+    await repo.init()
+    pipeline = MeetingPipeline(
+        settings=settings,
+        stt=FakeSTT([]),
+        diarizer=FakeDiarizer([]),
+        rag=rag,
+        llm=FakeLLM("{}"),
+        repository=repo,
+    )
+    try:
+        pending = await repo.list_ambient_segments(limit=10)
+        assert {row.rag_projection_state for row in pending} == {"reconcile_pending"}
+        assert await pipeline.repair_rag_projections() == (2, 2)
+        reconciled = await repo.list_ambient_segments(limit=10)
+        assert {row.rag_projection_state for row in reconciled} == {"indexed"}
+
+        snapshot = rag._snapshot_for_scope(("legacy-local", "legacy-local"), force=True)
+        ambient_chunks = [
+            chunk for chunk in snapshot.chunks if dict(chunk.metadata).get("kind") == "ambient"
+        ]
+        assert [chunk.text for chunk in ambient_chunks].count(
+            "legacy evidence already indexed"
+        ) == 1
+        assert [chunk.text for chunk in ambient_chunks].count(
+            "legacy evidence missing projection"
+        ) == 1
+        repaired = next(
+            chunk for chunk in ambient_chunks if chunk.text == "legacy evidence missing projection"
+        )
+        assert dict(repaired.metadata)["operation_id"] == f"ambient-segment:{missing_id}"
+    finally:
+        await repo.aclose()
 
 
 @pytest.mark.asyncio

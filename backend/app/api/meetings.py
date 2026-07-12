@@ -21,7 +21,6 @@ import hashlib
 import html
 import json
 import re
-import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
@@ -50,28 +49,38 @@ from app.api.deps import (
     reset_scope_runtime_component_for_test,
 )
 from app.api.retrieval import get_rag
+from app.artifacts.recovery import (
+    artifact_file_cleanup_target,
+    replay_artifact_file_cleanup_target,
+    validated_artifact_file_path,
+)
 from app.artifacts.repository import ArtifactRepository
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
 from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
-from app.schemas.artifact import GeneratedArtifact
+from app.schemas.artifact import GeneratedArtifact, GeneratedArtifactDTO
 from app.schemas.events import EchoEvent
 from app.schemas.meeting import MeetingMinutes, MeetingSummary, TranscriptSegment
-from app.schemas.workflow import WorkflowRunCreate
+from app.schemas.workflow import WorkflowRunCreate, WorkflowState
 from app.security.context import current_principal
 from app.security.governor import PrincipalGovernor, QuotaReservation
 from app.security.headers import PRIVATE_NO_STORE_HEADERS, apply_private_no_store
+from app.security.public_projection import project_client_dict
 from app.security.scope import scoped_directory
 from app.security.sessions import SessionStore
 from app.upload import UploadTooLarge, read_limited_upload
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
 from app.workflows.kernel import WorkflowContext, WorkflowDispatcher, WorkflowExecutionError
+from app.workflows.service import (
+    WorkflowConflictError,
+    WorkflowRunRecord,
+    new_workflow_run_id,
+)
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
-_share_ticket_tokens: dict[str, str] = {}
 _ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 _SHARE_TICKET_TTL = timedelta(minutes=10)
 
@@ -79,6 +88,28 @@ _SHARE_TICKET_TTL = timedelta(minutes=10)
 def _scope_key() -> tuple[str, str]:
     principal = current_principal()
     return principal.tenant_id, principal.owner_id
+
+
+def _minutes_dto(minutes: MeetingMinutes) -> MeetingMinutes:
+    return MeetingMinutes.model_validate(
+        project_client_dict(minutes.model_dump(mode="json"), current_principal())
+    )
+
+
+def _artifact_dto(artifact: GeneratedArtifact) -> GeneratedArtifactDTO:
+    return GeneratedArtifactDTO.model_validate(
+        project_client_dict(artifact.model_dump(mode="json"), current_principal())
+    )
+
+
+def _artifact_metadata(raw: object) -> dict[str, str]:
+    try:
+        parsed = json.loads(str(raw or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): str(value) for key, value in parsed.items()}
 
 
 class ClearMeetingOutputsRequest(BaseModel):
@@ -169,112 +200,280 @@ def get_initialized_meeting_pipeline() -> MeetingPipeline | None:
     return pipeline if isinstance(pipeline, MeetingPipeline) else None
 
 
-def bind_meeting_workflow_handlers(
+def bind_meeting_workflow_handlers(  # noqa: PLR0915 - explicit durable finalize lifecycle
     dispatcher: WorkflowDispatcher,
     pipeline: MeetingPipeline,
 ) -> None:
     scope = _scope_key()
 
+    async def write_terminal_projection(
+        conn: aiosqlite.Connection,
+        run_id: str,
+        meeting_id: str | None,
+        state: WorkflowState,
+        error: str,
+    ) -> bool:
+        if not meeting_id:
+            return False
+        principal = current_principal()
+        cancelled_at = datetime.now(UTC).isoformat() if state == "cancelled" else None
+        changed = await conn.execute(
+            """UPDATE meetings
+               SET state = 'ended', ended_at = COALESCE(ended_at, ?),
+                   minutes_status = 'generation_failed', minutes_error = ?,
+                   minutes_generation_run_id = NULL,
+                   minutes_generation_cancelled_at = ?
+               WHERE id = ? AND tenant_id = ? AND owner_id = ?
+                 AND (
+                       minutes_generation_run_id = ?
+                       OR (
+                           minutes_generation_run_id IS NULL
+                           AND NULLIF(minutes_json, '') IS NULL
+                           AND COALESCE(minutes_status, '') <> 'ok'
+                           AND minutes_cleared_at IS NULL
+                           AND EXISTS (
+                               SELECT 1
+                               FROM workflow_runs AS legacy_run
+                               WHERE legacy_run.run_id = ?
+                                 AND legacy_run.tenant_id = meetings.tenant_id
+                                 AND legacy_run.owner_id = meetings.owner_id
+                                 AND legacy_run.kind = 'meeting.finalize'
+                                 AND legacy_run.meeting_id = meetings.id
+                                 AND legacy_run.state IN (
+                                     'pending', 'running', 'cancel_requested'
+                                 )
+                           )
+                           AND NOT EXISTS (
+                               SELECT 1
+                               FROM workflow_runs AS other_run
+                               WHERE other_run.tenant_id = meetings.tenant_id
+                                 AND other_run.owner_id = meetings.owner_id
+                                 AND other_run.kind = 'meeting.finalize'
+                                 AND other_run.meeting_id = meetings.id
+                                 AND other_run.run_id <> ?
+                                 AND other_run.state IN (
+                                     'pending', 'running', 'cancel_requested'
+                                 )
+                           )
+                       )
+                 )""",
+            (
+                datetime.now(UTC).isoformat(),
+                error[:500],
+                cancelled_at,
+                meeting_id,
+                principal.tenant_id,
+                principal.owner_id,
+                run_id,
+                run_id,
+                run_id,
+            ),
+        )
+        applied = changed.rowcount == 1
+        await changed.close()
+        return applied
+
+    async def terminal_projector(
+        conn: aiosqlite.Connection,
+        run: WorkflowRunRecord,
+        state: WorkflowState,
+    ) -> None:
+        error = {
+            "cancelled": "会议纪要生成已取消",
+            "timeout": "会议纪要生成超时",
+            "failed": "会议纪要生成失败",
+            "cancel_failed": "会议纪要取消失败",
+        }.get(state, f"会议纪要 workflow 终止：{state}")
+        applied = await write_terminal_projection(
+            conn,
+            run.run_id,
+            run.meeting_id,
+            state,
+            error,
+        )
+        if not applied or not run.meeting_id:
+            return
+        await dispatcher.service.append_domain_event_in_transaction(
+            conn,
+            EchoEvent(
+                type="minutes.failed",
+                meeting_id=run.meeting_id,
+                payload={"error": error},
+            ),
+            aggregate_id=run.run_id,
+        )
+
+    async def attach_generation_owner(
+        conn: aiosqlite.Connection,
+        run: WorkflowRunRecord,
+    ) -> None:
+        if not run.meeting_id:
+            raise MeetingPipelineError("meeting finalize run has no meeting")
+        principal = current_principal()
+        cur = await conn.execute(
+            """SELECT rag_projection_generation, minutes_generation_run_id,
+                      minutes_status, minutes_json, minutes_cleared_at
+               FROM meetings
+               WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
+            (run.meeting_id, principal.tenant_id, principal.owner_id),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        if row is None:
+            raise MeetingPipelineError("meeting finalize target disappeared")
+        current_owner = str(row[1]) if row[1] is not None else None
+        if current_owner not in {None, run.run_id}:
+            raise WorkflowConflictError("meeting finalize generation is owned by another run")
+        if str(row[2] or "") == "ok" and row[3] is not None:
+            raise WorkflowConflictError("active meeting finalize already has committed minutes")
+        if row[4] is not None:
+            raise WorkflowConflictError("meeting minutes were explicitly cleared")
+        generation = int(row[0] or 0)
+        changed = await conn.execute(
+            """UPDATE meetings
+               SET state = 'ended', ended_at = COALESCE(ended_at, ?),
+                   minutes_status = 'generating', minutes_error = '',
+                   minutes_cleared_at = NULL, minutes_generation_run_id = ?,
+                   minutes_generation_cancelled_at = NULL
+               WHERE id = ? AND tenant_id = ? AND owner_id = ?
+                 AND rag_projection_generation = ?
+                 AND minutes_cleared_at IS NULL
+                 AND (minutes_generation_run_id IS NULL OR minutes_generation_run_id = ?)""",
+            (
+                datetime.now(UTC).isoformat(),
+                run.run_id,
+                run.meeting_id,
+                principal.tenant_id,
+                principal.owner_id,
+                generation,
+                run.run_id,
+            ),
+        )
+        changed_count = changed.rowcount
+        await changed.close()
+        if changed_count != 1:
+            raise WorkflowConflictError("meeting finalize generation attach lost its CAS")
+
     async def finalize_handler(context: WorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
         meeting_id = str(payload["meeting_id"])
         if context.cancel_event.is_set():
             raise asyncio.CancelledError
-        if not pipeline.get_segments(meeting_id):
-            loaded = await pipeline.load_meeting_for_retry(meeting_id)
-            if not loaded:
-                raise MeetingPipelineError(f"meeting {meeting_id} has no segments to summarize")
-        title = str(payload["title"])
-        try:
+        active_run = await dispatcher.service.get_run(context.run_id)
+        if active_run is None:
+            raise MeetingPipelineError("meeting workflow disappeared")
+        output = dict(active_run.output)
+        domain_commit = output.get("domain_commit")
+        if isinstance(domain_commit, dict):
+            if domain_commit.get("kind") != "meeting.finalize":
+                raise MeetingPipelineError("invalid meeting finalize recovery marker")
+            minutes = MeetingMinutes.model_validate(output.get("minutes"))
+            committed_generation = int(domain_commit["rag_projection_generation"])
+        else:
+            attached = await dispatcher.service.project_active_run(
+                context.run_id,
+                domain_writer=attach_generation_owner,
+            )
+            if attached is None or attached.is_terminal:
+                raise MeetingPipelineError("meeting finalize run disappeared before generation")
+            if not pipeline.get_segments(meeting_id):
+                loaded = await pipeline.load_meeting_for_retry(meeting_id)
+                if not loaded:
+                    raise MeetingPipelineError(f"meeting {meeting_id} has no segments to summarize")
+            title = str(payload["title"])
             minutes = await pipeline.finalize_meeting(meeting_id, title=title, commit=False)
-        except Exception as exc:
-            error = str(exc)[:500] or "unknown error"
+            now = datetime.now(UTC).isoformat()
+            minutes_json = minutes.model_dump_json()
+            output = {
+                "meeting_id": meeting_id,
+                "minutes": minutes.model_dump(mode="json"),
+                "domain_commit": {"kind": "meeting.finalize"},
+            }
 
-            async def write_failure(conn: aiosqlite.Connection) -> None:
+            async def write_success(conn: aiosqlite.Connection) -> None:
                 principal = current_principal()
-                await conn.execute(
+                cur = await conn.execute(
                     """UPDATE meetings
-                       SET state = 'ended', ended_at = COALESCE(ended_at, ?),
-                           minutes_status = 'generation_failed', minutes_error = ?,
-                           minutes_cleared_at = NULL
-                       WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
+                           SET state = 'finalized', title = ?, display_title = ?,
+                           ended_at = COALESCE(ended_at, ?), finalized_at = ?,
+                           minutes_json = ?, raw_transcript_ref = ?,
+                           minutes_status = 'ok', minutes_error = '', minutes_cleared_at = NULL,
+                           rag_projection_state = 'index_pending', rag_projection_error = NULL,
+                           rag_projected_at = NULL, rag_projection_attempts = 0,
+                           rag_projection_next_retry_at = NULL,
+                           rag_projection_generation = rag_projection_generation + 1,
+                           minutes_generation_run_id = NULL,
+                           minutes_generation_cancelled_at = NULL
+                       WHERE id = ? AND tenant_id = ? AND owner_id = ?
+                         AND minutes_generation_run_id = ?
+                       RETURNING rag_projection_generation""",
                     (
-                        datetime.now(UTC).isoformat(),
-                        error,
+                        title,
+                        minutes.title,
+                        now,
+                        now,
+                        minutes_json,
+                        minutes.raw_transcript_ref,
                         meeting_id,
                         principal.tenant_id,
                         principal.owner_id,
+                        context.run_id,
                     ),
                 )
+                row = await cur.fetchone()
+                await cur.close()
+                if row is None:
+                    raise MeetingPipelineError("stale meeting finalize generation")
+                output["domain_commit"]["rag_projection_generation"] = int(row[0])
 
-            await dispatcher.service.fail_run_atomic(
+            committed = await dispatcher.service.commit_run_progress_atomic(
                 context.run_id,
-                error=error,
-                domain_writer=write_failure,
+                output=output,
+                domain_writer=write_success,
                 domain_events=[
                     EchoEvent(
-                        type="minutes.failed", meeting_id=meeting_id, payload={"error": error}
-                    )
+                        type="meeting.ended",
+                        meeting_id=meeting_id,
+                        payload={"duration_sec": minutes.duration_sec},
+                    ),
+                    EchoEvent(
+                        type="minutes.ready",
+                        meeting_id=meeting_id,
+                        payload=minutes.model_dump(mode="json"),
+                    ),
+                    EchoEvent(
+                        type="tts.suggested",
+                        meeting_id=meeting_id,
+                        payload={
+                            "text": (f"会议{minutes.title}已结束，纪要已生成。{minutes.summary}")[
+                                :400
+                            ],
+                            "kind": "minutes",
+                        },
+                    ),
                 ],
+                event_type="workflow.domain_committed",
+                message="会议纪要领域状态已提交",
             )
-            raise
+            if committed is None or committed.is_terminal:
+                raise MeetingPipelineError("meeting workflow disappeared before projection")
+            committed_generation = int(output["domain_commit"]["rag_projection_generation"])
 
-        now = datetime.now(UTC).isoformat()
-        minutes_json = minutes.model_dump_json()
-
-        async def write_success(conn: aiosqlite.Connection) -> None:
-            principal = current_principal()
-            await conn.execute(
-                """UPDATE meetings
-                       SET state = 'finalized', title = ?, display_title = ?,
-                       ended_at = COALESCE(ended_at, ?), finalized_at = ?,
-                       minutes_json = ?, raw_transcript_ref = ?,
-                       minutes_status = 'ok', minutes_error = '', minutes_cleared_at = NULL,
-                       rag_projection_state = 'index_pending', rag_projection_error = NULL,
-                       rag_projected_at = NULL
-                   WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
-                (
-                    title,
-                    minutes.title,
-                    now,
-                    now,
-                    minutes_json,
-                    minutes.raw_transcript_ref,
-                    meeting_id,
-                    principal.tenant_id,
-                    principal.owner_id,
-                ),
-            )
-
-        output = {"meeting_id": meeting_id, "minutes": minutes.model_dump(mode="json")}
-        committed = await dispatcher.service.complete_run_atomic(
-            context.run_id,
-            output=output,
-            domain_writer=write_success,
-            domain_events=[
-                EchoEvent(
-                    type="meeting.ended",
-                    meeting_id=meeting_id,
-                    payload={"duration_sec": minutes.duration_sec},
-                ),
-                EchoEvent(
-                    type="minutes.ready",
-                    meeting_id=meeting_id,
-                    payload=minutes.model_dump(mode="json"),
-                ),
-                EchoEvent(
-                    type="tts.suggested",
-                    meeting_id=meeting_id,
-                    payload={
-                        "text": (f"会议{minutes.title}已结束，纪要已生成。{minutes.summary}")[:400],
-                        "kind": "minutes",
-                    },
-                ),
-            ],
-            message="会议纪要已生成",
+        if bool(output.get("post_commit_complete")):
+            return output
+        await pipeline.after_finalize_committed(
+            meeting_id,
+            minutes,
+            expected_generation=committed_generation,
         )
-        if committed is None:
-            raise MeetingPipelineError("meeting workflow disappeared")
-        await pipeline.after_finalize_committed(meeting_id, minutes)
+        output["post_commit_complete"] = True
+        projected = await dispatcher.service.merge_output(
+            context.run_id,
+            {"post_commit_complete": True},
+            event_type="workflow.rag_projection_attempted",
+            message="会议纪要检索投影已处理",
+        )
+        if projected is None or projected.is_terminal:
+            raise MeetingPipelineError("meeting workflow disappeared after projection")
         return output
 
     dispatcher.registry.register(
@@ -283,49 +482,20 @@ def bind_meeting_workflow_handlers(
         scope=scope,
         replace=True,
     )
+    dispatcher.registry.register_terminal_projector(
+        "meeting.finalize",
+        terminal_projector,
+        scope=scope,
+        replace=True,
+    )
 
 
 def bind_share_workflow_handler(
     dispatcher: WorkflowDispatcher,
-    sessions: SessionStore,
+    _sessions: SessionStore,
 ) -> None:
-    async def share_handler(context: WorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
-        resource_type = str(payload["resource_type"])
-        resource_id = str(payload["resource_id"])
-        output: dict[str, Any] = {
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-        }
-        token_box: dict[str, str] = {}
-
-        async def write_ticket(conn: aiosqlite.Connection) -> None:
-            token, ticket_id, expires_at = await sessions.issue_resource_ticket_tx(
-                conn,
-                current_principal(),
-                resource_type=resource_type,
-                resource_id=resource_id,
-                ttl=_SHARE_TICKET_TTL,
-            )
-            token_box["token"] = token
-            output.update(ticket_id=ticket_id, expires_at=expires_at)
-
-        committed = await dispatcher.service.complete_run_atomic(
-            context.run_id,
-            output=output,
-            domain_writer=write_ticket,
-            domain_events=[],
-            message="分享票据已签发",
-        )
-        if committed is None or "token" not in token_box:
-            raise RuntimeError("share ticket workflow disappeared")
-        _share_ticket_tokens[context.run_id] = token_box["token"]
-        asyncio.get_running_loop().call_later(
-            30,
-            _share_ticket_tokens.pop,
-            context.run_id,
-            None,
-        )
-        return output
+    async def share_handler(_context: WorkflowContext, _payload: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("share.prepare requires caller-bound inline issuance")
 
     if dispatcher.registry.resolve("share.prepare") is None:
         dispatcher.registry.register("share.prepare", share_handler)
@@ -340,48 +510,233 @@ async def dispatch_resource_share_ticket(
     source: str,
 ) -> str:
     bind_share_workflow_handler(dispatcher, sessions)
-    done = await dispatcher.execute(
+    output: dict[str, Any] = {
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+    }
+    token_box: dict[str, str] = {}
+
+    async def write_ticket(conn: aiosqlite.Connection) -> None:
+        token, ticket_id, expires_at = await sessions.issue_resource_ticket_tx(
+            conn,
+            current_principal(),
+            resource_type=resource_type,
+            resource_id=resource_id,
+            ttl=_SHARE_TICKET_TTL,
+        )
+        token_box["token"] = token
+        output.update(ticket_id=ticket_id, expires_at=expires_at)
+
+    await dispatcher.service.complete_new_run_atomic(
         WorkflowRunCreate(
             kind="share.prepare",
             source=source,
             intent_text=f"Prepare read-only share for {resource_type} {resource_id}",
             input={"resource_type": resource_type, "resource_id": resource_id},
             timeout_s=30,
-        )
+        ),
+        output=output,
+        domain_writer=write_ticket,
+        message="分享票据已签发",
     )
-    token = _share_ticket_tokens.pop(done.run_id, None)
+    token = token_box.get("token")
     if token is None:
         raise RuntimeError("share workflow did not return its one-time token")
     return token
 
 
-def bind_output_cleanup_workflow_handler(
+_FILE_CLEANUP_ERROR_IO = "file cleanup failed"
+_FILE_CLEANUP_ERROR_PROTECTED = "cleanup target is protected"
+_FILE_CLEANUP_ERROR_UNSAFE = "cleanup target is unsafe"
+_FILE_CLEANUP_STABLE_ERRORS = {
+    _FILE_CLEANUP_ERROR_IO,
+    _FILE_CLEANUP_ERROR_PROTECTED,
+    _FILE_CLEANUP_ERROR_UNSAFE,
+}
+
+
+def _file_cleanup_errors(output: dict[str, Any]) -> dict[str, str]:
+    raw = output.get("file_cleanup_errors")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(artifact_id): (
+            str(error) if str(error) in _FILE_CLEANUP_STABLE_ERRORS else _FILE_CLEANUP_ERROR_IO
+        )
+        for artifact_id, error in raw.items()
+        if isinstance(artifact_id, str) and _ARTIFACT_ID_RE.fullmatch(artifact_id)
+    }
+
+
+def _cleanup_artifact_id_set(output: dict[str, Any], key: str) -> set[str]:
+    raw = output.get(key)
+    if not isinstance(raw, list):
+        return set()
+    return {item for item in raw if isinstance(item, str) and _ARTIFACT_ID_RE.fullmatch(item)}
+
+
+def _merge_file_cleanup_output(
+    current: dict[str, Any],
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    """Union concurrent cleanup results against the latest durable receipt."""
+
+    merged = {**current, **patch}
+    target_ids = _cleanup_artifact_id_set(merged, "file_cleanup_artifact_ids")
+    deleted_ids = _cleanup_artifact_id_set(current, "file_cleanup_deleted_ids")
+    deleted_ids.update(_cleanup_artifact_id_set(patch, "file_cleanup_deleted_ids"))
+    missing_ids = _cleanup_artifact_id_set(current, "missing_artifact_ids")
+    missing_ids.update(_cleanup_artifact_id_set(patch, "missing_artifact_ids"))
+    if target_ids:
+        deleted_ids.intersection_update(target_ids)
+        missing_ids.intersection_update(target_ids)
+    missing_ids.difference_update(deleted_ids)
+    completed_ids = deleted_ids | missing_ids
+
+    errors = _file_cleanup_errors(current)
+    errors.update(_file_cleanup_errors(patch))
+    for artifact_id in completed_ids:
+        errors.pop(artifact_id, None)
+
+    merged["file_cleanup_deleted_ids"] = sorted(deleted_ids)
+    merged["missing_artifact_ids"] = sorted(missing_ids)
+    merged["artifacts_deleted"] = max(
+        int(current.get("artifacts_deleted") or 0),
+        int(patch.get("artifacts_deleted") or 0),
+        len(deleted_ids),
+    )
+    merged["file_cleanup_errors"] = errors
+    merged["post_commit_complete"] = not errors
+    return merged
+
+
+async def _replay_cleanup_receipt_files(
+    dispatcher: WorkflowDispatcher,
+    settings: Settings,
+    receipt: WorkflowRunRecord,
+) -> WorkflowRunRecord:
+    """Replay durable cleanup targets for the current owner and update one receipt."""
+
+    principal = current_principal()
+    errors = _file_cleanup_errors(receipt.output)
+    if not errors:
+        return receipt
+    deleted = int(receipt.output.get("artifacts_deleted") or 0)
+    deleted_ids = _cleanup_artifact_id_set(receipt.output, "file_cleanup_deleted_ids")
+    missing_ids = _cleanup_artifact_id_set(receipt.output, "missing_artifact_ids")
+    raw_targets = receipt.output.get("file_cleanup_targets")
+    targets = raw_targets if isinstance(raw_targets, list) else []
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        artifact_id = target.get("artifact_id")
+        if not isinstance(artifact_id, str) or not _ARTIFACT_ID_RE.fullmatch(artifact_id):
+            continue
+        if artifact_id not in errors:
+            continue
+        try:
+            outcome = await replay_artifact_file_cleanup_target(
+                settings,
+                target,
+                tenant_id=principal.tenant_id,
+                owner_id=principal.owner_id,
+            )
+            if outcome in {"deleted", "absent"}:
+                errors.pop(artifact_id, None)
+            elif outcome == "protected":
+                errors[artifact_id] = _FILE_CLEANUP_ERROR_PROTECTED
+            else:
+                errors[artifact_id] = _FILE_CLEANUP_ERROR_UNSAFE
+            if outcome == "deleted":
+                deleted_ids.add(artifact_id)
+                missing_ids.discard(artifact_id)
+                deleted = max(deleted, len(deleted_ids))
+            elif outcome == "absent" and artifact_id not in deleted_ids:
+                missing_ids.add(artifact_id)
+        except OSError:
+            errors[artifact_id] = _FILE_CLEANUP_ERROR_IO
+    updated = await dispatcher.service.merge_output(
+        receipt.run_id,
+        {
+            "artifacts_deleted": deleted,
+            "file_cleanup_deleted_ids": sorted(deleted_ids),
+            "missing_artifact_ids": sorted(missing_ids),
+            "file_cleanup_errors": errors,
+            "post_commit_complete": not errors,
+        },
+        event_type="workflow.file_cleanup_retried",
+        message="产物文件清理已重试",
+        merge_strategy=_merge_file_cleanup_output,
+    )
+    if updated is None:
+        raise RuntimeError("meeting output cleanup receipt disappeared")
+    return updated
+
+
+def _raise_if_file_cleanup_incomplete(output: dict[str, Any]) -> None:
+    if _file_cleanup_errors(output):
+        raise HTTPException(
+            status_code=503,
+            detail="artifact file cleanup incomplete; retry the request",
+        )
+
+
+def bind_output_cleanup_workflow_handler(  # noqa: PLR0915 - one atomic cleanup UoW
     dispatcher: WorkflowDispatcher,
     _repository: RepositoryPort,
     settings: Settings,
     _artifact_repo: ArtifactRepository,
+    pipeline: MeetingPipeline,
 ) -> None:
     principal = current_principal()
     scope = (principal.tenant_id, principal.owner_id)
 
-    async def handler(context: WorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
+    async def handler(  # noqa: PLR0912, PLR0915 - durable cleanup plus replayable projections
+        context: WorkflowContext,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         meeting_id = str(payload["meeting_id"])
         if context.cancel_event.is_set():
             raise asyncio.CancelledError
         clear_minutes = bool(payload.get("clear_minutes", True))
-        cleanup_artifacts: list[GeneratedArtifact] = []
-        output: dict[str, Any] = {
-            "meeting_id": meeting_id,
-            "minutes_cleared": clear_minutes,
-            "artifact_ids": [],
-            "artifacts_deleted": 0,
-            "missing_artifact_ids": [],
-            # Durable post-commit file cleanup intent. Startup recovery replays
-            # this list after a crash between SQLite commit and filesystem IO.
-            "file_cleanup_artifact_ids": [],
-        }
+        cleanup_artifact_ids: list[str] = []
+        cleanup_targets: dict[str, dict[str, str]] = {}
+        cleanup_generation: int | None = None
+        active_run = await dispatcher.service.get_run(context.run_id)
+        if active_run is None:
+            raise RuntimeError("meeting output cleanup workflow disappeared")
+        output = dict(active_run.output)
+        domain_commit = output.get("domain_commit")
+        if isinstance(domain_commit, dict):
+            if domain_commit.get("kind") != "meeting.outputs.clear":
+                raise RuntimeError("invalid meeting output cleanup recovery marker")
+            raw_generation = domain_commit.get("rag_projection_generation")
+            cleanup_generation = int(raw_generation) if raw_generation is not None else None
+            cleanup_artifact_ids = [
+                str(item) for item in output.get("file_cleanup_artifact_ids", [])
+            ]
+            cleanup_targets = {
+                str(item["artifact_id"]): dict(item)
+                for item in output.get("file_cleanup_targets", [])
+                if isinstance(item, dict) and isinstance(item.get("artifact_id"), str)
+            }
+        else:
+            output = {
+                "meeting_id": meeting_id,
+                "minutes_cleared": clear_minutes,
+                "artifact_ids": [],
+                "artifacts_deleted": 0,
+                "missing_artifact_ids": [],
+                "file_cleanup_deleted_ids": [],
+                # Durable post-commit file cleanup intent. A replacement
+                # dispatcher replays this exact owner-scoped target list.
+                "file_cleanup_artifact_ids": [],
+                "file_cleanup_targets": [],
+                "domain_commit": {"kind": "meeting.outputs.clear"},
+            }
 
         async def write_cleanup(conn: aiosqlite.Connection) -> None:
+            nonlocal cleanup_generation
             active = current_principal()
             cur = await conn.execute(
                 """SELECT DISTINCT a.*
@@ -420,71 +775,146 @@ def bind_output_cleanup_workflow_handler(
                     "AND tenant_id = ? AND owner_id = ?",
                     (artifact_id, active.tenant_id, active.owner_id),
                 )
-                cleanup_artifacts.append(
-                    GeneratedArtifact(
-                        artifact_id=artifact_id,
-                        artifact_type=str(row["artifact_type"]),
-                        title=str(row["title"] or ""),
-                        file_path=str(row["file_path"]),
-                        mime_type=str(row["mime_type"]),
-                        size_bytes=int(row["size_bytes"] or 0),
-                        generation_latency_ms=float(row["generation_latency_ms"] or 0),
-                        model=str(row["model"] or ""),
-                    )
+                artifact = GeneratedArtifact(
+                    artifact_id=artifact_id,
+                    artifact_type=str(row["artifact_type"]),
+                    title=str(row["title"] or ""),
+                    file_path=str(row["file_path"]),
+                    mime_type=str(row["mime_type"]),
+                    size_bytes=int(row["size_bytes"] or 0),
+                    generation_latency_ms=float(row["generation_latency_ms"] or 0),
+                    model=str(row["model"] or ""),
+                    metadata=_artifact_metadata(row["metadata_json"]),
                 )
-            output["file_cleanup_artifact_ids"] = [
-                artifact.artifact_id for artifact in cleanup_artifacts
-            ]
+                target = artifact_file_cleanup_target(
+                    settings,
+                    artifact_id=artifact.artifact_id,
+                    file_path=artifact.file_path,
+                    tenant_id=active.tenant_id,
+                    owner_id=active.owner_id,
+                    metadata=artifact.metadata,
+                )
+                if target is not None:
+                    output["file_cleanup_targets"].append(target)
+                    cleanup_targets[artifact.artifact_id] = target
+                cleanup_artifact_ids.append(artifact.artifact_id)
+            output["file_cleanup_artifact_ids"] = list(cleanup_artifact_ids)
             if clear_minutes:
-                await conn.execute(
-                    """UPDATE meetings SET
-                           state = CASE WHEN state = 'finalized' THEN 'ended' ELSE state END,
-                           minutes_json = NULL, minutes_status = NULL, minutes_error = NULL,
-                           display_title = NULL, finalized_at = NULL,
-                           minutes_cleared_at = CURRENT_TIMESTAMP,
-                           rag_projection_state = 'delete_pending',
-                           rag_projection_error = NULL, rag_projected_at = NULL
+                meeting_cur = await conn.execute(
+                    """SELECT minutes_json, minutes_status, minutes_error, display_title,
+                              finalized_at, minutes_cleared_at, minutes_generation_run_id,
+                              rag_projection_state, rag_projection_generation
+                       FROM meetings
                        WHERE id = ? AND tenant_id = ? AND owner_id = ?""",
                     (meeting_id, active.tenant_id, active.owner_id),
                 )
+                meeting_row = await meeting_cur.fetchone()
+                await meeting_cur.close()
+                if meeting_row is None:
+                    raise RuntimeError("meeting output cleanup target disappeared")
+                has_uncleared_state = (
+                    meeting_row[5] is None
+                    or any(meeting_row[index] not in {None, ""} for index in range(5))
+                    or meeting_row[6] is not None
+                )
+                if has_uncleared_state:
+                    clear_cur = await conn.execute(
+                        """UPDATE meetings SET
+                               state = CASE WHEN state = 'finalized' THEN 'ended' ELSE state END,
+                               minutes_json = NULL, minutes_status = NULL, minutes_error = NULL,
+                               display_title = NULL, finalized_at = NULL,
+                               minutes_cleared_at = CURRENT_TIMESTAMP,
+                               rag_projection_state = 'delete_pending',
+                               rag_projection_error = NULL, rag_projected_at = NULL,
+                               rag_projection_attempts = 0,
+                               rag_projection_next_retry_at = NULL,
+                               rag_projection_generation = rag_projection_generation + 1,
+                               minutes_generation_run_id = NULL,
+                               minutes_generation_cancelled_at = NULL
+                           WHERE id = ? AND tenant_id = ? AND owner_id = ?
+                           RETURNING rag_projection_generation""",
+                        (meeting_id, active.tenant_id, active.owner_id),
+                    )
+                    generation_row = await clear_cur.fetchone()
+                    await clear_cur.close()
+                    if generation_row is None:
+                        raise RuntimeError("meeting output cleanup target disappeared")
+                    cleanup_generation = int(generation_row[0])
+                elif str(meeting_row[7]) in {"delete_pending", "delete_failed"}:
+                    cleanup_generation = int(meeting_row[8])
+            output["domain_commit"]["rag_projection_generation"] = cleanup_generation
 
-        committed = await dispatcher.service.complete_run_atomic(
-            context.run_id,
-            output=output,
-            domain_writer=write_cleanup,
-            domain_events=[],
-            message="会议纪要与产物已清理",
-        )
-        if committed is None:
-            raise RuntimeError("meeting output cleanup workflow disappeared")
+        if not isinstance(domain_commit, dict):
+            committed = await dispatcher.service.commit_run_progress_atomic(
+                context.run_id,
+                output=output,
+                domain_writer=write_cleanup,
+                domain_events=[],
+                event_type="workflow.domain_committed",
+                message="会议纪要与产物领域状态已清理",
+            )
+            if committed is None or committed.is_terminal:
+                raise RuntimeError("meeting output cleanup workflow disappeared")
+
+        if bool(output.get("post_commit_complete")):
+            return output
+
+        rag_projection_deleted = True
+        if clear_minutes and cleanup_generation is not None:
+            rag_projection_deleted = await pipeline.delete_meeting_projection(
+                meeting_id,
+                expected_generation=cleanup_generation,
+            )
 
         deleted = 0
+        deleted_ids: set[str] = set()
         missing: list[str] = []
         cleanup_errors: dict[str, str] = {}
-        for artifact in cleanup_artifacts:
+        active = current_principal()
+        for artifact_id in cleanup_artifact_ids:
             try:
-                if _delete_artifact_file(settings, artifact):
+                outcome = await replay_artifact_file_cleanup_target(
+                    settings,
+                    cleanup_targets.get(artifact_id),
+                    tenant_id=active.tenant_id,
+                    owner_id=active.owner_id,
+                )
+                if outcome == "deleted":
                     deleted += 1
+                    deleted_ids.add(artifact_id)
+                elif outcome == "absent":
+                    missing.append(artifact_id)
+                elif outcome == "protected":
+                    cleanup_errors[artifact_id] = _FILE_CLEANUP_ERROR_PROTECTED
                 else:
-                    missing.append(artifact.artifact_id)
-            except OSError as exc:
-                cleanup_errors[artifact.artifact_id] = str(exc)[:300]
+                    cleanup_errors[artifact_id] = _FILE_CLEANUP_ERROR_UNSAFE
+            except OSError:
+                cleanup_errors[artifact_id] = _FILE_CLEANUP_ERROR_IO
         output.update(
             artifacts_deleted=deleted,
+            file_cleanup_deleted_ids=sorted(deleted_ids),
             missing_artifact_ids=missing,
             file_cleanup_errors=cleanup_errors,
+            rag_projection_deleted=rag_projection_deleted,
+            post_commit_complete=not cleanup_errors,
         )
-        await dispatcher.service.merge_output(
+        projected = await dispatcher.service.merge_output(
             context.run_id,
             {
                 "artifacts_deleted": deleted,
+                "file_cleanup_deleted_ids": sorted(deleted_ids),
                 "missing_artifact_ids": missing,
                 "file_cleanup_errors": cleanup_errors,
+                "rag_projection_deleted": rag_projection_deleted,
+                "post_commit_complete": not cleanup_errors,
             },
             event_type="workflow.file_cleanup_projected",
             message="产物文件清理投影已更新",
+            merge_strategy=_merge_file_cleanup_output,
         )
-        return output
+        if projected is None or projected.is_terminal:
+            raise RuntimeError("meeting output cleanup workflow disappeared after projection")
+        return dict(projected.output)
 
     dispatcher.registry.register(
         "meeting.outputs.clear",
@@ -494,7 +924,7 @@ def bind_output_cleanup_workflow_handler(
     )
 
 
-async def dispatch_meeting_finalize(
+async def dispatch_meeting_finalize(  # noqa: PLR0915 - explicit winner adoption lifecycle
     dispatcher: WorkflowDispatcher,
     pipeline: MeetingPipeline,
     repository: RepositoryPort,
@@ -504,7 +934,29 @@ async def dispatch_meeting_finalize(
     source: str,
 ) -> MeetingMinutes:
     bind_meeting_workflow_handlers(dispatcher, pipeline)
-    meeting = await repository.get_meeting(meeting_id)
+    active_key = f"meeting.finalize:{meeting_id}"
+
+    async def wait_for_active_finalize() -> bool:
+        active = await dispatcher.service.get_active_by_active_key(active_key)
+        if active is None:
+            return False
+        if active.kind != "meeting.finalize" or active.meeting_id != meeting_id:
+            raise WorkflowConflictError("active workflow cannot own this meeting finalize")
+        try:
+            await dispatcher.wait_succeeded(active.run_id)
+        except WorkflowExecutionError as exc:
+            raise MeetingPipelineError(str(exc)) from exc
+        return True
+
+    while True:
+        if await wait_for_active_finalize():
+            continue
+        meeting = await repository.get_meeting(meeting_id)
+        # Close the read race where another instance creates the active run
+        # after our first lookup and commits minutes before this meeting read.
+        if await wait_for_active_finalize():
+            continue
+        break
     if meeting is not None and meeting.minutes_json and meeting.minutes_status == "ok":
         return MeetingMinutes.model_validate_json(meeting.minutes_json)
 
@@ -514,43 +966,129 @@ async def dispatch_meeting_finalize(
         if item.kind == "meeting.finalize"
     ]
     latest = finalize_runs[0] if finalize_runs else None
-    active_key = f"meeting.finalize:{meeting_id}"
-    if latest is not None and not latest.is_terminal:
-        # Re-dispatching an active run through its permanent request key makes
-        # sure a request racing startup restore schedules the same run.
-        run = await dispatcher.dispatch(
+    expected_generation = meeting.rag_projection_generation if meeting is not None else 0
+    generation_started_at = datetime.now(UTC).isoformat()
+
+    async def write_generation_marker(
+        conn: aiosqlite.Connection,
+        run_id: str,
+    ) -> None:
+        principal = current_principal()
+        changed = await conn.execute(
+            """UPDATE meetings
+               SET state = 'ended', ended_at = COALESCE(ended_at, ?),
+                   minutes_status = 'generating', minutes_error = '',
+                   minutes_cleared_at = NULL, minutes_generation_run_id = ?,
+                   minutes_generation_cancelled_at = NULL
+               WHERE id = ? AND tenant_id = ? AND owner_id = ?
+                 AND rag_projection_generation = ?
+                 AND (minutes_generation_run_id IS NULL OR minutes_generation_run_id = ?)""",
+            (
+                generation_started_at,
+                run_id,
+                meeting_id,
+                principal.tenant_id,
+                principal.owner_id,
+                expected_generation,
+                run_id,
+            ),
+        )
+        updated = changed.rowcount == 1
+        await changed.close()
+        if not updated:
+            raise WorkflowConflictError("meeting finalize generation was superseded")
+
+    async def adopt_authoritative_run(candidate: WorkflowRunRecord) -> WorkflowRunRecord:
+        if (
+            candidate.kind != "meeting.finalize"
+            or candidate.meeting_id != meeting_id
+            or str(candidate.input.get("meeting_id") or "") != meeting_id
+            or not isinstance(candidate.input.get("title"), str)
+        ):
+            raise WorkflowConflictError("active workflow cannot own this meeting finalize")
+        if candidate.is_terminal:
+            if candidate.state == "succeeded":
+                return candidate
+            raise WorkflowConflictError("meeting finalize winner is already terminal")
+        current = await repository.get_meeting(meeting_id)
+        if current is None:
+            raise WorkflowConflictError("meeting finalize target disappeared")
+        projected = candidate
+        if current.minutes_generation_run_id != candidate.run_id:
+            attached = await dispatcher.service.project_active_run(
+                candidate.run_id,
+                domain_writer=lambda conn, run: write_generation_marker(conn, run.run_id),
+            )
+            if attached is None or (attached.is_terminal and attached.state != "succeeded"):
+                raise WorkflowConflictError("active meeting workflow cannot be adopted")
+            projected = attached
+            if projected.is_terminal:
+                return projected
+        scheduled = await dispatcher.dispatch(
             WorkflowRunCreate(
                 kind="meeting.finalize",
-                source=latest.source,
-                title=latest.title,
-                intent_text=latest.intent_text,
+                source=projected.source,
+                title=projected.title,
+                intent_text=projected.intent_text,
                 meeting_id=meeting_id,
-                input=dict(latest.input),
-                timeout_s=latest.timeout_s,
-                idempotency_key=latest.idempotency_key,
-                active_key=latest.active_key or active_key,
+                input=dict(projected.input),
+                timeout_s=projected.timeout_s,
+                idempotency_key=projected.idempotency_key,
+                active_key=projected.active_key or active_key,
             )
         )
-    elif latest is not None and latest.state != "succeeded":
-        retried = await dispatcher.retry(latest.run_id, reason="meeting minutes retry")
-        if retried is None:
-            raise MeetingPipelineError("meeting workflow retry was not created")
-        run = retried
-    else:
-        generation = len(finalize_runs) + 1
-        run = await dispatcher.dispatch(
-            WorkflowRunCreate(
-                kind="meeting.finalize",
-                source=source,
-                title=title,
-                intent_text=f"Finalize meeting {meeting_id}",
-                meeting_id=meeting_id,
-                input={"meeting_id": meeting_id, "title": title},
-                timeout_s=300,
-                idempotency_key=f"meeting.finalize:{meeting_id}:generation:{generation}",
-                active_key=active_key,
+        if scheduled.run_id != projected.run_id:
+            raise WorkflowConflictError("another meeting finalize became authoritative")
+        return scheduled
+
+    try:
+        if latest is not None and not latest.is_terminal:
+            run = latest
+        elif latest is not None and latest.state != "succeeded":
+            retried = await dispatcher.retry(
+                latest.run_id,
+                reason="meeting minutes retry",
+                domain_writer=lambda conn, child: write_generation_marker(conn, child.run_id),
             )
-        )
+            if retried is None:
+                raise WorkflowConflictError("meeting workflow retry was not created")
+            run = retried
+        else:
+            run_id = new_workflow_run_id()
+
+            run = await dispatcher.dispatch_atomic(
+                WorkflowRunCreate(
+                    kind="meeting.finalize",
+                    source=source,
+                    title=title,
+                    intent_text=f"Finalize meeting {meeting_id}",
+                    meeting_id=meeting_id,
+                    input={"meeting_id": meeting_id, "title": title},
+                    timeout_s=300,
+                    idempotency_key=f"meeting.finalize:{meeting_id}:run:{run_id}",
+                    active_key=active_key,
+                ),
+                domain_writer=lambda conn: write_generation_marker(conn, run_id),
+                run_id=run_id,
+            )
+        run = await adopt_authoritative_run(run)
+    except WorkflowConflictError:
+        winner = await dispatcher.service.get_active_by_active_key(active_key)
+        if winner is None:
+            winner = next(
+                (
+                    item
+                    for item in await dispatcher.service.list_runs(
+                        meeting_id=meeting_id,
+                        limit=20,
+                    )
+                    if item.kind == "meeting.finalize" and item.active_key == active_key
+                ),
+                None,
+            )
+        if winner is None:
+            raise
+        run = await adopt_authoritative_run(winner)
     try:
         done = await dispatcher.wait_succeeded(run.run_id)
     except WorkflowExecutionError as exc:
@@ -631,17 +1169,15 @@ def _artifact_download_info(settings: Settings, artifact_id: str) -> dict[str, o
 
 
 def _artifact_file_path(settings: Settings, artifact: GeneratedArtifact) -> Path | None:
-    path = Path(artifact.file_path).expanduser()
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    resolved = path.resolve()
-    allowed_roots = [
-        Path(settings.skill_executor_build_dir).expanduser().resolve(),
-        Path(settings.storage_dir).expanduser().resolve(),
-    ]
-    if not any(resolved == root or root in resolved.parents for root in allowed_roots):
-        return None
-    return resolved
+    principal = current_principal()
+    return validated_artifact_file_path(
+        settings,
+        artifact_id=artifact.artifact_id,
+        file_path=artifact.file_path,
+        tenant_id=principal.tenant_id,
+        owner_id=principal.owner_id,
+        metadata=artifact.metadata,
+    )
 
 
 def _artifact_download_info_from_record(
@@ -658,27 +1194,6 @@ def _artifact_download_info_from_record(
         "size_bytes": artifact.size_bytes,
         "download_url": f"/artifacts/{quote(artifact.artifact_id)}/download",
     }
-
-
-def _delete_artifact_file(settings: Settings, artifact: GeneratedArtifact) -> bool:
-    path = _artifact_file_path(settings, artifact)
-    if path is None or not path.exists():
-        return False
-    base = Path(settings.skill_executor_build_dir).expanduser().resolve()
-    build_dirs = (
-        (scoped_directory(base).resolve() / artifact.artifact_id).resolve(),
-        (base / artifact.artifact_id).resolve(),
-    )
-    for build_dir in build_dirs:
-        if (
-            build_dir != base
-            and base in build_dir.parents
-            and (path == build_dir or build_dir in path.parents)
-        ):
-            shutil.rmtree(build_dir)
-            return True
-    path.unlink()
-    return True
 
 
 def _format_bytes(size: int) -> str:
@@ -880,25 +1395,31 @@ async def get_current_meeting(
     state.start_watchdog()
     cur = state.current
     if cur is not None:
-        return {
-            "mode": "in_meeting",
-            "meeting_id": cur.meeting_id,
-            "started_at": cur.started_at.isoformat(),
-            "started_by": cur.started_by,
-            "minutes_status": None,
-            "minutes_error": None,
-        }
+        return project_client_dict(
+            {
+                "mode": "in_meeting",
+                "meeting_id": cur.meeting_id,
+                "started_at": cur.started_at.isoformat(),
+                "started_by": cur.started_by,
+                "minutes_status": None,
+                "minutes_error": None,
+            },
+            current_principal(),
+        )
     # idle：探一下最近一条 meeting，把它的 minutes_status 透传出来
     latest = await repository.list_meetings(limit=1)
     latest_rec = latest[0] if latest else None
-    return {
-        "mode": "idle",
-        "meeting_id": None,
-        "started_at": None,
-        "started_by": None,
-        "minutes_status": latest_rec.minutes_status if latest_rec else None,
-        "minutes_error": latest_rec.minutes_error if latest_rec else None,
-    }
+    return project_client_dict(
+        {
+            "mode": "idle",
+            "meeting_id": None,
+            "started_at": None,
+            "started_by": None,
+            "minutes_status": latest_rec.minutes_status if latest_rec else None,
+            "minutes_error": latest_rec.minutes_error if latest_rec else None,
+        },
+        current_principal(),
+    )
 
 
 @router.post("/manual_start")
@@ -1000,7 +1521,7 @@ async def get_minutes(
         raise HTTPException(status_code=502, detail=f"minutes_json corrupted: {e!s}") from e
     # 早期落库的 minutes 可能没带 meeting_id；补上保持 schema 完整
     data.setdefault("meeting_id", meeting_id)
-    return MeetingMinutes(**data)
+    return _minutes_dto(MeetingMinutes(**data))
 
 
 @router.get("/{meeting_id}/minutes.md")
@@ -1033,17 +1554,20 @@ async def download_minutes_markdown(
     )
 
 
-@router.get("/{meeting_id}/artifacts", response_model=list[GeneratedArtifact])
+@router.get("/{meeting_id}/artifacts", response_model=list[GeneratedArtifactDTO])
 async def get_meeting_artifacts(
     meeting_id: str,
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     artifact_repo: Annotated[ArtifactRepository, Depends(get_artifact_repository)],
-) -> list[GeneratedArtifact]:
+) -> list[GeneratedArtifactDTO]:
     """单会议产物（右下 outputs 面板用），以 artifact_links 为事实源。"""
     meeting = await repository.get_meeting(meeting_id)
     if meeting is None:
         raise HTTPException(status_code=404, detail="meeting not found")
-    return await artifact_repo.list_meeting_artifacts(meeting_id)
+    return [
+        _artifact_dto(artifact)
+        for artifact in await artifact_repo.list_meeting_artifacts(meeting_id)
+    ]
 
 
 @router.get("/{meeting_id}/share", response_class=HTMLResponse)
@@ -1155,13 +1679,14 @@ async def create_meeting_share_ticket(
 
 
 @router.delete("/{meeting_id}/outputs", response_model=ClearMeetingOutputsResponse)
-async def clear_meeting_outputs(
+async def clear_meeting_outputs(  # noqa: PLR0912 - active receipt arbitration is explicit
     meeting_id: str,
     body: ClearMeetingOutputsRequest,
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     settings: Annotated[Settings, Depends(get_settings)],
     artifact_repo: Annotated[ArtifactRepository, Depends(get_artifact_repository)],
     dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
+    pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
 ) -> ClearMeetingOutputsResponse:
     """清理会议纪要与产物文件。
 
@@ -1169,32 +1694,122 @@ async def clear_meeting_outputs(
     旧客户端兼容字段，但不会被用于扩大删除范围。
     """
     _ = body.artifact_ids
-    meeting = await repository.get_meeting(meeting_id)
-    if meeting is None:
-        raise HTTPException(status_code=404, detail="meeting not found")
-
-    current_artifacts = await artifact_repo.list_meeting_artifacts(meeting_id)
-    digest = hashlib.sha256(
-        ("\0".join(sorted(item.artifact_id for item in current_artifacts))).encode()
-    ).hexdigest()
-    bind_output_cleanup_workflow_handler(dispatcher, repository, settings, artifact_repo)
-    try:
-        done = await dispatcher.execute(
-            WorkflowRunCreate(
-                kind="meeting.outputs.clear",
-                source="meeting_outputs_api",
-                intent_text=f"Clear outputs for meeting {meeting_id}",
-                meeting_id=meeting_id,
-                input={"meeting_id": meeting_id, "clear_minutes": body.clear_minutes},
-                timeout_s=120,
-                idempotency_key=(
-                    f"meeting.outputs.clear:{meeting_id}:{body.clear_minutes}:{digest}"
-                ),
+    bind_output_cleanup_workflow_handler(
+        dispatcher,
+        repository,
+        settings,
+        artifact_repo,
+        pipeline,
+    )
+    active_key = f"meeting.outputs.clear:{meeting_id}"
+    for _attempt in range(8):
+        active = await dispatcher.service.get_active_by_active_key(active_key)
+        if active is not None:
+            try:
+                await dispatcher.wait_succeeded(active.run_id)
+            except WorkflowExecutionError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            continue
+        meeting = await repository.get_meeting(meeting_id)
+        if meeting is None:
+            raise HTTPException(status_code=404, detail="meeting not found")
+        current_artifacts = await artifact_repo.list_meeting_artifacts(meeting_id)
+        # Close the same read race as finalize: never reuse a succeeded receipt
+        # while another instance still owns an active post-domain tail.
+        active = await dispatcher.service.get_active_by_active_key(active_key)
+        if active is not None:
+            try:
+                await dispatcher.wait_succeeded(active.run_id)
+            except WorkflowExecutionError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            continue
+        request_satisfied = not current_artifacts and (
+            not body.clear_minutes
+            or (
+                meeting.minutes_cleared_at is not None
+                and meeting.minutes_json is None
+                and meeting.minutes_status is None
+                and meeting.finalized_at is None
             )
         )
-    except WorkflowExecutionError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return ClearMeetingOutputsResponse.model_validate(done.output)
+        if request_satisfied:
+            receipts = await dispatcher.service.list_runs(meeting_id=meeting_id, limit=200)
+            receipt = next(
+                (
+                    item
+                    for item in receipts
+                    if item.kind == "meeting.outputs.clear"
+                    and item.state == "succeeded"
+                    and bool(item.input.get("clear_minutes", True)) is body.clear_minutes
+                ),
+                None,
+            )
+            if receipt is not None:
+                receipt = await _replay_cleanup_receipt_files(
+                    dispatcher,
+                    settings,
+                    receipt,
+                )
+                if body.clear_minutes and meeting.rag_projection_state in {
+                    "delete_pending",
+                    "delete_failed",
+                }:
+                    projection_deleted = await pipeline.delete_meeting_projection(
+                        meeting_id,
+                        expected_generation=meeting.rag_projection_generation,
+                    )
+                    updated_receipt = await dispatcher.service.merge_output(
+                        receipt.run_id,
+                        {"rag_projection_deleted": projection_deleted},
+                        event_type="workflow.rag_projection_retried",
+                        message="会议清理检索投影已重试",
+                    )
+                    if updated_receipt is not None:
+                        receipt = updated_receipt
+                _raise_if_file_cleanup_incomplete(receipt.output)
+                return ClearMeetingOutputsResponse.model_validate(receipt.output)
+        fingerprint: dict[str, object] = {
+            "artifact_ids": sorted(item.artifact_id for item in current_artifacts),
+            "clear_minutes": body.clear_minutes,
+        }
+        if body.clear_minutes:
+            fingerprint["minutes_generation"] = {
+                "finalized_at": meeting.finalized_at.isoformat() if meeting.finalized_at else None,
+                "minutes_sha256": hashlib.sha256((meeting.minutes_json or "").encode()).hexdigest(),
+                "minutes_status": meeting.minutes_status,
+                "rag_projection_generation": meeting.rag_projection_generation,
+            }
+        digest = hashlib.sha256(
+            json.dumps(
+                fingerprint,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        idempotency_key = f"meeting.outputs.clear:{meeting_id}:{body.clear_minutes}:{digest}"
+        try:
+            done = await dispatcher.execute(
+                WorkflowRunCreate(
+                    kind="meeting.outputs.clear",
+                    source="meeting_outputs_api",
+                    intent_text=f"Clear outputs for meeting {meeting_id}",
+                    meeting_id=meeting_id,
+                    input={"meeting_id": meeting_id, "clear_minutes": body.clear_minutes},
+                    timeout_s=120,
+                    idempotency_key=idempotency_key,
+                    active_key=active_key,
+                )
+            )
+        except WorkflowExecutionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if done.idempotency_key == idempotency_key:
+            _raise_if_file_cleanup_incomplete(done.output)
+            return ClearMeetingOutputsResponse.model_validate(done.output)
+        # We joined a different request that already owned the meeting lane.
+        # Its handler is terminal now; refresh domain state and submit the
+        # caller's request against the new authoritative fingerprint.
+    raise HTTPException(status_code=409, detail="meeting output cleanup is busy")
 
 
 @router.post("/{meeting_id}/start")
@@ -1265,7 +1880,7 @@ async def finalize(
     if rec is None:
         raise HTTPException(status_code=404, detail=f"meeting {meeting_id} not found")
     try:
-        return await dispatch_meeting_finalize(
+        minutes = await dispatch_meeting_finalize(
             dispatcher,
             pipeline,
             repository,
@@ -1273,9 +1888,12 @@ async def finalize(
             title=title,
             source="meeting_api",
         )
+        return _minutes_dto(minutes)
     except MeetingPipelineError as exc:
         status_code = 400 if "no segments" in str(exc) else 502
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    except WorkflowConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{meeting_id}/end")

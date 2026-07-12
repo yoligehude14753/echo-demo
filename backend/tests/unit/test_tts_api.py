@@ -177,11 +177,14 @@ def test_speak_rejects_silent_upstream_with_502(
 def test_speak_502_on_upstream_connection_error(
     make_client: Callable[..., TestClient],
 ) -> None:
-    with _patch_httpx_raising(RuntimeError("connection refused")):
+    private_error = "connection refused by http://10.20.30.40:8094?token=secret"
+    with _patch_httpx_raising(RuntimeError(private_error)):
         client = make_client()
         r = client.post("/tts/speak", json={"text": "你好"})
     assert r.status_code == 502
-    assert "tts_upstream_error" in r.json()["detail"]
+    assert r.json()["detail"] == "tts_upstream_error"
+    assert "10.20.30.40" not in r.text
+    assert "secret" not in r.text
 
 
 @pytest.mark.unit

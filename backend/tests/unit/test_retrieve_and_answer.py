@@ -49,11 +49,24 @@ class FakeRag:
     async def ingest_pdf(self, path: str, doc_title: str | None = None) -> str:
         return "fake"
 
-    async def ingest_meeting(self, meeting_id: str, transcript: str, title: str) -> str:
+    async def ingest_meeting(
+        self,
+        meeting_id: str,
+        transcript: str,
+        title: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> str:
+        _ = projection_generation
         return f"meeting-{meeting_id}"
 
-    async def delete(self, doc_id: str) -> None:
-        return None
+    async def delete(
+        self,
+        doc_id: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> None:
+        _ = doc_id, projection_generation
 
 
 class FakeWeb:

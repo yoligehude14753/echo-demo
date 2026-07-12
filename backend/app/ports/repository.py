@@ -26,6 +26,7 @@ MeetingState = Literal["in_meeting", "ended", "finalized"]
 # - "generation_failed"：LLM 失败 / JSON 校验失败，用户可重试
 MinutesStatus = Literal["generating", "ok", "generation_failed"]
 RagProjectionState = Literal[
+    "reconcile_pending",
     "index_pending",
     "indexed",
     "index_failed",
@@ -58,6 +59,11 @@ class MeetingRecord(BaseModel):
     rag_projection_state: RagProjectionState | None = None
     rag_projection_error: str | None = None
     rag_projected_at: datetime | None = None
+    rag_projection_attempts: int = 0
+    rag_projection_next_retry_at: datetime | None = None
+    rag_projection_generation: int = 0
+    minutes_generation_run_id: str | None = None
+    minutes_generation_cancelled_at: datetime | None = None
 
 
 class AmbientSegmentRecord(BaseModel):
@@ -70,6 +76,11 @@ class AmbientSegmentRecord(BaseModel):
     speaker_label: str | None = None
     duration_ms: int = 0
     captured_at: datetime
+    rag_projection_state: RagProjectionState | None = None
+    rag_projection_error: str | None = None
+    rag_projected_at: datetime | None = None
+    rag_projection_attempts: int = 0
+    rag_projection_next_retry_at: datetime | None = None
 
 
 class AmbientAudioFileRecord(BaseModel):
@@ -132,7 +143,9 @@ class RepositoryPort(Protocol):
         rag_projection_state: RagProjectionState | None = None,
         rag_projection_error: str | None = None,
         rag_projected_at: datetime | None = None,
-    ) -> None: ...
+    ) -> int | None:
+        """Update a meeting and return its committed RAG projection generation."""
+        ...
 
     async def get_meeting(self, meeting_id: str) -> MeetingRecord | None: ...
 
@@ -157,7 +170,9 @@ class RepositoryPort(Protocol):
         state: RagProjectionState,
         error: str | None = None,
         projected_at: datetime | None = None,
-    ) -> None: ...
+        retry_backoff: bool = False,
+        expected_generation: int | None = None,
+    ) -> bool: ...
 
     async def list_meetings_needing_rag_projection(
         self,
@@ -166,6 +181,8 @@ class RepositoryPort(Protocol):
     ) -> list[MeetingRecord]: ...
 
     async def list_meeting_rag_projection_scopes(self) -> list[tuple[str, str, str]]: ...
+
+    async def list_rag_projection_scopes(self) -> list[tuple[str, str, str]]: ...
 
     # ── Meeting segments ────────────────────────────────────────
     async def append_meeting_segment(
@@ -226,6 +243,22 @@ class RepositoryPort(Protocol):
         *,
         since: datetime | None = None,
         until: datetime | None = None,
+        limit: int = 100,
+    ) -> list[AmbientSegmentRecord]: ...
+
+    async def set_ambient_rag_projection(
+        self,
+        segment_id: int,
+        *,
+        state: RagProjectionState,
+        error: str | None = None,
+        projected_at: datetime | None = None,
+        retry_backoff: bool = False,
+    ) -> bool: ...
+
+    async def list_ambient_segments_needing_rag_projection(
+        self,
+        *,
         limit: int = 100,
     ) -> list[AmbientSegmentRecord]: ...
 

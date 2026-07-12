@@ -106,7 +106,7 @@ async def tts_speak(
             elapsed,
             e,
         )
-        raise HTTPException(status_code=502, detail=f"tts_upstream_error: {e}") from e
+        raise HTTPException(status_code=502, detail="tts_upstream_error") from e
     if not result.pcm:
         raise HTTPException(status_code=400, detail="empty text")
     if is_silent(result):

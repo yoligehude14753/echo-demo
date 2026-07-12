@@ -41,6 +41,7 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _JSON_LIMIT_BYTES = 2 * 1024 * 1024
 _WS_FRAME_LIMIT_BYTES = 128 * 1024
 _DEPLOYMENT_GATE_HEADER = "X-Echo-Deployment-Gate"
+_CLIENT_VERSION_HEADER = "X-EchoDesk-Client-Version"
 _DEPLOYMENT_GATE_TOKEN_RE = re.compile(r"\A[A-Za-z0-9_-]{43,128}\Z")
 
 # 调用方可能预先打开全局 DEBUG；WebSocket debug 会记录含 bearer 的 client_hello。
@@ -183,7 +184,10 @@ class IsolationSmoke:
         self._meeting_started = False
         self._rag_doc_id: str | None = None
         self._cleanup_failed = False
-        headers = {"User-Agent": "EchoDesk-Public-Isolation-Smoke/0.3.1"}
+        headers = {
+            "User-Agent": "EchoDesk-Public-Isolation-Smoke/0.3.1",
+            _CLIENT_VERSION_HEADER: "0.3.1",
+        }
         if deployment_gate_token is not None:
             headers[_DEPLOYMENT_GATE_HEADER] = deployment_gate_token
         self._deployment_gate_token = deployment_gate_token
@@ -305,7 +309,7 @@ class IsolationSmoke:
                 {
                     "type": "client_hello",
                     "last_seq": 0,
-                    "client_version": "public-isolation-no-replay",
+                    "client_version": "0.3.1+public-isolation-no-replay",
                     "auth": {"type": "bearer", "token": identity.token},
                 },
                 separators=(",", ":"),

@@ -31,6 +31,7 @@ from app.api.deps import (
     require_admin_access,
 )
 from app.api.deps import get_llm_singleton as get_llm
+from app.artifacts.recovery import validated_artifact_file_path
 from app.artifacts.repository import ArtifactRepository
 from app.artifacts.staging import (
     load_workflow_artifact,
@@ -41,12 +42,13 @@ from app.artifacts.staging import (
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
 from app.ports.skill import SkillExecutorPort
-from app.schemas.artifact import ArtifactRequest, GeneratedArtifact
+from app.schemas.artifact import ArtifactRequest, GeneratedArtifact, GeneratedArtifactDTO
 from app.schemas.events import EchoEvent
 from app.schemas.workflow import WorkflowRunCreate
 from app.security.context import current_principal
 from app.security.errors import InternalHTTPException
 from app.security.headers import PRIVATE_NO_STORE_HEADERS
+from app.security.public_projection import project_client_dict
 from app.security.scope import scoped_directory
 from app.use_cases.generate_artifact import generate_artifact
 from app.workflows.kernel import WorkflowContext, WorkflowDispatcher, WorkflowExecutionError
@@ -69,6 +71,11 @@ def get_skill(settings: Settings = Depends(get_settings)) -> SkillExecutorPort:
 def reset_skill_singleton() -> None:
     global _skill_singleton  # noqa: PLW0603
     _skill_singleton = None
+
+
+def _artifact_dto(value: GeneratedArtifact | dict[str, Any]) -> GeneratedArtifactDTO:
+    payload = value.model_dump(mode="json") if isinstance(value, GeneratedArtifact) else value
+    return GeneratedArtifactDTO.model_validate(project_client_dict(payload, current_principal()))
 
 
 def bind_artifact_workflow_handler(
@@ -290,7 +297,7 @@ def bind_artifact_workflow_handler(
 
 @router.post(
     "/artifacts/generate",
-    response_model=GeneratedArtifact,
+    response_model=GeneratedArtifactDTO,
     dependencies=[Depends(require_admin_access)],
 )
 async def generate(
@@ -300,7 +307,7 @@ async def generate(
     event_bus: InMemoryEventBus = Depends(get_event_bus),
     dispatcher: WorkflowDispatcher = Depends(get_workflow_dispatcher),
     artifact_repo: ArtifactRepository = Depends(get_artifact_repository),
-) -> GeneratedArtifact:
+) -> GeneratedArtifactDTO:
     """生成产物。artifact_type 走 ArtifactKind 枚举校验（含 ppt/pptx/word/xlsx/excel/html 别名）。
 
     M_minutes_refactor：可选携带 ``meeting_id`` + ``todo_id``：
@@ -344,7 +351,7 @@ async def generate(
             status_code=502 if "远程 LLM" in detail else 400,
             detail=detail,
         ) from exc
-    return GeneratedArtifact.model_validate(done.output["artifact"])
+    return _artifact_dto(done.output["artifact"])
 
 
 # 跨平台不允许的文件名字符 + 控制字符
@@ -368,18 +375,19 @@ def _safe_title(raw: str) -> str:
     return s
 
 
-def _allowed_artifact_file(settings: Settings, file_path: str) -> Path | None:
-    path = Path(file_path).expanduser()
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    resolved = path.resolve()
-    allowed_roots = [
-        Path(settings.skill_executor_build_dir).expanduser().resolve(),
-        Path(settings.storage_dir).expanduser().resolve(),
-    ]
-    if not any(resolved == root or root in resolved.parents for root in allowed_roots):
-        return None
-    return resolved if resolved.is_file() else None
+def _allowed_artifact_file(
+    settings: Settings,
+    artifact: GeneratedArtifact,
+) -> Path | None:
+    principal = current_principal()
+    return validated_artifact_file_path(
+        settings,
+        artifact_id=artifact.artifact_id,
+        file_path=artifact.file_path,
+        tenant_id=principal.tenant_id,
+        owner_id=principal.owner_id,
+        metadata=artifact.metadata,
+    )
 
 
 def _download_name_from_artifact(artifact: GeneratedArtifact, path: Path) -> str:
@@ -388,12 +396,12 @@ def _download_name_from_artifact(artifact: GeneratedArtifact, path: Path) -> str
     return f"{safe}_{artifact.artifact_id}.{ext}" if ext else f"{safe}_{artifact.artifact_id}"
 
 
-@router.get("/artifacts", response_model=list[GeneratedArtifact])
+@router.get("/artifacts", response_model=list[GeneratedArtifactDTO])
 async def list_artifacts(
     artifact_repo: ArtifactRepository = Depends(get_artifact_repository),
     limit: int = Query(100, ge=1, le=500),
-) -> list[GeneratedArtifact]:
-    return await artifact_repo.list_artifacts(limit=limit)
+) -> list[GeneratedArtifactDTO]:
+    return [_artifact_dto(artifact) for artifact in await artifact_repo.list_artifacts(limit=limit)]
 
 
 @router.get("/artifacts/{artifact_id}/download")
@@ -410,7 +418,7 @@ async def download(
         _log.debug("artifact db lookup skipped for %s: %s", artifact_id, e)
         artifact = None
     if artifact is not None:
-        f = _allowed_artifact_file(settings, artifact.file_path)
+        f = _allowed_artifact_file(settings, artifact)
         if f is not None:
             return FileResponse(
                 f,

@@ -10,12 +10,20 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from app.config import OFFICIAL_ELECTRON_ORIGIN, Settings
+from app.security.client_version import is_supported_public_client
 from app.security.models import IssuedDeviceIdentity, IssuedSession, Principal, local_principal
 from app.security.sessions import EnrollmentAdmissionPolicy, SessionStore
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
-_ANONYMOUS_PUBLIC_PATHS = frozenset(
-    {"/healthz", "/readyz", "/bootstrap", "/session", "/session/enroll", "/session/renew"}
+_PUBLIC_METADATA_PATHS = frozenset({"/healthz", "/readyz", "/bootstrap"})
+_ANONYMOUS_PUBLIC_SESSION_PATHS = frozenset({"/session", "/session/enroll", "/session/renew"})
+_SESSION_BODY_ADMISSION_PATHS = frozenset(
+    {
+        "/session",
+        "/session/enroll",
+        "/session/renew",
+        "/session/credential/rotate",
+    }
 )
 _LAN_SAFE_GET_PATTERNS = (
     re.compile(r"^/healthz$"),
@@ -269,6 +277,7 @@ class AccessPolicy:
         session_limiter: SessionIssueLimiter | None = None,
         sensitive_limiter: SessionIssueLimiter | None = None,
         http_admission: PreAuthAdmission | None = None,
+        session_body_admission: PreAuthAdmission | None = None,
         websocket_admission: PreAuthAdmission | None = None,
         cleanup_interval_s: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
@@ -284,6 +293,30 @@ class AccessPolicy:
             channel="http",
             global_concurrent=settings.preauth_http_global_concurrent,
             peer_concurrent=settings.preauth_http_peer_concurrent,
+            global_attempts=settings.preauth_http_global_requests_per_window,
+            peer_attempts=settings.preauth_http_peer_requests_per_window,
+            window_s=settings.preauth_window_s,
+            max_peers=settings.preauth_max_peers,
+            clock=clock,
+        )
+        # Session credential bodies are intentionally separated from the
+        # short token-lookup gate. A slow anonymous enrollment must retain a
+        # peer lease until its response finishes, but that lease must not make
+        # normal authenticated traffic from the same NAT wait. When the body
+        # pool has more than one slot, cap one peer below the pool size so a
+        # single source cannot reserve every global body slot.
+        session_body_global_concurrent = min(
+            settings.preauth_http_global_concurrent,
+            settings.upload_global_concurrent_requests,
+        )
+        session_body_peer_concurrent = min(
+            settings.preauth_http_peer_concurrent,
+            max(1, session_body_global_concurrent - 1),
+        )
+        self.session_body_admission = session_body_admission or PreAuthAdmission(
+            channel="session body",
+            global_concurrent=session_body_global_concurrent,
+            peer_concurrent=session_body_peer_concurrent,
             global_attempts=settings.preauth_http_global_requests_per_window,
             peer_attempts=settings.preauth_http_peer_requests_per_window,
             window_s=settings.preauth_window_s,
@@ -362,6 +395,24 @@ class AccessPolicy:
             return None
         return await self.http_admission.acquire(client_key)
 
+    @staticmethod
+    def is_session_body_admission_route(method: str, path: str) -> bool:
+        return method.upper() == "POST" and path in _SESSION_BODY_ADMISSION_PATHS
+
+    async def admit_session_body(
+        self,
+        *,
+        method: str,
+        path: str,
+        client_key: str,
+    ) -> _PreAuthAdmissionLease | None:
+        if not self.settings.public_demo_mode or not self.is_session_body_admission_route(
+            method,
+            path,
+        ):
+            return None
+        return await self.session_body_admission.acquire(client_key)
+
     async def admit_websocket(self, client_key: str) -> _PreAuthAdmissionLease | None:
         if not self.settings.public_demo_mode:
             return None
@@ -384,6 +435,13 @@ class AccessPolicy:
         )
 
     def is_lan_request_allowed(self, *, method: str, path: str, client_host: str) -> bool:
+        if self.settings.public_demo_mode:
+            # Public deployments are intentionally reached through a trusted
+            # reverse proxy, which restores the remote peer address.  The LAN
+            # share gate is not an authentication layer; public requests are
+            # constrained by the version, origin, session, ownership and
+            # host-admin policy below instead.
+            return True
         return (
             self.settings.lan_full_api_enabled
             or client_host in _LOOPBACK_HOSTS
@@ -425,6 +483,7 @@ class AccessPolicy:
         authorization: str = "",
         x_echo_admin_token: str = "",
         share_token: str = "",
+        client_version: str = "",
     ) -> Principal:
         if self.is_host_capability_route(method, path):
             self.require_host_admin(
@@ -435,7 +494,7 @@ class AccessPolicy:
             return local_principal()
         if not self.settings.public_demo_mode:
             return local_principal()
-        if method.upper() == "OPTIONS" or path in _ANONYMOUS_PUBLIC_PATHS:
+        if method.upper() == "OPTIONS" or path in _PUBLIC_METADATA_PATHS:
             return local_principal()
         if self._has_admin_token(authorization, x_echo_admin_token):
             return local_principal()
@@ -446,10 +505,15 @@ class AccessPolicy:
                 resource_type=share_target[0],
                 resource_id=share_target[1],
             )
-        scheme, _, token = authorization.partition(" ")
-        if scheme.lower() != "bearer" or not token:
-            raise AccessPolicyError("session required", status_code=401)
-        return await self.sessions.validate_public_token(token)
+        if not is_supported_public_client(client_version):
+            raise AccessPolicyError("client upgrade required", status_code=426)
+        principal = local_principal()
+        if path not in _ANONYMOUS_PUBLIC_SESSION_PATHS:
+            scheme, _, token = authorization.partition(" ")
+            if scheme.lower() != "bearer" or not token:
+                raise AccessPolicyError("session required", status_code=401)
+            principal = await self.sessions.validate_public_token(token)
+        return principal
 
     async def resolve_websocket_principal(
         self,

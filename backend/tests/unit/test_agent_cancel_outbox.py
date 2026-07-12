@@ -20,7 +20,7 @@ from app.agents.base import AgentIntent, AgentSubmitResult
 from app.agents.events import EchoTaskEvent
 from app.agents.service import AgentTaskRecord, AgentTaskService
 from app.config import Settings
-from app.runtime.execution_lease import LeaseOwnershipError
+from app.runtime.execution_lease import ExecutionLeaseStore, LeaseOwnershipError
 
 
 class _CancelBackend:
@@ -427,11 +427,13 @@ async def test_two_resume_requests_share_one_durable_submit_lease(tmp_path: Path
 
 @pytest.mark.unit
 async def test_submit_heartbeat_prevents_takeover_after_initial_ttl(tmp_path: Path) -> None:
+    lease_ttl = 0.12
+    heartbeat_step = 0.02
     first, bus, _backend = await _make_service(
         tmp_path,
         holder_id="submit-heartbeat-a",
-        submit_lease_ttl_seconds=0.12,
-        submit_heartbeat_seconds=0.02,
+        submit_lease_ttl_seconds=lease_ttl,
+        submit_heartbeat_seconds=heartbeat_step,
     )
     task = await first.submit_task(AgentIntent(text="续租后仍只提交一次", device_id="desktop-test"))
     grant = await first.create_grant(device_id="desktop-test")
@@ -439,9 +441,17 @@ async def test_submit_heartbeat_prevents_takeover_after_initial_ttl(tmp_path: Pa
         first.settings,
         bus,
         holder_id="submit-heartbeat-b",
-        submit_lease_ttl_seconds=0.12,
-        submit_heartbeat_seconds=0.02,
+        submit_lease_ttl_seconds=lease_ttl,
+        submit_heartbeat_seconds=heartbeat_step,
     )
+    clock_now = 1_000.0
+    initial_expiry = clock_now + lease_ttl
+
+    def clock() -> float:
+        return clock_now
+
+    first._lease_store = ExecutionLeaseStore(first.settings.db_path, clock=clock)
+    second._lease_store = ExecutionLeaseStore(second.settings.db_path, clock=clock)
     backend = _BlockingSubmitBackend()
     for service in (first, second):
         service.backend = backend  # type: ignore[assignment]
@@ -452,8 +462,10 @@ async def test_submit_heartbeat_prevents_takeover_after_initial_ttl(tmp_path: Pa
     renewed_beyond_initial_term = asyncio.Event()
 
     async def counted_renew(*args: Any, **kwargs: Any) -> Any:
-        nonlocal renew_count
+        nonlocal clock_now, renew_count
+        clock_now += heartbeat_step
         renewed = await original_renew(*args, **kwargs)
+        assert renewed is not None
         renew_count += 1
         if renew_count >= 8:
             renewed_beyond_initial_term.set()
@@ -472,6 +484,7 @@ async def test_submit_heartbeat_prevents_takeover_after_initial_ttl(tmp_path: Pa
     await first_call
 
     assert renew_count >= 8
+    assert clock_now > initial_expiry
     assert backend.submit_calls == 1
     assert second_result.runner_task_id is None
     stored = await first.get_task(task.task_id)

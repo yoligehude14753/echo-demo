@@ -457,8 +457,9 @@ class MeetingPipeline:
         if not commit:
             return minutes
 
+        committed_generation: int | None = None
         if self._repo is not None:
-            await self._repo.update_meeting_state(
+            committed_generation = await self._repo.update_meeting_state(
                 meeting_id,
                 state="finalized",
                 title=title,  # 保留用户/系统传入的原始 title
@@ -471,7 +472,13 @@ class MeetingPipeline:
                 # 显式覆盖之前可能写下的失败信息；空串而非 None 触发 SET（None 会被 SQL 跳过）
                 minutes_error="",
             )
-        await self.after_finalize_committed(meeting_id, minutes)
+            if committed_generation is None:
+                raise MeetingPipelineError(f"meeting {meeting_id} disappeared after minutes commit")
+        await self.after_finalize_committed(
+            meeting_id,
+            minutes,
+            expected_generation=committed_generation,
+        )
         await self._publish("meeting.ended", meeting_id, {"duration_sec": duration_sec})
         await self._publish("minutes.ready", meeting_id, minutes.model_dump(mode="json"))
         # 主动建议前端 TTS 播一句简短的纪要 ack（前端可按 tts_enabled 决定真不真的播）
@@ -513,6 +520,8 @@ class MeetingPipeline:
         self,
         meeting_id: str,
         minutes: MeetingMinutes,
+        *,
+        expected_generation: int | None = None,
     ) -> None:
         """Update replayable in-memory/RAG projections after the SQLite commit."""
 
@@ -520,11 +529,17 @@ class MeetingPipeline:
         segs = self.get_segments(meeting_id)
         transcript_text = self._render_transcript(segs)
         try:
-            await self._index_minutes(meeting_id, minutes, transcript_text)
+            await self._index_minutes(
+                meeting_id,
+                minutes,
+                transcript_text,
+                expected_generation=expected_generation,
+            )
             await self._set_rag_projection(
                 meeting_id,
                 state="indexed",
                 projected_at=datetime.now(UTC),
+                expected_generation=expected_generation,
             )
         except Exception as e:
             # RAG is a rebuildable projection.  The meeting/minutes transaction
@@ -540,6 +555,7 @@ class MeetingPipeline:
                 meeting_id,
                 state="index_failed",
                 error=str(e),
+                expected_generation=expected_generation,
             )
 
     async def _index_minutes(
@@ -547,9 +563,16 @@ class MeetingPipeline:
         meeting_id: str,
         minutes: MeetingMinutes,
         transcript_text: str,
+        *,
+        expected_generation: int | None = None,
     ) -> None:
         rag_payload = "【纪要】\n" + minutes.summary + "\n\n【逐字稿】\n" + transcript_text
-        await self._rag.ingest_meeting(meeting_id, rag_payload, minutes.title)
+        await self._rag.ingest_meeting(
+            meeting_id,
+            rag_payload,
+            minutes.title,
+            projection_generation=expected_generation,
+        )
 
     async def _set_rag_projection(
         self,
@@ -558,21 +581,72 @@ class MeetingPipeline:
         state: str,
         error: str | None = None,
         projected_at: datetime | None = None,
-    ) -> None:
+        retry_backoff: bool = False,
+        expected_generation: int | None = None,
+    ) -> bool:
         if self._repo is None:
-            return
+            return True
         setter = getattr(self._repo, "set_meeting_rag_projection", None)
         if setter is None:
-            return
-        await setter(
+            return True
+        updated = await setter(
             meeting_id,
             state=state,
             error=error,
             projected_at=projected_at,
+            retry_backoff=retry_backoff,
+            expected_generation=expected_generation,
+        )
+        return bool(updated)
+
+    async def delete_meeting_projection(
+        self,
+        meeting_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
+        """Project a committed minutes clear before the request returns.
+
+        SQLite remains authoritative.  A failed BM25 deletion is recorded as
+        replayable ``delete_failed`` state and the background repair loop will
+        retry it; callers never silently lose the durable delete intent.
+        """
+
+        if self._repo is not None and expected_generation is not None:
+            current = await self._repo.get_meeting(meeting_id)
+            if (
+                current is None
+                or current.rag_projection_generation != expected_generation
+                or current.rag_projection_state not in {"delete_pending", "delete_failed"}
+            ):
+                return False
+
+        try:
+            await self._rag.delete(
+                f"meeting-{meeting_id}",
+                projection_generation=expected_generation,
+            )
+        except Exception as exc:
+            await self._set_rag_projection(
+                meeting_id,
+                state="delete_failed",
+                error=str(exc),
+                expected_generation=expected_generation,
+            )
+            return False
+        return await self._set_rag_projection(
+            meeting_id,
+            state="deleted",
+            projected_at=datetime.now(UTC),
+            expected_generation=expected_generation,
         )
 
-    async def repair_rag_projections(self, *, limit: int = 100) -> tuple[int, int]:
-        """Replay durable index/delete intent for the active principal scope."""
+    async def repair_rag_projections(  # noqa: PLR0912 - meeting + legacy ambient replay
+        self,
+        *,
+        limit: int = 100,
+    ) -> tuple[int, int]:
+        """Replay due meeting and ambient projection intent for one principal."""
 
         if self._repo is None:
             return 0, 0
@@ -582,13 +656,18 @@ class MeetingPipeline:
         meetings = await loader(limit=limit)
         succeeded = 0
         for meeting in meetings:
+            generation = meeting.rag_projection_generation
             try:
                 if meeting.rag_projection_state in {"delete_pending", "delete_failed"}:
-                    await self._rag.delete(f"meeting-{meeting.id}")
-                    await self._set_rag_projection(
+                    await self._rag.delete(
+                        f"meeting-{meeting.id}",
+                        projection_generation=generation,
+                    )
+                    projected = await self._set_rag_projection(
                         meeting.id,
                         state="deleted",
                         projected_at=datetime.now(UTC),
+                        expected_generation=generation,
                     )
                 else:
                     if not meeting.minutes_json:
@@ -599,13 +678,16 @@ class MeetingPipeline:
                         meeting.id,
                         minutes,
                         self._render_transcript(segments),
+                        expected_generation=generation,
                     )
-                    await self._set_rag_projection(
+                    projected = await self._set_rag_projection(
                         meeting.id,
                         state="indexed",
                         projected_at=datetime.now(UTC),
+                        expected_generation=generation,
                     )
-                succeeded += 1
+                if projected:
+                    succeeded += 1
             except Exception as exc:
                 operation = (
                     "delete"
@@ -616,8 +698,56 @@ class MeetingPipeline:
                     meeting.id,
                     state=f"{operation}_failed",
                     error=str(exc),
+                    retry_backoff=True,
+                    expected_generation=generation,
                 )
-        return len(meetings), succeeded
+
+        ambient_loader = getattr(
+            self._repo,
+            "list_ambient_segments_needing_rag_projection",
+            None,
+        )
+        ambient_segments = await ambient_loader(limit=limit) if ambient_loader else []
+        ambient_setter = getattr(self._repo, "set_ambient_rag_projection", None)
+        for segment in ambient_segments:
+            try:
+                if segment.rag_projection_state == "reconcile_pending":
+                    reconciler = getattr(self._rag, "contains_ambient_segment", None)
+                    if reconciler is not None and await reconciler(
+                        segment.text,
+                        captured_at=segment.captured_at.isoformat(),
+                        audio_ref=segment.audio_ref,
+                    ):
+                        if ambient_setter is not None and await ambient_setter(
+                            segment.id,
+                            state="indexed",
+                            projected_at=datetime.now(UTC),
+                        ):
+                            succeeded += 1
+                        continue
+                await self._rag.ingest_ambient_segment(
+                    segment.text,
+                    captured_at=segment.captured_at.isoformat(),
+                    audio_ref=segment.audio_ref,
+                    speaker_id=segment.speaker_id,
+                    speaker_label=segment.speaker_label,
+                    operation_id=f"ambient-segment:{segment.id}",
+                )
+                if ambient_setter is not None and await ambient_setter(
+                    segment.id,
+                    state="indexed",
+                    projected_at=datetime.now(UTC),
+                ):
+                    succeeded += 1
+            except Exception as exc:
+                if ambient_setter is not None:
+                    await ambient_setter(
+                        segment.id,
+                        state="index_failed",
+                        error=str(exc),
+                        retry_backoff=True,
+                    )
+        return len(meetings) + len(ambient_segments), succeeded
 
     @staticmethod
     def _extract_display_title(raw: object, *, fallback: str) -> str:

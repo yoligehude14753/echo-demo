@@ -11,11 +11,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import app.api.meetings as meetings_api
 import pytest
+from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.repo.migrator import run_migrations
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.api.deps import (
@@ -26,12 +30,16 @@ from app.api.deps import (
     reset_deps_for_test,
 )
 from app.api.meetings import reset_meeting_pipeline
+from app.api.retrieval import get_rag
 from app.artifacts.repository import ArtifactRepository
 from app.config import Settings, get_settings
 from app.main import create_app
 from app.ports.repository import RepositoryPort
 from app.schemas.artifact import GeneratedArtifact
 from app.schemas.meeting import TranscriptSegment
+from app.schemas.workflow import WorkflowRunCreate
+from app.workflows.kernel import WorkflowDispatcher
+from app.workflows.service import WorkflowService
 from fastapi.testclient import TestClient
 
 
@@ -64,6 +72,7 @@ def client(tmp_path: Path, repo: SQLiteRepository) -> TestClient:
         db_path=tmp_path / "echo.db",
         storage_dir=tmp_path / "storage",
         skill_executor_build_dir=tmp_path / "skill_build",
+        rag_index_dir=tmp_path / "rag",
     )
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_repository] = lambda: repo
@@ -102,6 +111,7 @@ def _settings(tmp_path: Path) -> Settings:
         db_path=tmp_path / "echo.db",
         storage_dir=tmp_path / "storage",
         skill_executor_build_dir=tmp_path / "skill_build",
+        rag_index_dir=tmp_path / "rag",
     )
 
 
@@ -487,11 +497,181 @@ async def test_clear_meeting_outputs_clears_minutes_and_deletes_artifacts(
     runs = client.get("/workflows/runs?meeting_id=mtg-clear").json()
     cleanup_run = next(item for item in runs if item["kind"] == "meeting.outputs.clear")
     assert cleanup_run["state"] == "succeeded"
+    assert cleanup_run["output"]["file_cleanup_targets"] == [
+        {
+            "artifact_id": artifact_id,
+            "root": "skill_build",
+            "relative_path": f"{artifact_id}/output.txt",
+        }
+    ]
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_clear_meeting_outputs_rolls_back_domain_writes_when_terminal_commit_crashes(
+async def test_clear_meeting_outputs_uses_new_request_after_minutes_regeneration(
+    client: TestClient,
+    repo: SQLiteRepository,
+) -> None:
+    meeting_id = "mtg-clear-regenerated"
+    started_at = datetime(2026, 5, 28, 11, 30, tzinfo=UTC)
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="重复清理会议",
+        started_at=started_at,
+        segments=[],
+        minutes_payload={
+            "meeting_id": meeting_id,
+            "title": "第一版纪要",
+            "duration_sec": 60,
+            "summary": "第一版",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+
+    first = client.request(
+        "DELETE",
+        f"/meetings/{meeting_id}/outputs",
+        json={"artifact_ids": [], "clear_minutes": True},
+    )
+    assert first.status_code == 200
+    cleared = await repo.get_meeting(meeting_id)
+    assert cleared is not None and cleared.minutes_json is None
+
+    regenerated_at = started_at + timedelta(hours=1)
+    await repo.update_meeting_state(
+        meeting_id,
+        state="finalized",
+        finalized_at=regenerated_at,
+        minutes_json=json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "title": "第二版纪要",
+                "duration_sec": 60,
+                "summary": "第二版必须能再次清理",
+                "sections": [],
+                "decisions": [],
+                "todos": [],
+                "action_items": [],
+            },
+            ensure_ascii=False,
+        ),
+        minutes_status="ok",
+        rag_projection_state="index_pending",
+    )
+
+    second = client.request(
+        "DELETE",
+        f"/meetings/{meeting_id}/outputs",
+        json={"artifact_ids": [], "clear_minutes": True},
+    )
+
+    assert second.status_code == 200
+    cleared_again = await repo.get_meeting(meeting_id)
+    assert cleared_again is not None
+    assert cleared_again.minutes_json is None
+    runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    cleanup_runs = [item for item in runs if item["kind"] == "meeting.outputs.clear"]
+    assert len(cleanup_runs) == 2
+    assert {item["state"] for item in cleanup_runs} == {"succeeded"}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_clear_meeting_outputs_removes_bm25_projection_before_response(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+) -> None:
+    meeting_id = "mtg-clear-bm25"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="清理检索投影",
+        started_at=datetime(2026, 5, 28, 11, 45, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": meeting_id,
+            "title": "清理检索投影",
+            "duration_sec": 60,
+            "summary": "孔雀石投影必须立即消失",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+    rag = get_rag(_settings(tmp_path))
+    await rag.ingest_meeting(meeting_id, "孔雀石投影必须立即消失", "清理检索投影")
+    assert any(hit.doc_id == f"meeting-{meeting_id}" for hit in await rag.query("孔雀石"))
+
+    response = client.request(
+        "DELETE",
+        f"/meetings/{meeting_id}/outputs",
+        json={"artifact_ids": [], "clear_minutes": True},
+    )
+
+    assert response.status_code == 200
+    assert all(hit.doc_id != f"meeting-{meeting_id}" for hit in await rag.query("孔雀石"))
+    meeting = await repo.get_meeting(meeting_id)
+    assert meeting is not None
+    assert meeting.rag_projection_state == "deleted"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_clear_meeting_outputs_fails_closed_when_physical_bm25_delete_fails(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meeting_id = "mtg-clear-bm25-failure"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="失败也必须隐藏",
+        started_at=datetime(2026, 5, 28, 11, 50, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": meeting_id,
+            "title": "失败也必须隐藏",
+            "duration_sec": 60,
+            "summary": "绿松石物理文件暂时删不掉",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+    rag = get_rag(_settings(tmp_path))
+    await rag.ingest_meeting(meeting_id, "绿松石物理文件暂时删不掉", "失败也必须隐藏")
+    assert any(hit.doc_id == f"meeting-{meeting_id}" for hit in await rag.query("绿松石"))
+
+    async def fail_delete(_doc_id: str, **_kwargs: object) -> None:
+        raise OSError("simulated index file lock")
+
+    monkeypatch.setattr(rag, "delete", fail_delete)
+    response = client.request(
+        "DELETE",
+        f"/meetings/{meeting_id}/outputs",
+        json={"artifact_ids": [], "clear_minutes": True},
+    )
+
+    assert response.status_code == 200
+    meeting = await repo.get_meeting(meeting_id)
+    assert meeting is not None
+    assert meeting.rag_projection_state == "delete_failed"
+    assert "index file lock" in (meeting.rag_projection_error or "")
+    assert all(hit.doc_id != f"meeting-{meeting_id}" for hit in await rag.query("绿松石"))
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_clear_meeting_outputs_rolls_back_domain_writes_when_progress_commit_crashes(
     client: TestClient,
     repo: SQLiteRepository,
     tmp_path: Path,
@@ -522,7 +702,7 @@ async def test_clear_meeting_outputs_rolls_back_domain_writes_when_terminal_comm
         body=b"must survive rollback",
     )
     service = get_workflow_service(_settings(tmp_path), get_event_bus())
-    original_complete = service.complete_run_atomic
+    original_commit = service.commit_run_progress_atomic
 
     async def crash_after_domain_writer(run_id: str, **kwargs: object) -> object:
         domain_writer = kwargs["domain_writer"]
@@ -532,9 +712,9 @@ async def test_clear_meeting_outputs_rolls_back_domain_writes_when_terminal_comm
             raise RuntimeError("injected crash before workflow terminal commit")
 
         kwargs["domain_writer"] = write_then_crash
-        return await original_complete(run_id, **kwargs)  # type: ignore[arg-type]
+        return await original_commit(run_id, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(service, "complete_run_atomic", crash_after_domain_writer)
+    monkeypatch.setattr(service, "commit_run_progress_atomic", crash_after_domain_writer)
 
     response = client.request(
         "DELETE",
@@ -554,6 +734,445 @@ async def test_clear_meeting_outputs_rolls_back_domain_writes_when_terminal_comm
     runs = client.get("/workflows/runs?meeting_id=mtg-cleanup-crash").json()
     cleanup_run = next(item for item in runs if item["kind"] == "meeting.outputs.clear")
     assert cleanup_run["state"] == "failed"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear_minutes", [True, False])
+async def test_repeated_output_cleanup_does_not_rewrite_minutes_generation(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+    clear_minutes: bool,
+) -> None:
+    meeting_id = f"mtg-cleanup-repeat-{clear_minutes}"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="幂等清理",
+        started_at=datetime(2026, 5, 28, 12, 10, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": meeting_id,
+            "title": "幂等清理",
+            "duration_sec": 60,
+            "summary": "不得重复推进 generation",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+    payload = {"artifact_ids": [], "clear_minutes": clear_minutes}
+    first = client.request("DELETE", f"/meetings/{meeting_id}/outputs", json=payload)
+    assert first.status_code == 200
+    after_first = await repo.get_meeting(meeting_id)
+    assert after_first is not None
+    first_runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    first_cleanup = next(item for item in first_runs if item["kind"] == "meeting.outputs.clear")
+    first_events = client.get(f"/workflows/runs/{first_cleanup['run_id']}/events").json()["events"]
+
+    second = client.request("DELETE", f"/meetings/{meeting_id}/outputs", json=payload)
+    assert second.status_code == 200
+    after_second = await repo.get_meeting(meeting_id)
+    assert after_second is not None
+    assert after_second.rag_projection_generation == after_first.rag_projection_generation
+    assert after_second.minutes_cleared_at == after_first.minutes_cleared_at
+    if clear_minutes:
+        assert after_second.minutes_json is None
+    else:
+        assert after_second.minutes_json == after_first.minutes_json
+    runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    cleanup_runs = [item for item in runs if item["kind"] == "meeting.outputs.clear"]
+    assert len(cleanup_runs) == 1
+    assert cleanup_runs[0]["run_id"] == first_cleanup["run_id"]
+    assert cleanup_runs[0]["revision"] == first_cleanup["revision"]
+    second_events = client.get(f"/workflows/runs/{first_cleanup['run_id']}/events").json()["events"]
+    assert len(second_events) == len(first_events)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_new_artifact_after_minutes_clear_does_not_advance_minutes_generation(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+) -> None:
+    meeting_id = "mtg-cleanup-new-artifact"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="先清纪要后加产物",
+        started_at=datetime(2026, 5, 28, 12, 20, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": meeting_id,
+            "title": "先清纪要后加产物",
+            "duration_sec": 60,
+            "summary": "纪要 generation 只能推进一次",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+    first = client.request(
+        "DELETE",
+        f"/meetings/{meeting_id}/outputs",
+        json={"artifact_ids": [], "clear_minutes": True},
+    )
+    assert first.status_code == 200
+    cleared = await repo.get_meeting(meeting_id)
+    assert cleared is not None and cleared.minutes_cleared_at is not None
+
+    artifact = await _seed_artifact_link(
+        tmp_path,
+        artifact_id="artifact-after-minutes-clear",
+        meeting_id=meeting_id,
+        artifact_type="txt",
+        body=b"new artifact",
+    )
+    second = client.request(
+        "DELETE",
+        f"/meetings/{meeting_id}/outputs",
+        json={"artifact_ids": [], "clear_minutes": True},
+    )
+    assert second.status_code == 200
+    assert second.json()["artifact_ids"] == [artifact.artifact_id]
+    cleared_again = await repo.get_meeting(meeting_id)
+    assert cleared_again is not None
+    assert cleared_again.rag_projection_generation == cleared.rag_projection_generation
+    assert cleared_again.minutes_cleared_at == cleared.minutes_cleared_at
+    runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    cleanup_runs = [item for item in runs if item["kind"] == "meeting.outputs.clear"]
+    assert len(cleanup_runs) == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_failed_delete_projection_retries_with_same_generation(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meeting_id = "mtg-cleanup-same-generation-retry"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="同代重试投影",
+        started_at=datetime(2026, 5, 28, 12, 30, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": meeting_id,
+            "title": "同代重试投影",
+            "duration_sec": 60,
+            "summary": "投影失败不能推进 generation",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+    rag = get_rag(_settings(tmp_path))
+    await rag.ingest_meeting(meeting_id, "同代重试投影", "同代重试投影")
+    original_delete = rag.delete
+    generations: list[int | None] = []
+
+    async def fail_once(doc_id: str, *, projection_generation: int | None = None) -> None:
+        generations.append(projection_generation)
+        if len(generations) == 1:
+            raise OSError("transient projection failure")
+        await original_delete(doc_id, projection_generation=projection_generation)
+
+    monkeypatch.setattr(rag, "delete", fail_once)
+    payload = {"artifact_ids": [], "clear_minutes": True}
+    first = client.request("DELETE", f"/meetings/{meeting_id}/outputs", json=payload)
+    assert first.status_code == 200
+    failed = await repo.get_meeting(meeting_id)
+    assert failed is not None and failed.rag_projection_state == "delete_failed"
+
+    second = client.request("DELETE", f"/meetings/{meeting_id}/outputs", json=payload)
+    assert second.status_code == 200
+    recovered = await repo.get_meeting(meeting_id)
+    assert recovered is not None and recovered.rag_projection_state == "deleted"
+    assert recovered.rag_projection_generation == failed.rag_projection_generation
+    assert generations == [failed.rag_projection_generation, failed.rag_projection_generation]
+    runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    cleanup_runs = [item for item in runs if item["kind"] == "meeting.outputs.clear"]
+    assert len(cleanup_runs) == 1
+    assert cleanup_runs[0]["output"]["rag_projection_deleted"] is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_file_cleanup_error_returns_503_and_same_receipt_retries_target(  # noqa: PLR0915
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meeting_id = "mtg-file-cleanup-retry"
+    artifact_id = "artifact-file-cleanup-retry"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="文件清理重试",
+        started_at=datetime(2026, 5, 28, 12, 40, tzinfo=UTC),
+        segments=[],
+        minutes_payload={
+            "meeting_id": meeting_id,
+            "title": "文件清理重试",
+            "duration_sec": 60,
+            "summary": "文件删除失败必须显式重试",
+            "sections": [],
+            "decisions": [],
+            "todos": [],
+            "action_items": [],
+        },
+    )
+    artifact = await _seed_artifact_link(
+        tmp_path,
+        artifact_id=artifact_id,
+        meeting_id=meeting_id,
+        artifact_type="txt",
+        body=b"delete after retry",
+    )
+    import app.artifacts.recovery as artifact_recovery
+
+    original_rmtree = artifact_recovery.shutil.rmtree
+
+    def fail_rmtree(_path: Path) -> None:
+        raise OSError("simulated artifact directory lock")
+
+    monkeypatch.setattr(artifact_recovery.shutil, "rmtree", fail_rmtree)
+    payload = {"artifact_ids": [], "clear_minutes": True}
+    first = client.request("DELETE", f"/meetings/{meeting_id}/outputs", json=payload)
+    assert first.status_code == 503
+    assert first.json()["detail"] == "artifact file cleanup incomplete; retry the request"
+    assert "directory lock" not in first.text
+    assert Path(artifact.file_path).exists()
+    first_runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    cleanup_runs = [item for item in first_runs if item["kind"] == "meeting.outputs.clear"]
+    assert len(cleanup_runs) == 1
+    assert cleanup_runs[0]["state"] == "succeeded"
+    assert cleanup_runs[0]["output"]["post_commit_complete"] is False
+    assert artifact_id in cleanup_runs[0]["output"]["file_cleanup_errors"]
+
+    monkeypatch.setattr(artifact_recovery.shutil, "rmtree", original_rmtree)
+    service = WorkflowService(_settings(tmp_path), InMemoryEventBus())
+    dispatcher = WorkflowDispatcher(service)
+    receipt = await service.get_run(cleanup_runs[0]["run_id"])
+    assert receipt is not None
+    assert receipt.output["file_cleanup_errors"] == {artifact_id: "file cleanup failed"}
+    original_replay = meetings_api.replay_artifact_file_cleanup_target
+    entered = 0
+    both_entered = asyncio.Event()
+
+    async def synchronized_replay(*args: object, **kwargs: object) -> str:
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both_entered.set()
+        await asyncio.wait_for(both_entered.wait(), timeout=1)
+        return await original_replay(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(meetings_api, "replay_artifact_file_cleanup_target", synchronized_replay)
+    await asyncio.gather(
+        meetings_api._replay_cleanup_receipt_files(dispatcher, _settings(tmp_path), receipt),
+        meetings_api._replay_cleanup_receipt_files(dispatcher, _settings(tmp_path), receipt),
+    )
+    concurrent = await service.get_run(receipt.run_id)
+    assert concurrent is not None
+    assert concurrent.output["artifacts_deleted"] == 1
+    assert concurrent.output["file_cleanup_deleted_ids"] == [artifact_id]
+    assert concurrent.output["missing_artifact_ids"] == []
+    assert concurrent.output["file_cleanup_errors"] == {}
+    assert concurrent.output["post_commit_complete"] is True
+    await dispatcher.aclose()
+
+    monkeypatch.setattr(
+        meetings_api,
+        "replay_artifact_file_cleanup_target",
+        original_replay,
+    )
+    second = client.request("DELETE", f"/meetings/{meeting_id}/outputs", json=payload)
+    assert second.status_code == 200
+    assert not Path(artifact.file_path).exists()
+    second_runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    cleanup_runs = [item for item in second_runs if item["kind"] == "meeting.outputs.clear"]
+    assert len(cleanup_runs) == 1
+    assert cleanup_runs[0]["output"]["file_cleanup_errors"] == {}
+    assert cleanup_runs[0]["output"]["post_commit_complete"] is True
+    assert cleanup_runs[0]["output"]["artifacts_deleted"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_initial_cleanup_rejects_path_reused_after_domain_commit(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meeting_id = "mtg-initial-cleanup-path-reuse"
+    artifact_id = "artifact-initial-cleanup-path-reuse"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="路径复用防护",
+        started_at=datetime.now(UTC),
+        segments=[],
+    )
+    old = await _seed_artifact_link(
+        tmp_path,
+        artifact_id=artifact_id,
+        meeting_id=meeting_id,
+        artifact_type="txt",
+        body=b"new owner must survive",
+    )
+    original_replay = meetings_api.replay_artifact_file_cleanup_target
+    replacement_id = "artifact-replacement-owner"
+    injected = False
+
+    async def reuse_before_delete(*args: object, **kwargs: object) -> str:
+        nonlocal injected
+        if not injected:
+            injected = True
+            artifacts = ArtifactRepository(_settings(tmp_path))
+            assert await artifacts.get_artifact(artifact_id) is None
+            await artifacts.save_artifact(
+                GeneratedArtifact(
+                    artifact_id=replacement_id,
+                    artifact_type="txt",
+                    title="replacement",
+                    file_path=old.file_path,
+                    mime_type="text/plain",
+                    size_bytes=Path(old.file_path).stat().st_size,
+                    generation_latency_ms=0,
+                    model="test",
+                )
+            )
+        return await original_replay(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(meetings_api, "replay_artifact_file_cleanup_target", reuse_before_delete)
+    response = client.request(
+        "DELETE",
+        f"/meetings/{meeting_id}/outputs",
+        json={"artifact_ids": [], "clear_minutes": False},
+    )
+    assert response.status_code == 503
+    assert Path(old.file_path).read_bytes() == b"new owner must survive"
+    replacement = await ArtifactRepository(_settings(tmp_path)).get_artifact(replacement_id)
+    assert replacement is not None and replacement.file_path == old.file_path
+    runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    [cleanup] = [item for item in runs if item["kind"] == "meeting.outputs.clear"]
+    raw_cleanup = await WorkflowService(_settings(tmp_path), InMemoryEventBus()).get_run(
+        cleanup["run_id"]
+    )
+    assert raw_cleanup is not None
+    assert raw_cleanup.output["file_cleanup_errors"] == {artifact_id: "cleanup target is protected"}
+    assert raw_cleanup.output["post_commit_complete"] is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_initial_cleanup_rejects_symlink_replacement_after_domain_commit(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meeting_id = "mtg-initial-cleanup-symlink"
+    artifact_id = "artifact-initial-cleanup-symlink"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="符号链接防护",
+        started_at=datetime.now(UTC),
+        segments=[],
+    )
+    old = await _seed_artifact_link(
+        tmp_path,
+        artifact_id=artifact_id,
+        meeting_id=meeting_id,
+        artifact_type="txt",
+        body=b"old",
+    )
+    build_dir = Path(old.file_path).parent
+    outside = tmp_path / "outside-replacement"
+    outside.mkdir()
+    outside_output = outside / Path(old.file_path).name
+    outside_output.write_bytes(b"outside must survive")
+    original_replay = meetings_api.replay_artifact_file_cleanup_target
+    injected = False
+
+    async def symlink_before_delete(*args: object, **kwargs: object) -> str:
+        nonlocal injected
+        if not injected:
+            injected = True
+            assert await ArtifactRepository(_settings(tmp_path)).get_artifact(artifact_id) is None
+            shutil.rmtree(build_dir)
+            build_dir.symlink_to(outside, target_is_directory=True)
+        return await original_replay(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(meetings_api, "replay_artifact_file_cleanup_target", symlink_before_delete)
+    response = client.request(
+        "DELETE",
+        f"/meetings/{meeting_id}/outputs",
+        json={"artifact_ids": [], "clear_minutes": False},
+    )
+    assert response.status_code == 503
+    assert build_dir.is_symlink()
+    assert outside_output.read_bytes() == b"outside must survive"
+    runs = client.get(f"/workflows/runs?meeting_id={meeting_id}").json()
+    [cleanup] = [item for item in runs if item["kind"] == "meeting.outputs.clear"]
+    raw_cleanup = await WorkflowService(_settings(tmp_path), InMemoryEventBus()).get_run(
+        cleanup["run_id"]
+    )
+    assert raw_cleanup is not None
+    assert raw_cleanup.output["file_cleanup_errors"] == {artifact_id: "cleanup target is unsafe"}
+    assert raw_cleanup.output["post_commit_complete"] is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_meeting_finalize_unadoptable_active_key_conflict_is_http_409(
+    client: TestClient,
+    repo: SQLiteRepository,
+    tmp_path: Path,
+) -> None:
+    meeting_id = "mtg-finalize-conflict-409"
+    await _seed_meeting(
+        repo,
+        meeting_id,
+        title="冲突会议",
+        started_at=datetime.now(UTC),
+        segments=[TranscriptSegment(text="冲突不能变成 500", start_ms=0, end_ms=800)],
+    )
+    settings = _settings(tmp_path)
+    service = get_workflow_service(settings, get_event_bus())
+    winner = await service.create_run(
+        WorkflowRunCreate(
+            kind="rag.query",
+            source="conflicting-owner",
+            intent_text="invalid owner of meeting finalize active key",
+            active_key=f"meeting.finalize:{meeting_id}",
+        )
+    )
+
+    response = client.post(
+        f"/meetings/{meeting_id}/finalize",
+        data={"title": "冲突会议"},
+    )
+
+    assert response.status_code == 409
+    assert "cannot own this meeting finalize" in response.json()["detail"]
+    meeting = await repo.get_meeting(meeting_id)
+    assert meeting is not None
+    assert meeting.minutes_status is None
+    assert meeting.minutes_generation_run_id is None
+    assert (await service.get_run(winner.run_id)) is not None
 
 
 @pytest.mark.unit

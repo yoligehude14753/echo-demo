@@ -41,6 +41,7 @@ from app.schemas.workflow import TERMINAL_WORKFLOW_STATES, WorkflowRunCreate
 from app.security.context import current_principal
 from app.security.errors import InternalHTTPException
 from app.security.governor import PrincipalGovernor
+from app.security.public_projection import project_client_dict
 from app.upload import UploadTooLarge, read_limited_upload
 from app.upload.ownership import (
     bind_rag_content_doc,
@@ -444,7 +445,10 @@ async def rag_docs(rag: RagPort = Depends(get_rag)) -> dict[str, object]:
     by_source: dict[str, list[dict[str, object]]] = {}
     for d in docs:
         by_source.setdefault(str(d.get("source", "unknown")), []).append(d)
-    return {"total": len(docs), "by_source": by_source, "docs": docs}
+    return project_client_dict(
+        {"total": len(docs), "by_source": by_source, "docs": docs},
+        current_principal(),
+    )
 
 
 @router.delete("/rag/docs/{doc_id}")

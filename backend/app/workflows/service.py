@@ -218,6 +218,10 @@ def _row_to_run(row: aiosqlite.Row) -> WorkflowRunRecord:
 
 
 def _row_to_event(row: aiosqlite.Row) -> WorkflowEventRecord:
+    payload = _json_loads(row["payload_json"], {})
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.pop("agent_delivery_key", None)
     return WorkflowEventRecord(
         run_id=row["run_id"],
         seq=int(row["seq"]),
@@ -225,7 +229,7 @@ def _row_to_event(row: aiosqlite.Row) -> WorkflowEventRecord:
         state=row["state"],
         visibility=row["visibility"],
         message=row["message"],
-        payload=_json_loads(row["payload_json"], {}),
+        payload=payload,
         created_at=row["created_at"],
     )
 
@@ -354,6 +358,9 @@ class WorkflowService:
         )
         seq_row = await cur.fetchone()
         await cur.close()
+        durable_payload = dict(payload)
+        external_payload = dict(payload)
+        external_payload.pop("agent_delivery_key", None)
         event = WorkflowEventRecord(
             run_id=run.run_id,
             seq=int(seq_row["next_seq"] if seq_row else 1),
@@ -361,7 +368,7 @@ class WorkflowService:
             state=run.state,
             visibility=visibility,
             message=message,
-            payload=payload,
+            payload=external_payload,
             created_at=utc_now_iso(),
         )
         await conn.execute(
@@ -376,7 +383,7 @@ class WorkflowService:
                 event.state,
                 event.visibility,
                 event.message,
-                json.dumps(event.payload, ensure_ascii=False),
+                json.dumps(durable_payload, ensure_ascii=False),
                 event.created_at,
                 tenant_id,
                 device_id,
@@ -434,6 +441,30 @@ class WorkflowService:
                 ),
                 event.ts.isoformat(),
             ),
+        )
+
+    async def append_domain_event_in_transaction(
+        self,
+        conn: aiosqlite.Connection,
+        event: EchoEvent,
+        *,
+        aggregate_id: str,
+    ) -> None:
+        """Stage a domain event in a caller-owned workflow transaction.
+
+        The caller remains responsible for committing or rolling back ``conn``.
+        This keeps terminal domain projections and their observable events in
+        the same unit of work without exposing tenant identity as input.
+        """
+
+        tenant_id, device_id, owner_id = _scope()
+        await self._append_domain_outbox_tx(
+            conn,
+            event,
+            aggregate_id=aggregate_id,
+            tenant_id=tenant_id,
+            device_id=device_id,
+            owner_id=owner_id,
         )
 
     async def _outbox_replay_floor(self, conn: aiosqlite.Connection, rows: int) -> int:
@@ -1582,6 +1613,27 @@ class WorkflowService:
                 log.warning("workflow outbox cleanup failed: %s", exc)
         return published
 
+    async def _flush_outbox_after_commit_best_effort(
+        self,
+        *,
+        operation: str,
+        run_id: str,
+    ) -> None:
+        """Defer eager delivery failures after the SQLite commit point."""
+
+        try:
+            await self.flush_outbox()
+        except Exception as exc:
+            # The run/domain mutation and unpublished outbox rows are already
+            # durable.  Propagating this error would falsely reverse committed
+            # semantics; the application outbox poller will retry delivery.
+            log.warning(
+                "workflow outbox flush deferred operation=%s run_id=%s error_type=%s",
+                operation,
+                run_id,
+                type(exc).__name__,
+            )
+
     async def prune_outbox(self) -> int:
         """Delete safe published history while preserving lagging/recovery consumers."""
 
@@ -1741,7 +1793,39 @@ class WorkflowService:
                 if active is not None:
                     return active
             raise
-        await self.flush_outbox()
+        await self._flush_outbox_after_commit_best_effort(
+            operation="create_run",
+            run_id=record.run_id,
+        )
+        return await self.get_run(record.run_id) or record
+
+    async def create_run_atomic(
+        self,
+        body: WorkflowRunCreate,
+        *,
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[None]],
+        run_id: str | None = None,
+        parent_run_id: str | None = None,
+        attempt: int = 1,
+    ) -> WorkflowRunRecord:
+        """Create a workflow and its domain start marker in one Unit of Work."""
+
+        async with self._conn() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            record, created = await self.create_run_in_transaction(
+                conn,
+                body,
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+                attempt=attempt,
+            )
+            if created:
+                await domain_writer(conn)
+            await conn.commit()
+        await self._flush_outbox_after_commit_best_effort(
+            operation="create_run_atomic",
+            run_id=record.run_id,
+        )
         return await self.get_run(record.run_id) or record
 
     async def create_run_in_transaction(
@@ -1856,6 +1940,36 @@ class WorkflowService:
             owner_id=owner_id,
         )
         return record, True
+
+    async def project_active_run(
+        self,
+        run_id: str,
+        *,
+        domain_writer: Callable[[aiosqlite.Connection, WorkflowRunRecord], Awaitable[None]],
+        lease: LeaseToken | None = None,
+    ) -> WorkflowRunRecord | None:
+        """Attach a missing domain marker to an already-durable active run."""
+
+        tenant_id, _device_id, owner_id = _scope()
+        async with self._conn() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            await self._assert_workflow_lease(conn, run_id, lease)
+            cur = await conn.execute(
+                "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
+                (run_id, tenant_id, owner_id),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+            if row is None:
+                await conn.rollback()
+                return None
+            run = _row_to_run(row)
+            if run.is_terminal:
+                await conn.rollback()
+                return run
+            await domain_writer(conn, run)
+            await conn.commit()
+        return run
 
     async def get_active_by_idempotency(self, key: str) -> WorkflowRunRecord | None:
         tenant_id, _device_id, owner_id = _scope()
@@ -2035,8 +2149,149 @@ class WorkflowService:
                 owner_id=owner_id,
             )
             await conn.commit()
-        await self.flush_outbox()
+        await self._flush_outbox_after_commit_best_effort(
+            operation="record_event",
+            run_id=run_id,
+        )
         return event
+
+    async def record_agent_delivery_once_in_transaction(
+        self,
+        conn: aiosqlite.Connection,
+        run_id: str,
+        *,
+        delivery_key: str,
+        event_type: str,
+        message: str | None,
+        payload: dict[str, Any],
+        visibility: WorkflowVisibility,
+    ) -> bool:
+        """Append one Agent projection effect exactly once on a caller-owned UoW.
+
+        ``AgentTaskService`` asserts its ``agent_projection`` fencing token on
+        the same ``BEGIN IMMEDIATE`` transaction immediately before calling
+        this method.  Keeping the durable delivery-key lookup and workflow
+        event/outbox append on that transaction closes the former
+        check-then-write takeover window without requiring another schema
+        migration.  The private key remains in ``payload_json`` for replay
+        deduplication and is removed by :func:`_row_to_event` and
+        :meth:`_append_event_tx` before any client projection.
+        """
+
+        if not conn.in_transaction:
+            raise RuntimeError("Agent delivery requires an active transaction")
+        if not delivery_key or len(delivery_key) > 200:
+            raise ValueError("Agent delivery key must be 1..200 characters")
+        tenant_id, device_id, owner_id = _scope()
+        cur = await conn.execute(
+            "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
+            (run_id, tenant_id, owner_id),
+        )
+        run_row = await cur.fetchone()
+        await cur.close()
+        if run_row is None:
+            return False
+        cur = await conn.execute(
+            """SELECT payload_json FROM workflow_events
+               WHERE run_id = ? AND tenant_id = ? AND owner_id = ?""",
+            (run_id, tenant_id, owner_id),
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        for row in rows:
+            durable_payload = _json_loads(row["payload_json"], {})
+            if (
+                isinstance(durable_payload, dict)
+                and durable_payload.get("agent_delivery_key") == delivery_key
+            ):
+                return False
+        await self._append_event_tx(
+            conn,
+            _row_to_run(run_row),
+            event_type,
+            message=message,
+            payload={**payload, "agent_delivery_key": delivery_key},
+            visibility=visibility,
+            tenant_id=tenant_id,
+            device_id=device_id,
+            owner_id=owner_id,
+        )
+        return True
+
+    async def merge_agent_output_once_in_transaction(
+        self,
+        conn: aiosqlite.Connection,
+        run_id: str,
+        *,
+        delivery_key: str,
+        patch: dict[str, Any],
+        event_type: str,
+        message: str,
+    ) -> bool:
+        """Merge one fenced Agent output effect and its marker atomically."""
+
+        if not conn.in_transaction:
+            raise RuntimeError("Agent output delivery requires an active transaction")
+        if not delivery_key or len(delivery_key) > 200:
+            raise ValueError("Agent delivery key must be 1..200 characters")
+        tenant_id, device_id, owner_id = _scope()
+        cur = await conn.execute(
+            "SELECT payload_json FROM workflow_events "
+            "WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
+            (run_id, tenant_id, owner_id),
+        )
+        event_rows = await cur.fetchall()
+        await cur.close()
+        for event_row in event_rows:
+            durable_payload = _json_loads(event_row["payload_json"], {})
+            if (
+                isinstance(durable_payload, dict)
+                and durable_payload.get("agent_delivery_key") == delivery_key
+            ):
+                return False
+        cur = await conn.execute(
+            "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
+            (run_id, tenant_id, owner_id),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        if row is None:
+            return False
+        run = _row_to_run(row)
+        now = utc_now_iso()
+        output = {**run.output, **patch}
+        changed = await conn.execute(
+            """UPDATE workflow_runs
+               SET output_json = ?, updated_at = ?, revision = revision + 1
+               WHERE run_id = ? AND tenant_id = ? AND owner_id = ? AND revision = ?""",
+            (
+                json.dumps(output, ensure_ascii=False),
+                now,
+                run_id,
+                tenant_id,
+                owner_id,
+                run.revision,
+            ),
+        )
+        if changed.rowcount != 1:
+            await changed.close()
+            raise WorkflowConflictError(f"workflow revision conflict: {run_id}")
+        await changed.close()
+        run.output = output
+        run.updated_at = now
+        run.revision += 1
+        await self._append_event_tx(
+            conn,
+            run,
+            event_type,
+            message=message,
+            payload={"output": patch, "agent_delivery_key": delivery_key},
+            visibility="debug",
+            tenant_id=tenant_id,
+            device_id=device_id,
+            owner_id=owner_id,
+        )
+        return True
 
     async def _set_state(
         self,
@@ -2050,7 +2305,7 @@ class WorkflowService:
         error: str | None = None,
         started: bool = False,
         finished: bool = False,
-        domain_writer: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[bool | None]] | None = None,
         domain_events: list[EchoEvent] | None = None,
         lease: LeaseToken | None = None,
     ) -> WorkflowRunRecord | None:
@@ -2074,8 +2329,9 @@ class WorkflowService:
                 raise InvalidWorkflowTransition(
                     f"illegal workflow transition: {rec.state} -> {state}"
                 )
+            domain_write_applied = True
             if domain_writer is not None:
-                await domain_writer(conn)
+                domain_write_applied = await domain_writer(conn) is not False
             started_at = now if started and rec.started_at is None else rec.started_at
             finished_at = now if finished else rec.finished_at
             next_output = rec.output if output is None else output
@@ -2100,7 +2356,9 @@ class WorkflowService:
                     rec.revision,
                 ),
             )
-            if changed.rowcount != 1:
+            changed_count = changed.rowcount
+            await changed.close()
+            if changed_count != 1:
                 raise WorkflowConflictError(f"workflow revision conflict: {run_id}")
             cur = await conn.execute(
                 "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
@@ -2122,17 +2380,21 @@ class WorkflowService:
                 device_id=device_id,
                 owner_id=owner_id,
             )
-            for domain_event in domain_events or []:
-                await self._append_domain_outbox_tx(
-                    conn,
-                    domain_event,
-                    aggregate_id=run_id,
-                    tenant_id=tenant_id,
-                    device_id=device_id,
-                    owner_id=owner_id,
-                )
+            if domain_write_applied:
+                for domain_event in domain_events or []:
+                    await self._append_domain_outbox_tx(
+                        conn,
+                        domain_event,
+                        aggregate_id=run_id,
+                        tenant_id=tenant_id,
+                        device_id=device_id,
+                        owner_id=owner_id,
+                    )
             await conn.commit()
-        await self.flush_outbox()
+        await self._flush_outbox_after_commit_best_effort(
+            operation=f"set_state:{state}",
+            run_id=run_id,
+        )
         return updated
 
     async def start_run(self, run_id: str) -> WorkflowRunRecord | None:
@@ -2182,6 +2444,186 @@ class WorkflowService:
             domain_events=domain_events,
         )
 
+    async def commit_run_progress_atomic(
+        self,
+        run_id: str,
+        *,
+        output: dict[str, Any],
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[bool | None]],
+        domain_events: list[EchoEvent],
+        event_type: str = "workflow.domain_committed",
+        message: str = "任务领域状态已提交",
+        lease: LeaseToken | None = None,
+    ) -> WorkflowRunRecord | None:
+        """Commit durable domain progress without making the run terminal.
+
+        Handlers with post-commit projections use ``output`` as their recovery
+        marker.  A replacement dispatcher can therefore skip an already
+        committed LLM/domain step, replay only the external projection tail,
+        and let the dispatcher perform the single terminal transition after
+        the handler really returns.
+        """
+
+        now = utc_now_iso()
+        tenant_id, device_id, owner_id = _scope()
+        async with self._conn() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            await self._assert_workflow_lease(conn, run_id, lease)
+            cur = await conn.execute(
+                "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
+                (run_id, tenant_id, owner_id),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+            if row is None:
+                await conn.rollback()
+                return None
+            rec = _row_to_run(row)
+            if rec.is_terminal:
+                await conn.rollback()
+                return rec
+
+            domain_write_applied = await domain_writer(conn) is not False
+            next_output = {**rec.output, **output}
+            changed = await conn.execute(
+                """UPDATE workflow_runs
+                   SET output_json = ?, updated_at = ?, revision = revision + 1
+                   WHERE run_id = ? AND tenant_id = ? AND owner_id = ? AND revision = ?
+                     AND state IN ('pending', 'running', 'cancel_requested')""",
+                (
+                    json.dumps(next_output, ensure_ascii=False),
+                    now,
+                    run_id,
+                    tenant_id,
+                    owner_id,
+                    rec.revision,
+                ),
+            )
+            changed_count = changed.rowcount
+            await changed.close()
+            if changed_count != 1:
+                raise WorkflowConflictError(f"workflow revision conflict: {run_id}")
+            cur = await conn.execute(
+                "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
+                (run_id, tenant_id, owner_id),
+            )
+            updated_row = await cur.fetchone()
+            await cur.close()
+            if updated_row is None:
+                raise WorkflowConflictError(f"workflow disappeared during update: {run_id}")
+            updated = _row_to_run(updated_row)
+            await self._append_event_tx(
+                conn,
+                updated,
+                event_type,
+                message=message,
+                payload={"output": output},
+                visibility="debug",
+                tenant_id=tenant_id,
+                device_id=device_id,
+                owner_id=owner_id,
+            )
+            if domain_write_applied:
+                for domain_event in domain_events:
+                    await self._append_domain_outbox_tx(
+                        conn,
+                        domain_event,
+                        aggregate_id=run_id,
+                        tenant_id=tenant_id,
+                        device_id=device_id,
+                        owner_id=owner_id,
+                    )
+            await conn.commit()
+        await self._flush_outbox_after_commit_best_effort(
+            operation="domain_progress",
+            run_id=run_id,
+        )
+        return updated
+
+    async def complete_new_run_atomic(
+        self,
+        body: WorkflowRunCreate,
+        *,
+        output: dict[str, Any],
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[None]],
+        domain_events: list[EchoEvent] | None = None,
+        message: str = "任务完成",
+    ) -> WorkflowRunRecord:
+        """Create, execute and finish a caller-owned workflow in one UoW.
+
+        This boundary is intentionally limited to a brand-new run.  It is used
+        when a domain operation returns an unpersistable one-time secret to the
+        current caller: another dispatcher must never execute the operation,
+        and an existing idempotency receipt cannot be paired with a new secret.
+        """
+
+        now = utc_now_iso()
+        tenant_id, device_id, owner_id = _scope()
+        async with self._conn() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            record, created = await self.create_run_in_transaction(conn, body)
+            if not created:
+                raise WorkflowConflictError("inline workflow must create a new run")
+            await domain_writer(conn)
+            changed = await conn.execute(
+                """UPDATE workflow_runs
+                   SET state = 'succeeded', output_json = ?, error = NULL,
+                       started_at = ?, finished_at = ?, updated_at = ?, revision = revision + 1
+                   WHERE run_id = ? AND tenant_id = ? AND owner_id = ? AND revision = ?
+                     AND state = 'pending'""",
+                (
+                    json.dumps(output, ensure_ascii=False),
+                    now,
+                    now,
+                    now,
+                    record.run_id,
+                    tenant_id,
+                    owner_id,
+                    record.revision,
+                ),
+            )
+            changed_count = changed.rowcount
+            await changed.close()
+            if changed_count != 1:
+                raise WorkflowConflictError(f"inline workflow revision conflict: {record.run_id}")
+            cur = await conn.execute(
+                "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
+                (record.run_id, tenant_id, owner_id),
+            )
+            updated_row = await cur.fetchone()
+            await cur.close()
+            if updated_row is None:
+                raise WorkflowConflictError(
+                    f"inline workflow disappeared during update: {record.run_id}"
+                )
+            updated = _row_to_run(updated_row)
+            await self._append_event_tx(
+                conn,
+                updated,
+                "workflow.succeeded",
+                message=message,
+                payload={},
+                visibility="user",
+                tenant_id=tenant_id,
+                device_id=device_id,
+                owner_id=owner_id,
+            )
+            for domain_event in domain_events or []:
+                await self._append_domain_outbox_tx(
+                    conn,
+                    domain_event,
+                    aggregate_id=record.run_id,
+                    tenant_id=tenant_id,
+                    device_id=device_id,
+                    owner_id=owner_id,
+                )
+            await conn.commit()
+        await self._flush_outbox_after_commit_best_effort(
+            operation="inline_complete",
+            run_id=record.run_id,
+        )
+        return updated
+
     async def merge_output(
         self,
         run_id: str,
@@ -2190,6 +2632,7 @@ class WorkflowService:
         event_type: str = "workflow.output_updated",
         message: str | None = None,
         lease: LeaseToken | None = None,
+        merge_strategy: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
     ) -> WorkflowRunRecord | None:
         """Merge late projection data without reopening or re-transitioning a run."""
         now = utc_now_iso()
@@ -2206,7 +2649,11 @@ class WorkflowService:
             if row is None:
                 return None
             rec = _row_to_run(row)
-            output = {**rec.output, **patch}
+            output = (
+                merge_strategy(dict(rec.output), dict(patch))
+                if merge_strategy is not None
+                else {**rec.output, **patch}
+            )
             changed = await conn.execute(
                 """UPDATE workflow_runs
                    SET output_json = ?, updated_at = ?, revision = revision + 1
@@ -2220,7 +2667,9 @@ class WorkflowService:
                     rec.revision,
                 ),
             )
-            if changed.rowcount != 1:
+            changed_count = changed.rowcount
+            await changed.close()
+            if changed_count != 1:
                 raise WorkflowConflictError(f"workflow revision conflict: {run_id}")
             cur = await conn.execute(
                 "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
@@ -2243,7 +2692,10 @@ class WorkflowService:
                 owner_id=owner_id,
             )
             await conn.commit()
-        await self.flush_outbox()
+        await self._flush_outbox_after_commit_best_effort(
+            operation="merge_output",
+            run_id=run_id,
+        )
         return updated
 
     async def fail_run(
@@ -2252,6 +2704,7 @@ class WorkflowService:
         *,
         error: str,
         payload: dict[str, Any] | None = None,
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[bool | None]] | None = None,
     ) -> WorkflowRunRecord | None:
         return await self._set_state(
             run_id,
@@ -2261,6 +2714,7 @@ class WorkflowService:
             payload=payload or {"error": error},
             error=error,
             finished=True,
+            domain_writer=domain_writer,
         )
 
     async def fail_run_atomic(
@@ -2269,7 +2723,7 @@ class WorkflowService:
         *,
         error: str,
         domain_events: list[EchoEvent],
-        domain_writer: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[bool | None]] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> WorkflowRunRecord | None:
         return await self._set_state(
@@ -2285,7 +2739,11 @@ class WorkflowService:
         )
 
     async def timeout_run(
-        self, run_id: str, *, error: str = "workflow timeout"
+        self,
+        run_id: str,
+        *,
+        error: str = "workflow timeout",
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
     ) -> WorkflowRunRecord | None:
         return await self._set_state(
             run_id,
@@ -2295,6 +2753,7 @@ class WorkflowService:
             payload={"error": error},
             error=error,
             finished=True,
+            domain_writer=domain_writer,
         )
 
     async def request_cancel(
@@ -2516,6 +2975,7 @@ class WorkflowService:
         run_id: str,
         *,
         message: str = "任务已取消",
+        domain_writer: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
     ) -> WorkflowRunRecord | None:
         return await self._set_state(
             run_id,
@@ -2523,6 +2983,7 @@ class WorkflowService:
             event_type="workflow.cancelled",
             message=message,
             finished=True,
+            domain_writer=domain_writer,
         )
 
     async def mark_cancel_failed(
@@ -2546,48 +3007,80 @@ class WorkflowService:
         run_id: str,
         *,
         reason: str | None = None,
+        domain_writer: Callable[[aiosqlite.Connection, WorkflowRunRecord], Awaitable[None]]
+        | None = None,
     ) -> WorkflowRunRecord | None:
-        old = await self.get_run(run_id)
-        if old is None:
-            return None
-        if not old.is_terminal:
-            raise InvalidWorkflowTransition(
-                f"cannot retry non-terminal workflow in state {old.state}"
+        tenant_id, device_id, owner_id = _scope()
+        async with self._conn() as conn:
+            # Serialize the terminal-parent read, permanent child dedupe and
+            # parent retry event across every backend process.  A retry is one
+            # Unit of Work: no committed child may exist without the lineage
+            # event that makes it discoverable from its parent.
+            await conn.execute("BEGIN IMMEDIATE")
+            cur = await conn.execute(
+                "SELECT * FROM workflow_runs WHERE run_id = ? AND tenant_id = ? AND owner_id = ?",
+                (run_id, tenant_id, owner_id),
             )
-        if old.state == "succeeded":
-            raise InvalidWorkflowTransition("cannot retry a succeeded workflow")
-        retry_input = dict(old.input)
-        retry_input["retry_of"] = old.run_id
-        if reason:
-            retry_input["retry_reason"] = reason
-        new_run = await self.create_run(
-            WorkflowRunCreate(
-                kind=old.kind,
-                source=old.source,
-                title=old.title,
-                intent_text=old.intent_text,
-                meeting_id=old.meeting_id,
-                todo_id=old.todo_id,
-                agent_task_id=old.agent_task_id,
-                input=retry_input,
-                timeout_s=old.timeout_s,
-                idempotency_key=(
-                    f"{old.idempotency_key}:retry:{old.attempt + 1}"
-                    if old.idempotency_key
-                    else None
+            row = await cur.fetchone()
+            await cur.close()
+            if row is None:
+                await conn.rollback()
+                return None
+            old = _row_to_run(row)
+            if not old.is_terminal:
+                raise InvalidWorkflowTransition(
+                    f"cannot retry non-terminal workflow in state {old.state}"
+                )
+            if old.state == "succeeded":
+                raise InvalidWorkflowTransition("cannot retry a succeeded workflow")
+
+            retry_input = dict(old.input)
+            retry_input["retry_of"] = old.run_id
+            if reason:
+                retry_input["retry_reason"] = reason
+            attempt = old.attempt + 1
+            new_run, created = await self.create_run_in_transaction(
+                conn,
+                WorkflowRunCreate(
+                    kind=old.kind,
+                    source=old.source,
+                    title=old.title,
+                    intent_text=old.intent_text,
+                    meeting_id=old.meeting_id,
+                    todo_id=old.todo_id,
+                    agent_task_id=old.agent_task_id,
+                    input=retry_input,
+                    timeout_s=old.timeout_s,
+                    idempotency_key=f"workflow.retry:{old.run_id}:{attempt}",
+                    active_key=old.active_key,
                 ),
-            ),
-            parent_run_id=old.run_id,
-            attempt=old.attempt + 1,
+                parent_run_id=old.run_id,
+                attempt=attempt,
+            )
+            if not created and new_run.parent_run_id != old.run_id:
+                raise WorkflowConflictError(
+                    f"active workflow already won retry race: {new_run.run_id}"
+                )
+            if created:
+                if domain_writer is not None:
+                    await domain_writer(conn, new_run)
+                await self._append_event_tx(
+                    conn,
+                    old,
+                    "workflow.retry_created",
+                    message="已创建重试任务",
+                    payload={"retry_run_id": new_run.run_id, "reason": reason},
+                    visibility="debug",
+                    tenant_id=tenant_id,
+                    device_id=device_id,
+                    owner_id=owner_id,
+                )
+            await conn.commit()
+        await self._flush_outbox_after_commit_best_effort(
+            operation="retry_run",
+            run_id=new_run.run_id,
         )
-        await self.record_event(
-            old.run_id,
-            "workflow.retry_created",
-            message="已创建重试任务",
-            payload={"retry_run_id": new_run.run_id, "reason": reason},
-            visibility="debug",
-        )
-        return new_run
+        return await self.get_run(new_run.run_id) or new_run
 
     async def restore_unfinished(self) -> int:
         await self.drain_outbox()

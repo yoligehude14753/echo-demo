@@ -51,14 +51,27 @@ class _FakeRag:
     async def ingest_pdf(self, file_path: str, doc_title: str | None = None) -> str:
         return "pdf"
 
-    async def ingest_meeting(self, meeting_id: str, transcript: str, title: str) -> str:
+    async def ingest_meeting(
+        self,
+        meeting_id: str,
+        transcript: str,
+        title: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> str:
+        _ = projection_generation
         return f"doc-{meeting_id}"
 
     async def query(self, query: str, *, top_k: int = 5) -> list[RagChunk]:
         return []
 
-    async def delete(self, doc_id: str) -> None:
-        return None
+    async def delete(
+        self,
+        doc_id: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> None:
+        _ = doc_id, projection_generation
 
 
 class _FakeLLM:

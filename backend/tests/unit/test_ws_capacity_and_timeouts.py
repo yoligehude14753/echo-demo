@@ -35,6 +35,7 @@ class _FakeWebSocket:
         hello = {
             "type": "client_hello",
             "last_seq": 0,
+            "client_version": "0.3.1",
             "auth": {"type": "bearer", "token": token},
         }
         self.headers = Headers()

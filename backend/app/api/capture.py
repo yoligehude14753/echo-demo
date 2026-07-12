@@ -38,6 +38,7 @@ from app.ports.repository import RepositoryPort
 from app.schemas.capture import CaptureChunkResult
 from app.security.context import current_principal
 from app.security.governor import PrincipalGovernor
+from app.security.public_projection import project_client_dict
 from app.upload import UploadTooLarge, read_limited_upload
 from app.use_cases.ambient_capture import AmbientCapturePipeline
 from app.use_cases.meeting_pipeline import MeetingPipeline
@@ -113,10 +114,13 @@ async def capture_chunk(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="empty audio")
     mid = meeting_id.strip() if meeting_id else None
-    return await pipeline.ingest_chunk(
+    result = await pipeline.ingest_chunk(
         audio_bytes,
         sample_rate=sample_rate,
         meeting_id=mid or None,
+    )
+    return CaptureChunkResult.model_validate(
+        project_client_dict(result.model_dump(mode="json"), current_principal())
     )
 
 

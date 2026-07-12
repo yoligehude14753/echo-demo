@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -16,10 +17,13 @@ from app.adapters.repo.migrator import run_migrations
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.artifacts import staging as artifact_staging
 from app.artifacts.recovery import (
+    artifact_file_cleanup_target,
     recover_skill_build_artifacts,
+    replay_artifact_file_cleanup_target,
     replay_succeeded_artifact_file_cleanups,
+    validated_artifact_file_path,
 )
-from app.artifacts.repository import ArtifactRepository
+from app.artifacts.repository import ArtifactFileUnavailableError, ArtifactRepository
 from app.artifacts.staging import (
     WORKFLOW_BUILDING_DIR,
     cleanup_abandoned_builds,
@@ -32,8 +36,111 @@ from app.schemas.artifact import GeneratedArtifact
 from app.schemas.workflow import WorkflowRunCreate
 from app.security.context import bind_principal, current_principal, reset_principal
 from app.security.models import Principal
-from app.security.scope import scoped_directory, scoped_directory_for
+from app.security.scope import physical_resource_id_for, scoped_directory, scoped_directory_for
 from app.workflows.service import WorkflowService
+
+
+@pytest.mark.unit
+async def test_artifact_locator_binds_skill_and_agent_storage_to_registered_artifact(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        storage_dir=tmp_path / "storage",
+        skill_executor_build_dir=tmp_path / "skill-build",
+    )
+    tenant_id = "tenant-a"
+    owner_id = "owner-a"
+
+    skill_scope = scoped_directory_for(settings.skill_executor_build_dir, tenant_id, owner_id)
+    own_output = skill_scope / "artifact-a" / "output.txt"
+    sibling_output = skill_scope / "artifact-b" / "output.txt"
+    own_output.parent.mkdir(parents=True)
+    sibling_output.parent.mkdir(parents=True)
+    own_output.write_text("artifact a", encoding="utf-8")
+    sibling_output.write_text("artifact b", encoding="utf-8")
+    assert (
+        artifact_file_cleanup_target(
+            settings,
+            artifact_id="artifact-a",
+            file_path=str(own_output),
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+        )
+        is not None
+    )
+    assert (
+        validated_artifact_file_path(
+            settings,
+            artifact_id="artifact-a",
+            file_path=str(sibling_output),
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+        )
+        is None
+    )
+
+    task_id = "task-agent-storage-binding"
+    relpath = "out/report.pdf"
+    artifact_id = f"agent-{hashlib.sha1(f'{task_id}:{relpath}'.encode()).hexdigest()[:24]}"
+    task_dir = physical_resource_id_for(
+        task_id,
+        kind="agent-task",
+        tenant_id=tenant_id,
+        owner_id=owner_id,
+    )
+    storage_scope = scoped_directory_for(
+        settings.storage_dir / "agent_artifacts",
+        tenant_id,
+        owner_id,
+    )
+    registered = storage_scope / task_dir / "out" / "report.pdf"
+    sibling = storage_scope / task_dir / "out" / "other.pdf"
+    registered.parent.mkdir(parents=True)
+    registered.write_bytes(b"registered")
+    sibling.write_bytes(b"same owner sibling")
+    metadata = {"source": "agent", "agent_task_id": task_id, "relpath": relpath}
+    assert (
+        validated_artifact_file_path(
+            settings,
+            artifact_id=artifact_id,
+            file_path=str(registered),
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            metadata=metadata,
+        )
+        == registered
+    )
+    assert (
+        validated_artifact_file_path(
+            settings,
+            artifact_id=artifact_id,
+            file_path=str(sibling),
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            metadata=metadata,
+        )
+        is None
+    )
+    target = artifact_file_cleanup_target(
+        settings,
+        artifact_id=artifact_id,
+        file_path=str(registered),
+        tenant_id=tenant_id,
+        owner_id=owner_id,
+        metadata=metadata,
+    )
+    assert target is not None and target["binding"] == "agent-storage-v1"
+    tampered = {**target, "relative_path": sibling.relative_to(settings.storage_dir).as_posix()}
+    assert (
+        await replay_artifact_file_cleanup_target(
+            settings,
+            tampered,
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+        )
+        == "unsafe"
+    )
+    assert sibling.read_bytes() == b"same owner sibling"
 
 
 @pytest.mark.unit
@@ -935,3 +1042,367 @@ async def test_recovery_replays_succeeded_artifact_file_cleanup_intent(
     )
     assert await replay_succeeded_artifact_file_cleanups(settings) == 0
     assert output.is_file()
+
+
+@pytest.mark.unit
+async def test_cleanup_replay_deletes_storage_target_but_rejects_escape_and_path_reuse(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        storage_dir=tmp_path / "storage",
+        skill_executor_build_dir=tmp_path / "skill_build",
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    stale = settings.storage_dir / "agent_artifacts" / "stale.txt"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("delete after crash", encoding="utf-8")
+    reused = settings.storage_dir / "agent_artifacts" / "reused.txt"
+    reused.write_text("current artifact owns this path", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("never delete outside controlled roots", encoding="utf-8")
+    assert (
+        artifact_file_cleanup_target(
+            settings,
+            artifact_id="outside-artifact",
+            file_path=str(outside),
+            tenant_id="legacy-local",
+            owner_id="legacy-local",
+        )
+        is None
+    )
+    assert (
+        artifact_file_cleanup_target(
+            settings,
+            artifact_id="cross-scope-artifact",
+            file_path=str(reused),
+            tenant_id="tenant-a",
+            owner_id="owner-a",
+        )
+        is None
+    )
+
+    stale_target = artifact_file_cleanup_target(
+        settings,
+        artifact_id="stale-storage-artifact",
+        file_path=str(stale),
+        tenant_id="legacy-local",
+        owner_id="legacy-local",
+    )
+    reused_target = artifact_file_cleanup_target(
+        settings,
+        artifact_id="old-artifact-id",
+        file_path=str(reused),
+        tenant_id="legacy-local",
+        owner_id="legacy-local",
+    )
+    assert stale_target is not None and reused_target is not None
+
+    service = WorkflowService(settings, InMemoryEventBus())
+    run = await service.create_run(
+        WorkflowRunCreate(
+            kind="meeting.outputs.clear",
+            source="test",
+            intent_text="durable standalone cleanup",
+        )
+    )
+    await service.start_run(run.run_id)
+    await service.complete_run(
+        run.run_id,
+        output={
+            "file_cleanup_artifact_ids": [
+                "stale-storage-artifact",
+                "old-artifact-id",
+                "escape-artifact",
+            ],
+            "file_cleanup_targets": [
+                stale_target,
+                reused_target,
+                {
+                    "artifact_id": "escape-artifact",
+                    "root": "storage",
+                    "relative_path": "../outside.txt",
+                },
+                {
+                    "artifact_id": "absolute-artifact",
+                    "root": "storage",
+                    "relative_path": str(outside),
+                },
+            ],
+        },
+    )
+    await ArtifactRepository(settings).save_artifact(
+        GeneratedArtifact(
+            artifact_id="new-artifact-id",
+            artifact_type="txt",
+            title="current path owner",
+            file_path=str(reused),
+            mime_type="text/plain",
+            size_bytes=reused.stat().st_size,
+            generation_latency_ms=0,
+            model="test",
+        )
+    )
+
+    assert await replay_succeeded_artifact_file_cleanups(settings) == 1
+    assert not stale.exists()
+    assert reused.read_text(encoding="utf-8") == "current artifact owns this path"
+    assert outside.read_text(encoding="utf-8") == "never delete outside controlled roots"
+    assert await replay_succeeded_artifact_file_cleanups(settings) == 0
+    await service.aclose()
+
+
+@pytest.mark.unit
+async def test_cleanup_replay_expands_tilde_db_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    settings = Settings(
+        db_path=Path("~/.echodesk/echo.db"),
+        storage_dir=tmp_path / "storage",
+        skill_executor_build_dir=tmp_path / "skill_build",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    expanded_db = Path(settings.db_path).expanduser()
+    assert (await run_migrations(expanded_db)).errors == []
+    output = settings.storage_dir / "tilde-replay.txt"
+    output.parent.mkdir(parents=True)
+    output.write_text("delete from expanded database", encoding="utf-8")
+    target = artifact_file_cleanup_target(
+        settings,
+        artifact_id="tilde-replay-artifact",
+        file_path=str(output),
+        tenant_id="legacy-local",
+        owner_id="legacy-local",
+    )
+    assert target is not None
+    async with aiosqlite.connect(expanded_db) as conn:
+        await conn.execute(
+            """INSERT INTO workflow_runs
+               (run_id, kind, source, state, intent_text, output_json,
+                created_at, updated_at, tenant_id, device_id, owner_id)
+               VALUES ('tilde-cleanup', 'meeting.outputs.clear', 'test', 'succeeded',
+                       'tilde cleanup', ?, '2026-01-01', '2026-01-01',
+                       'legacy-local', 'legacy-local', 'legacy-local')""",
+            (json.dumps({"file_cleanup_targets": [target]}),),
+        )
+        await conn.commit()
+
+    assert await replay_succeeded_artifact_file_cleanups(settings) == 1
+    assert not output.exists()
+
+
+@pytest.mark.unit
+async def test_online_cleanup_rejects_public_cross_scope_and_symlink_targets(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        storage_dir=tmp_path / "storage",
+        skill_executor_build_dir=tmp_path / "skill_build",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    scope_b = scoped_directory_for(settings.storage_dir, "tenant-b", "owner-b")
+    cross_scope_file = scope_b / "private.txt"
+    cross_scope_file.parent.mkdir(parents=True)
+    cross_scope_file.write_text("owner B", encoding="utf-8")
+    cross_scope_target = artifact_file_cleanup_target(
+        settings,
+        artifact_id="cross-scope",
+        file_path=str(cross_scope_file),
+        tenant_id="tenant-a",
+        owner_id="owner-a",
+    )
+    assert cross_scope_target is None
+    assert (
+        await replay_artifact_file_cleanup_target(
+            settings,
+            cross_scope_target,
+            tenant_id="tenant-a",
+            owner_id="owner-a",
+        )
+        == "unsafe"
+    )
+    assert cross_scope_file.read_text(encoding="utf-8") == "owner B"
+
+    scope_a = scoped_directory_for(settings.storage_dir, "tenant-a", "owner-a")
+    real_file = scope_a / "real.txt"
+    real_file.parent.mkdir(parents=True)
+    real_file.write_text("do not follow links", encoding="utf-8")
+    symlink = scope_a / "linked.txt"
+    try:
+        symlink.symlink_to(real_file)
+    except OSError:
+        return
+    symlink_target = artifact_file_cleanup_target(
+        settings,
+        artifact_id="symlink-artifact",
+        file_path=str(symlink),
+        tenant_id="tenant-a",
+        owner_id="owner-a",
+    )
+    assert symlink_target is None
+    assert (
+        await replay_artifact_file_cleanup_target(
+            settings,
+            symlink_target,
+            tenant_id="tenant-a",
+            owner_id="owner-a",
+        )
+        == "unsafe"
+    )
+    assert symlink.is_symlink()
+    assert real_file.read_text(encoding="utf-8") == "do not follow links"
+
+
+@pytest.mark.unit
+async def test_online_cleanup_retry_rejects_path_reuse_and_symlink_replacement(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        storage_dir=tmp_path / "storage",
+        skill_executor_build_dir=tmp_path / "skill_build",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    reused = settings.storage_dir / "agent_artifacts" / "reused-online.txt"
+    reused.parent.mkdir(parents=True)
+    reused.write_text("new owner data", encoding="utf-8")
+    reused_target = artifact_file_cleanup_target(
+        settings,
+        artifact_id="old-online-artifact",
+        file_path=str(reused),
+        tenant_id="legacy-local",
+        owner_id="legacy-local",
+    )
+    assert reused_target is not None
+    await ArtifactRepository(settings).save_artifact(
+        GeneratedArtifact(
+            artifact_id="new-online-artifact",
+            artifact_type="txt",
+            title="new path owner",
+            file_path=str(reused),
+            mime_type="text/plain",
+            size_bytes=reused.stat().st_size,
+            generation_latency_ms=0,
+            model="test",
+        )
+    )
+    assert (
+        await replay_artifact_file_cleanup_target(
+            settings,
+            reused_target,
+            tenant_id="legacy-local",
+            owner_id="legacy-local",
+        )
+        == "protected"
+    )
+    assert reused.read_text(encoding="utf-8") == "new owner data"
+
+    linked = settings.storage_dir / "agent_artifacts" / "linked-online.txt"
+    linked.write_text("old", encoding="utf-8")
+    linked_target = artifact_file_cleanup_target(
+        settings,
+        artifact_id="linked-online-artifact",
+        file_path=str(linked),
+        tenant_id="legacy-local",
+        owner_id="legacy-local",
+    )
+    assert linked_target is not None
+    linked.unlink()
+    outside = tmp_path / "outside-online.txt"
+    outside.write_text("outside", encoding="utf-8")
+    try:
+        linked.symlink_to(outside)
+    except OSError:
+        return
+    assert (
+        await replay_artifact_file_cleanup_target(
+            settings,
+            linked_target,
+            tenant_id="legacy-local",
+            owner_id="legacy-local",
+        )
+        == "unsafe"
+    )
+    assert linked.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+@pytest.mark.unit
+async def test_online_cleanup_lock_rejects_file_before_db_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "echo.db",
+        storage_dir=tmp_path / "storage",
+        skill_executor_build_dir=tmp_path / "skill_build",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert (await run_migrations(settings.db_path)).errors == []
+    old_artifact_id = "cleanup-window-old"
+    build_dir = settings.skill_executor_build_dir / old_artifact_id
+    build_dir.mkdir(parents=True)
+    output = build_dir / "output.txt"
+    output.write_bytes(b"old bytes")
+    target = artifact_file_cleanup_target(
+        settings,
+        artifact_id=old_artifact_id,
+        file_path=str(output),
+        tenant_id="legacy-local",
+        owner_id="legacy-local",
+    )
+    assert target is not None
+
+    deletion_entered = threading.Event()
+    registration_started = threading.Event()
+    writer_errors: list[BaseException] = []
+    replacement = GeneratedArtifact(
+        artifact_id="cleanup-window-new",
+        artifact_type="txt",
+        title="new writer",
+        file_path=str(output),
+        mime_type="text/plain",
+        size_bytes=16,
+        generation_latency_ms=0,
+        model="test",
+    )
+    original_rmtree = shutil.rmtree
+
+    def wait_for_file_before_db(path: Path) -> None:
+        deletion_entered.set()
+        assert registration_started.wait(timeout=2)
+        original_rmtree(path)
+
+    monkeypatch.setattr("app.artifacts.recovery.shutil.rmtree", wait_for_file_before_db)
+
+    def register_after_writing_file() -> None:
+        assert deletion_entered.wait(timeout=2)
+        output.write_bytes(b"new before db")
+        registration_started.set()
+        try:
+            asyncio.run(ArtifactRepository(settings).save_artifact(replacement))
+        except BaseException as exc:  # captured for assertion in the pytest thread
+            writer_errors.append(exc)
+
+    writer = threading.Thread(target=register_after_writing_file, daemon=True)
+    writer.start()
+    outcome = await replay_artifact_file_cleanup_target(
+        settings,
+        target,
+        tenant_id="legacy-local",
+        owner_id="legacy-local",
+    )
+    await asyncio.to_thread(writer.join, 3)
+
+    assert outcome == "deleted"
+    assert not writer.is_alive()
+    assert len(writer_errors) == 1
+    assert isinstance(writer_errors[0], ArtifactFileUnavailableError)
+    assert not output.exists()
+    assert await ArtifactRepository(settings).get_artifact(replacement.artifact_id) is None

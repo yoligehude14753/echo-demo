@@ -97,5 +97,19 @@ class GeneratedArtifact(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
+class GeneratedArtifactDTO(BaseModel):
+    """Client projection; public transports redact the server filesystem path."""
+
+    artifact_id: str
+    artifact_type: str
+    title: str = ""
+    file_path: str | None = None
+    mime_type: str
+    size_bytes: int
+    generation_latency_ms: float
+    model: str
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
 # 旧别名，避免下游引用断
 ArtifactResult = GeneratedArtifact

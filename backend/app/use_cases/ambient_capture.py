@@ -679,9 +679,10 @@ class AmbientCapturePipeline:
             ambient_text = " ".join(texts)
             duration_ms = max(0, max((s.end_ms for s in stt_segs), default=0))
             repository_stored: bool | None = None
+            ambient_segment_id: int | None = None
             if self._repo is not None:
                 try:
-                    await self._repo.append_ambient_segment(
+                    stored_id = await self._repo.append_ambient_segment(
                         audio_ref=audio_ref,
                         text=ambient_text,
                         captured_at=captured_dt,
@@ -689,22 +690,61 @@ class AmbientCapturePipeline:
                         speaker_label=speaker_label,
                         duration_ms=duration_ms,
                     )
+                    if not isinstance(stored_id, int) or stored_id <= 0:
+                        raise RuntimeError("ambient repository returned an invalid segment id")
+                    ambient_segment_id = stored_id
                     repository_stored = True
                 except Exception as e:
                     repository_stored = False
                     logger.warning("ambient repo persist failed: %s", e)
             rag_stored = False
-            try:
-                await self._rag.ingest_ambient_segment(
-                    ambient_text,
-                    captured_at=captured_at,
-                    audio_ref=audio_ref,
-                    speaker_id=speaker_id,
-                    speaker_label=speaker_label,
-                )
-                rag_stored = True
-            except Exception as e:
-                logger.warning("ambient RAG ingest failed: %s", e)
+            # A configured repository is authoritative.  If its append
+            # failed, there is no durable row/generation from which RAG can
+            # be repaired or deleted, so never create an orphan projection.
+            if repository_stored is not False:
+                try:
+                    await self._rag.ingest_ambient_segment(
+                        ambient_text,
+                        captured_at=captured_at,
+                        audio_ref=audio_ref,
+                        speaker_id=speaker_id,
+                        speaker_label=speaker_label,
+                        operation_id=(
+                            f"ambient-segment:{ambient_segment_id}"
+                            if ambient_segment_id is not None
+                            else None
+                        ),
+                    )
+                    rag_stored = True
+                except Exception as e:
+                    logger.warning("ambient RAG ingest failed: %s", e)
+                    if ambient_segment_id is not None and self._repo is not None:
+                        try:
+                            await self._repo.set_ambient_rag_projection(
+                                ambient_segment_id,
+                                state="index_failed",
+                                error=str(e),
+                            )
+                        except Exception as projection_exc:
+                            logger.warning(
+                                "ambient RAG failure state persist failed: %s",
+                                projection_exc,
+                            )
+                else:
+                    if ambient_segment_id is not None and self._repo is not None:
+                        try:
+                            await self._repo.set_ambient_rag_projection(
+                                ambient_segment_id,
+                                state="indexed",
+                                projected_at=datetime.now(UTC),
+                            )
+                        except Exception as projection_exc:
+                            # The INSERT left index_pending durable.  Repair can
+                            # replay the same operation_id without duplication.
+                            logger.warning(
+                                "ambient RAG success state persist failed: %s",
+                                projection_exc,
+                            )
 
             # DB 是正常运行时 authoritative store；RAG 是可修复 projection。
             # 仅在没有 repository 的显式降级/单测模式下才沿用 RAG 成功语义。

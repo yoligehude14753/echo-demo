@@ -12,6 +12,10 @@ from app.api import deps as deps_mod
 from app.config import Settings
 from app.main import _guard_sse_body, create_app
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
+from app.security.client_version import (
+    MINIMUM_PUBLIC_CLIENT_VERSION,
+    PUBLIC_CLIENT_VERSION_HEADER,
+)
 from app.security.models import Principal
 from fastapi.testclient import TestClient
 
@@ -40,7 +44,10 @@ def test_public_http_request_quota_is_enforced_per_principal(
     app = create_app()
     app.dependency_overrides[deps_mod.get_settings] = lambda: settings
 
-    with TestClient(app) as client:
+    with TestClient(
+        app,
+        headers={PUBLIC_CLIENT_VERSION_HEADER: MINIMUM_PUBLIC_CLIENT_VERSION},
+    ) as client:
         session_a_response = client.post(
             "/session/enroll",
             json={
@@ -135,7 +142,11 @@ async def test_public_stream_holds_request_and_expensive_leases_until_body_finis
     llm = GatedLLM()
     app.dependency_overrides[deps_mod.get_llm_singleton] = lambda: llm
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={PUBLIC_CLIENT_VERSION_HEADER: MINIMUM_PUBLIC_CLIENT_VERSION},
+    ) as client:
         enrolled = await client.post(
             "/session/enroll",
             json={

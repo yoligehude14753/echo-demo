@@ -110,11 +110,11 @@ class Settings(BaseSettings):
         return self.llm_main_api_key.strip() or self.yunwu_open_key.strip() or "EMPTY"
 
     # ── LLM 快速通道 ────────────────────────────────────────────────
-    # public demo 默认跟随 Yunwu 主通道，避免 eight fast LLM 未启动时影响可用性；
-    # 私有部署可在设置页改回 eight-local / vLLM 端点。
-    llm_fast_provider: str = "bj-model-gateway"
-    llm_fast_model: str = "qwen3-vl-8b-local"
-    llm_fast_base_url: str = "http://100.87.251.9:7920/v1"
+    # 默认跟随 Yunwu 主通道，避免私有 fast LLM 未启动时影响源码安装；
+    # 私有部署可在设置页改为自己的 vLLM / OpenAI-compatible 端点。
+    llm_fast_provider: str = "yunwu"
+    llm_fast_model: str = "MiniMax-M2.7"
+    llm_fast_base_url: str = "https://yunwu.ai/v1"
     llm_local_api_key: str = Field(default="EMPTY", repr=False)
     llm_fast_max_tokens: int = 512
     # STT/TTS/本地模型网关共享 token。历史 eight 裸服务不需要鉴权，adapter 会回退到
@@ -396,7 +396,6 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     web_search_top_n: int = 5
     tavily_api_key: str = Field(default="", repr=False)
-    web_arbitration_model: str = "qwen3-vl-8b-local"
 
     # ── Skill 执行器 ──────────────────────────────────────────────
     skill_ppt_tool: str = "pptxgenjs"
@@ -547,6 +546,7 @@ class Settings(BaseSettings):
     ws_replay_buffer_size: int = Field(default=200, ge=1)
     ws_send_timeout_s: float = Field(default=5.0, gt=0, le=60.0)
     ws_auth_revalidate_interval_s: float = Field(default=15.0, gt=0, le=300)
+    ws_client_frames_per_second: int = Field(default=20, ge=1, le=1000)
     execution_lease_ttl_s: float = Field(default=30.0, ge=5.0, le=300.0)
     execution_lease_heartbeat_s: float = Field(default=5.0, ge=1.0, le=60.0)
     # 所有可携带 body 的 HTTP 路由都在 Starlette 解析 JSON / multipart 前受保护。

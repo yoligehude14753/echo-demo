@@ -46,7 +46,24 @@ def physical_resource_id(
     """Map an untrusted logical id to a path-safe, scope-bound physical id."""
 
     resolved = principal or current_principal()
-    raw = f"{resolved.tenant_id}\0{resolved.owner_id}\0{kind}\0{logical_id}".encode()
+    return physical_resource_id_for(
+        logical_id,
+        kind=kind,
+        tenant_id=resolved.tenant_id,
+        owner_id=resolved.owner_id,
+    )
+
+
+def physical_resource_id_for(
+    logical_id: str,
+    *,
+    kind: str,
+    tenant_id: str,
+    owner_id: str,
+) -> str:
+    """Derive a physical id for one authoritative persisted principal scope."""
+
+    raw = f"{tenant_id}\0{owner_id}\0{kind}\0{logical_id}".encode()
     digest = hashlib.sha256(raw).hexdigest()[:32]
     safe_kind = "".join(ch for ch in kind.lower() if ch.isalnum() or ch == "-") or "resource"
     return f"{safe_kind}-{digest}"
@@ -55,6 +72,7 @@ def physical_resource_id(
 __all__ = [
     "SCOPES_DIRECTORY",
     "physical_resource_id",
+    "physical_resource_id_for",
     "scope_storage_key",
     "scope_storage_key_for",
     "scoped_directory",
