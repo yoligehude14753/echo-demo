@@ -13,6 +13,10 @@ from typing import Any
 
 PIN_RE_TEMPLATE = r"(?m)^{package}==([^\s;\\]+)"
 EXPIRY_RE = re.compile(r"Exception expires:\s*(\d{4}-\d{2}-\d{2})")
+LOCAL_PIN_RE = re.compile(
+    r"(?m)^([A-Za-z0-9_.-]+)==([^\s;+\\]+)\+([^\s;\\]+)(?=\s*(?:;|\\|$))"
+)
+AUDITABLE_LOCAL_BUILDS = {"torch": "cpu", "torchaudio": "cpu"}
 
 
 def fail(message: str) -> None:
@@ -71,6 +75,29 @@ def locked_versions(lock_path: Path, package: str) -> tuple[str, set[str]]:
             f"found {sorted(versions) or 'none'}"
         )
     return next(iter(public_versions)), versions
+
+
+def normalize_lock_for_audit(lock_path: Path, output_path: Path) -> None:
+    """Map reviewed CPU wheel local versions to their advisory public version.
+
+    pip-audit's PyPI vulnerability service does not index ``+cpu`` local build
+    labels.  The exact hashed install lock remains untouched and is still the
+    evidence authority; this derived copy is retained beside the raw report.
+    """
+
+    text = lock_path.read_text(encoding="utf-8")
+
+    def replace(match: re.Match[str]) -> str:
+        package, base, local = match.groups()
+        normalized_package = package.lower().replace("_", "-")
+        if AUDITABLE_LOCAL_BUILDS.get(normalized_package) != local:
+            fail(f"unreviewed local dependency build: {package}=={base}+{local}")
+        return f"{package}=={base}"
+
+    normalized, count = LOCAL_PIN_RE.subn(replace, text)
+    if "+cpu" in text and count == 0:
+        fail(f"{lock_path} contains an unrecognized CPU local-version pin")
+    output_path.write_text(normalized, encoding="utf-8")
 
 
 def validate_clean(report_path: Path, exit_path: Path) -> None:
@@ -158,13 +185,19 @@ def parser() -> argparse.ArgumentParser:
     exception.add_argument("--exception", type=Path, required=True)
     exception.add_argument("--package", required=True)
     exception.add_argument("--vulnerability", required=True)
+    normalize = subparsers.add_parser("normalize-lock")
+    normalize.add_argument("--lock", type=Path, required=True)
+    normalize.add_argument("--output", type=Path, required=True)
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        if args.mode == "clean":
+        if args.mode == "normalize-lock":
+            normalize_lock_for_audit(args.lock, args.output)
+            print(f"Prepared advisory audit input: {args.output}")
+        elif args.mode == "clean":
             validate_clean(args.report, args.exit_code)
             print(f"Validated clean pip-audit evidence: {args.report}")
         else:

@@ -1071,6 +1071,22 @@ test("raw pip-audit evidence permits only the explicit unpatched torch exception
       0,
       `${acceptedCpuBuild.stdout}\n${acceptedCpuBuild.stderr}`,
     );
+    const normalizedLock = path.join(root, "requirements-audit.lock");
+    const normalized = spawnSync(
+      python,
+      [
+        parser,
+        "normalize-lock",
+        "--lock",
+        lock,
+        "--output",
+        normalizedLock,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(normalized.status, 0, normalized.stderr);
+    assert.doesNotMatch(readFileSync(normalizedLock, "utf8"), /\+cpu/);
+    assert.match(readFileSync(lock, "utf8"), /torch==2\.11\.0\+cpu/);
 
     const unpinnedLocalBuild = structuredClone(torchFinding);
     unpinnedLocalBuild.dependencies[0].version = "2.11.0+cuda";
@@ -1087,6 +1103,22 @@ test("raw pip-audit evidence permits only the explicit unpatched torch exception
     ]);
     assert.notEqual(rejectedLocalBuild.status, 0);
     assert.match(rejectedLocalBuild.stderr, /unexpected exception finding/);
+
+    writeFileSync(lock, "torch==2.11.0+cuda ; sys_platform != 'darwin'\\\n");
+    const rejectedAuditInput = spawnSync(
+      python,
+      [
+        parser,
+        "normalize-lock",
+        "--lock",
+        lock,
+        "--output",
+        normalizedLock,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(rejectedAuditInput.status, 0);
+    assert.match(rejectedAuditInput.stderr, /unreviewed local dependency build/);
 
     const extraFinding = structuredClone(torchFinding);
     extraFinding.dependencies.push({

@@ -28,11 +28,7 @@ def _write_fixture(
         "torch==2.11.0\ntorchaudio==2.11.0\n",
         encoding="utf-8",
     )
-    index = (
-        "--extra-index-url https://download.pytorch.org/whl/cpu\n"
-        if include_cpu_index
-        else ""
-    )
+    index = "--extra-index-url https://download.pytorch.org/whl/cpu\n" if include_cpu_index else ""
     lock = (
         "--index-url https://pypi.org/simple\n"
         f"{index}\n"

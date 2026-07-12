@@ -118,10 +118,14 @@ jobs:
             local lock="$2"
             local report="$evidence/${label}.json"
             local exit_file="$evidence/${label}.exit-code"
+            local audit_input="$evidence/${label}.requirements-audit.lock"
             local audit_exit
+            python scripts/check-pip-audit-evidence.py normalize-lock \
+              --lock "$lock" \
+              --output "$audit_input"
             set +e
             pip-audit \
-              --requirement "$lock" \
+              --requirement "$audit_input" \
               --no-deps \
               --disable-pip \
               --strict \
