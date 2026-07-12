@@ -181,6 +181,10 @@ test("Android Gradle and package scripts separate development from public releas
     verificationMetadata,
     /junit-bom-5\.10\.2\.module[\s\S]*de23b114b3e4119a8fe6eb17bed5a3852816698bace67071579d6d927ebb080a/,
   );
+  assert.match(
+    verificationMetadata,
+    /aapt2-8\.13\.0-13719691-linux\.jar[\s\S]*c1aebd96a144313da65de675cc1f59041b41a52e844228d311bb580ed830b0d9/,
+  );
   assert.equal(
     pkg.scripts["app:build:android:development"],
     "node scripts/build-android-debug.cjs",
@@ -346,6 +350,7 @@ test("required CI and live workflows encode honest release and network gates", (
     path.join(desktopRoot, "scripts/windows-installed-smoke.ps1"),
     "utf8",
   );
+  const normalizedWindowsSmoke = windowsSmoke.replace(/\r\n?/g, "\n");
   const pkg = JSON.parse(
     readFileSync(path.join(desktopRoot, "package.json"), "utf8"),
   );
@@ -560,14 +565,29 @@ test("required CI and live workflows encode honest release and network gates", (
     windowsSmoke,
     /foreach \(\$artifact in @\(\$installedApp, \$installedBackend\)\)/,
   );
+  const silentInstallIndex = normalizedWindowsSmoke.indexOf(
+    "Invoke-CheckedNativeProcess @installParameters",
+  );
+  const installedVerificationIndex = normalizedWindowsSmoke.lastIndexOf(
+    "if ($authenticodeVerificationEnabled)",
+  );
+  const packagedCodeExecutionIndex = normalizedWindowsSmoke.indexOf(
+    "\n  Set-SmokeEnvironment\n",
+  );
   assert.ok(
-    windowsSmoke.indexOf("Invoke-CheckedNativeProcess @installParameters") <
-      windowsSmoke.lastIndexOf("if ($authenticodeVerificationEnabled)"),
+    [
+      silentInstallIndex,
+      installedVerificationIndex,
+      packagedCodeExecutionIndex,
+    ].every((index) => index >= 0),
+    "installed signing-order markers must all exist",
+  );
+  assert.ok(
+    silentInstallIndex < installedVerificationIndex,
     "installed Authenticode verification must happen after silent installation",
   );
   assert.ok(
-    windowsSmoke.lastIndexOf("if ($authenticodeVerificationEnabled)") <
-      windowsSmoke.indexOf("\n  Set-SmokeEnvironment\n"),
+    installedVerificationIndex < packagedCodeExecutionIndex,
     "installed Authenticode verification must happen before packaged code executes",
   );
   assert.match(migration, /workflow_dispatch:/);
@@ -630,6 +650,36 @@ test("public build content scans fail closed on missing roots and find errors", 
     assert.equal(typeof matches[0].run, "string");
     return matches[0].run;
   };
+  const assertStaticScanContract = (run, label, requiredNames) => {
+    assert.match(run, /^set -euo pipefail$/m, label);
+    assert.match(
+      run,
+      /scan_roots=\(desktop\/dist backend\/dist desktop\/release\)/,
+      label,
+    );
+    assert.match(
+      run,
+      /for scan_root in "\$\{scan_roots\[@\]\}"; do[\s\S]*test -d "\$\{scan_root\}" \|\| \{[\s\S]*exit 1[\s\S]*done/,
+      `${label} must reject a missing scan root`,
+    );
+    assert.match(run, /! -path '\*\/certifi\/cacert\.pem'/, label);
+    assert.doesNotMatch(
+      run,
+      /2>\/?dev\/null|\|\| true/,
+      `${label} must not silence content-scan errors`,
+    );
+    assert.match(
+      run,
+      /found="\$\(find "\$\{scan_roots\[@\]\}"[\s\S]*-print\)"$/m,
+      `${label} must capture a direct, fail-closed find command`,
+    );
+    for (const name of requiredNames) {
+      assert.ok(
+        run.includes(`-name '${name}'`),
+        `${label} must scan ${name}`,
+      );
+    }
+  };
   const guards = [
     {
       label: "linux CI",
@@ -669,27 +719,18 @@ test("public build content scans fail closed on missing roots and find errors", 
     },
   ];
   const root = mkdtempSync(path.join(os.tmpdir(), "echodesk-build-scan-gates-"));
-  const bash = process.platform === "win32" ? "bash.exe" : "bash";
+  const bash = "bash";
 
   try {
     for (const [index, contract] of guards.entries()) {
-      assert.match(contract.run, /^set -euo pipefail$/m, contract.label);
-      assert.match(
+      assertStaticScanContract(
         contract.run,
-        /scan_roots=\(desktop\/dist backend\/dist desktop\/release\)/,
         contract.label,
+        contract.requiredNames,
       );
-      assert.match(
-        contract.run,
-        /! -path '\*\/certifi\/cacert\.pem'/,
-        contract.label,
-      );
-      assert.doesNotMatch(contract.run, /2>\/?dev\/null|\|\| true/, contract.label);
-      for (const name of contract.requiredNames) {
-        assert.ok(
-          contract.run.includes(`-name '${name}'`),
-          `${contract.label} must scan ${name}`,
-        );
+
+      if (process.platform === "win32") {
+        continue;
       }
 
       const marker = contract.run.indexOf("scan_roots=(");
@@ -754,6 +795,21 @@ test("public build content scans fail closed on missing roots and find errors", 
       assert.notEqual(findFailure.status, 0, contract.label);
       assert.match(findFailure.stderr, /forced find failure/, contract.label);
     }
+
+    const failOpenCounterexample = guards[0].run.replace(
+      '-print)"',
+      '-print || true)"',
+    );
+    assert.notEqual(failOpenCounterexample, guards[0].run);
+    assert.throws(
+      () =>
+        assertStaticScanContract(
+          failOpenCounterexample,
+          "fail-open counterexample",
+          guards[0].requiredNames,
+        ),
+      /must not silence content-scan errors/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -159,10 +159,6 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
   await expect(page.getByTestId("mobile-backend-base")).toBeVisible();
 
   await page.keyboard.press("Escape");
-  if (await page.getByTestId("mobile-backend-base").isVisible()) {
-    const settingsDrawer = page.locator(".ant-drawer-content").filter({ has: page.getByTestId("mobile-backend-base") });
-    await settingsDrawer.locator(".ant-drawer-close").click();
-  }
   await expect(page.getByTestId("mobile-backend-base")).toBeHidden();
 
   await page.evaluate(() => {

@@ -33,6 +33,17 @@ function sameIdentity(stat, identity) {
   );
 }
 
+function sameCanonicalWorkspaceRootPath(
+  left,
+  right,
+  platform = process.platform,
+) {
+  // Windows realpath may preserve different casing than the configured path.
+  // Use the host path semantics without accepting a different canonical root.
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  return pathApi.relative(pathApi.resolve(left), pathApi.resolve(right)) === "";
+}
+
 async function verifyWorkspaceRootIdentity({
   root,
   expectedIdentity = null,
@@ -67,7 +78,7 @@ async function verifyWorkspaceRootIdentity({
     throw rootError("WORKSPACE_ROOT_INVALID", cause);
   }
   if (
-    canonical !== resolved ||
+    !sameCanonicalWorkspaceRootPath(canonical, resolved) ||
     !current.isDirectory() ||
     current.isSymbolicLink() ||
     !sameIdentity(current, identityFromStat(initial)) ||
@@ -80,5 +91,6 @@ async function verifyWorkspaceRootIdentity({
 
 module.exports = {
   WorkspaceRootIdentityError,
+  sameCanonicalWorkspaceRootPath,
   verifyWorkspaceRootIdentity,
 };

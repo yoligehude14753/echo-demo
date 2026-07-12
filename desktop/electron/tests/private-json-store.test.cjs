@@ -17,6 +17,12 @@ function fixture(t) {
   return { root, target: path.join(root, "workspaces.json") };
 }
 
+function assertPosixMode(target, expected) {
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(target).mode & 0o777, expected);
+  }
+}
+
 test("private JSON read refuses symlinks without touching their target", (t) => {
   const { root, target } = fixture(t);
   const outside = path.join(root, "outside.json");
@@ -28,7 +34,7 @@ test("private JSON read refuses symlinks without touching their target", (t) => 
     (error) => error.code === "PRIVATE_STORE_INVALID",
   );
   assert.equal(fs.readFileSync(outside, "utf8"), '{"secret":"unchanged"}');
-  assert.equal(fs.statSync(outside).mode & 0o777, 0o644);
+  assertPosixMode(outside, 0o644);
 });
 
 test("private JSON read verifies a regular inode and tightens legacy mode", (t) => {
@@ -36,7 +42,7 @@ test("private JSON read verifies a regular inode and tightens legacy mode", (t) 
   fs.writeFileSync(target, '{"schema":3}', { mode: 0o644 });
 
   assert.deepEqual(readPrivateJsonFile(target), { schema: 3 });
-  assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+  assertPosixMode(target, 0o600);
 });
 
 test("atomic private JSON write commits mode 0600 and leaves no temp file", (t) => {
@@ -50,6 +56,6 @@ test("atomic private JSON write commits mode 0600 and leaves no temp file", (t) 
     payload,
   );
   assert.deepEqual(JSON.parse(fs.readFileSync(target, "utf8")), payload);
-  assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+  assertPosixMode(target, 0o600);
   assert.deepEqual(fs.readdirSync(root), ["workspaces.json"]);
 });

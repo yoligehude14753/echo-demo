@@ -7,6 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  sameCanonicalWorkspaceRootPath,
   verifyWorkspaceRootIdentity,
 } = require("../workspace-root-identity.cjs");
 
@@ -19,6 +20,41 @@ function fixture(t) {
   fs.mkdirSync(outside);
   return { root: fs.realpathSync(root), outside: fs.realpathSync(outside) };
 }
+
+function createDirectoryLink(target, link) {
+  fs.symlinkSync(
+    target,
+    link,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+}
+
+test("canonical root comparison follows host path case semantics", () => {
+  assert.equal(
+    sameCanonicalWorkspaceRootPath(
+      "C:\\Users\\Alice\\Workspace",
+      "c:\\users\\alice\\workspace",
+      "win32",
+    ),
+    true,
+  );
+  assert.equal(
+    sameCanonicalWorkspaceRootPath(
+      "C:\\Users\\Alice\\Workspace",
+      "C:\\Users\\Alice\\Outside",
+      "win32",
+    ),
+    false,
+  );
+  assert.equal(
+    sameCanonicalWorkspaceRootPath(
+      "/Users/Alice/Workspace",
+      "/users/alice/workspace",
+      "linux",
+    ),
+    false,
+  );
+});
 
 test("workspace root identity persists dev/ino and rejects replacement", async (t) => {
   const { root } = fixture(t);
@@ -42,7 +78,7 @@ test("configured root swapped to an outside symlink never redefines authorizatio
       expectedIdentity: captured.identity,
       afterInitialLstat: async () => {
         fs.renameSync(root, `${root}.old`);
-        fs.symlinkSync(outside, root);
+        createDirectoryLink(outside, root);
       },
     }),
     (error) =>
@@ -54,7 +90,7 @@ test("configured root swapped to an outside symlink never redefines authorizatio
 test("a configured symlink root is rejected even before identity capture", async (t) => {
   const { root, outside } = fixture(t);
   fs.rmdirSync(root);
-  fs.symlinkSync(outside, root);
+  createDirectoryLink(outside, root);
   await assert.rejects(
     verifyWorkspaceRootIdentity({ root }),
     (error) => error.code === "WORKSPACE_ROOT_INVALID",

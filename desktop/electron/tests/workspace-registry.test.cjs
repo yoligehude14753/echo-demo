@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const test = require("node:test");
 
 const {
@@ -20,6 +21,10 @@ const {
 
 const ORIGIN_A = "https://workspace-a.example";
 const ORIGIN_B = "https://workspace-b.example";
+
+function hostAbsolutePath(...segments) {
+  return path.join(path.parse(process.cwd()).root, ...segments);
+}
 
 test("schema 2 workspace state migrates only into the active backend origin", () => {
   const registry = normalizedWorkspaceRegistry(
@@ -225,9 +230,14 @@ test("scan failures retain old mappings only inside configured failed subtrees",
 });
 
 test("pre-upload intent survives normalization before any remote side effect", () => {
-  const sourcePath = "/knowledge/current/brief.md";
+  const workspaceRoot = hostAbsolutePath("knowledge", "current");
+  const sourcePath = path.join(workspaceRoot, "brief.md");
   const pending = {
-    snapshot_path: "/tmp/echodesk-workspace-scan-crash/brief.snapshot",
+    snapshot_path: hostAbsolutePath(
+      "tmp",
+      "echodesk-workspace-scan-crash",
+      "brief.snapshot",
+    ),
     sha256: "a".repeat(64),
     size: 42,
     mtime: 1234,
@@ -244,7 +254,7 @@ test("pre-upload intent survives normalization before any remote side effect", (
       normalizedWorkspaceRegistry(null, ORIGIN_A),
       ORIGIN_A,
       {
-        workspaces: ["/knowledge/current"],
+        workspaces: [workspaceRoot],
         files: { [sourcePath]: { doc_id: "doc-old" } },
         doc_ids: ["doc-old"],
         pending_uploads: { [sourcePath]: pending },
@@ -259,9 +269,14 @@ test("pre-upload intent survives normalization before any remote side effect", (
 });
 
 test("crash projections preserve both ids before cleanup and converge after retry", () => {
-  const sourcePath = "/knowledge/current/brief.md";
+  const workspaceRoot = hostAbsolutePath("knowledge", "current");
+  const sourcePath = path.join(workspaceRoot, "brief.md");
   const pending = {
-    snapshot_path: "/tmp/echodesk-workspace-scan-crash/brief.snapshot",
+    snapshot_path: hostAbsolutePath(
+      "tmp",
+      "echodesk-workspace-scan-crash",
+      "brief.snapshot",
+    ),
     sha256: "b".repeat(64),
     size: 84,
     mtime: 4321,
@@ -274,7 +289,7 @@ test("crash projections preserve both ids before cleanup and converge after retr
     queued_at: 8765,
   };
   const before = {
-    workspaces: ["/knowledge/current"],
+    workspaces: [workspaceRoot],
     files: { [sourcePath]: { doc_id: "doc-old" } },
     doc_ids: ["doc-old"],
     pending_uploads: { [sourcePath]: pending },
@@ -302,8 +317,14 @@ test("crash projections preserve both ids before cleanup and converge after retr
 });
 
 test("clear can abandon an intent proven not to have started network upload", () => {
+  const clearSource = hostAbsolutePath("knowledge", "clear.md");
+  const ambiguousSource = hostAbsolutePath("knowledge", "ambiguous.md");
   const unstarted = {
-    snapshot_path: "/tmp/echodesk-workspace-scan-clear/unstarted.snapshot",
+    snapshot_path: hostAbsolutePath(
+      "tmp",
+      "echodesk-workspace-scan-clear",
+      "unstarted.snapshot",
+    ),
     sha256: "c".repeat(64),
     size: 1,
     mtime: 1,
@@ -317,27 +338,36 @@ test("clear can abandon an intent proven not to have started network upload", ()
   };
   const ambiguous = {
     ...unstarted,
-    snapshot_path: "/tmp/echodesk-workspace-scan-clear/ambiguous.snapshot",
+    snapshot_path: hostAbsolutePath(
+      "tmp",
+      "echodesk-workspace-scan-clear",
+      "ambiguous.snapshot",
+    ),
     file_name: "ambiguous.md",
     upload_started_at: 2,
   };
   const { state, abandonedSnapshotPaths } = abandonUnstartedWorkspaceUploads({
-    files: { "/knowledge/clear.md": { doc_id: "doc-old" } },
+    files: { [clearSource]: { doc_id: "doc-old" } },
     doc_ids: ["doc-old"],
     pending_uploads: {
-      "/knowledge/clear.md": unstarted,
-      "/knowledge/ambiguous.md": ambiguous,
+      [clearSource]: unstarted,
+      [ambiguousSource]: ambiguous,
     },
   });
 
   assert.deepEqual(abandonedSnapshotPaths, [unstarted.snapshot_path]);
-  assert.deepEqual(Object.keys(state.pending_uploads), ["/knowledge/ambiguous.md"]);
-  assert.equal(state.files["/knowledge/clear.md"].doc_id, "doc-old");
+  assert.deepEqual(Object.keys(state.pending_uploads), [ambiguousSource]);
+  assert.equal(state.files[clearSource].doc_id, "doc-old");
 });
 
 test("clear tombstones an ambiguous upload without blocking on immediate recovery", () => {
+  const ambiguousSource = hostAbsolutePath("knowledge", "ambiguous.md");
   const ambiguous = {
-    snapshot_path: "/tmp/echodesk-workspace-scan-clear/ambiguous.snapshot",
+    snapshot_path: hostAbsolutePath(
+      "tmp",
+      "echodesk-workspace-scan-clear",
+      "ambiguous.snapshot",
+    ),
     sha256: "d".repeat(64),
     size: 2,
     mtime: 2,
@@ -350,18 +380,15 @@ test("clear tombstones an ambiguous upload without blocking on immediate recover
     queued_at: 1,
   };
   const prepared = prepareWorkspaceUploadsForClear({
-    files: { "/knowledge/ambiguous.md": { doc_id: "doc-old" } },
+    files: { [ambiguousSource]: { doc_id: "doc-old" } },
     doc_ids: ["doc-old"],
-    pending_uploads: { "/knowledge/ambiguous.md": ambiguous },
+    pending_uploads: { [ambiguousSource]: ambiguous },
   });
 
   assert.deepEqual(prepared.abandonedSnapshotPaths, []);
   assert.equal(
-    prepared.state.pending_uploads["/knowledge/ambiguous.md"].clear_requested,
+    prepared.state.pending_uploads[ambiguousSource].clear_requested,
     true,
   );
-  assert.equal(
-    prepared.state.files["/knowledge/ambiguous.md"].doc_id,
-    "doc-old",
-  );
+  assert.equal(prepared.state.files[ambiguousSource].doc_id, "doc-old");
 });

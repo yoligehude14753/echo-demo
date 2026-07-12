@@ -32,6 +32,12 @@ function fixture(t) {
   };
 }
 
+function assertPosixMode(target, expected) {
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(target).mode & 0o777, expected);
+  }
+}
+
 test("workspace snapshot is bounded, hashed, private and detached from later source changes", async (t) => {
   const { root, snapshots } = fixture(t);
   const source = path.join(root, "brief.md");
@@ -47,7 +53,7 @@ test("workspace snapshot is bounded, hashed, private and detached from later sou
   assert.equal(fs.readFileSync(snapshot.path, "utf8"), "trusted content");
   assert.equal(snapshot.size, Buffer.byteLength("trusted content"));
   assert.equal(snapshot.sha256.length, 64);
-  assert.equal(fs.statSync(snapshot.path).mode & 0o777, 0o600);
+  assertPosixMode(snapshot.path, 0o600);
 });
 
 test("snapshot is acknowledged only after its parent directory fsync", async (t) => {
@@ -261,7 +267,7 @@ test("durable snapshot root is private and explicitly coexists with legacy tmp r
   const durableRoot = ensurePrivateWorkspaceSnapshotRoot(
     path.join(temp, "user-data", "workspace-upload-snapshots"),
   );
-  assert.equal(fs.statSync(durableRoot).mode & 0o777, 0o700);
+  assertPosixMode(durableRoot, 0o700);
 
   const durableDirectory = fs.mkdtempSync(
     path.join(durableRoot, WORKSPACE_SNAPSHOT_PREFIX),
@@ -383,9 +389,9 @@ test("failed retained-snapshot recovery does not delete a sibling intent", async
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), WORKSPACE_SNAPSHOT_PREFIX));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   fs.chmodSync(directory, 0o700);
-  const invalid = path.join(directory, "invalid.snapshot");
+  const invalid = path.join(directory, "invalid.txt");
   const sibling = path.join(directory, "sibling.snapshot");
-  fs.writeFileSync(invalid, "invalid", { mode: 0o644 });
+  fs.writeFileSync(invalid, "invalid", { mode: 0o600 });
   fs.writeFileSync(sibling, "recover me", { mode: 0o600 });
 
   assert.equal(await removeRetainedWorkspaceSnapshotFile(invalid), false);
