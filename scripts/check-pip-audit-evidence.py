@@ -54,13 +54,23 @@ def findings(dependencies: list[dict[str, Any]]) -> list[tuple[str, str, dict[st
     return result
 
 
-def locked_version(lock_path: Path, package: str) -> str:
+def public_version(version: str) -> str:
+    """Strip a PEP 440 local build suffix without weakening the base pin."""
+
+    return version.split("+", 1)[0]
+
+
+def locked_versions(lock_path: Path, package: str) -> tuple[str, set[str]]:
     pattern = re.compile(PIN_RE_TEMPLATE.format(package=re.escape(package)))
     matches = pattern.findall(lock_path.read_text(encoding="utf-8"))
-    versions = sorted(set(matches))
-    if len(versions) != 1:
-        fail(f"{lock_path} must pin exactly one {package} version; found {versions or 'none'}")
-    return versions[0]
+    versions = set(matches)
+    public_versions = {public_version(version) for version in versions}
+    if len(public_versions) != 1:
+        fail(
+            f"{lock_path} must pin one public {package} version; "
+            f"found {sorted(versions) or 'none'}"
+        )
+    return next(iter(public_versions)), versions
 
 
 def validate_clean(report_path: Path, exit_path: Path) -> None:
@@ -92,17 +102,19 @@ def validate_exception(
         fail(f"exception audit must contain exactly one finding, got {len(discovered)}")
 
     name, version, vulnerability = discovered[0]
-    expected_version = locked_version(lock_path, package)
+    expected_version, accepted_versions = locked_versions(lock_path, package)
     identifiers = {str(vulnerability.get("id", ""))}
     aliases = vulnerability.get("aliases", [])
     if not isinstance(aliases, list):
         fail("pip-audit vulnerability aliases must be an array")
     identifiers.update(str(alias) for alias in aliases)
-    if name != package or version != expected_version or vulnerability_id not in identifiers:
+    version_matches_lock = version == expected_version or version in accepted_versions
+    if name != package or not version_matches_lock or vulnerability_id not in identifiers:
         fail(
             "unexpected exception finding: "
             f"{name}=={version} ids={sorted(identifier for identifier in identifiers if identifier)}; "
-            f"expected {package}=={expected_version} containing {vulnerability_id}"
+            f"expected {package} in {sorted(accepted_versions)} "
+            f"(public {expected_version}) containing {vulnerability_id}"
         )
     fix_versions = vulnerability.get("fix_versions")
     if fix_versions != []:

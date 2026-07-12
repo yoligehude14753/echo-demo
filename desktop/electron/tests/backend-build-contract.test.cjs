@@ -11,6 +11,7 @@ const test = require("node:test");
 
 const { peMachine } = require("../../scripts/build-backend-win.cjs");
 const {
+  REQUIRED_CPU_DIARIZER_ENTRIES,
   verifyFrozenAnalysis,
 } = require("../../scripts/backend-frozen-contract.cjs");
 const {
@@ -99,22 +100,46 @@ test("package entry points cannot bypass the bundled backend verifier", () => {
   );
 });
 
-test("frozen backend manifest rejects unused optional audio runtimes", () => {
+test("frozen backend manifest preserves CPU diarization and rejects unused runtimes", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "echodesk-frozen-contract-"));
   const manifest = path.join(root, "Analysis-00.toc");
+  const required = REQUIRED_CPU_DIARIZER_ENTRIES.map(
+    (entry) => `('${entry}', '/tmp/${entry}.py', 'PYMODULE')`,
+  ).join(", ");
   try {
     writeFileSync(
       manifest,
-      "[['speech_recognition'], ('huggingface_hub.inference.automatic_speech_recognition', '/tmp/hf.py', 'PYMODULE'), ('app.main', '/tmp/app/main.py', 'PYMODULE')]\n",
+      `[['speech_recognition', 'torch._dynamo', 'nvidia'], ${required}, ` +
+        "('huggingface_hub.inference.automatic_speech_recognition', '/tmp/hf.py', 'PYMODULE')]\n",
     );
     assert.equal(verifyFrozenAnalysis(manifest), true);
     writeFileSync(
       manifest,
-      "[('speech_recognition/flac-mac', '/tmp/flac-mac', 'BINARY')]\n",
+      `[${required}, ('speech_recognition/flac-mac', '/tmp/flac-mac', 'BINARY')]\n`,
     );
     assert.throws(
       () => verifyFrozenAnalysis(manifest),
-      /forbidden optional audio runtime.*speech_recognition.*flac-mac/,
+      /forbidden optional or accelerator runtime.*speech_recognition.*flac-mac/,
+    );
+    writeFileSync(
+      manifest,
+      `[${required}, ('torch._dynamo.optimize', '/tmp/dynamo.py', 'PYMODULE'), ` +
+        "('nvidia/cublas.so', '/tmp/cublas.so', 'BINARY')]\n",
+    );
+    assert.throws(
+      () => verifyFrozenAnalysis(manifest),
+      /forbidden optional or accelerator runtime.*nvidia.*torch\._dynamo/,
+    );
+    writeFileSync(
+      manifest,
+      `[${required
+        .split(", ")
+        .filter((entry) => !entry.startsWith("('torchaudio'"))
+        .join(", ")}]\n`,
+    );
+    assert.throws(
+      () => verifyFrozenAnalysis(manifest),
+      /frozen CPU diarizer runtime is incomplete.*torchaudio/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -39,9 +39,28 @@ function sameCanonicalWorkspaceRootPath(
   platform = process.platform,
 ) {
   // Windows realpath may preserve different casing than the configured path.
-  // Use the host path semantics without accepting a different canonical root.
-  const pathApi = platform === "win32" ? path.win32 : path.posix;
-  return pathApi.relative(pathApi.resolve(left), pathApi.resolve(right)) === "";
+  // It can also return an extended-length `\\?\` spelling for the exact same
+  // drive/UNC path.  Normalize only that Windows namespace decoration before
+  // comparing; resolving `..` first keeps sibling paths distinct.
+  if (platform === "win32") {
+    const normalizeWindowsCanonicalPath = (value) => {
+      let normalized = path.win32.normalize(path.win32.resolve(value));
+      if (/^\\\\\?\\UNC\\/i.test(normalized)) {
+        normalized = `\\\\${normalized.slice(8)}`;
+      } else if (/^\\\\\?\\/i.test(normalized)) {
+        normalized = normalized.slice(4);
+      }
+      return normalized.toLowerCase();
+    };
+    return (
+      normalizeWindowsCanonicalPath(left) ===
+      normalizeWindowsCanonicalPath(right)
+    );
+  }
+  return (
+    path.posix.relative(path.posix.resolve(left), path.posix.resolve(right)) ===
+    ""
+  );
 }
 
 async function verifyWorkspaceRootIdentity({
@@ -55,7 +74,9 @@ async function verifyWorkspaceRootIdentity({
   const resolved = path.resolve(root);
   let initial;
   try {
-    initial = await fs.promises.lstat(resolved);
+    // Windows file IDs are 64-bit values.  BigIntStats prevents precision loss
+    // before the durable identity is serialized as a decimal string.
+    initial = await fs.promises.lstat(resolved, { bigint: true });
   } catch (cause) {
     throw rootError("WORKSPACE_ROOT_INVALID", cause);
   }
@@ -72,7 +93,7 @@ async function verifyWorkspaceRootIdentity({
   try {
     [canonical, current] = await Promise.all([
       fs.promises.realpath(resolved),
-      fs.promises.lstat(resolved),
+      fs.promises.lstat(resolved, { bigint: true }),
     ]);
   } catch (cause) {
     throw rootError("WORKSPACE_ROOT_INVALID", cause);

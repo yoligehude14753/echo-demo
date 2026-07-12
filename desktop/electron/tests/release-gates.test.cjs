@@ -364,6 +364,9 @@ test("required CI and live workflows encode honest release and network gates", (
   const linuxCi = ci
     .split("  desktop-linux-packaged-smoke:", 2)[1]
     .split("  desktop-linux-provenance:", 1)[0];
+  const androidCi = ci
+    .split("  android-tv:", 2)[1]
+    .split("  desktop-packaged-smoke:", 1)[0];
 
   assert.match(ci, /android-tv:\r?\n\s+name: Android \+ TV/);
   assert.match(ci, /permissions:\r?\n\s+contents: read/);
@@ -387,11 +390,18 @@ test("required CI and live workflows encode honest release and network gates", (
   }
   assert.match(ci, /export ECHO_USER_DIR="\$RUNNER_TEMP\/echodesk-deterministic"/);
   assert.match(ci, /npm run app:build:android:development/);
-  assert.match(ci, /:app:connectedDebugAndroidTest/);
-  assert.match(ci, /MODE="0666"/);
-  assert.match(ci, /test -r \/dev\/kvm/);
-  assert.match(ci, /test -w \/dev\/kvm/);
-  assert.match(ci, /disable-linux-hw-accel: false/);
+  assert.match(androidCi, /:app:connectedDebugAndroidTest/);
+  assert.match(androidCi, /if \[\[ ! -c \/dev\/kvm \]\]; then/);
+  assert.match(androidCi, /sudo chmod a\+rw \/dev\/kvm/);
+  assert.match(androidCi, /test -c \/dev\/kvm/);
+  assert.match(androidCi, /test -r \/dev\/kvm/);
+  assert.match(androidCi, /test -w \/dev\/kvm/);
+  assert.doesNotMatch(androidCi, /udevadm|\/etc\/udev\/rules/);
+  assert.ok(
+    androidCi.indexOf("enable and verify KVM for Android instrumentation") <
+      androidCi.indexOf("install pinned Android SDK components"),
+  );
+  assert.match(androidCi, /disable-linux-hw-accel: false/);
   assert.match(
     ci,
     /assembleRelease unexpectedly accepted missing stable signing inputs/,
@@ -632,6 +642,135 @@ test("required CI and live workflows encode honest release and network gates", (
   assert.doesNotMatch(migration, /set -x|echo "\$\{![^}]+\}"/);
   assert.match(playwright, /retries: 0/);
   assert.doesNotMatch(playwright, /retries: process\.env\.CI/);
+});
+
+test("Linux packaged CI fails fast on non-CPU Python dependencies before packaging", () => {
+  const document = yaml.load(
+    readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"),
+  );
+  const job = document.jobs?.["desktop-linux-packaged-smoke"];
+  assert.ok(job, "Linux packaged smoke job must exist");
+
+  const assertPreflightContract = (steps) => {
+    const stepByName = (name) => {
+      const matches = steps.filter((step) => step.name === name);
+      assert.equal(matches.length, 1, `expected exactly one ${name} step`);
+      return matches[0];
+    };
+    const stepIndex = (name) => steps.indexOf(stepByName(name));
+
+    const lockName =
+      "validate CPU-only Python locks before dependency installation";
+    const installName = "install clean Linux CPU build dependencies";
+    const runtimeName =
+      "verify installed Linux CPU-only runtime before packaging";
+    const frontendName = "install clean Linux frontend and smoke dependencies";
+    const electronName = "run Electron main-process contracts";
+    const buildName = "build x64 backend, AppImage and deb";
+    const unpackedSmokeName =
+      "unpacked Electron + bundled backend + artifact + persistence smoke";
+    const appImageSmokeName =
+      "extracted AppImage + bundled backend + artifact + persistence smoke";
+    const debSmokeName =
+      "installed deb + bundled backend + artifact + persistence smoke";
+
+    const lockIndex = stepIndex(lockName);
+    const installIndex = stepIndex(installName);
+    const runtimeIndex = stepIndex(runtimeName);
+    const frontendIndex = stepIndex(frontendName);
+    const electronIndex = stepIndex(electronName);
+    const buildIndex = stepIndex(buildName);
+    const unpackedSmokeIndex = stepIndex(unpackedSmokeName);
+    const appImageSmokeIndex = stepIndex(appImageSmokeName);
+    const debSmokeIndex = stepIndex(debSmokeName);
+    assert.ok(
+      lockIndex < installIndex,
+      "lock validation must run before Python dependency installation",
+    );
+    assert.ok(
+      installIndex < runtimeIndex,
+      "installed runtime verification must follow the hashed build-lock install",
+    );
+    assert.ok(
+      runtimeIndex < frontendIndex &&
+        runtimeIndex < electronIndex &&
+        runtimeIndex < buildIndex,
+      "CPU runtime verification must run before frontend setup, Electron contracts, and packaging",
+    );
+    assert.ok(
+      buildIndex < unpackedSmokeIndex &&
+        unpackedSmokeIndex < appImageSmokeIndex &&
+        appImageSmokeIndex < debSmokeIndex,
+      "Linux packaging must retain unpacked, extracted AppImage, and installed deb smoke states",
+    );
+
+    assert.equal(
+      stepByName(lockName).run.trim(),
+      "python scripts/check-python-locks.py",
+    );
+    assert.match(
+      stepByName(installName).run,
+      /python -m pip install --require-hashes -r backend\/packaging\/requirements-build\.lock/,
+      "build dependencies must come only from the hashed build lock",
+    );
+    const runtime = stepByName(runtimeName).run;
+    for (const assertion of [
+      'metadata.version("torch") == expected',
+      'metadata.version("torchaudio") == expected',
+      "torch.__version__ == expected",
+      "torchaudio.__version__ == expected",
+      "torch.version.cuda is None",
+      "torch.cuda.is_available() is False",
+      'name == "triton"',
+      'name.startswith(("cuda-", "nvidia-"))',
+      "assert not forbidden",
+    ]) {
+      assert.ok(
+        runtime.includes(assertion),
+        `CPU runtime preflight must enforce ${assertion}`,
+      );
+    }
+    assert.match(
+      runtime,
+      /expected = "2\.11\.0\+cpu"/,
+      "CPU runtime preflight must require the exact Linux wheel build",
+    );
+    assert.doesNotMatch(
+      stepByName(frontendName).run,
+      /pip install|requirements-build\.lock/,
+      "slow frontend setup must not defer Python dependency installation",
+    );
+  };
+
+  assertPreflightContract(job.steps);
+
+  const reordered = structuredClone(job.steps);
+  const lockIndex = reordered.findIndex((step) =>
+    step.name?.startsWith("validate CPU-only Python locks"),
+  );
+  const [lockStep] = reordered.splice(lockIndex, 1);
+  const buildIndex = reordered.findIndex(
+    (step) => step.name === "build x64 backend, AppImage and deb",
+  );
+  reordered.splice(buildIndex + 1, 0, lockStep);
+  assert.throws(
+    () => assertPreflightContract(reordered),
+    /lock validation must run before Python dependency installation/,
+  );
+
+  const weakened = structuredClone(job.steps);
+  const runtimeStep = weakened.find(
+    (step) =>
+      step.name === "verify installed Linux CPU-only runtime before packaging",
+  );
+  runtimeStep.run = runtimeStep.run.replace(
+    'expected = "2.11.0+cpu"',
+    'expected = "2.11.0"',
+  );
+  assert.throws(
+    () => assertPreflightContract(weakened),
+    /exact Linux wheel build/,
+  );
 });
 
 test("public build content scans fail closed on missing roots and find errors", () => {
@@ -908,6 +1047,46 @@ test("raw pip-audit evidence permits only the explicit unpatched torch exception
       "CVE-2025-3000",
     ]);
     assert.equal(accepted.status, 0, `${accepted.stdout}\n${accepted.stderr}`);
+
+    writeFileSync(
+      lock,
+      "torch==2.11.0 ; sys_platform == 'darwin'\\\n" +
+        "torch==2.11.0+cpu ; sys_platform != 'darwin'\\\n",
+    );
+    const cpuFinding = structuredClone(torchFinding);
+    cpuFinding.dependencies[0].version = "2.11.0+cpu";
+    writeFileSync(report, JSON.stringify(cpuFinding));
+    const acceptedCpuBuild = run("exception", [
+      "--lock",
+      lock,
+      "--exception",
+      exception,
+      "--package",
+      "torch",
+      "--vulnerability",
+      "CVE-2025-3000",
+    ]);
+    assert.equal(
+      acceptedCpuBuild.status,
+      0,
+      `${acceptedCpuBuild.stdout}\n${acceptedCpuBuild.stderr}`,
+    );
+
+    const unpinnedLocalBuild = structuredClone(torchFinding);
+    unpinnedLocalBuild.dependencies[0].version = "2.11.0+cuda";
+    writeFileSync(report, JSON.stringify(unpinnedLocalBuild));
+    const rejectedLocalBuild = run("exception", [
+      "--lock",
+      lock,
+      "--exception",
+      exception,
+      "--package",
+      "torch",
+      "--vulnerability",
+      "CVE-2025-3000",
+    ]);
+    assert.notEqual(rejectedLocalBuild.status, 0);
+    assert.match(rejectedLocalBuild.stderr, /unexpected exception finding/);
 
     const extraFinding = structuredClone(torchFinding);
     extraFinding.dependencies.push({

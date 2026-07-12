@@ -828,7 +828,7 @@ async function collectWorkspaceFiles(
   let stableAuthorizedRoot = canonicalAuthorizedRoot;
   try {
     [openedStat, openedCanonical] = await Promise.all([
-      fs.promises.lstat(root),
+      fs.promises.lstat(root, { bigint: true }),
       fs.promises.realpath(root),
     ]);
     if (!stableAuthorizedRoot) {
@@ -915,7 +915,7 @@ async function collectWorkspaceFiles(
 
   try {
     const [currentStat, currentCanonical] = await Promise.all([
-      fs.promises.lstat(root),
+      fs.promises.lstat(root, { bigint: true }),
       fs.promises.realpath(root),
     ]);
     if (

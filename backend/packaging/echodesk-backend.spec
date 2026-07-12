@@ -12,6 +12,24 @@ datas = collect_data_files(
 )
 binaries = []
 
+# SpeechBrain 1.1 resolves lazy exports by scanning its on-disk Python source
+# directories at import time.  Keep those small source files as data so the
+# frozen CPU diarizer has the same package layout without unpacking a model.
+datas.extend(collect_data_files("speechbrain", include_py_files=True))
+
+# EchoDesk's packaged diarizer is deliberately CPU eager-only.  SpeechBrain's
+# inference interface imports the core ``torch.distributed`` API even for one
+# local process, so that module must remain available.  Dynamo/Inductor are
+# reached only by ``torch.compile`` (disabled at both process and ECAPA
+# boundaries), while Triton/NVIDIA are accelerator runtimes absent from the
+# official CPU wheel selected by the hashed packaging lock.
+UNUSED_ACCELERATOR_MODULES = [
+    "nvidia",
+    "torch._dynamo",
+    "torch._inductor",
+    "triton",
+]
+
 # Artifact scripts are generated after the application has been frozen, so
 # PyInstaller cannot discover these imports through normal static analysis.
 # Collect their complete runtime explicitly, including package metadata and
@@ -57,7 +75,7 @@ a = Analysis(
     # SpeechRecognition, but EchoDesk's RAG contract intentionally excludes
     # audio files.  Collecting it would bundle an obsolete x86_64 flac-mac
     # helper into every platform build and break the arm64 release boundary.
-    excludes=["funasr", "speech_recognition"],
+    excludes=["funasr", "speech_recognition", *UNUSED_ACCELERATOR_MODULES],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

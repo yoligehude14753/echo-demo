@@ -272,6 +272,45 @@ def _validate_rag_parser_runtime(
     return parsed_chars
 
 
+def _validate_cpu_diarizer_runtime() -> dict[str, object]:
+    """Exercise the frozen ECAPA dependency boundary without fetching a model."""
+
+    import torch
+    import torch.distributed as distributed
+    import torchaudio
+    from speechbrain.inference.speaker import SpeakerRecognition
+
+    del SpeakerRecognition  # the model class import is the frozen SpeechBrain boundary
+    cuda_build = torch.version.cuda
+    cuda_available = bool(torch.cuda.is_available())
+    jit_enabled = bool(torch.jit._state._enabled)
+    if cuda_build is not None or cuda_available:
+        raise RuntimeError(
+            "packaged diarizer must use the official CPU torch runtime "
+            f"(cuda_build={cuda_build!r}, cuda_available={cuda_available})"
+        )
+    if jit_enabled:
+        raise RuntimeError("packaged diarizer unexpectedly enabled TorchScript")
+
+    with torch.no_grad():
+        probe = torch.tensor([[3.0, 4.0]], dtype=torch.float32)
+        normalized = torch.nn.functional.normalize(probe, dim=1)
+        norm = float(torch.linalg.vector_norm(normalized).item())
+    if abs(norm - 1.0) > 1e-6:
+        raise RuntimeError(f"packaged CPU eager tensor probe returned invalid norm {norm}")
+
+    return {
+        "cpu_only": True,
+        "cuda_available": cuda_available,
+        "cuda_build": cuda_build,
+        "distributed_available": bool(distributed.is_available()),
+        "jit_enabled": jit_enabled,
+        "torch_version": str(torch.__version__),
+        "torchaudio_version": str(torchaudio.__version__),
+        "vector_norm": norm,
+    }
+
+
 def run_artifact_runtime_smoke(raw_output_dir: str) -> int:
     """Generate and reopen deterministic artifacts using the packaged runtime."""
 
@@ -283,6 +322,7 @@ def run_artifact_runtime_smoke(raw_output_dir: str) -> int:
         artifacts["pptx"] = _generate_ppt_smoke_artifact(output_dir)
         sizes = _validate_smoke_artifacts(artifacts)
         parser_chars = _validate_rag_parser_runtime(output_dir, artifacts)
+        diarizer_runtime = _validate_cpu_diarizer_runtime()
         manifest = {
             "ok": True,
             "output_dir": str(output_dir),
@@ -290,6 +330,7 @@ def run_artifact_runtime_smoke(raw_output_dir: str) -> int:
                 kind: {"path": str(artifacts[kind]), "size_bytes": sizes[kind]}
                 for kind in sorted(artifacts)
             },
+            "diarizer_runtime": diarizer_runtime,
             "rag_parser_chars": parser_chars,
         }
         (output_dir / "artifact-runtime-smoke.json").write_text(

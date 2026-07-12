@@ -206,6 +206,22 @@ function validateArtifactRuntime(env) {
   if (manifest.ok !== true) {
     throw new Error("[linux-smoke] artifact runtime did not report success");
   }
+  const diarizer = manifest.diarizer_runtime;
+  if (
+    diarizer?.cpu_only !== true ||
+    diarizer.cuda_build !== null ||
+    diarizer.cuda_available !== false ||
+    diarizer.jit_enabled !== false ||
+    diarizer.distributed_available !== true ||
+    !String(diarizer.torch_version || "").startsWith("2.11.0") ||
+    !String(diarizer.torchaudio_version || "").startsWith("2.11.0")
+  ) {
+    throw new Error(
+      `[linux-smoke] packaged CPU diarizer runtime is invalid: ${JSON.stringify(
+        diarizer,
+      )}`,
+    );
+  }
   for (const kind of ["docx", "xlsx", "pdf", "pptx"]) {
     const artifact = manifest.artifacts?.[kind];
     if (
@@ -218,7 +234,7 @@ function validateArtifactRuntime(env) {
     }
   }
   console.log(
-    `[linux-smoke] artifact runtime PASS ${JSON.stringify(
+    `[linux-smoke] artifact + CPU diarizer runtime PASS ${JSON.stringify(
       Object.fromEntries(
         Object.entries(manifest.artifacts).map(([kind, value]) => [
           kind,

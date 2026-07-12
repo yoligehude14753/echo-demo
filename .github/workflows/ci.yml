@@ -290,6 +290,20 @@ jobs:
           java-version: "21"
           cache: gradle
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      - name: enable and verify KVM for Android instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -c /dev/kvm ]]; then
+            echo "GitHub hosted runner does not expose the required /dev/kvm device" >&2
+            exit 1
+          fi
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            sudo chmod a+rw /dev/kvm
+          fi
+          test -c /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
       - name: install pinned Android SDK components
         run: |
           sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.1.0" \
@@ -310,17 +324,6 @@ jobs:
             echo "assembleRelease unexpectedly accepted missing stable signing inputs" >&2
             exit 1
           fi
-      - name: enable and verify KVM for Android instrumentation
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -c /dev/kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
       - name: run Android identity instrumentation on emulator
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
@@ -462,12 +465,46 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: install clean Linux build and smoke dependencies
+      - name: validate CPU-only Python locks before dependency installation
+        run: python scripts/check-python-locks.py
+      - name: install clean Linux CPU build dependencies
         run: |
+          set -euo pipefail
           test "$(uname -m)" = "x86_64"
+          python -m pip install --require-hashes -r backend/packaging/requirements-build.lock
+      - name: verify installed Linux CPU-only runtime before packaging
+        run: |
+          python - <<'PY'
+          from importlib import metadata
+
+          import torch
+          import torchaudio
+
+          expected = "2.11.0+cpu"
+          assert metadata.version("torch") == expected, metadata.version("torch")
+          assert metadata.version("torchaudio") == expected, metadata.version("torchaudio")
+          assert torch.__version__ == expected, torch.__version__
+          assert torchaudio.__version__ == expected, torchaudio.__version__
+          assert torch.version.cuda is None, torch.version.cuda
+          assert torch.cuda.is_available() is False
+
+          installed = {
+              distribution.metadata["Name"].lower().replace("_", "-")
+              for distribution in metadata.distributions()
+              if distribution.metadata["Name"]
+          }
+          forbidden = sorted(
+              name
+              for name in installed
+              if name == "triton" or name.startswith(("cuda-", "nvidia-"))
+          )
+          assert not forbidden, f"accelerator packages installed: {forbidden}"
+          PY
+      - name: install clean Linux frontend and smoke dependencies
+        run: |
+          set -euo pipefail
           npm ci --prefix desktop
           npm ci --prefix backend/app/adapters/skill/assets/ppt_ib_deck
-          pip install --require-hashes -r backend/packaging/requirements-build.lock
           cd desktop
           npx playwright install-deps chromium
       - name: run Electron main-process contracts

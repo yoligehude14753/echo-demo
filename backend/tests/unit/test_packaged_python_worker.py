@@ -179,3 +179,12 @@ def test_artifact_runtime_smoke_generates_openable_office_pdf_and_pptx(
     assert manifest["artifacts"]["xlsx"]["size_bytes"] > 1_000
     assert manifest["artifacts"]["pdf"]["size_bytes"] > 100
     assert manifest["artifacts"]["pptx"]["size_bytes"] > 8_000
+    diarizer = manifest["diarizer_runtime"]
+    assert diarizer["cpu_only"] is True
+    assert diarizer["cuda_available"] is False
+    assert diarizer["cuda_build"] is None
+    assert diarizer["distributed_available"] is True
+    assert diarizer["jit_enabled"] is False
+    assert diarizer["torch_version"].startswith("2.11.0")
+    assert diarizer["torchaudio_version"].startswith("2.11.0")
+    assert diarizer["vector_norm"] == pytest.approx(1.0)
