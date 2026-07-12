@@ -134,7 +134,7 @@ bash scripts/collect-scenario-videos.sh   # 整理成 webm + mp4
 
 跑真实服务版本：
 ```bash
-cd backend && uvicorn app.main:app --port 8769   # 终端 1
+cd backend && uvicorn app.main:app --port 8769 --ws-max-size 4096   # 终端 1
 cd desktop && VITE_API_TARGET=http://localhost:8769 npm run dev -- --port 5173  # 终端 2
 npm run demo:record    # 跑 tests/e2e-real/demo-recording.spec.ts
 ```

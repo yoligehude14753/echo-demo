@@ -76,6 +76,9 @@ Principal = tenant_id + owner_id(user_id) + device_id + session_id + mode
 - public 首次 enroll 后创建 tenant、user、device、session family 和 device credential。
 - session token 只在签发时返回明文；服务端保存 hash。
 - renew、credential rotation、additional-device enrollment 和 revoke 都由服务端校验当前身份。
+- public HTTP 的 session/业务请求必须携带 `X-EchoDesk-Client-Version`，WebSocket `client_hello.client_version` 必填；缺失、非法或低于 `/bootstrap.minimum_client_version` 时分别以 HTTP `426` / WS `4426` fail closed，客户端进入升级态并停止重试。该自报版本只用于兼容性门禁，不是身份或授权凭据。
+- `/session`、`/session/enroll`、`/session/renew` 与 credential rotation 的 request body 使用独立 pre-auth admission pool。lease 从 principal 解析前持有到 route 完成 body 解析/响应；pool 有多个 slot 时，同一 peer 不能全部占满，普通已认证业务路由也不进入这个 pool。
+- Electron 身份 IPC 的成功响应必须携带主进程 credential vault 的 `backend_origin`；renderer 仅在它与当前请求 origin 完全一致时接纳 bearer。后端地址变化会关闭并代际废弃旧 WS、清 owner-scoped UI/cursor，再建立新 scope，旧 socket 的迟到 4426 不能污染新 origin。
 - 401 表示凭证失效或身份丢失，409 表示身份冲突；客户端不能静默换 owner 继续执行。
 - HTTP 和 WebSocket 在 transport boundary 验证后把 principal 绑定到 context；repository、RAG、Workflow 和 storage 从 context 读取 scope。
 
@@ -108,7 +111,7 @@ pending -> running -> succeeded
 ```
 
 - 终态 first-terminal-wins；晚到的冲突终态不会覆盖既有结果。
-- retry 创建新 run，通过 `parent_run_id` / attempt lineage 关联旧 run。
+- retry 创建新 run，通过 `parent_run_id` / attempt lineage 关联旧 run；永久 retry idempotency key 与继承的 `active_key` 共同仲裁 retry-vs-retry 和 fresh-create-vs-retry 并发。
 - `idempotency_key` 与 `active_key` 阻止同一 scope 的重复活动执行。
 - `revision` 保护并发状态更新；`deadline_at` 和 `cancel_requested_at` 保留恢复所需信息。
 
@@ -127,6 +130,8 @@ COMMIT
 ```
 
 任一步失败则整体 rollback。Artifact metadata/link、minutes tombstone、RAG lifecycle 等不能先独立成功再补写 run/event。
+
+retry 自身也是一个 Unit of Work：`BEGIN IMMEDIATE` 串行化 terminal parent 读取与 active-key 竞争，child run、parent `workflow.retry_created` event、对应 outbox 和可选 domain marker 一次提交。若 fresh create 已赢得同 scope 的 `active_key`，retry 返回冲突而不会产生第二个活动 run 或半条 lineage。
 
 ### 5.4 Transactional outbox
 
@@ -162,6 +167,10 @@ Agent terminal write 会在同一个 SQLite Unit of Work 中先仲裁并写入 l
 
 SQLite 是跨进程 commit point。每个实例比较 revision 并加载同一 manifest，查询不再依赖某个先启动的内存实例是否看见其他实例的增量。上传、删除、workspace scan 和 meeting projection 都经过 owner scope 与 workflow lifecycle。
 
+meeting projection 额外携带单调 `rag_projection_generation`；BM25 的 `bm25_document_projection_fences` 持久记录每个 scope/doc 的 generation 与 `index|delete` 意图，迟到 index/delete 不能覆盖新 generation。查询会把缓存 meeting 文档与 SQLite 当前 generation/state 对账，`delete_pending`、`delete_failed`、`deleted` 立即不可见，即使物理 cache 删除失败也 fail closed。
+
+meeting 与 ambient 的 pending/failed 投影都保存 attempts 和 next-retry 时间。启动及周期 repair 按 tenant/owner 合并 due scope、有界取数并退避重试；ambient 使用 `ambient-segment:<id>` 稳定 operation id，成功写入后崩溃重放也不会重复追加内容。schema 37 的旧 ambient 行先进入 `reconcile_pending`，按 owner scope、规范化时间与正文（以及仍存在时的 audio ref）核对旧 BM25 chunk；已有投影只确认状态，crash-gap 才补写稳定 operation。
+
 ## 7. Meeting、Artifact 与 Agent
 
 ### Meeting
@@ -169,7 +178,8 @@ SQLite 是跨进程 commit point。每个实例比较 revision 并加载同一 m
 - `meetings`、segments、speaker labels、ambient audio 都使用复合 scope key。
 - 同一 owner 只允许一个 active meeting。
 - 清空纪要写 `minutes_cleared_at` tombstone；恢复流程不能重新生成用户已清除的纪要。
-- meeting RAG projection 有显式 state/error/projected_at，可在重启后修复。
+- `minutes_generation_run_id` 标记当前纪要生成 owner。只有持有该 marker 的 run 能写 minutes 或清理 marker；取消、超时和失败通过 Workflow terminal projector 与 run/event/outbox 同一事务投影为 `generation_failed`，不会永久停在 generating。
+- meeting RAG projection 有显式 state/error/projected_at/attempt/generation，可在重启后按退避修复；显式清除先递增 generation 再投影 delete，阻止旧 finalize/repair 把内容写回。
 
 ### Artifact
 
@@ -194,6 +204,8 @@ React store 只保存当前视图和后端快照：
 - SSE 用于 Chat/RAG 无副作用读流；
 - Electron IPC 用于本机 backend、workspace、artifact、update、mic 和 credential vault。
 
+public Electron 的 workspace IPC 不直接复用 renderer fetch：主进程 transport 只接受无凭证的精确 HTTPS origin，要求 backend、credential vault、renderer expected origin 与 session `backend_origin` 四者一致，附加 client version + bearer，只允许一次 401 renew，拒绝全部 3xx，并让 timeout/cancel 覆盖响应体读取。workspace registry schema 3 按 origin 分区；每个 origin 的 mutation 串行化并持有代际 lease，切换 origin 会取消旧操作，失败的 orphan doc 删除保留到后续扫描继续回收。
+
 UI 采用 Session Navigation、Workbench、Inspector 三层结构。转写、助手、纪要和产物互不混排；内部 ID、原始异常和底层事件不直接暴露给普通用户。
 
 ## 9. 发布边界
@@ -212,10 +224,12 @@ UI 采用 Session Navigation、Workbench、Inspector 三层结构。转写、助
 
 ## 11. 架构门禁证据
 
-- Backend：`916 collected`，`18 live deselected`，确定性 `898 passed / 0 skipped`，coverage `87%`，进程自然退出。
-- Live GLM contract：`2 / 2 passed`。
-- Electron contracts：`70 passed`。
-- Desktop E2E：`95 passed`；scenarios：`29 passed`。
-- 真实安装态 GLM + AgentOS workflow：`1 / 1 passed`；packaged local smoke 通过。
+- Backend：`1045 collected`，`18 live deselected`，确定性 `1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors`，line coverage `87.46%`（终端显示 `87%`），进程自然退出；Ruff check、Ruff format `250 files`、mypy `128 source files` 与 compile 通过。
+- Electron contracts：`176 / 176 passed`；Desktop E2E：`150 passed`；scenarios：`29 passed`。
+- public isolation self-test 与双 principal 完整 smoke 通过；release aggregate `28 / 28 passed`，actionlint 与 action pins 通过。
+- Android / TV current exact-SHA phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列。debug APK 不可公开发布。
+- npm 两处为 `0` finding；Python six locks 均有效，runtime/dev/build 各有同一项上游无 `fix_versions` 的 `torch` `CVE-2025-3000`，受控例外至 2026-08-12，lint/typecheck/audit-tool 为 `0`。不得把该非零 Python 审计写成 clean 或零漏洞。
 
-这些数字描述当前源码快照，不替代跨平台 CI、签名、公开 Release 或生产可用性证据。
+以上 current exact-SHA 本地门禁由 [F-ECHO-028] 记录。macOS arm64 fresh ad-hoc DMG/ZIP、metadata/blockmap、codesign/plist/asar/forbidden scan、SBOM `1066` 与 SHA-256 通过，read-only DMG smoke `1 / 1`、安装态完整 workflow `1 / 1`、live contract `2 / 2` 均通过且 `0 skipped / 0 failed`。安装态 workflow 覆盖真实下载 `0600`、marker、安全文件名、无 partial，以及 GLM/RAG、失败注入、重启、retry 和 AgentOS success/cancel/timeout/restart。Developer ID、notary、staple、Gatekeeper 正式链路是 external skipped，ad-hoc 证据不等同正式签名发布。
+
+截至 2026-07-13，公共 Release / 生产 / bootstrap 仍分别为 `v0.2.50` / `0.2.49` / `0.2.45`，bootstrap 未声明 `minimum_client_version` [F-ECHO-029]。正式 signed cross-platform、受保护 environment/secret 和 public cutover 仍为外部阻塞；本段不替代跨平台 CI、签名、公开 Release 或生产可用性证据。

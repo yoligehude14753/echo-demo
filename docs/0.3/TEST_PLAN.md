@@ -1,6 +1,6 @@
 # EchoDesk 0.3 测试计划
 
-版本：0.3.1 | 状态：最终门禁 | 更新时间：2026-07-12
+版本：0.3.1 | 状态：当前本地源码门禁；等待 exact SHA 跨平台/发布证据 | 更新时间：2026-07-12
 
 ## 1. 测试原则
 
@@ -41,6 +41,7 @@ node desktop/scripts/check-version-sync.cjs
 - npm lock 只使用允许的官方 registry。
 - 6 份 Python requirements lock 带 hash 且与输入文件一致。
 - Desktop、Backend、Android、package-lock 和 Commitizen 版本一致。
+- migration catalog、空库建库与 037→038 真实升级都到 schema `038`；migration checksum、内容漂移和 adapter 预建 fence table 路径保持 fail closed/可升级。
 - dependency audit 的临时例外必须有 owner、缓解措施、过期日与 regression gate。
 
 ## 4. Backend 确定性全量门禁
@@ -57,6 +58,14 @@ npm ci --prefix backend/app/adapters/skill/assets/ppt_ib_deck
 
 ```bash
 cd backend
+TEST_ROOT="$(mktemp -d)"
+trap 'rm -rf "$TEST_ROOT"' EXIT
+export ECHO_USER_DIR="$TEST_ROOT"
+export DB_PATH="$TEST_ROOT/echodesk.db"
+export STORAGE_DIR="$TEST_ROOT/storage"
+export RAG_INDEX_DIR="$TEST_ROOT/rag_index"
+export WORKSPACE_STATE_FILE="$TEST_ROOT/workspace_state.json"
+export SKILL_EXECUTOR_BUILD_DIR="$TEST_ROOT/skill_build"
 export ECHO_RUN_NODE_INSTALL=1
 export ECHODESK_NODE_RUNTIME="$(command -v node)"
 export ECHODESK_NODE_RUNTIME_IS_ELECTRON=true
@@ -68,14 +77,17 @@ export ECHODESK_NODE_RUNTIME_IS_ELECTRON=true
 
 随后解析 JUnit：`failures=0`、`errors=0`、`skipped=0`。测试进程必须自然退出；打印绿色摘要后仍被非 daemon worker 卡住不算通过。
 
-当前最终结果：
+当前本地源码结果：
 
 ```text
-916 collected
+1045 collected
 18 live deselected
-898 passed
+1027 selected
+1027 passed
 0 skipped
-coverage 87%
+0 failed
+0 errors
+line coverage 87.46% (terminal display: 87%)
 process exited naturally
 ```
 
@@ -86,6 +98,8 @@ backend/.venv/bin/ruff check backend
 backend/.venv/bin/ruff format --check backend
 backend/.venv/bin/mypy backend/app
 ```
+
+当前结果：Ruff check 通过；Ruff format 检查 `250 files`；mypy 检查 `128 source files`；compile 通过。
 
 Architecture tests 额外约束：
 
@@ -101,8 +115,12 @@ Architecture tests 额外约束：
 - 两个 principal 不能互读/互写 meeting、RAG、Artifact、Workflow、Agent。
 - WebSocket 只能收到当前 scope event。
 - token/credential 只在正确 transport 位置接受；query/header 泄漏路径被拒绝。
+- 缺失、非法、过低或超长客户端版本统一为 HTTP 426 / WS 4426；客户端进入 upgrade-required 后不再 renew、发业务请求或重连。
+- Electron IPC 返回的 `backend_origin` 必须与 renderer 当前 origin 完全相等；A 的 bearer 不会到达 B。
+- backend origin 切换会关闭旧 WS、丢弃 stale close、清 owner-scoped store 并以新 cursor 重新连接。
 - renew、rotation、additional device、revoke 的 401/409/429 fail closed。
 - enrollment admission、quota 和 resource ticket 不能跨 owner 重放。
+- `/session` alias、enroll、renew 与 credential rotation 才进入 session-body pool；同 peer 慢 body 触发 peer 429 时其它 peer 和普通已认证业务仍可前进，body 取消或解析完成后 lease 必须释放。
 
 对应测试集中在：
 
@@ -121,6 +139,7 @@ test_scoped_event_bus.py
 
 - domain write 成功但 run/event/outbox 失败时整体 rollback。
 - revision/idempotency/active key 并发冲突。
+- retry 的 child、parent retry event/outbox 与 domain marker 必须同事务；两个独立 WorkflowService 的 retry-vs-retry、fresh-create-vs-retry 真并发只产生一个 active-key winner，lineage 和 outbox 完整。
 - lease 过期、heartbeat 丢失、旧 fence 写入被拒绝。
 - per-consumer、scope lane 和 global recovery 不丢消息、不永久阻塞健康 scope。
 - terminal first-wins；冲突晚到 terminal 被忽略。
@@ -144,6 +163,8 @@ test_agent_bridge_recovery.py
 - upload 超限、超时、取消和 ownership rollback。
 - workspace path、symlink 和 Artifact path 不能逃逸授权根。
 - SSE error/disconnect 不发送假 `done`。
+- meeting index→delete 与 delete→旧 index 两个竞态方向都由 generation fence 拒绝迟到操作；`delete_failed` 立即查询不可见且不能污染其它 owner。
+- meeting/ambient due scope 合并、有界排序、失败 attempts/next-retry 和恢复成功都可重放；ambient 稳定 operation id 在“索引成功、状态未提交”后重试不重复追加。
 
 对应测试：
 
@@ -161,6 +182,7 @@ test_ambient_storage_boundary.py
 
 - 同 scope 单 active meeting。
 - minutes tombstone 阻止恢复重建。
+- minutes run marker 只允许 owner run 写终态；取消、timeout、failure 与 Workflow terminal/event/outbox 同事务清理 generating，旧 run completion 不能覆盖显式 retry 或 clear。
 - Artifact staging、metadata、link、download 同 scope。
 - Agent Artifact declared/chunked oversize 与取消 cleanup。
 - bridge 过期 lease 自动接管。
@@ -180,7 +202,13 @@ cd backend
 1. 配置的 MAIN model 非流式与流式 chat 返回指定内容并报告 usage。
 2. 同一 model 生成真实 TXT Artifact，文件存在、size 匹配、内容通过断言。
 
-缺 key、provider 不可达、timeout 或格式失败都算失败，不允许 skip。当前 GLM 结果：`2 / 2 passed`。
+缺 key、provider 不可达、timeout 或格式失败都算失败，不允许 skip。current exact-SHA GLM live contract `2 / 2 passed`，`0 skipped / 0 failed` [F-ECHO-028]。
+
+GitHub 的 private-network speech/fast-model job 是可选外部门禁，只调度到同时带
+`echodesk-private-models` 与 `actions-runner-2-327-1` 标签的 self-hosted runner；后一个
+标签表示运维已核验 Actions Runner `>= 2.327.1`，以满足 Node 24 action runtime。没有该
+runner 时 job 必须记为 skipped/blocked，不能冒充云端通过；此前产品合同由本机可达的
+GLM-5.2 路径完成 `2 / 2` 实测，本轮 exact-SHA 结果以复验完成后的证据为准。
 
 其它 Yunwu、STT、TTS、Web provider 诊断测试保留为独立 reachability 信息，不替代这两条产品合同。
 
@@ -198,7 +226,7 @@ CI=1 NODE_ENV=test npm run e2e
 CI=1 NODE_ENV=test npm run scenarios
 ```
 
-当前结果：Electron `70 passed`；E2E `95 passed`；scenarios `29 passed`。
+当前结果：Electron `176 / 176 passed`；E2E `150 passed`；scenarios `29 passed` [F-ECHO-028]。
 
 覆盖：
 
@@ -206,16 +234,21 @@ CI=1 NODE_ENV=test npm run scenarios
 - WebSocket 4401/resync/reconnect/rehydrate；
 - Capture/Chat SSE/TTS/meeting detail 的 timeout、cancel 和 error；
 - onboarding、settings、workspace、Artifact preview、clear outputs；
+- public Electron workspace 的 exact HTTPS origin/vault/session fence、3xx 拒绝、单次 401 renew、426 terminal、response-size/timeout/cancel，以及 origin-scoped registry/mutation lease/orphan retry；
+- public 浏览器、Android 与 TV 的目录能力为 unavailable，不回退到服务器扫描，但上传文档管理保持可用；
 - 411/960/1280/1920 responsive 与 text overflow；
 - dialog/drawer accessible name、focus restore、icon label；
 - update downgrade protection；
 - public finalize 和 owner boundary。
+- public 426 / WS 4426 熔断、升级入口、origin switch 与 Electron A→B bearer 泄漏反例。
 
 ## 9. Packaged 与 installed
 
 ### Packaged local smoke
 
-验证安装包内 backend binary、版本、自定义端口、SQLite 写入、主要点击和退出后端口清理。它证明 packaging boundary，不验证真实模型和 Agent 长流程。
+验证安装包内 backend binary、版本、自定义端口、SQLite 写入、主要点击和退出后端口清理。Linux 分别验证 unpacked、AppImage 解包执行与真实安装 deb；Windows 分别验证 NSIS 安装态与 ZIP 解压执行。它证明 packaging boundary，不验证真实模型和 Agent 长流程。
+
+current exact-SHA macOS arm64 fresh ad-hoc DMG/ZIP、metadata/blockmap、codesign/plist/asar/forbidden scan、SBOM `1066` 与 SHA-256 全部通过；read-only mounted DMG smoke `1 / 1 passed` [F-ECHO-028]。
 
 ### Installed full workflow
 
@@ -229,7 +262,7 @@ CI=1 NODE_ENV=test npm run scenarios
 6. cancel、timeout 和 Workflow/Agent terminal 一致；
 7. 最终重启后仍能恢复全部持久状态。
 
-当前结果：`1 / 1 passed`。
+current exact-SHA 结果：`1 / 1 passed`。验证了真实下载文件 mode `0600`、marker、安全文件名、无残留 partial，以及 GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart [F-ECHO-028]。
 
 ## 10. Public isolation smoke
 
@@ -243,6 +276,8 @@ backend/.venv/bin/python scripts/public-isolation-smoke.py \
 
 验证双 principal 的 meeting、RAG、Artifact、Workflow、Agent、WS 隔离，并在结束后撤销 session family、清理可公开删除的测试资源。输出不能打印 bearer、credential 或正文。
 
+当前结果：self-test 与双 principal 完整 smoke 均通过。
+
 ## 11. 跨平台发布门禁
 
 | 平台 | 必跑 |
@@ -253,6 +288,12 @@ backend/.venv/bin/python scripts/public-isolation-smoke.py \
 | Android / TV | development build、identity instrumentation；release 使用稳定签名并校验产物 |
 
 任何平台“构建成功”都不能代替安装后启动、bundled backend、身份和持久化 smoke。
+
+Android / TV current exact-SHA：phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列。debug APK 不可作为公开发布资产。release aggregate `28 / 28 passed`，actionlint 与 action pins 通过 [F-ECHO-028]。
+
+依赖审计必须保留原始 exit code：desktop 与内置 `ppt_ib_deck` 的 npm audit 均为 `0` finding；Python six locks 均有效，runtime/dev/build 各仍报告同一项未修复且上游无 `fix_versions` 的 `torch` `CVE-2025-3000`，按 [`backend/SECURITY_DEPENDENCY_EXCEPTIONS.md`](../../backend/SECURITY_DEPENDENCY_EXCEPTIONS.md) 控制至 2026-08-12，lint/typecheck/audit-tool 为 `0`。不得把 Python 总体审计写成 clean 或零漏洞。
+
+Developer ID、notary、staple 与 Gatekeeper 正式链路因外部签名输入缺失而 skipped；ad-hoc 结果不可替代正式签名发布。截至 2026-07-13，公共 Release / 生产 / bootstrap 仍分别为 `v0.2.50` / `0.2.49` / `0.2.45`，bootstrap 未声明 `minimum_client_version` [F-ECHO-029]。正式 signed cross-platform、受保护 environment/secret 与 public cutover 仍是外部阻塞。
 
 ## 12. Agent 一致性门禁
 

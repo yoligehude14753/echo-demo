@@ -1,8 +1,8 @@
 # EchoDesk 0.3 文档包
 
-更新时间：2026-07-12 | 当前源码：`0.3.1`
+更新时间：2026-07-13 | 当前源码：`0.3.1`
 
-状态：确定性门禁、live GLM contract、packaged smoke 与真实安装态 GLM + AgentOS workflow 已通过；跨平台 CI、公开签名、Release 与公网切流按各自证据单独确认。
+状态：current exact-SHA Backend、Desktop、public isolation、release aggregate、Android / TV、macOS ad-hoc package / installed / live 门禁均已通过 [F-ECHO-028]。Developer ID、notary、staple、Gatekeeper 正式链路为 external skipped；正式跨平台签名、受保护 environment/secret、Release 与公网切流按各自证据单独确认。
 
 ## 1. 0.3 定位
 
@@ -37,11 +37,13 @@ Claude Code / AgentOS 保留 Full Access 主路径，但纳入 task、event、le
 - Meeting、segments、RAG、Artifact、Workflow、Agent、WebSocket 和 storage 按 tenant / owner scope。
 - session 支持 enroll、renew、claim、credential rotate、additional device 与 revoke。
 - admission、quota、resource ticket 与 host-admin policy fail closed。
+- session credential POST body 使用与普通 HTTP token lookup 分离的全局/peer admission pool；lease 覆盖 body 解析，慢 peer 不能挤占全部多-slot pool，也不阻塞普通已认证业务路由。
 
 ### Workflow Kernel
 
 - durable run/event、idempotency、revision、deadline、cancel、retry 和 lineage。
 - domain write、run/event 和 transactional outbox 使用同一个 SQLite Unit of Work。
+- retry 在 `BEGIN IMMEDIATE` 中提交 child、parent lineage event/outbox 与 domain marker；永久 retry key 和继承的 scoped `active_key` 仲裁 retry/fresh create 并发，只允许一个活动 run。
 - execution lease + fence + heartbeat 阻止多实例双执行。
 - per-consumer、scope lane 和 global lease recovery 处理 outbox 失败与慢消费者。
 
@@ -51,10 +53,13 @@ Claude Code / AgentOS 保留 Full Access 主路径，但纳入 task、event、le
 - `/rag/ask` 是随连接取消的 SSE 读流，只有 `done` 终帧代表完成。
 - SQLite manifest 与 revision 是跨进程 commit point，JSON index 是可重建 cache。
 - Query、Ambient、Meeting 不再各自维护互相不可见的事实源。
+- schema 038 为 meeting projection 增加 generation/CAS 和 BM25 index/delete fence；清除进入 pending/failed/deleted 后查询立即 fail closed，迟到投影不能复活旧内容。
+- meeting 与 ambient repair 持久化 attempts/next-retry；ambient 以 segment id 派生稳定 operation id，重启重放不重复追加。schema 37 旧行先 `reconcile_pending`，仅对没有旧 BM25 证据的 crash-gap 补写，已索引行不会重复。
 
 ### Meeting、Artifact 与 Agent
 
 - 同 owner 单 active meeting；纪要清除使用 durable tombstone。
+- 纪要生成由 `minutes_generation_run_id` 绑定当前 Workflow run；取消、超时、失败与 run/event/outbox 同事务写入可重试终态，旧 run 不能覆盖显式 retry。
 - Artifact metadata、link 和文件 staging 有统一提交边界。
 - Agent raw event 持久化后再投影；bridge 支持 lease、backoff 和 failover。
 - Agent Artifact 使用 bounded streaming import/proxy。
@@ -64,6 +69,8 @@ Claude Code / AgentOS 保留 Full Access 主路径，但纳入 task、event、le
 
 - Electron 默认 local-first，自包含 backend；public 模式必须显式设置 `ECHO_PUBLIC_DEMO=1`。
 - renderer 使用 session-aware、可取消、带超时和结构化错误的 transport。
+- public Electron workspace transport 严格绑定 HTTPS backend/vault/session/renderer origin，拒绝 redirect，只 renew 一次；registry schema 3 按 origin 分区并以串行 mutation lease 隔离迟到扫描。
+- public 浏览器、Android 与 TV 不回退到服务器目录扫描；上传文档和知识库管理仍可用。
 - WebSocket 收到 resync 后通过 REST 全量 rehydrate。
 - Android / TV 使用设备身份桥接；公开资产必须由稳定 release 身份签名并校验。
 
@@ -76,19 +83,28 @@ Claude Code / AgentOS 保留 Full Access 主路径，但纳入 task、event、le
 - 普通界面隐藏内部 ID、供应商实现、原始异常类名与低层 workflow 事件。
 - 覆盖 411、960、1280、1920 viewport，长文本有明确换行或省略行为。
 
-## 5. 最终门禁证据
+## 5. 当前本地门禁证据
 
 | 门禁 | 结果 |
 |---|---|
-| Backend deterministic | `916 collected`；`18 live deselected`；`898 passed / 0 skipped`；coverage `87%`；pytest 自然退出 |
-| Live GLM product contract | `2 / 2 passed` |
-| Electron main-process contracts | `70 passed` |
-| Desktop Playwright E2E | `95 passed` |
+| Backend deterministic | `1045 collected`；`18 live deselected`；`1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors`；line coverage `87.46%`（终端显示 `87%`）；pytest 自然退出 |
+| Backend static | Ruff check 通过；Ruff format `250 files`；mypy `128 source files`；compile 通过 |
+| Electron main-process contracts | `176 / 176 passed` |
+| Desktop Playwright E2E | `150 passed` |
 | Desktop scenarios | `29 passed` |
-| Installed GLM + AgentOS full workflow | `1 / 1 passed` |
-| Packaged local smoke | passed |
+| Public isolation | self-test 与双 principal 完整 smoke 通过 |
+| Release aggregate | `28 / 28 passed`；actionlint 与 action pins 通过 |
+| Android / TV current exact-SHA | phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)`、unsigned fail-closed 全部通过；lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列；debug APK 不可发布 |
+| Dependency audit | npm 两处 `0`；Python six locks 均有效，runtime/dev/build 各保留同一项上游无 `fix_versions` 的受控 `torch` `CVE-2025-3000` 至 2026-08-12，lint/typecheck/audit-tool 为 `0` |
+| current exact-SHA macOS package | fresh ad-hoc arm64 DMG/ZIP、metadata/blockmap、codesign/plist/asar/forbidden scan、SBOM `1066`、SHA-256 通过；read-only DMG smoke `1 / 1 passed` |
+| current exact-SHA installed / live | 完整 workflow `1 / 1 passed`，覆盖真实下载 `0600`、marker、安全文件名、无 partial、GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart；live `2 / 2 passed`、`0 skipped / 0 failed` |
+| 正式 Apple 签名链 | Developer ID、notary、staple、Gatekeeper：external skipped；ad-hoc 结果不可替代 |
 
 安装态完整 workflow 覆盖真实模型、Artifact 超时注入、退出重启、失败恢复、retry lineage、Agent 执行与 Artifact import、取消、超时及最终持久化恢复。packaged smoke 只验证打包边界，不替代该完整路径。
+
+公共兼容性门禁覆盖 HTTP 426、WS 4426、停止身份/业务/重连、Electron `backend_origin` 绑定和后端切换时清除旧 scope UI。当前 public isolation self-test 与双 principal 完整 smoke 已通过；这里仍只是本地源码/受控 smoke 证据。
+
+截至 2026-07-13，公共状态是 GitHub Release `v0.2.50`、生产 backend `0.2.49`、bootstrap `app_version=0.2.45` 且没有 `minimum_client_version` [F-ECHO-029]。正式 signed cross-platform、受保护 environment/secret 与 public cutover 仍为外部阻塞；最终 exact SHA、hosted 平台、签名资产与公网结果以最终交接文件为准。
 
 ## 6. Agent 一致性状态
 

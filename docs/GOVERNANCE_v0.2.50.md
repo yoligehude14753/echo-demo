@@ -1,19 +1,21 @@
-# EchoDesk v0.2.50 主线治理规范
+# EchoDesk v0.2.50 治理规范（冻结历史）
+
+> 本文只记录 v0.2.50 阶段的治理裁决，已被根目录 `PRD.md`、`ARCHITECTURE.md` 与 `docs/0.3/` 取代；下文出现的 Canonical、当前、主线和冲突仲裁措辞均不适用于 0.3.1。
 
 日期：2026-07-09  
 基准：`v0.2.50` / `e5574e9379e82f10057d5c84f401349c6f8e613b`  
-状态：Canonical baseline。`0.2.7` 线不再作为 EchoDesk 主线解释或继承。
+状态：冻结历史 baseline，不作为当前实现、版本或验收真源。
 
 ## 0. 基准裁决
 
-本仓库治理从现在起以 `v0.2.50` 为准。
+本仓库在该历史阶段以 `v0.2.50` 为准。
 
 约束：
 
 1. `desktop/package.json`、`backend/app/__init__.py`、README、Release 文档必须一致指向 `0.2.50`。
 2. 任何来自旧 `0.2.7`/heyi/ESP32/agent 实验线的代码，不允许直接混入主线。
 3. 若要重新引入实验线能力，必须先写 ADR，说明产品模式、数据 owner、交互契约、测试门禁和发布影响。
-4. `ARCHITECTURE.md`、本文和 README 的架构口径冲突时，以本文为治理裁决入口，再回写架构文档。
+4. 该阶段曾以本文作为冲突裁决入口；当前冲突以根目录 `ARCHITECTURE.md` 和 `PRD.md` 为准。
 5. 主线产品目标是 EchoDesk public demo/release：会议、持续采集、知识库、产物、桌面/Android/TV、更新和诊断。
 
 一句话架构：
@@ -502,13 +504,13 @@ pytest
 6. 加测试门禁。
 7. 最后再落代码。
 
-## 9. P0/P1 治理任务
+## 9. 历史 P0/P1 治理任务
 
 ### P0
 
 | 任务 | 说明 | 完成标准 |
 |---|---|---|
-| 固定 0.2.50 基线 | 当前分支必须以 `v0.2.50` 为基点 | `git describe --exact-match HEAD` 可见或 README/package 明确 |
+| 固定 0.2.50 基线 | 当时的治理分支以 `v0.2.50` 为基点 | `git describe --exact-match HEAD` 可见或 README/package 明确 |
 | 移除 0.2.7 混入 | 不再引用 0.2.7 为主线 | 文档/版本/branch clean |
 | 版本一致性 | frontend/backend/README/release 一致 | `npm run version:check` 通过 |
 | FactStore 初始化 | 按 monorepo 规则补 `_state/events` | health-check 通过 |
@@ -524,9 +526,9 @@ pytest
 | Architecture refresh | 回写 `ARCHITECTURE.md` | 与本文一致 |
 | Product mode ADR | 若引入实验线先裁决 | ADR 合并后再代码 |
 
-## 10. 当前分支状态
+## 10. 历史分支快照
 
-当前治理分支应满足：
+当时的治理分支应满足：
 
 ```text
 branch: codex/v0.2.50-governance
@@ -536,5 +538,4 @@ backend version: 0.2.50
 0.2.7 line: not part of mainline
 ```
 
-后续任何治理工作都从这个状态继续。
-
+该快照只用于追溯，不约束 0.3.1 及后续治理工作。

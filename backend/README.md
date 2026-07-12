@@ -34,7 +34,7 @@ cp ../.env.example ../.env
 # 确保 YUNWU_OPEN_KEY / TAVILY_API_KEY 已填
 
 # 3. 启动（canonical port = 8769，与 Electron / vite / playwright 对齐）
-uvicorn app.main:app --host 127.0.0.1 --port 8769
+uvicorn app.main:app --host 127.0.0.1 --port 8769 --ws-max-size 4096
 
 # 4. 自检
 curl http://localhost:8769/healthz
@@ -63,7 +63,7 @@ env \
   WEB_SEARCH_ENABLED=false \
   AGENT_OS_ENABLED=false \
   backend/.venv/bin/uvicorn app.main:app --app-dir backend \
-    --host 127.0.0.1 --port 18791
+    --host 127.0.0.1 --port 18791 --ws-max-size 4096
 ```
 
 服务的 `/readyz` 返回 200 后，在另一个终端运行：

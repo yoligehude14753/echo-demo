@@ -2,6 +2,12 @@
 
 本 SOP 使用 [`scripts/public-backend-deploy.sh`](../../scripts/public-backend-deploy.sh) 管理公共后端。目标是让代码、数据和凭证拥有不同生命周期：代码进入不可变的 versioned release；canary 使用独立端口、数据库和数据目录；生产切换只替换 `current` symlink；数据库与配置在停服后做一致快照。
 
+> **Breaking cutover：最低公共客户端版本 0.3.1。** 当前稳定版 v0.2.50 没有
+> enrollment / bearer session 协议，切到 0.3.1 公共后端后会被
+> `426 client_upgrade_required` fail closed。首次 bootstrap 前必须先公开可安装且已验证的
+> 0.3.1 GitHub prerelease（渠道可标 prerelease，包内必须自报 `0.3.1`），并完成所有仍声明支持的平台公共 transport 验证；不得把 v0.2.50 标记为
+> 兼容通过，也不得先切公网再补客户端。
+
 ## 安全不变量
 
 - release、canary、backup、deployment record 一旦存在就拒绝覆盖。
@@ -67,6 +73,14 @@ scripts/public-backend-deploy.sh --python /usr/bin/python3.11 self-test
 ## 首次从 legacy 迁移到 versioned layout
 
 当前服务器的 legacy `0.2.49` 不是可制作为 release 的 clean checkout，也不具备 `/readyz` 和公共身份隔离。因此不要尝试把它伪造成 baseline；首次切换使用 `bootstrap`，把首个已经通过隔离 canary 的安全版本直接设为 `current`。
+
+开始以下步骤前，先确认 GitHub prerelease 中存在与目标提交绑定、且包内自报 `0.3.1` 的客户端资产。
+Android 与 TV 必须分别完成真实覆盖升级和公共入口 transport smoke；每个仍公开声明支持的
+Desktop OS 也必须完成对应安装态验证。无法提供资产或验证的平台必须在切流前显式撤下支持
+声明，不能用另一个平台的一次安装代替。`/bootstrap` 必须返回
+`minimum_client_version=0.3.1`；缺失/非法/低版本请求必须返回带最低版本和升级链接的
+`426 client_upgrade_required`，受支持版本但无 session 的业务请求必须返回
+`401 session_required`。任一条件不满足都停止切流。
 
 当前 legacy 路径如下。这些路径是迁移输入，不是脚本的通用默认值：
 

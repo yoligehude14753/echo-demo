@@ -108,7 +108,7 @@ https://echodesk.yoliyoli.uk
 ```bash
 cd backend
 source .venv/bin/activate
-ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --port 8769
+ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --port 8769 --ws-max-size 4096
 ```
 
 然后在电视端 EchoDesk 设置里填电脑局域网地址，例如：

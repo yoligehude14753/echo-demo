@@ -1,5 +1,7 @@
 # Echo Demo · 开发计划（自上而下，按 PR 分批合并）
 
+> 冻结历史：本文是早期两周实施草案，不作为 0.3.1 当前计划、实现或验收真源。
+
 > **基准**：PRD v6.7.1 + ARCHITECTURE.md
 > **节奏**：2 周 14 PR
 > **commit 规范**：`feat(echodesk-<task-id>): 中文描述`
@@ -7,7 +9,7 @@
 
 ## PR 顺序（自上而下 + 自底向上交织）
 
-### Sprint 0：脚手架（Day 1，**当前 batch**）
+### Sprint 0：脚手架（Day 1，历史 batch）
 
 | PR | task-id | 内容 |
 |---|---|---|

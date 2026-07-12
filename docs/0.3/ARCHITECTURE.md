@@ -41,6 +41,8 @@ public principal 由服务端根据 bearer/session 验证产生：
 
 请求 body、query 和 WebSocket hello 中的逻辑 ID 只能作为资源标识，不能提升或替换 principal。HTTP/WS 验证成功后绑定 context；repository、runtime registry、RAG、Workflow、storage 和 event bus 从 context 获取 scope。
 
+public session credential POST 在 principal lookup 前进入独立 body admission：全局与 peer 同时限流，lease 覆盖 route 的 body 解析并在完成/取消时释放。该 pool 与普通 HTTP pre-auth lookup 分开；多-slot 配置下单个 peer 不能占满全部 slot，已有 bearer 的普通业务路由也不受其容量影响。
+
 隔离覆盖：
 
 - meeting、segments、speaker labels、ambient audio；
@@ -68,7 +70,7 @@ create -> pending -> running -> succeeded
 
 - first terminal wins；冲突的晚到 terminal 仅记录 debug/ignored 信息。
 - retry 创建新 run，保留 parent/attempt lineage。
-- active key 和 idempotency key 在当前 scope 内生效。
+- active key 和 idempotency key 在当前 scope 内生效；retry 使用永久派生 key 并继承 parent `active_key`，与 fresh create 竞争同一个唯一活动位置。
 - deadline、cancel request、revision 和 lease fence 都可持久化检查。
 
 ### 4.2 Atomic completion
@@ -83,6 +85,8 @@ create -> pending -> running -> succeeded
 6. commit 后再投影。
 
 Artifact staging、meeting minutes/tombstone、RAG lifecycle 等都遵守这个顺序。
+
+retry 不是事务外的“复制 run”：terminal parent 读取、child insert、parent retry event/outbox 与可选 domain marker 在同一个 `BEGIN IMMEDIATE` 内完成。两个 backend 实例同时发起 retry，或 fresh create 与 retry 同时竞争时，只允许一个 active-key winner；loser 不留下孤立 child 或缺 event 的 lineage。
 
 ### 4.3 Outbox 与慢消费者
 
@@ -102,6 +106,10 @@ ingest、delete、workspace scan、meeting projection 是 durable workflow。SQL
 
 JSON BM25 文件是原子替换的 cache；任意 backend 实例都根据 SQLite revision 加载同一 payload manifest。因此 Query、Ambient 与 Meeting 不再拥有互相不可见的独立索引。
 
+schema 038 为 meeting intent 增加单调 generation，并以 `bm25_document_projection_fences` 持久化每个 owner/doc 的 `index|delete` fence。迟到投影低于当前 generation 时是 no-op；同 generation 的相反意图也不能翻转。查询还会用 meeting 当前 state/generation 过滤缓存，delete pending/failed/deleted 在物理清理成功前就不可检索。
+
+meeting 与 ambient 都持久化 projection state、attempts 与 next retry。repair 先合并所有 due tenant/owner scope，再按时间和上限公平推进；ambient 使用 `ambient-segment:<id>` 作为稳定 operation id，使“BM25 成功、状态提交前崩溃”的重放保持幂等。schema 37 旧 ambient 行先标为 `reconcile_pending`，以 scope、规范化 captured time/text 和可用 audio ref 对账旧 chunk，避免把已索引历史全量重复追加。
+
 ### Read path
 
 `/rag/ask` 直接流式返回 provider delta、citations 和 terminal frame：
@@ -116,7 +124,8 @@ JSON BM25 文件是原子替换的 cache；任意 backend 实例都根据 SQLite
 - 同 tenant/owner 同时最多一个 active meeting。
 - capture 的原始流与 meeting finalize 分开；finalize/minutes 才进入 durable completion。
 - `minutes_cleared_at` 是用户清除纪要的 tombstone。
-- meeting RAG projection 记录 state/error/projected_at，启动恢复可以补投。
+- `minutes_generation_run_id`/`minutes_generation_cancelled_at` 将生成权和显式取消归属到具体 Workflow run。terminal projector 只有 marker 匹配时才把取消、超时或失败写成 `generation_failed`，并与 run/event/outbox 同事务提交。
+- meeting RAG projection 记录 state/error/projected_at/attempt/generation，启动和周期恢复可以补投；clear 先递增 generation，旧 finalize/repair completion 不能写回。
 - Artifact 文件先在安全 staging 生成，再原子登记 metadata 与 links。
 - UI 的 outputs 来自 Artifact/Agent/Workflow 持久投影，不从内存数组推断。
 
@@ -155,6 +164,14 @@ JSON BM25 文件是原子替换的 cache；任意 backend 实例都根据 SQLite
 - 411px：纵向组织，输入与主要操作保持可达。
 - TV：转写优先双栏，使用远距离可读尺寸。
 
+### Workspace capability
+
+- `host-backend`：local-first 或显式 self-hosted 服务使用后端授权目录。
+- `local-electron`：public Electron 在主进程读取用户选择的本机目录，并通过绑定当前 session 的安全 transport 上传。
+- `unavailable`：public 浏览器、Android 与 TV 不提供服务器目录扫描，但保留文件上传和知识库管理。
+
+public Electron transport 只接受精确无凭证 HTTPS origin；backend、vault、renderer expected origin 和 session `backend_origin` 必须相同，3xx 全部拒绝，401 最多 renew 一次，timeout/cancel 覆盖 body drain。registry schema 3 按 origin 分区；同 origin mutation 串行且持有 generation lease，origin 切换取消旧操作，失败 orphan cleanup 留待下次扫描重试。
+
 ## 9. 运行与发布模式
 
 | 模式 | 默认行为 |
@@ -182,4 +199,8 @@ JSON BM25 文件是原子替换的 cache；任意 backend 实例都根据 SQLite
 - Desktop 不混排转写、助手、纪要与产物。
 - 失败路径有反例测试和用户可执行恢复入口。
 
-当前证据：Backend `898 passed / 0 skipped`（`916 collected`、`18 live deselected`、coverage `87%`、自然退出）；GLM live `2 / 2`；Electron `70`；Desktop E2E `95`；scenarios `29`；真实安装态 workflow `1 / 1`；packaged smoke 通过。
+当前本地源码证据：Backend `1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors`（`1045 collected`、`18 live deselected`、line coverage `87.46%`，终端显示 `87%`，自然退出），Ruff check / format `250 files` / mypy `128 source files` / compile 通过；Electron `176 / 176`；Desktop E2E `150`；scenarios `29`；public isolation self-test 与双 principal 完整 smoke 通过；release aggregate `28 / 28`、actionlint 和 action pins 通过 [F-ECHO-028]。
+
+Android / TV current exact-SHA phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)`、unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列；debug APK 不可公开发布。npm 两处为 `0` finding；Python runtime/dev/build 各保留同一项受控 `torch` `CVE-2025-3000` 至 2026-08-12，且上游无 `fix_versions`；lint/typecheck/audit-tool 为 `0`，不能宣称 Python 总体 clean 或零漏洞。
+
+current exact-SHA macOS arm64 fresh ad-hoc DMG/ZIP、metadata/blockmap、codesign/plist/asar/forbidden scan、SBOM `1066` 与 SHA-256 通过；read-only DMG smoke `1 / 1`、安装态完整 workflow `1 / 1`、live `2 / 2` 均通过且 `0 skipped / 0 failed`。安装态覆盖真实下载 `0600`、marker、安全文件名、无 partial、GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart。Developer ID、notary、staple、Gatekeeper 正式链路 external skipped。公共 Release / 生产 / bootstrap 当前分别为 `v0.2.50` / `0.2.49` / `0.2.45`，bootstrap 未声明 `minimum_client_version` [F-ECHO-029]；正式 signed cross-platform、受保护 environment/secret、最终包与公网证据必须绑定最终 exact SHA，不能由本段替代。

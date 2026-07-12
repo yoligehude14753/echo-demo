@@ -2,7 +2,7 @@
 
 目标：从“会议输入”走到“纪要、知识问答、办公产物和 Agent 任务”，同时验证失败可见、重启可恢复和 owner scope 不串用。
 
-当前最终验收使用 GLM 完成 live contract 和安装态完整 workflow；产品合同本身是 OpenAI-compatible、provider-neutral，不要求代码默认模型必须是 GLM。
+current exact-SHA 已使用 GLM 完成 live contract 与安装态完整 workflow [F-ECHO-028]；产品合同本身是 OpenAI-compatible、provider-neutral，不要求代码默认模型必须是 GLM。本地 ad-hoc 结果不能替代正式 Apple 签名链、跨平台 hosted runner 或公共环境结果。
 
 ## 1. 选择 Demo 方式
 
@@ -66,7 +66,7 @@ cd <echo-repo>/backend
 1. 非流式与流式 chat 都返回指定内容并报告 usage；
 2. 同一模型生成真实 TXT Artifact，文件内容和 size 均通过。
 
-缺 key、timeout、返回空内容或 Artifact 不合格都算失败，不会 skip。当前最终证据为 GLM `2 / 2 passed`。
+缺 key、timeout、返回空内容或 Artifact 不合格都算失败，不会 skip。此前本地 live 记录为 GLM `2 / 2 passed`；本轮 exact-SHA 结果以复验完成后的证据为准。
 
 ## 5. 启动源码 Demo
 
@@ -75,7 +75,7 @@ cd <echo-repo>/backend
 ```bash
 cd <echo-repo>
 backend/.venv/bin/uvicorn app.main:app \
-  --app-dir backend --host 127.0.0.1 --port 8769
+  --app-dir backend --host 127.0.0.1 --port 8769 --ws-max-size 4096
 ```
 
 期望日志包含当前版本 `0.3.1`；健康检查：
@@ -108,8 +108,9 @@ npm run electron:dev
 2. 打开“设置 -> 工作区”，显式选择一个只含演示资料的目录。
 3. 扫描后在知识库中确认文档数量变化。
 4. 关闭设置，焦点回到触发位置。
+5. 若使用 public Electron，切换到另一个 staged HTTPS origin 后重新打开知识库，确认旧 origin 的目录、扫描进度和文档 registry 不会出现在新 origin；旧扫描应被取消。
 
-验收：没有内部路径溢出；知识库 dialog 与设置 drawer 的 accessible name 不冲突。
+验收：没有内部路径溢出；知识库 dialog 与设置 drawer 的 accessible name 不冲突。public 浏览器、Android 与 TV 不显示服务器目录扫描入口，仍可上传和管理知识文档。
 
 ### B. 会议到纪要
 
@@ -120,6 +121,8 @@ npm run electron:dev
 5. 在 Inspector 切换到“会议纪要”，等待生成完成。
 
 验收：历史会议出现真实段数/人数；纪要成功或显示明确失败与重试，不出现假“已完成”。
+
+测试环境还应各执行一次生成中取消和短 timeout：会议必须离开 `generating` 并显示可重试失败；只有显式 retry 创建的新 run 可以接管生成，旧 run 的迟到结果不能覆盖新结果或已清除纪要。
 
 ### C. 知识问答
 
@@ -159,6 +162,8 @@ npm run electron:dev
 4. 对失败任务点击重试。
 5. 再次退出并打开，确认成功结果仍在。
 
+恢复后额外确认：同一失败任务只有一个活动 retry；清除会议纪要后，即使旧索引删除失败或旧 finalize 迟到，知识问答也不能检索到该会议。恢复 RAG 后端后，meeting/ambient 的 pending/failed 投影应按持久队列继续修复，不要求重启某个内存 BM25 实例。
+
 ## 7. Packaged 与安装态
 
 构建 macOS 本机包：
@@ -175,12 +180,12 @@ ad-hoc 只用于本机验收，不等同于公开签名。
 
 ```bash
 cd <echo-repo>/desktop
-npm run e2e:real -- --grep "installed local workflow"
+npm run e2e:real -- --grep "installed app"
 ```
 
 该测试依赖已安装 App、隔离 data dir、真实 MAIN model 和 Agent runner。运行参数以测试文件与当前环境为准，不要把本机 key 写进脚本。
 
-当前最终结果：真实 GLM + AgentOS full workflow `1 / 1 passed`；packaged local smoke 通过。
+current exact-SHA 结果：真实 GLM + AgentOS full workflow `1 / 1 passed`；下载文件 mode `0600`、marker、安全文件名、无 partial，以及 GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart 均已验证 [F-ECHO-028]。
 
 ## 8. Public staged Demo
 
@@ -198,7 +203,11 @@ backend/.venv/bin/python scripts/public-isolation-smoke.py \
 - A 看不到 B 的会议、RAG、Artifact、Workflow、Agent；
 - A 的 WebSocket 不收到 B 的 event；
 - revoke 后旧 session 不能继续连接；
+- 缺失/旧客户端收到 HTTP 426、WS 4426，客户端停止 renew、业务与 WS 重连并显示升级入口；
+- Electron A 后端 session 不能被发送给 B，切换 origin 后旧 UI/WS scope 被清除；
 - 普通 principal 不能调用 host-admin Agent/文件能力。
+
+另外针对 session body admission 做慢请求验证：同一 peer 并发占用 `/session` 或 `/session/enroll` body slot 时，超过 peer 上限的请求返回可重试 429；其它 peer 仍能使用剩余全局 slot，已有 bearer 的普通业务请求也不被 session body pool 阻塞。取消慢 body 或 route 完成后，slot 必须立即可再次获取。
 
 ## 9. 失败判断
 
@@ -208,21 +217,38 @@ backend/.venv/bin/python scripts/public-isolation-smoke.py \
 - deterministic suite 有 skip；
 - SSE error 被 UI 显示为“已回答”；
 - Agent terminal 与 Workflow 永久不一致；
+- fresh create 与 retry 同时产生两个相同 `active_key` 的活动 run，或出现 child 已提交但 parent retry event/outbox 缺失；
+- 纪要取消/超时/失败后永久停在 `generating`，或旧 run 覆盖新 retry/清除结果；
 - 需要重启某个 RAG 内存实例才能看到新增内容；
+- 清除后的 meeting 因旧 generation/物理删除失败仍可检索，或 ambient repair 重放产生重复文档；
 - public 跨 principal 读写或订阅成功；
+- 单一 peer 的慢 session body 占满全部多-slot pool，或该 pool 阻塞普通已认证业务；
+- Electron workspace 把 A origin 的 bearer、目录 registry 或迟到扫描结果写入 B origin；
 - 安装包缺 bundled backend；
 - 未验证签名却写成公开可发布。
 
 ## 10. 当前门禁摘要
 
 ```text
-Backend: 916 collected / 18 live deselected / 898 passed / 0 skipped
-Coverage: 87%
+Backend: 1045 collected / 18 live deselected / 1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors
+Line coverage: 87.46% (terminal display: 87%)
 Backend process: natural exit
-Live GLM: 2 / 2
-Electron contracts: 70
-Desktop E2E: 95
+Backend static: Ruff pass / format 250 / mypy 128 / compile pass
+Electron contracts: 176 / 176
+Desktop E2E: 150
 Desktop scenarios: 29
-Installed GLM + AgentOS workflow: 1 / 1
-Packaged local smoke: passed
+Public isolation: self-test + dual-principal full smoke passed
+Release aggregate: 28 / 28; actionlint + action pins passed
+Android / TV current exact-SHA: phone + TV builds / JVM 4 / instrumentation 6 / APK 0.3.1 (301) / unsigned fail-closed passed
+Android lint aggregate: Fatal 0 / Error 0 / Warning 0; Capacitor Hint 2; debug APK is not publishable
+Dependency audit: npm 0 + 0; Python six locks valid; runtime/dev/build each retain the same controlled torch CVE-2025-3000 with no upstream fix_versions
+Current exact-SHA macOS package: fresh ad-hoc arm64 DMG + ZIP / metadata + blockmap / codesign + plist + asar + forbidden scan / SBOM 1066 / SHA-256 passed
+Read-only DMG smoke: 1 / 1 passed
+Installed full workflow: 1 / 1 passed
+Live contract: 2 / 2 passed / 0 skipped / 0 failed
+Developer ID / notary / staple / Gatekeeper: external skipped
 ```
+
+以上 current exact-SHA 本地结果由 [F-ECHO-028] 记录。Python `torch` 例外截至 2026-08-12，lint/typecheck/audit-tool 锁为 `0` finding，不能把 Python 总体审计写成 clean 或零漏洞。ad-hoc、unsigned 与 debug 结果均不能替代正式发布签名。
+
+截至 2026-07-13，公共 Release / 生产 / bootstrap 仍分别为 `v0.2.50` / `0.2.49` / `0.2.45`，bootstrap 未声明 `minimum_client_version` [F-ECHO-029]。正式 signed cross-platform、受保护 environment/secret 与 public cutover 仍是外部阻塞。

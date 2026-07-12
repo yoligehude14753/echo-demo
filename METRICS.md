@@ -31,7 +31,7 @@
 - 按 `kind`、运行模式、tenant 和 owner 聚合；不跨 tenant 合并资源明细。
 
 当前生产基线：**未知，尚未采集**。
-当前 release gate：真实安装态完整 workflow `1 / 1 passed`，只证明该验收路径。
+current exact-SHA release-gate 记录：真实安装态完整 workflow `1 / 1 passed`。该结果只证明受控验收路径，不代表生产基线。
 v0.3.1 发布后 30 天目标：`>= 95%`。
 频率：weekly；事故期间 daily。
 
@@ -75,6 +75,8 @@ v0.3.1 发布后 30 天目标：`>= 95%`。
 - admission 拒绝数与原因类别；
 - quota accepted/rejected 单位和 ledger reconciliation 差异；
 - 401 后仍继续使用旧 owner 的客户端行为数，目标为 `0`；
+- 426 / 4426 触发数、最低版本和客户端停止重试数；目标是旧客户端不产生后续 session / business / WS 尝试；
+- Electron `backend_origin` mismatch 拒绝数；目标是跨 origin bearer 发送数恒为 `0`；
 - 设备身份恢复/轮换失败率。
 
 当前 SQLite 已有 identity、admission、session 与 quota ledger；跨版本趋势面板尚未实现，不能把表存在写成生产 dashboard 已上线。
@@ -92,19 +94,26 @@ v0.3.1 发布后 30 天目标：`>= 95%`。
 
 ## 7. 发布门禁指标
 
-当前 v0.3.1 源码快照：
+当前 v0.3.1 本地源码与受控安装态快照 [F-ECHO-028]（跨平台 hosted runner 结果另列在最终交接）：
 
 | 门禁 | 结果 |
 |---|---|
-| Backend deterministic | `916 collected`；`18 live deselected`；`898 passed / 0 skipped`；coverage `87%`；进程自然退出 |
-| Live model contract | GLM `2 / 2 passed` |
-| Electron contracts | `70 passed` |
-| Desktop E2E | `95 passed` |
+| Backend deterministic | `1045 collected`；`18 live deselected`；`1027 selected / 1027 passed / 0 skipped / 0 failed / 0 errors`；line coverage `87.46%`（终端显示 `87%`）；进程自然退出 |
+| Backend static | Ruff check 通过；Ruff format `250 files`；mypy `128 source files`；compile 通过 |
+| Electron contracts | `176 / 176 passed` |
+| Desktop E2E | `150 passed` |
 | Desktop scenarios | `29 passed` |
-| Installed full workflow | GLM + AgentOS `1 / 1 passed` |
-| Packaged local smoke | passed |
+| Public isolation | self-test 与双 principal 完整 smoke 通过 |
+| Release aggregate | `28 / 28 passed`；actionlint 与 action pins 通过 |
+| Android / TV current exact-SHA | phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)`、unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列；debug APK 不可发布 |
+| Dependency audit | npm 两处 `0`；Python six locks 均有效，runtime/dev/build 各有同一项上游无 `fix_versions` 的受控 `torch` `CVE-2025-3000`，例外至 2026-08-12；lint/typecheck/audit-tool 为 `0` |
+| current exact-SHA macOS package | fresh ad-hoc arm64 DMG/ZIP、metadata/blockmap、codesign/plist/asar/forbidden scan、SBOM `1066`、SHA-256 通过；read-only DMG smoke `1 / 1 passed` |
+| current exact-SHA installed / live | 完整 workflow `1 / 1 passed`，覆盖真实下载 `0600`、marker、安全文件名、无 partial、GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart；live `2 / 2 passed`、`0 skipped / 0 failed` |
+| 正式 Apple 签名链 | Developer ID、notary、staple、Gatekeeper：external skipped；ad-hoc 结果不可替代 |
 
 这些结果是 release gate，不进入北极星生产分母。
+
+截至 2026-07-13，公共状态仍为 GitHub Release `v0.2.50`、生产 backend `0.2.49`、bootstrap `app_version=0.2.45` 且没有 `minimum_client_version` [F-ECHO-029]。正式 signed cross-platform 候选、受保护 environment/secret 与 public cutover 仍是外部阻塞；不能把本地、开发签名或 unsigned 结果计为正式发布通过。
 
 ## 8. 已知 P2 的专门监控
 
