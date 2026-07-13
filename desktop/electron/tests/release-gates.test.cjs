@@ -649,6 +649,148 @@ test("required CI and live workflows encode honest release and network gates", (
   assert.doesNotMatch(playwright, /retries: process\.env\.CI/);
 });
 
+test("CI platform builds stay independent and preserve failure diagnostics", () => {
+  const ci = yaml.load(
+    readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"),
+  );
+  const windows = yaml.load(
+    readFileSync(
+      path.join(repoRoot, ".github/workflows/build-windows-installer.yml"),
+      "utf8",
+    ),
+  );
+  const platformInput = ci.on?.workflow_dispatch?.inputs?.platform;
+  assert.equal(platformInput?.type, "choice");
+  assert.equal(platformInput?.default, "all");
+  assert.deepEqual(platformInput?.options, [
+    "all",
+    "backend",
+    "macos",
+    "linux",
+    "windows",
+    "android",
+  ]);
+  assert.equal(ci.concurrency?.["cancel-in-progress"], false);
+  assert.equal(ci.concurrency?.queue, "max");
+
+  const jobs = ci.jobs || {};
+  const selectors = new Map([
+    ["android-tv", "android"],
+    ["desktop-packaged-smoke", "macos"],
+    ["desktop-linux-packaged-smoke", "linux"],
+    ["desktop-windows-packaged-smoke", "windows"],
+  ]);
+  for (const [jobName, selector] of selectors) {
+    const job = jobs[jobName];
+    assert.ok(job, `${jobName} must exist`);
+    assert.equal(job.needs, undefined, `${jobName} must stay independent`);
+    assert.match(job.if, /github\.event_name != 'workflow_dispatch'/);
+    assert.match(job.if, /inputs\.platform == 'all'/);
+    assert.match(job.if, new RegExp(`inputs\\.platform == '${selector}'`));
+    assert.doesNotMatch(JSON.stringify(job), /continue-on-error/);
+  }
+
+  const requireFailureDiagnostics = (jobName, label) => {
+    const failureOrCancellation = "${{ failure() || cancelled() }}";
+    const steps = jobs[jobName]?.steps || [];
+    const collect = steps.find(
+      (step) => step.name === `collect ${label} smoke failure diagnostics`,
+    );
+    const upload = steps.find(
+      (step) => step.name === `upload ${label} smoke failure diagnostics`,
+    );
+    assert.equal(
+      collect?.if,
+      failureOrCancellation,
+      `${jobName} must collect on failure or cancellation`,
+    );
+    assert.match(collect?.run || "", /job-context\.txt/);
+    assert.equal(
+      upload?.if,
+      failureOrCancellation,
+      `${jobName} must upload on failure or cancellation`,
+    );
+    assert.match(upload?.uses || "", /^actions\/upload-artifact@[0-9a-f]{40}$/);
+    assert.match(upload?.with?.path || "", /runner\.temp/);
+    assert.equal(upload?.with?.["if-no-files-found"], "error");
+  };
+  requireFailureDiagnostics("android-tv", "Android");
+  requireFailureDiagnostics("desktop-packaged-smoke", "macOS");
+  requireFailureDiagnostics("desktop-linux-packaged-smoke", "Linux");
+
+  const backendFailureUpload = jobs["backend-test"].steps.find(
+    (step) => step.name === "upload backend test failure diagnostics",
+  );
+  const desktopFailureUpload = jobs["desktop-e2e"].steps.find(
+    (step) => step.name === "upload desktop E2E failure diagnostics",
+  );
+  for (const upload of [backendFailureUpload, desktopFailureUpload]) {
+    assert.equal(upload?.if, "${{ failure() || cancelled() }}");
+    assert.equal(upload?.with?.["if-no-files-found"], "error");
+  }
+
+  const windowsSteps = windows.jobs?.["build-windows"]?.steps || [];
+  const windowsCollect = windowsSteps.find(
+    (step) => step.name === "Collect Windows smoke failure diagnostics",
+  );
+  const windowsUpload = windowsSteps.find(
+    (step) => step.name === "Upload Windows installed smoke evidence",
+  );
+  assert.equal(windowsCollect?.if, "${{ failure() || cancelled() }}");
+  assert.match(windowsCollect?.run || "", /failure\.log/);
+  assert.equal(windowsUpload?.if, "always()");
+  assert.equal(windowsUpload?.with?.["if-no-files-found"], "error");
+
+  const requiredJobs = [
+    "backend-lint",
+    "backend-typecheck",
+    "backend-dependency-audit",
+    "backend-test",
+    "desktop-e2e",
+    "android-tv",
+    "desktop-packaged-smoke",
+    "desktop-linux-packaged-smoke",
+    "desktop-windows-packaged-smoke",
+  ];
+  assert.match(
+    jobs.check?.name || "",
+    /github\.event_name == 'workflow_dispatch'.*inputs\.platform != 'all'.*'manual platform check'.*\|\| 'check'/,
+  );
+  assert.equal(jobs.check?.if, "always()");
+  assert.deepEqual(jobs.check?.needs, requiredJobs);
+  const gate = jobs.check?.steps?.find((step) => step.name === "gate")?.run || "";
+  assert.match(gate, /event_name.*workflow_dispatch/);
+  assert.match(gate, /platform.*all/);
+  for (const jobName of requiredJobs) {
+    assert.match(gate, new RegExp(`needs\\.${jobName}\\.result`));
+  }
+
+  assert.equal(ci.permissions?.contents, "read");
+  assert.equal(jobs["desktop-windows-packaged-smoke"].with.publish_release, false);
+  const windowsPublishGuard = windowsSteps.find(
+    (step) => step.name === "Refuse unsigned public publishing",
+  );
+  assert.match(windowsPublishGuard?.if || "", /inputs\.publish_release == true/);
+  assert.match(windowsPublishGuard?.run || "", /exit 1/);
+  assert.match(
+    jobs["desktop-packaged-smoke"].steps
+      .map((step) => step.run || "")
+      .join("\n"),
+    /app:dist:mac:adhoc-test/,
+  );
+  assert.match(
+    jobs["android-tv"].steps.map((step) => step.run || "").join("\n"),
+    /assembleRelease unexpectedly accepted missing stable signing inputs/,
+  );
+  const candidateJobs = JSON.stringify(
+    [...selectors.keys()].map((jobName) => jobs[jobName]),
+  );
+  assert.doesNotMatch(
+    candidateJobs,
+    /contents["']?:["']?write|gh release (?:create|upload)|--publish (?!never)|publish_release["']?:true/i,
+  );
+});
+
 test("Linux packaged CI fails fast on non-CPU Python dependencies before packaging", () => {
   const document = yaml.load(
     readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"),

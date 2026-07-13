@@ -161,13 +161,34 @@ jobs:
             -ExpectedVersion $version `
             -EvidenceDirectory (Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence/portable")
 
+      - name: Collect Windows smoke failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence"
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          @(
+            "job=$env:GITHUB_JOB"
+            "run_id=$env:GITHUB_RUN_ID"
+            "sha=$env:GITHUB_SHA"
+          ) | Set-Content -LiteralPath (Join-Path $evidence "failure.log")
+          foreach ($source in @(
+            "desktop/test-results",
+            "desktop/playwright-report"
+          )) {
+            if (Test-Path $source) {
+              Copy-Item -Path $source -Destination $evidence -Recurse -Force
+            }
+          }
+
       - name: Upload Windows installed smoke evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: echodesk-windows-installed-smoke-evidence
           path: ${{ runner.temp }}/echodesk-windows-smoke-evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Guard public build contents
