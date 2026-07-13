@@ -1,3 +1,36 @@
+const { spawn } = require("node:child_process");
+
+function stopWindowsProcessTree(
+  proc,
+  { spawnProcess = spawn } = {},
+) {
+  if (!proc || !Number.isSafeInteger(proc.pid) || proc.pid <= 0) {
+    return Promise.reject(new Error("backend child has no valid Windows pid"));
+  }
+  return new Promise((resolve, reject) => {
+    let taskkill;
+    try {
+      // PyInstaller one-file executables use a bootloader parent plus the real
+      // application child. Killing only the process returned by Node can leave
+      // the server child listening after Electron exits, so terminate the
+      // complete descendant tree and wait for taskkill itself to finish.
+      taskkill = spawnProcess(
+        "taskkill.exe",
+        ["/PID", String(proc.pid), "/T", "/F"],
+        { windowsHide: true, stdio: "ignore" },
+      );
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    taskkill.once("error", reject);
+    taskkill.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`taskkill failed for backend process tree (exit ${code})`));
+    });
+  });
+}
+
 function stopBackendProcess(
   proc,
   {
@@ -5,9 +38,12 @@ function stopBackendProcess(
     cancel = clearTimeout,
     graceMs = 3_000,
     killWaitMs = 1_000,
+    platform = process.platform,
+    stopWindowsTree = stopWindowsProcessTree,
   } = {},
 ) {
   if (!proc || proc.exitCode !== null) return Promise.resolve();
+  if (platform === "win32") return stopWindowsTree(proc);
   return new Promise((resolve, reject) => {
     let finished = false;
     let forceTimer = null;
@@ -133,4 +169,8 @@ function createManualBackendRestart(options) {
   };
 }
 
-module.exports = { createManualBackendRestart, stopBackendProcess };
+module.exports = {
+  createManualBackendRestart,
+  stopBackendProcess,
+  stopWindowsProcessTree,
+};

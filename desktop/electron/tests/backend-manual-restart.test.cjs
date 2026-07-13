@@ -7,6 +7,7 @@ const test = require("node:test");
 const {
   createManualBackendRestart,
   stopBackendProcess,
+  stopWindowsProcessTree,
 } = require("../backend-manual-restart.cjs");
 
 class FakeChild extends EventEmitter {
@@ -173,6 +174,55 @@ test("backend stop escalates once and rejects before any replacement can spawn",
   assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
 });
 
+test("Windows backend stop delegates to a complete process-tree terminator", async () => {
+  const child = new FakeChild();
+  child.pid = 1234;
+  const calls = [];
+  await stopBackendProcess(child, {
+    platform: "win32",
+    stopWindowsTree: async (proc) => calls.push(proc.pid),
+  });
+  assert.deepEqual(calls, [1234]);
+  assert.deepEqual(child.signals, []);
+});
+
+test("Windows process-tree terminator waits for taskkill /T /F", async () => {
+  const taskkill = new EventEmitter();
+  const calls = [];
+  const stopped = stopWindowsProcessTree(
+    { pid: 4321, exitCode: null },
+    {
+      spawnProcess: (command, args, options) => {
+        calls.push({ command, args, options });
+        return taskkill;
+      },
+    },
+  );
+  assert.deepEqual(calls, [
+    {
+      command: "taskkill.exe",
+      args: ["/PID", "4321", "/T", "/F"],
+      options: { windowsHide: true, stdio: "ignore" },
+    },
+  ]);
+  taskkill.emit("exit", 0);
+  await stopped;
+});
+
+test("Windows process-tree terminator rejects an unverified taskkill failure", async () => {
+  const taskkill = new EventEmitter();
+  const child = { pid: 4321, exitCode: null };
+  const stopped = stopWindowsProcessTree(
+    child,
+    { spawnProcess: () => taskkill },
+  );
+  // The PyInstaller bootloader can exit before its server child. A taskkill
+  // failure must not be hidden merely because the directly spawned PID exited.
+  child.exitCode = 0;
+  taskkill.emit("exit", 1);
+  await assert.rejects(stopped, /taskkill failed/);
+});
+
 test("manual restart source contract cannot resolve Python before supervisor selection", () => {
   const source = readFileSync(path.resolve(__dirname, "../main.cjs"), "utf8");
   const handler = source
@@ -188,4 +238,11 @@ test("manual restart source contract cannot resolve Python before supervisor sel
   assert.match(source, /backendLifecycleGeneration/);
   assert.match(spawn, /supervised child is already running/);
   assert.ok(spawn.indexOf("bundledBackendExecutable()") < spawn.indexOf("resolvePython()"));
+});
+
+test("application shutdown waits for the shared backend process-tree stop", () => {
+  const source = readFileSync(path.resolve(__dirname, "../main.cjs"), "utf8");
+  const handler = source.split('app.on("before-quit"', 2)[1];
+  assert.match(handler, /stopBackendProcess\(proc, \{ graceMs: SIGKILL_GRACE_MS \}\)/);
+  assert.doesNotMatch(handler, /proc\.kill\(/);
 });

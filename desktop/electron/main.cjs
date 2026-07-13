@@ -2316,28 +2316,18 @@ function startExternalHealthWatcher() {
 
 // ---------- 进程生命周期 ----------
 
-function killBackendProc() {
-  if (!backendProc || backendProc.killed) {
+async function killBackendProc() {
+  if (!backendProc || backendProc.exitCode !== null) {
     backendProc = null;
     return;
   }
   const proc = backendProc;
   backendProc = null;
   try {
-    proc.kill("SIGTERM");
-  } catch {
-    /* ignore */
+    await stopBackendProcess(proc, { graceMs: SIGKILL_GRACE_MS });
+  } catch (error) {
+    log(`[backend] stop failed during recovery: ${safeFailureCode(error)}`);
   }
-  // 异步 SIGKILL 兜底，避免 uvicorn lifespan shutdown 卡住
-  setTimeout(() => {
-    if (proc && proc.exitCode === null) {
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
-    }
-  }, SIGKILL_GRACE_MS);
 }
 
 function stopBackendProcForRestart() {
@@ -2353,7 +2343,7 @@ function stopBackendProcForRestart() {
 async function handleBackendDeath(reason) {
   if (shuttingDown) return;
   stopHealthWatcher();
-  killBackendProc();
+  await killBackendProc();
 
   if (restartAttempts >= RESTART_BACKOFFS_MS.length) {
     // 3 次重启都没救活 → 进入 degraded，停止自动循环，等 renderer 手动触发
@@ -3138,8 +3128,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// 优雅退出：先通知 renderer（避免它弹"断开"红条），再 SIGTERM child，超时 SIGKILL，
-// 最后真正 app.quit()。preventDefault 第一次拦下 quit；等子进程清干净再放行。
+// 优雅退出：先通知 renderer（避免它弹"断开"红条），再停止完整 backend
+// process tree，最后真正 app.quit()。preventDefault 第一次拦下 quit；等子进程
+// 清干净再放行。Windows 的 PyInstaller one-file backend 有 bootloader + server
+// 两层进程，必须由 stopBackendProcess 使用 taskkill /T 一并回收。
 app.on("before-quit", (event) => {
   if (quittingForReal) return;
   shuttingDown = true;
@@ -3147,7 +3139,7 @@ app.on("before-quit", (event) => {
   stopHealthWatcher();
   stopExternalHealthWatcher();
 
-  if (!backendProc || backendProc.killed) {
+  if (!backendProc || backendProc.exitCode !== null) {
     quittingForReal = true;
     return;
   }
@@ -3155,12 +3147,11 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   const proc = backendProc;
   backendProc = null;
-  log("[backend] SIGTERM child (graceful)");
-  try {
-    proc.kill("SIGTERM");
-  } catch (e) {
-    log(`[backend] SIGTERM failed: ${e.message}`);
-  }
+  log(
+    process.platform === "win32"
+      ? "[backend] stopping Windows process tree"
+      : "[backend] SIGTERM child (graceful)",
+  );
 
   let finished = false;
   const finalize = () => {
@@ -3169,19 +3160,9 @@ app.on("before-quit", (event) => {
     quittingForReal = true;
     app.quit();
   };
-  const t = setTimeout(() => {
-    if (proc && proc.exitCode === null) {
-      log("[backend] grace expired, SIGKILL");
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
-    }
-    finalize();
-  }, SIGKILL_GRACE_MS);
-  proc.once("exit", () => {
-    clearTimeout(t);
-    finalize();
-  });
+  void stopBackendProcess(proc, { graceMs: SIGKILL_GRACE_MS })
+    .catch((error) => {
+      log(`[backend] stop failed: ${safeFailureCode(error)}`);
+    })
+    .finally(finalize);
 });
