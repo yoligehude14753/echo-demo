@@ -27,7 +27,6 @@ import {
   generateArtifact,
   ingestFile,
   listRagDocs,
-  memoryRecall,
   ragAsk,
   routeIntent,
   workspaceStatus,
@@ -624,18 +623,16 @@ export default function CommandBar(): JSX.Element {
         }
         message.info("正在检索相关资料…");
 
-        void memoryRecall(question, conversationId, messageId)
-          .then(emitMemoryFrame)
-          .catch((error) => {
-            console.warn("[command-bar] memory recall degraded", error);
-          });
-
         // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
         // 让 RAG 覆盖整个文件夹，而不是只能用一两个手动上传的 PDF。
         // 不阻塞 ragAsk 主链路（并发触发）。
         void maybePromptWorkspaceConfig(originGeneration);
 
-        void ragAsk(question)
+        void ragAsk(question, {
+          conversationId,
+          messageId,
+          onMemoryFrame: emitMemoryFrame,
+        })
           .then((ans) => {
             if (!isCurrent(originGeneration)) return;
             applyEvent({

@@ -163,6 +163,7 @@ class MemoryService:
         if not candidates:
             return [], False
         timeout_s = self.settings.memory_small_model_timeout_s
+        model_candidates = candidates[: self.settings.memory_small_model_candidate_limit]
         system = MEMORY_ASSOCIATION_PROMPT.replace("{limit}", str(limit))
         payload = {
             "query": query,
@@ -175,7 +176,7 @@ class MemoryService:
                     "source_ref": item.source_ref,
                     "occurred_at": item.occurred_at.isoformat(),
                 }
-                for item in candidates
+                for item in model_candidates
             ],
         }
         try:
@@ -194,7 +195,13 @@ class MemoryService:
                     timeout_s=timeout_s,
                 )
             parsed = _safe_json(response.content)
-            return self._validated_matches(parsed, candidates, limit), True
+            validated = self._validated_matches(parsed, model_candidates, limit)
+            fallback = self._fallback_matches(query, candidates, limit)
+            used = {item.candidate.candidate_id for item in validated}
+            combined = validated + [
+                item for item in fallback if item.candidate.candidate_id not in used
+            ]
+            return sorted(combined, key=lambda item: item.score, reverse=True)[:limit], True
         except Exception as error:
             logger.warning("memory association fell back: %s", _bounded_error(error))
             return self._fallback_matches(query, candidates, limit), False
