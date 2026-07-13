@@ -1,6 +1,6 @@
 # EchoDesk 0.3 测试计划
 
-版本：0.3.1 | 状态：当前本地源码门禁；等待 exact SHA 跨平台/发布证据 | 更新时间：2026-07-12
+版本：0.3.2 | 状态：当前源码契约；等待 039 功能、exact SHA 跨平台与发布证据 | 更新时间：2026-07-13
 
 ## 1. 测试原则
 
@@ -41,7 +41,7 @@ node desktop/scripts/check-version-sync.cjs
 - npm lock 只使用允许的官方 registry。
 - 6 份 Python requirements lock 带 hash 且与输入文件一致。
 - Desktop、Backend、Android、package-lock 和 Commitizen 版本一致。
-- migration catalog、空库建库与 037→038 真实升级都到 schema `038`；migration checksum、内容漂移和 adapter 预建 fence table 路径保持 fail closed/可升级。
+- migration catalog、空库建库与 038→039 真实升级都必须到 schema `039`；published v7 的 `memory_nodes` 必须继续保存在 `legacy_v7_memory_nodes` 且不得自动导入新表；migration checksum、内容漂移和 adapter 预建 fence table 路径保持 fail closed/可升级。
 - dependency audit 的临时例外必须有 owner、缓解措施、过期日与 regression gate。
 
 ## 4. Backend 确定性全量门禁
@@ -77,7 +77,7 @@ export ECHODESK_NODE_RUNTIME_IS_ELECTRON=true
 
 随后解析 JUnit：`failures=0`、`errors=0`、`skipped=0`。测试进程必须自然退出；打印绿色摘要后仍被非 daemon worker 卡住不算通过。
 
-当前本地源码结果：
+0.3.1 exact-SHA 历史基线（[F-ECHO-028]；0.3.2 不得继承，必须重跑）：
 
 ```text
 1045 collected
@@ -99,7 +99,7 @@ backend/.venv/bin/ruff format --check backend
 backend/.venv/bin/mypy backend/app
 ```
 
-当前结果：Ruff check 通过；Ruff format 检查 `250 files`；mypy 检查 `128 source files`；compile 通过。
+0.3.1 exact-SHA 历史基线：Ruff check 通过；Ruff format 检查 `250 files`；mypy 检查 `128 source files`；compile 通过。0.3.2 已有的源码证据仅确认 memory 实现通过 AST/type 静态门禁 [F-ECHO-035]；本节命令仍须在最终 exact SHA 重跑。
 
 Architecture tests 额外约束：
 
@@ -188,6 +188,18 @@ test_ambient_storage_boundary.py
 - bridge 过期 lease 自动接管。
 - Agent 成功、失败、取消、超时、retry 和 Artifact import 都有终态。
 
+### Memory / schema 039
+
+- 空库必须创建 `memory_nodes`、`memory_provenance`、`memory_relations`、`memory_profile_settings`、`memory_extraction_runs` 并登记 schema 039；038→039 真实升级、重跑幂等和 checksum 漂移都要覆盖。
+- published v7 lineage 升级后，旧无 principal/provenance 的 `memory_nodes` 必须留在 `legacy_v7_memory_nodes`；新 owner-scoped 表为空，未经显式审查不能导入旧行。
+- 两个 principal 不能互读/互写 node、provenance、relation、profile 或 extraction run；所有 API scope 只能来自认证 Principal。
+- active canonical key 去重、reaffirm 计数、supersede 关系、confirm、soft delete、profile tombstone 与 revision 必须有精确断言。
+- L0 working/current meeting、L1 meeting/ambient/Artifact、L2 semantic node、L3 explicit profile 的召回来源要分别覆盖；小模型 timeout/非法 JSON 时回退 deterministic ranking，不能扩大 scope 或伪造来源。
+- `/memory/extract` 只能声明 `user_explicit` 来源；trusted meeting/Artifact provenance 只能由内部 ingest 写入。抽取失败/跳过必须记录 run state，不能创建虚假 active node。
+- node list/get/provenance/confirm/patch/delete、profile list/put/delete、working clear 的 happy、404、输入边界和跨 owner 负例都要覆盖。
+
+0.3.2 当前证据边界：源码与静态门禁已确认 [F-ECHO-035]，但该 fact 明确记录 functional runtime、migration、microphone、UI 和 packaged-app 尚未验证。已有 `test_cross_meeting_memory.py` 是 live RAG 跨会议召回历史测试，不替代上述 schema 039/API 回归门禁。
+
 ## 7. Live model contract
 
 Live gate 只运行 provider-neutral 产品合同：
@@ -202,7 +214,7 @@ cd backend
 1. 配置的 MAIN model 非流式与流式 chat 返回指定内容并报告 usage。
 2. 同一 model 生成真实 TXT Artifact，文件存在、size 匹配、内容通过断言。
 
-缺 key、provider 不可达、timeout 或格式失败都算失败，不允许 skip。current exact-SHA GLM live contract `2 / 2 passed`，`0 skipped / 0 failed` [F-ECHO-028]。
+缺 key、provider 不可达、timeout 或格式失败都算失败，不允许 skip。0.3.1 exact-SHA 历史基线为 GLM live contract `2 / 2 passed`、`0 skipped / 0 failed` [F-ECHO-028]；0.3.2 必须重跑。
 
 GitHub 的 private-network speech/fast-model job 是可选外部门禁，只调度到同时带
 `echodesk-private-models` 与 `actions-runner-2-327-1` 标签的 self-hosted runner；后一个
@@ -226,7 +238,7 @@ CI=1 NODE_ENV=test npm run e2e
 CI=1 NODE_ENV=test npm run scenarios
 ```
 
-当前结果：Electron `177 / 177 passed`；E2E `150 passed`；scenarios `29 passed` [F-ECHO-028]。
+0.3.1 exact-SHA 历史基线：Electron `177 / 177 passed`；E2E `150 passed`；scenarios `29 passed` [F-ECHO-028]。0.3.2 必须在最终 exact SHA 重跑，并覆盖 memory source card 与管理入口。
 
 覆盖：
 
@@ -248,7 +260,7 @@ CI=1 NODE_ENV=test npm run scenarios
 
 验证安装包内 backend binary、版本、自定义端口、SQLite 写入、主要点击和退出后端口清理。Linux 分别验证 unpacked、AppImage 解包执行与真实安装 deb；Windows 分别验证 NSIS 安装态与 ZIP 解压执行。它证明 packaging boundary，不验证真实模型和 Agent 长流程。
 
-current exact-SHA macOS arm64 fresh ad-hoc DMG/ZIP、metadata/blockmap、codesign/plist/asar/forbidden scan、SBOM `1066` 与 SHA-256 全部通过；read-only mounted DMG smoke `1 / 1 passed` [F-ECHO-028]。
+0.3.1 exact-SHA 历史基线：macOS arm64 fresh ad-hoc DMG/ZIP、metadata/blockmap、codesign/plist/asar/forbidden scan、SBOM `1066` 与 SHA-256 全部通过；read-only mounted DMG smoke `1 / 1 passed` [F-ECHO-028]。0.3.2 package 必须重跑。
 
 ### Installed full workflow
 
@@ -262,7 +274,7 @@ current exact-SHA macOS arm64 fresh ad-hoc DMG/ZIP、metadata/blockmap、codesig
 6. cancel、timeout 和 Workflow/Agent terminal 一致；
 7. 最终重启后仍能恢复全部持久状态。
 
-current exact-SHA 结果：`1 / 1 passed`。验证了真实下载文件 mode `0600`、marker、安全文件名、无残留 partial，以及 GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart [F-ECHO-028]。
+0.3.1 exact-SHA 历史基线：`1 / 1 passed`。当时验证了真实下载文件 mode `0600`、marker、安全文件名、无残留 partial，以及 GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart [F-ECHO-028]。0.3.2 installed workflow 必须额外验证 039 升级后 memory 持久化、重启召回与删除/确认状态。
 
 ## 10. Public isolation smoke
 
@@ -276,7 +288,7 @@ backend/.venv/bin/python scripts/public-isolation-smoke.py \
 
 验证双 principal 的 meeting、RAG、Artifact、Workflow、Agent、WS 隔离，并在结束后撤销 session family、清理可公开删除的测试资源。输出不能打印 bearer、credential 或正文。
 
-当前结果：self-test 与双 principal 完整 smoke 均通过。
+0.3.1 exact-SHA 历史基线：self-test 与双 principal 完整 smoke 均通过 [F-ECHO-028]。0.3.2 必须加入 memory node/profile/provenance 跨 principal 负例后重跑。
 
 ## 11. 跨平台发布门禁
 
@@ -289,11 +301,11 @@ backend/.venv/bin/python scripts/public-isolation-smoke.py \
 
 任何平台“构建成功”都不能代替安装后启动、bundled backend、身份和持久化 smoke。
 
-Android / TV current exact-SHA：phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列。debug APK 不可作为公开发布资产。release aggregate `31 / 31 passed`，actionlint 与 action pins 通过 [F-ECHO-028]。
+Android / TV 0.3.1 exact-SHA 历史基线：phone/TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint `Fatal 0 / Error 0 / Warning 0`，Capacitor `Hint 2` 单列。debug APK 不可作为公开发布资产。release aggregate `31 / 31 passed`，actionlint 与 action pins 通过 [F-ECHO-028]。0.3.2 账本分配的是 `302`，但必须以最终 APK identity gate 实测后才能写为通过。
 
 依赖审计必须保留原始 exit code：desktop 与内置 `ppt_ib_deck` 的 npm audit 均为 `0` finding；Python six locks 均有效，runtime/dev/build 各仍报告同一项未修复且上游无 `fix_versions` 的 `torch` `CVE-2025-3000`，按 [`backend/SECURITY_DEPENDENCY_EXCEPTIONS.md`](../../backend/SECURITY_DEPENDENCY_EXCEPTIONS.md) 控制至 2026-08-12，lint/typecheck/audit-tool 为 `0`。不得把 Python 总体审计写成 clean 或零漏洞。
 
-Developer ID、notary、staple 与 Gatekeeper 正式链路因外部签名输入缺失而 skipped；ad-hoc 结果不可替代正式签名发布。截至 2026-07-13，公共 Release / 生产 / bootstrap 仍分别为 `v0.2.50` / `0.2.49` / `0.2.45`，bootstrap 未声明 `minimum_client_version` [F-ECHO-029]。正式 signed cross-platform、受保护 environment/secret 与 public cutover 仍是外部阻塞。
+0.3.1 发布收口时的历史观察（2026-07-13，[F-ECHO-029]）：Developer ID、notary、staple 与 Gatekeeper 正式链路因外部签名输入缺失而 skipped；ad-hoc 结果不可替代正式签名发布。当时公共 Release / 生产 / bootstrap 分别为 `v0.2.50` / `0.2.49` / `0.2.45`，bootstrap 未声明 `minimum_client_version`。0.3.2 发布前必须重新观测公共状态；正式 signed cross-platform、受保护 environment/secret 与 public cutover 仍须以当轮证据判定。
 
 ## 12. Agent 一致性门禁
 

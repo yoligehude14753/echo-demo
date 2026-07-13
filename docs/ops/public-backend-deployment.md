@@ -2,10 +2,10 @@
 
 本 SOP 使用 [`scripts/public-backend-deploy.sh`](../../scripts/public-backend-deploy.sh) 管理公共后端。目标是让代码、数据和凭证拥有不同生命周期：代码进入不可变的 versioned release；canary 使用独立端口、数据库和数据目录；生产切换只替换 `current` symlink；数据库与配置在停服后做一致快照。
 
-> **Breaking cutover：最低公共客户端版本 0.3.1。** 当前稳定版 v0.2.50 没有
-> enrollment / bearer session 协议，切到 0.3.1 公共后端后会被
+> **Breaking cutover：最低公共客户端版本 0.3.2。** 当前稳定版 v0.2.50 没有
+> enrollment / bearer session 协议，切到 0.3.2 公共后端后会被
 > `426 client_upgrade_required` fail closed。首次 bootstrap 前必须先公开可安装且已验证的
-> 0.3.1 GitHub prerelease（渠道可标 prerelease，包内必须自报 `0.3.1`），并完成所有仍声明支持的平台公共 transport 验证；不得把 v0.2.50 标记为
+> 0.3.2 GitHub prerelease（渠道可标 prerelease，包内必须自报 `0.3.2`），并完成所有仍声明支持的平台公共 transport 验证；不得把 v0.2.50 标记为
 > 兼容通过，也不得先切公网再补客户端。
 
 ## 安全不变量
@@ -74,11 +74,11 @@ scripts/public-backend-deploy.sh --python /usr/bin/python3.11 self-test
 
 当前服务器的 legacy `0.2.49` 不是可制作为 release 的 clean checkout，也不具备 `/readyz` 和公共身份隔离。因此不要尝试把它伪造成 baseline；首次切换使用 `bootstrap`，把首个已经通过隔离 canary 的安全版本直接设为 `current`。
 
-开始以下步骤前，先确认 GitHub prerelease 中存在与目标提交绑定、且包内自报 `0.3.1` 的客户端资产。
+开始以下步骤前，先确认 GitHub prerelease 中存在与目标提交绑定、且包内自报 `0.3.2` 的客户端资产。
 Android 与 TV 必须分别完成真实覆盖升级和公共入口 transport smoke；每个仍公开声明支持的
 Desktop OS 也必须完成对应安装态验证。无法提供资产或验证的平台必须在切流前显式撤下支持
 声明，不能用另一个平台的一次安装代替。`/bootstrap` 必须返回
-`minimum_client_version=0.3.1`；缺失/非法/低版本请求必须返回带最低版本和升级链接的
+`minimum_client_version=0.3.2`；缺失/非法/低版本请求必须返回带最低版本和升级链接的
 `426 client_upgrade_required`，受支持版本但无 session 的业务请求必须返回
 `401 session_required`。任一条件不满足都停止切流。
 
@@ -98,7 +98,7 @@ unit:       /home/ai/.config/systemd/user/echodesk-demo-backend.service
 ```bash
 SHA=<full-ci-passed-git-sha>
 SHORT_SHA="$(printf '%s' "$SHA" | cut -c1-12)"
-RELEASE="v0.3.1-$SHORT_SHA"
+RELEASE="v0.3.2-$SHORT_SHA"
 ROOT=/home/ai/echodesk-public
 SRC="/home/ai/echodesk-src/$SHA"
 PY=/usr/bin/python3.11
@@ -203,7 +203,7 @@ resume 会先重新 close gate 并 mask service，保存任何 partial new DB，
 ROOT=/home/ai/echodesk-public
 ENV_FILE="$ROOT/shared/runtime.env"
 DB="$ROOT/shared/data/echodesk.db"
-RELEASE=v0.3.1-<git-sha>
+RELEASE=v0.3.2-<git-sha>
 PY=/usr/bin/python3.11
 PUBLIC_URL=https://echodesk.yoliyoli.uk
 INGRESS_GATE="$ROOT/releases/$RELEASE/scripts/echodesk-ingress-gate.py"
@@ -250,7 +250,7 @@ scripts/public-backend-deploy.sh \
   --ingress-gate "$INGRESS_GATE" --public-url "$PUBLIC_URL" \
   rollback
 
-# 或：--deployment 20260712T010203Z-v0.3.1-abcdef
+# 或：--deployment 20260712T010203Z-v0.3.2-abcdef
 ```
 
 回滚不是“只换代码”：它恢复该 deployment 的切换前 DB/config。这样旧 schema 不会读取新 schema 写入的数据，但 promote 后的新写入会被替换。若业务必须保留这些写入，应保持当前安全版本运行，从 `rollback-*` 安全快照做离线数据迁移，不能直接让旧版本读取新 DB。

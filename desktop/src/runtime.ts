@@ -260,16 +260,58 @@ function normalizeVersion(raw: string | null | undefined): string {
   return String(raw ?? "").trim().replace(/^v/i, "");
 }
 
-export function compareVersions(a: string, b: string): number {
-  const aa = normalizeVersion(a).split(".").map((x) => Number.parseInt(x, 10) || 0);
-  const bb = normalizeVersion(b).split(".").map((x) => Number.parseInt(x, 10) || 0);
-  for (let i = 0; i < Math.max(aa.length, bb.length); i += 1) {
-    const av = aa[i] ?? 0;
-    const bv = bb[i] ?? 0;
-    if (av > bv) return 1;
-    if (av < bv) return -1;
+interface ParsedVersion {
+  core: string[];
+  prerelease: string[] | null;
+}
+
+function parseVersion(raw: string): ParsedVersion {
+  const withoutBuild = normalizeVersion(raw).split("+", 1)[0];
+  const prereleaseIndex = withoutBuild.indexOf("-");
+  const core = (
+    prereleaseIndex >= 0 ? withoutBuild.slice(0, prereleaseIndex) : withoutBuild
+  ).split(".");
+  const prerelease =
+    prereleaseIndex >= 0
+      ? withoutBuild.slice(prereleaseIndex + 1).split(".")
+      : null;
+  return { core, prerelease };
+}
+
+function compareNumericIdentifiers(a: string, b: string): number {
+  const aa = a.replace(/^0+/, "") || "0";
+  const bb = b.replace(/^0+/, "") || "0";
+  if (aa.length !== bb.length) return aa.length > bb.length ? 1 : -1;
+  if (aa === bb) return 0;
+  return aa > bb ? 1 : -1;
+}
+
+function comparePrereleaseIdentifiers(a: string[], b: string[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const av = a[i];
+    const bv = b[i];
+    if (av === undefined) return -1;
+    if (bv === undefined) return 1;
+    if (av === bv) continue;
+    const aIsNumeric = /^\d+$/.test(av);
+    const bIsNumeric = /^\d+$/.test(bv);
+    if (aIsNumeric && bIsNumeric) return compareNumericIdentifiers(av, bv);
+    if (aIsNumeric !== bIsNumeric) return aIsNumeric ? -1 : 1;
+    return av > bv ? 1 : -1;
   }
   return 0;
+}
+
+export function compareVersions(a: string, b: string): number {
+  const aa = parseVersion(a);
+  const bb = parseVersion(b);
+  for (let i = 0; i < Math.max(aa.core.length, bb.core.length); i += 1) {
+    const coreOrder = compareNumericIdentifiers(aa.core[i] ?? "0", bb.core[i] ?? "0");
+    if (coreOrder !== 0) return coreOrder;
+  }
+  if (aa.prerelease === null) return bb.prerelease === null ? 0 : 1;
+  if (bb.prerelease === null) return -1;
+  return comparePrereleaseIdentifiers(aa.prerelease, bb.prerelease);
 }
 
 /**
