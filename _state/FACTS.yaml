@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-12T04:38:50.923275+00:00'
+generated_at: '2026-07-13T01:11:05.304675+00:00'
 generated_by: replay.py
-fact_count: 22
+fact_count: 28
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -240,7 +240,7 @@ facts:
   category: observation
   volatility: high
   evidence_strength: runtime
-  status: confirmed
+  status: superseded
   confidence: 0.99
   observed_at: '2026-07-10T17:35:00+08:00'
   observed_by: agent/codex-release-audit
@@ -253,7 +253,7 @@ facts:
   evidence: The v0.3.0 release query returned release not found. The latest-release query returned v0.2.50 with its macOS
     assets and latest-mac.yml. The installed updater is configured for the same GitHub owner/repository feed.
   supersedes: []
-  superseded_by: null
+  superseded_by: F-ECHO-024
   pinned: false
   tags:
   - release
@@ -506,7 +506,7 @@ facts:
   category: conclusion
   volatility: medium
   evidence_strength: test
-  status: confirmed
+  status: superseded
   confidence: 0.99
   observed_at: '2026-07-12T03:29:34+08:00'
   observed_by: agent/codex-android-tv-identity
@@ -528,7 +528,7 @@ facts:
     Desktop typecheck, lint, production build, 18 focused identity Playwright tests, and the full 83-test Playwright suite
     passed. Static inspection found no localStorage/sessionStorage use in the identity store or native vault.
   supersedes: []
-  superseded_by: null
+  superseded_by: F-ECHO-028
   pinned: false
   tags:
   - 0.3.1
@@ -544,7 +544,7 @@ facts:
   category: conclusion
   volatility: medium
   evidence_strength: test
-  status: confirmed
+  status: superseded
   confidence: 0.99
   observed_at: '2026-07-12T04:00:06+08:00'
   observed_by: agent/codex-agent-recovery
@@ -563,7 +563,7 @@ facts:
     isolated failure projection, transient heartbeat retry, and automatic two-instance lease failover without restart; Ruff
     and strict mypy also passed.
   supersedes: []
-  superseded_by: null
+  superseded_by: F-ECHO-028
   pinned: false
   tags:
   - 0.3.1
@@ -579,7 +579,7 @@ facts:
   category: conclusion
   volatility: medium
   evidence_strength: test
-  status: confirmed
+  status: superseded
   confidence: 0.99
   observed_at: '2026-07-12T12:38:00+08:00'
   observed_by: agent/codex-echodesk-0-3-1-final
@@ -604,7 +604,7 @@ facts:
   supersedes:
   - F-ECHO-002
   - F-ECHO-017
-  superseded_by: null
+  superseded_by: F-ECHO-023
   pinned: false
   tags:
   - 0.3.1
@@ -621,7 +621,7 @@ facts:
   category: conclusion
   volatility: medium
   evidence_strength: test
-  status: confirmed
+  status: superseded
   confidence: 0.99
   observed_at: '2026-07-12T12:38:00+08:00'
   observed_by: agent/codex-echodesk-0-3-1-final
@@ -645,7 +645,7 @@ facts:
   - F-ECHO-013
   - F-ECHO-014
   - F-ECHO-015
-  superseded_by: null
+  superseded_by: F-ECHO-023
   pinned: false
   tags:
   - 0.3.1
@@ -660,7 +660,7 @@ facts:
   category: observation
   volatility: low
   evidence_strength: runtime
-  status: confirmed
+  status: superseded
   confidence: 0.99
   observed_at: '2026-07-12T12:38:00+08:00'
   observed_by: agent/codex-echodesk-0-3-1-final
@@ -677,7 +677,7 @@ facts:
     final integrity was ok with zero foreign-key violations.
   supersedes:
   - F-ECHO-011
-  superseded_by: null
+  superseded_by: F-ECHO-028
   pinned: false
   tags:
   - 0.3.1
@@ -685,3 +685,263 @@ facts:
   - sqlite
   - artifact
   - user-data
+- id: F-ECHO-023
+  claim: EchoDesk 0.3.1 local source gates pass across backend, Electron, browser UX and scenarios with enforced public-client
+    compatibility, aligned defaults and portable packaging contracts.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-12T13:45:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/main.py
+  - backend/tests/unit/test_public_principal_http.py
+  - backend/tests/unit/test_config_io.py
+  - desktop/scripts/package-tv-installer.cjs
+  - desktop/electron/tests/release-gates.test.cjs
+  - desktop/tests/e2e/backend-transport-policy.spec.ts
+  - .github/workflows/ci.yml
+  - docs/ops/public-backend-deployment.md
+  - runtime:backend deterministic => 933 collected, 18 live deselected, 915 passed, 0 skipped, coverage 87%, natural exit
+  - runtime:Electron contracts => 74 passed
+  - runtime:Playwright E2E => 121 passed
+  - runtime:recorded click scenarios => 29 passed
+  evidence: The complete deterministic backend suite passed 915 tests with zero skips. Public HTTP, session, Electron IPC
+    and WebSocket paths enforce minimum client 0.3.1 with explicit 426/4426 upgrade states and no retry loop; Electron also
+    binds every bearer to backend_origin and clears stale scope state on origin change. A shared backend-origin lease aborts
+    in-flight transport and fences REST hydration, commands, capture, meetings, artifacts, knowledge-base state, settings,
+    previews and TTS so late A responses cannot enter B state. Configuration-template parsing, Capacitor origins and runtime
+    defaults share one contract. Electron, browser UX and recorded scenarios passed 74, 121 and 29 cases. Local contracts
+    cover CRLF, Windows path normalization, portable file-mode assertions, PowerShell ZIP generation, full TV bundle hashes,
+    Gradle dependency verification and package-specific SBOM generation. Workflow actions use immutable Node 24 revisions.
+    Actual hosted Windows/Linux/Android packaging, public prerelease and production cutover remain external gates.
+  supersedes:
+  - F-ECHO-020
+  - F-ECHO-021
+  superseded_by: F-ECHO-025
+  pinned: false
+  tags:
+  - 0.3.1
+  - deterministic
+  - public-client
+  - windows
+  - packaging
+  - configuration
+  - gates
+- id: F-ECHO-024
+  claim: At 2026-07-12 14:04 +08:00 the configured GitHub Releases feed still reports v0.2.50 as latest and contains no public
+    0.3.1 release or prerelease.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: superseded
+  confidence: 1.0
+  observed_at: '2026-07-12T14:04:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 6
+  source:
+  - https://api.github.com/repos/yoligehude14753/echo-demo/releases
+  - runtime:gh release list --repo yoligehude14753/echo-demo
+  evidence: A direct authenticated GitHub release listing showed v0.2.50 as latest and no tag or prerelease beginning with
+    v0.3.1.
+  supersedes:
+  - F-ECHO-010
+  superseded_by: F-ECHO-027
+  pinned: false
+  tags:
+  - release
+  - 0.3.1
+  - github
+  - observation
+- id: F-ECHO-025
+  claim: EchoDesk 0.3.1 final local source, macOS package and installed GLM plus AgentOS workflow gates pass with zero deterministic
+    skips and completed core consistency fixes.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 1.0
+  observed_at: '2026-07-12T21:54:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/workflows/service.py
+  - backend/app/api/meetings.py
+  - backend/app/adapters/repo/migrations/038_rag_projection_recovery.sql
+  - backend/app/adapters/rag/index_store.py
+  - backend/app/security/access.py
+  - desktop/electron/workspace-backend-transport.cjs
+  - desktop/src/ws.ts
+  - .github/workflows/ci.yml
+  - runtime:backend deterministic => 971 collected, 18 live deselected, 953 passed, 0 skipped, coverage 87%, natural exit
+  - runtime:Electron contracts => 95 passed
+  - runtime:Playwright E2E => 127 passed
+  - runtime:recorded click scenarios => 29 passed
+  - runtime:GLM-5.2 product contract => 2 passed
+  - runtime:read-only DMG packaged smoke => 1 passed
+  - runtime:installed GLM-5.2 plus AgentOS full workflow => 1 passed
+  - runtime:Android phone/TV development builds, JVM/lint and API 36.1 instrumentation => passed
+  evidence: The final deterministic backend process selected 953 non-live tests from 971 collected and exited naturally with
+    zero failures, errors or skips and 87% coverage. Ruff, formatting, mypy over 127 files, Python compile, 95 Electron contracts,
+    127 browser interaction cases and 29 recorded scenarios passed. Dependency audits reported zero npm findings and zero
+    known Python findings apart from the documented CVE-2025-3000 exception. GLM-5.2 passed both live product contracts. The
+    exact local source produced an arm64 DMG and ZIP; the read-only mounted DMG exercised the bundled backend and Office/PDF/PPTX/XLSX
+    runtimes. The installed app then passed the full GLM/RAG/failure/restart/retry-lineage/AgentOS artifact/cancel/timeout/persistence
+    workflow. Android phone and TV development APKs, JVM tests, lint and six API 36.1 instrumentation tests passed, while
+    unsigned public release failed closed. Formal signed macOS/Windows assets, exact-main signed Android candidates, hosted
+    cross-platform CI and production public cutover remain separate external gates.
+  supersedes:
+  - F-ECHO-023
+  superseded_by: F-ECHO-028
+  pinned: false
+  tags:
+  - 0.3.1
+  - deterministic
+  - installed
+  - workflow
+  - agentos
+  - rag
+  - identity
+  - release-gates
+- id: F-ECHO-027
+  claim: At 2026-07-12 21:56 +08:00 Releases latest is v0.2.50 with no 0.3.1; production backend is 0.2.49 with legacy bootstrap
+    app_version 0.2.45.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: superseded
+  confidence: 1.0
+  observed_at: '2026-07-12T21:56:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 6
+  source:
+  - https://api.github.com/repos/yoligehude14753/echo-demo/releases
+  - https://echodesk.yoliyoli.uk/healthz
+  - https://echodesk.yoliyoli.uk/bootstrap
+  - runtime:gh release list --repo yoligehude14753/echo-demo
+  evidence: An authenticated GitHub release listing showed v0.2.50 as the latest non-prerelease and no v0.3.1 tag among the
+    newest releases. Direct HTTPS reads returned healthz version 0.2.49 and a legacy bootstrap payload with app_version 0.2.45
+    and no minimum-client session contract. Therefore the 0.3.1 public isolation smoke cannot be claimed against production
+    and a breaking promotion must wait for formally installable 0.3.1 clients.
+  supersedes:
+  - F-ECHO-024
+  superseded_by: F-ECHO-029
+  pinned: false
+  tags:
+  - release
+  - public-backend
+  - 0.3.1
+  - observation
+  - cutover-blocked
+- id: F-ECHO-028
+  claim: EchoDesk 0.3.1 local and hosted backend, dependency, macOS, Linux, Android/TV and Windows package gates pass; formal
+    signing, exact-main provenance and production cutover remain external.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-13T09:10:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-closure
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/workflows/service.py
+  - backend/app/api/meetings.py
+  - backend/app/artifacts/recovery.py
+  - backend/app/artifacts/repository.py
+  - backend/app/agents/service.py
+  - backend/app/adapters/repo/migrations/038_rag_projection_recovery.sql
+  - desktop/electron/artifact-download.cjs
+  - desktop/electron/workspace-backend-transport.cjs
+  - desktop/src/ws.ts
+  - desktop/android/build.gradle
+  - .github/workflows/ci.yml
+  - runtime:backend deterministic => 1045 collected, 18 live deselected, 1027 passed, 0 skipped, 0 failed, 0 errors, coverage
+    line-rate 87.46%, natural exit
+  - runtime:Electron contracts => 184 passed
+  - runtime:Playwright E2E => 150 passed
+  - runtime:recorded click scenarios => 29 passed
+  - runtime:release contracts => 31 passed
+  - runtime:public isolation self-test and dual-principal full smoke => passed
+  - runtime:live provider contracts => 2 passed, 0 skipped
+  - runtime:read-only ad-hoc DMG packaged smoke => 1 passed
+  - runtime:installed bundled workflow => 1 passed
+  - runtime:Android phone/TV development builds, JVM, zero-warning lint, and API 36.1 instrumentation => passed
+  - runtime:hosted CI 29214796717 => backend, dependency audits, desktop, macOS arm64 DMG, Linux AppImage/deb, and Android/TV
+    passed; branch-inapplicable exact-main provenance skipped
+  - runtime:hosted Windows workflow 29216263869 at 1e428786 => 184 Electron contracts, installer/content, NSIS installed lifecycle,
+    portable ZIP, public-content guard, SBOM/checksums, and artifact upload passed
+  evidence: The final deterministic backend process selected 1027 non-live tests from 1045 collected and exited naturally
+    with zero failures, errors, or skips and a 87.46% line rate. Ruff formatted 250 files and strict mypy checked 128 source
+    files. Public self-test and the complete dual-principal HTTP, WebSocket, meeting, Artifact, RAG, Workflow, admin-fence,
+    and cleanup smoke passed. Electron passed 184 contracts, Playwright passed 150 browser cases, recorded scenarios passed
+    29 cases, and release contracts passed 31 cases. Six hashed Python locks validated; runtime, dev, and build audits contain
+    only the documented torch CVE-2025-3000 exception with no upstream fix version, while the other audited locks and both
+    npm production trees are clean. Fresh arm64 ad-hoc DMG and ZIP bytes, blockmaps, updater metadata, deep code signature,
+    plist version, asar allowlist, SBOM, and checksums passed; the read-only DMG smoke and installed bundled full workflow
+    passed, including authenticated mode-0600 Artifact download, restart/retry lineage, and Agent success, cancel, timeout,
+    and bridge recovery. Both live provider contracts passed with zero skips. Android phone and TV development builds, four
+    JVM tests, zero Error/Warning aggregate lint, six API 36.1 instrumentation tests, identity/version checks, and unsigned
+    fail-closed contracts passed. A privacy-safe validation of the schema-38 migration copy passed integrity and foreign-key
+    checks without publishing user paths, row counts, hashes, or content. Hosted CI 29214796717 passed backend, all three
+    dependency audits, desktop, macOS arm64 DMG, Linux AppImage/deb three-state smoke, and Android/TV; the exact-main provenance
+    job was branch-inapplicable. Final Windows workflow 29216263869 at 1e428786 passed 184 Electron contracts, installer/content
+    validation, NSIS installed lifecycle including backend process-tree cleanup, portable ZIP, public-content guard, SBOM/checksums,
+    and artifact upload. Developer ID, notarization, stapling, Gatekeeper distribution, Authenticode, exact-main formal candidates,
+    and production cutover remain separate external gates.
+  supersedes:
+  - F-ECHO-018
+  - F-ECHO-019
+  - F-ECHO-022
+  - F-ECHO-025
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.1
+  - deterministic
+  - installed
+  - workflow
+  - agentos
+  - rag
+  - identity
+  - privacy
+  - release-gates
+- id: F-ECHO-029
+  claim: At 2026-07-13 06:28 +08:00, latest release is v0.2.50 with no v0.3.1; production health is 0.2.49 and legacy bootstrap
+    app_version is 0.2.45 without a minimum-client contract.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-13T06:28:38+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-closure
+  valid_until: null
+  ttl_hours: 6
+  source:
+  - https://api.github.com/repos/yoligehude14753/echo-demo/releases
+  - https://echodesk.yoliyoli.uk/healthz
+  - https://echodesk.yoliyoli.uk/bootstrap
+  - runtime:gh release list --repo yoligehude14753/echo-demo
+  evidence: An authenticated GitHub release listing showed v0.2.50 as the latest release and no v0.3.1 tag or prerelease among
+    the newest releases. Direct HTTPS reads returned healthz version 0.2.49 and a legacy bootstrap payload with app_version
+    0.2.45 and no minimum_client_version. Therefore the locally validated 0.3.1 isolation contract is not deployed to production,
+    and the breaking public promotion must wait for formally installable 0.3.1 clients.
+  supersedes:
+  - F-ECHO-027
+  superseded_by: null
+  pinned: false
+  tags:
+  - release
+  - public-backend
+  - 0.3.1
+  - observation
+  - cutover-blocked

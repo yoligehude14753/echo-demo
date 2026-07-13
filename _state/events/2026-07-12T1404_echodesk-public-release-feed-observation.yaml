@@ -1,0 +1,37 @@
+event_id: "E-20260712T1404-001"
+event_type: "supersede"
+timestamp: "2026-07-12T14:04:00+08:00"
+author: "agent/codex-echodesk-0-3-1-final"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-024"
+      claim: "At 2026-07-12 14:04 +08:00 the configured GitHub Releases feed still reports v0.2.50 as latest and contains no public 0.3.1 release or prerelease."
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-12T14:04:00+08:00"
+      observed_by: "agent/codex-echodesk-0-3-1-final"
+      valid_until: null
+      ttl_hours: 6
+      source:
+        - "https://api.github.com/repos/yoligehude14753/echo-demo/releases"
+        - "runtime:gh release list --repo yoligehude14753/echo-demo"
+      evidence: "A direct authenticated GitHub release listing showed v0.2.50 as latest and no tag or prerelease beginning with v0.3.1."
+      supersedes:
+        - "F-ECHO-010"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "release"
+        - "0.3.1"
+        - "github"
+        - "observation"
+  - action: "supersede"
+    old_fact: "F-ECHO-010"
+    new_fact: "F-ECHO-024"
+    reason: "The release-feed state was directly re-observed on 2026-07-12 at 14:04 +08:00."
+git_commit: null
