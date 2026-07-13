@@ -632,8 +632,28 @@ function bootstrapBackendForOrigin(
     return bootstrapPromise;
   }
   bootstrapPromiseOrigin = origin;
-  bootstrapPromise = loadBootstrap(origin);
-  return bootstrapPromise;
+  const pending = loadBootstrap(origin);
+  bootstrapPromise = pending;
+  void pending.catch((error: unknown) => {
+    // The packaged renderer commonly starts before its bundled backend has
+    // finished migrations and opened the socket.  Do not pin that transient
+    // bootstrap failure for the lifetime of the renderer: the WebSocket retry
+    // loop must be able to probe the now-ready backend on its next attempt.
+    //
+    // A concrete contract mismatch stays cached and therefore fail-closed;
+    // replacing an incompatible backend requires an explicit origin/session
+    // reset instead of silently reconnecting to a different binary.
+    if (
+      error instanceof BackendContractMismatchError &&
+      error.reason === "bootstrap-unavailable" &&
+      bootstrapPromise === pending &&
+      bootstrapPromiseOrigin === origin
+    ) {
+      bootstrapPromise = null;
+      bootstrapPromiseOrigin = null;
+    }
+  });
+  return pending;
 }
 
 export async function bootstrapBackend(): Promise<BackendBootstrap | null> {

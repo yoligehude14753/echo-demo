@@ -58,11 +58,7 @@ def test_chat_sse_streams_and_terminates(client_with_fake: TestClient) -> None:
     assert payloads[-1] == "[DONE]"
     # v0.3.2 会在 answer.delta 前发送 memory.status / memory.sources；旧客户端
     # 仍可只消费带 delta 的帧。
-    deltas = [
-        decoded["delta"]
-        for p in payloads[:-1]
-        if "delta" in (decoded := json.loads(p))
-    ]
+    deltas = [decoded["delta"] for p in payloads[:-1] if "delta" in (decoded := json.loads(p))]
     assert deltas == ["你好"]
 
 

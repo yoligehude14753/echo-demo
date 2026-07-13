@@ -397,7 +397,7 @@ async def test_rag_query_sse_streams_without_waiting_for_workflow(tmp_path: Path
         assert success.headers["cache-control"] == "no-cache, no-transform"
         assert success.headers["x-accel-buffering"] == "no"
         assert "event: delta" in success.text
-        assert '"delta":"ok"' in success.text
+        assert '"delta":"- evidence [doc:doc-1-chunk-1]"' in success.text
         assert "event: done" in success.text
         assert '"chosen_source":"rag"' in success.text
         assert "data: [DONE]" not in success.text
@@ -409,7 +409,7 @@ async def test_rag_query_sse_streams_without_waiting_for_workflow(tmp_path: Path
         app.dependency_overrides[get_llm_singleton] = lambda: failing_llm
         failed = client.post("/rag/ask", json={"question": "make this fail"})
         assert failed.status_code == 200
-        assert "event: delta" in failed.text
+        assert "event: delta" not in failed.text
         assert "event: error" in failed.text
         assert "暂时无法生成回答，请稍后重试" in failed.text
         assert "answer stream exploded" not in failed.text

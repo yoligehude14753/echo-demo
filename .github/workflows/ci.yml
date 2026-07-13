@@ -237,11 +237,17 @@ jobs:
           export WORKSPACE_STATE_FILE="$ECHO_USER_DIR/workspace_state.json"
           export SKILL_EXECUTOR_BUILD_DIR="$ECHO_USER_DIR/skill_build"
           mkdir -p "$RUNNER_TEMP/echodesk-backend-test-evidence"
+          pytest_status=0
           pytest tests -m "not live" \
             --junitxml=pytest-deterministic.xml \
             --cov=app --cov-report=term-missing \
-            --timeout=60 --timeout-method=thread --durations=20 2>&1 \
-              | tee "$RUNNER_TEMP/echodesk-backend-test-evidence/pytest.log"
+            --timeout=60 --timeout-method=thread --durations=20 \
+            > "$RUNNER_TEMP/echodesk-backend-test-evidence/pytest.log" 2>&1 \
+            || pytest_status=$?
+          cat "$RUNNER_TEMP/echodesk-backend-test-evidence/pytest.log"
+          if (( pytest_status != 0 )); then
+            exit "$pytest_status"
+          fi
           python - <<'PY'
           import xml.etree.ElementTree as ET
           root = ET.parse("pytest-deterministic.xml").getroot()
@@ -410,12 +416,12 @@ jobs:
           profile: pixel_2
           disable-animations: true
           disable-linux-hw-accel: false
-          script: |
-            mkdir -p "$RUNNER_TEMP/echodesk-android-smoke-evidence"
-            set -o pipefail
-            cd desktop/android
-            ./gradlew :app:connectedDebugAndroidTest -PechoApplicationId=com.echodesk.app 2>&1 \
-              | tee "$RUNNER_TEMP/echodesk-android-smoke-evidence/instrumentation.log"
+          script: >-
+            bash -lc 'set -o pipefail;
+            mkdir -p "$RUNNER_TEMP/echodesk-android-smoke-evidence";
+            cd desktop/android;
+            ./gradlew :app:connectedDebugAndroidTest -PechoApplicationId=com.echodesk.app 2>&1 |
+            tee "$RUNNER_TEMP/echodesk-android-smoke-evidence/instrumentation.log"'
       - name: verify development artifacts cannot masquerade as releases
         shell: bash
         run: |

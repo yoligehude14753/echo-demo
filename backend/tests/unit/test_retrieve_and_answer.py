@@ -103,7 +103,7 @@ async def test_rag_only_branch_skips_web() -> None:
         question="本地 PDF 提到什么?",
     )
     chunks = [c async for c in out.chunks]
-    assert "".join(chunks) == "答复"
+    assert "".join(chunks) == "- 本地证据 1 [doc:d-c1]"
     assert rag.query_count == 1
     assert web.search_count == 0
     assert out.retrieval.chosen_source == "rag"
@@ -198,7 +198,7 @@ async def test_prompt_includes_citations() -> None:
     assert llm.answer_messages is not None
     body = llm.answer_messages[0].content
     assert "2024 年营收 100 亿" in body
-    assert "[doc:c1" in body
+    assert "[doc:pdf-1-c1]" in body
     assert "财报" in body
     assert llm.answer_kwargs is not None
     assert llm.answer_kwargs["max_tokens"] == 768
@@ -207,7 +207,7 @@ async def test_prompt_includes_citations() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_answer_generation_error_propagates_instead_of_fake_success_text() -> None:
+async def test_zero_evidence_skips_answer_generation_and_returns_short_notice() -> None:
     llm = FailingAnswerLLM(classify_label="rag")
     out = await retrieve_and_answer(
         main_llm=llm,
@@ -217,5 +217,6 @@ async def test_answer_generation_error_propagates_instead_of_fake_success_text()
         web=FakeWeb([]),
         question="must fail",
     )
-    with pytest.raises(RuntimeError, match="unavailable"):
-        _ = [chunk async for chunk in out.chunks]
+    chunks = [chunk async for chunk in out.chunks]
+    assert "".join(chunks) == "当前没有足够的可用证据。"
+    assert llm.answer_messages is None

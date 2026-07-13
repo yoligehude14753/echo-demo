@@ -14,7 +14,6 @@ from app.schemas.rag import RagChunk
 from app.use_cases.retrieve_and_answer import retrieve_and_answer
 from starlette.requests import Request
 
-
 _SUPPORTED_LINE = "grounded evidence [doc:doc-1-chunk-1]"
 
 

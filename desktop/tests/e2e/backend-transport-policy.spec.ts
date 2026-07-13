@@ -1,6 +1,47 @@
 import { expect, test } from "@playwright/test";
 import { installEchoMock } from "./_mock";
 
+test("Electron retries bootstrap after a transient unavailable failure", async ({ page }) => {
+  await installEchoMock(page);
+  await page.goto("/");
+
+  const result = await page.evaluate(async () => {
+    const session = await import("/src/session.ts");
+    session.resetSessionForTest();
+    const originalFetch = window.fetch.bind(window);
+    let bootstrapCalls = 0;
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (new URL(url, window.location.origin).pathname.endsWith("/bootstrap")) {
+        bootstrapCalls += 1;
+        if (bootstrapCalls === 1) throw new TypeError("backend is still starting");
+      }
+      return originalFetch(input, init);
+    };
+
+    let firstReason = "";
+    try {
+      await session.bootstrapBackend();
+    } catch (error) {
+      firstReason = (error as { reason?: string }).reason ?? "";
+    }
+    const bootstrap = await session.bootstrapBackend();
+    window.fetch = originalFetch;
+    return { bootstrapCalls, firstReason, backendVersion: bootstrap?.backend_version };
+  });
+
+  expect(result).toEqual({
+    bootstrapCalls: 2,
+    firstReason: "bootstrap-unavailable",
+    backendVersion: "0.3.2",
+  });
+});
+
 test("backend URL policy allows explicit private HTTP but rejects public cleartext", async ({
   page,
 }) => {

@@ -91,6 +91,14 @@ export async function installEchoMock(
     (window as unknown as { __echoMock__: typeof ctrl }).__echoMock__ = ctrl;
     const existingEcho = (window as unknown as { echo?: Record<string, unknown> }).echo ?? {};
     const originBoundEcho = { ...existingEcho };
+    const mockBuildContract = {
+      schema_version: 1,
+      product_id: "com.echodesk.app.backend",
+      product_version: "0.3.2",
+      api_contract: "echodesk.desktop-backend/v1",
+      build_id: `sha256:${"0".repeat(64)}`,
+      schema_catalog_max: 39,
+    };
     const identityOrigin = (): string => {
       const configured = window.localStorage.getItem("echodesk.mobileBackendBase");
       const bridgeHost =
@@ -113,6 +121,7 @@ export async function installEchoMock(
     (window as unknown as { echo: Record<string, unknown> }).echo = {
       ...originBoundEcho,
       isElectron,
+      getBackendContract: async () => mockBuildContract,
       getShareBackendHost: async () => "http://192.168.50.10:8769",
     };
 
@@ -228,13 +237,17 @@ export async function installEchoMock(
           JSON.stringify({
             schema_version: 1,
             api_version: "0.3",
-            backend_version: "0.3.1-mock",
+            backend_version: "0.3.2",
+            app_version: "0.3.2",
+            build_contract: mockBuildContract,
             session_required: false,
             capabilities: {
               principal_sessions: true,
               owner_isolation: true,
               workflow_kernel: "dispatcher-v1",
               ws_owner_filtering: true,
+              ws_stream_epoch: true,
+              ws_hello_bearer: false,
               server_resync_rehydrate_required: true,
               host_runtime_requires_admin: false,
             },
