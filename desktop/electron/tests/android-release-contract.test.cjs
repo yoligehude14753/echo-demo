@@ -106,7 +106,7 @@ test("signed Android workflow upgrades real pinned historical APKs to candidates
   assert.match(upgradeRunner, /set -euo pipefail/);
   assert.equal(
     upgradeRunner
-      .split("\n")
+      .replace(/\r\n/g, "\n").split("\n")
       .filter((line) => line === "run_upgrade_smoke \\").length,
     2,
   );
