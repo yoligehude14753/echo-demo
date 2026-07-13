@@ -1,6 +1,6 @@
 # EchoDesk Desktop
 
-EchoDesk v0.3.1 的跨端客户端：Electron + React 18 + TypeScript + Vite，Android / TV 使用 Capacitor 和原生身份桥接。
+EchoDesk v0.3.2 的跨端客户端：Electron + React 18 + TypeScript + Vite，Android / TV 使用 Capacitor 和原生身份桥接。
 
 ## 运行模式
 
@@ -102,13 +102,13 @@ npm run app:dist:win:unsigned-test
 
 桌面包会先生成对应平台的 PyInstaller backend，再由 electron-builder 把 binary 放入 `resources/backend/`。目标机器不需要另装 Python、Node 或运行 `install-backend.sh`。
 
-v0.3.1 正式候选资产契约：
+v0.3.2 正式候选资产契约：
 
 - macOS：DMG、DMG blockmap、ZIP、ZIP blockmap、`latest-mac.yml`、CycloneDX SBOM 和
   `SHA256SUMS-macOS.txt`，缺一项都不能进入发布审核。
 - Windows：NSIS EXE、EXE blockmap、ZIP、`latest.yml`、CycloneDX SBOM 和
   `SHA256SUMS-Windows.txt`。
-- Linux：`release/EchoDesk-0.3.1-linux-x86_64.AppImage`、`release/EchoDesk-0.3.1-linux-amd64.deb`。
+- Linux：`release/EchoDesk-0.3.2-linux-x86_64.AppImage`、`release/EchoDesk-0.3.2-linux-amd64.deb`。
 - Android / TV：由 release 脚本输出带版本号的 APK、签名清单与 TV one-click 包。
 
 正式 macOS / Windows 候选只从 `main` 的精确 SHA 手动触发

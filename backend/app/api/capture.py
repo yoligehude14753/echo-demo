@@ -30,8 +30,10 @@ from app.api.deps import (
     reset_scope_runtime_component_for_test,
 )
 from app.api.meetings import get_meeting_pipeline
+from app.api.memory import get_memory_dependency
 from app.api.retrieval import get_rag
 from app.config import Settings, get_settings
+from app.memory import MemoryService
 from app.ports.diarizer import DiarizerPort
 from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
@@ -59,6 +61,7 @@ def get_ambient_pipeline(
     llm: OpenAICompatibleLLM = Depends(get_llm_singleton),
     rag: RagPort = Depends(get_rag),
     governor: PrincipalGovernor = Depends(get_quota_governor),
+    memory: MemoryService = Depends(get_memory_dependency),
 ) -> AmbientCapturePipeline:
     runtime = get_scope_runtime(settings)
 
@@ -79,6 +82,7 @@ def get_ambient_pipeline(
             punctuator=punctuator,
             governor=governor,
             principal=current_principal(),
+            memory=memory,
         )
 
     return runtime.get_or_create("ambient_pipeline", make_pipeline)

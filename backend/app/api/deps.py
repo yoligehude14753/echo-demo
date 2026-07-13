@@ -271,6 +271,9 @@ def get_auto_meeting_detector(
             window_s=settings.automeet_window_s,
             min_distinct_speakers=settings.automeet_min_distinct_speakers,
             min_active_seconds=settings.automeet_min_active_seconds,
+            unknown_speaker_min_active_seconds=(
+                settings.automeet_unknown_speaker_min_active_seconds
+            ),
             silence_timeout_s=settings.automeet_silence_timeout_s,
             cooldown_s=settings.automeet_cooldown_s,
             max_meeting_duration_s=settings.automeet_max_meeting_duration_s,
@@ -315,6 +318,8 @@ def get_meeting_state(
             repository=repository,
             event_bus=event_bus,
             max_meeting_duration_s=settings.automeet_max_meeting_duration_s,
+            manual_max_meeting_duration_s=settings.manual_meeting_max_duration_s,
+            manual_inactivity_timeout_s=settings.manual_meeting_inactivity_timeout_s,
             recovery_max_age_s=settings.meeting_recovery_max_age_s,
             finalize_callback=finalize_via_workflow,
         )

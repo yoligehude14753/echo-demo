@@ -13,12 +13,18 @@ import logging
 import os
 import stat
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.adapters.audio_gate import is_likely_hallucination, pre_stt_gate
+from app.adapters.audio_gate import (
+    is_likely_hallucination,
+    normalize_transcript_text,
+    pre_stt_gate,
+)
 from app.config import Settings
+from app.memory import MemoryScope, MemoryService
 from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
 from app.ports.punctuator import TextPunctuatorPort
@@ -26,6 +32,7 @@ from app.ports.rag import RagPort
 from app.ports.repository import AmbientAudioFileRecord, RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.capture import CaptureChunkResult, SttStatus
+from app.schemas.events import EchoEvent
 from app.schemas.meeting import TranscriptSegment
 from app.security.context import current_principal
 from app.security.governor import PrincipalGovernor, QuotaExceeded, QuotaReservation
@@ -67,6 +74,7 @@ class AmbientStats:
     stt_failed: int = 0  # Gate 2b: STT 发了但失败（超时/网络/5xx）
     stt_empty: int = 0  # Gate 3:  STT 返回空文本 / 所有 segs 文本为空
     hallu_dropped: int = 0  # Gate 4:  后置幻觉门丢弃（cps 过高 / 过短）
+    repeat_dropped: int = 0  # Gate 4b: 短窗口内同一文本超过允许次数
     diarize_failed: int = 0  # side: diarizer 抛异常（不影响入库；与 returned_none 区分）
     # side: diarizer 正常返回 None（短段没匹配 / 全静音切不出 voiced）。phase4-diar-deep
     # 引入，区分 "diarizer 跑了但说不出是谁"（None）和 "diarizer 挂了"（failed）；
@@ -130,6 +138,7 @@ class AmbientCapturePipeline:
         punctuator: TextPunctuatorPort | None = None,
         governor: PrincipalGovernor | None = None,
         principal: Principal | None = None,
+        memory: MemoryService | None = None,
     ) -> None:
         self._settings = settings
         self._stt = stt
@@ -143,6 +152,10 @@ class AmbientCapturePipeline:
         self._punctuator = punctuator
         self._principal = principal or current_principal()
         self._governor = governor
+        self._memory = memory
+        self._memory_scope = MemoryScope.from_principal(self._principal)
+        self._memory_tasks: set[asyncio.Task[None]] = set()
+        self._last_memory_association_at = 0.0
         self._ambient_dir = scoped_directory(
             Path(settings.storage_dir).expanduser() / "ambient",
             self._principal,
@@ -158,10 +171,135 @@ class AmbientCapturePipeline:
         self._stats = AmbientStats()
         self._stt_lock = asyncio.Lock()
         self._storage_lock = asyncio.Lock()
+        self._recent_transcripts: deque[tuple[datetime, str]] = deque()
 
     def get_stats(self) -> AmbientStats:
         """返回当前进程级 7 道门处理结果计数（供 GET /capture/stats 用）。"""
         return self._stats
+
+    def _schedule_recognized_memory(
+        self,
+        *,
+        text: str,
+        segment_id: int,
+        captured_at: datetime,
+        meeting_id: str | None,
+    ) -> None:
+        if self._memory is None or not self._settings.memory_recognized_text_enabled:
+            return
+        source_id = str(segment_id)
+        self._memory.schedule_extraction(
+            self._memory_scope,
+            text=text,
+            source_kind="ambient_segment",
+            source_id=source_id,
+            occurred_at=captured_at,
+            meeting_id=meeting_id,
+            metadata={"capture": "ambient"},
+        )
+        if self._event_bus is None:
+            return
+        now = asyncio.get_running_loop().time()
+        if now - self._last_memory_association_at < self._settings.memory_proactive_cooldown_s:
+            return
+        self._last_memory_association_at = now
+        task = asyncio.create_task(
+            self._publish_memory_association(text, segment_id, meeting_id),
+            name=f"memory-associate:ambient:{segment_id}",
+        )
+        self._memory_tasks.add(task)
+        task.add_done_callback(self._memory_task_done)
+
+    def _memory_task_done(self, task: asyncio.Task[None]) -> None:
+        self._memory_tasks.discard(task)
+        if task.cancelled():
+            return
+        if error := task.exception():
+            logger.warning("recognized-text memory association failed: %s", error)
+
+    async def _publish_memory_association(
+        self,
+        text: str,
+        segment_id: int,
+        meeting_id: str | None,
+    ) -> None:
+        if self._memory is None or self._event_bus is None:
+            return
+        result = await self._memory.recall(
+            self._memory_scope,
+            text,
+            conversation_id=f"meeting:{meeting_id}" if meeting_id else "ambient",
+        )
+        matches = [
+            match
+            for match in result.matches
+            if match.candidate.source_ref != f"ambient:{segment_id}"
+            and match.score >= self._settings.memory_proactive_min_score
+        ]
+        if not matches:
+            return
+        sources = [
+            {
+                "index": index,
+                "candidate_id": match.candidate.candidate_id,
+                "memory_id": match.candidate.memory_id,
+                "level": match.candidate.level,
+                "kind": match.candidate.kind,
+                "title": "历史会议与产物" if match.candidate.level == "L1" else "长期记忆",
+                "excerpt": match.candidate.content[:1_500],
+                "source_ref": match.candidate.source_ref,
+                "occurred_at": match.candidate.occurred_at.isoformat(),
+                "confidence": match.candidate.confidence,
+                "relevance": match.relevance,
+                "score": match.score,
+                "relation": match.relation,
+                "manageable": match.candidate.level in {"L2", "L3"},
+            }
+            for index, match in enumerate(matches, start=1)
+        ]
+        await self._event_bus.publish(
+            EchoEvent(
+                type="memory.sources",
+                meeting_id=meeting_id,
+                tenant_id=self._principal.tenant_id,
+                owner_id=self._principal.owner_id,
+                payload={
+                    "type": "memory.sources",
+                    "state": "found",
+                    "label": f"识别到 {len(sources)} 条相关历史信息",
+                    "model_display_name": self._settings.llm_fast_display_name,
+                    "message_id": f"ambient:{segment_id}",
+                    "sources": sources,
+                },
+            )
+        )
+
+    def _record_transcript_repeat(
+        self,
+        text: str,
+        *,
+        captured_at: datetime,
+    ) -> tuple[bool, bool, int]:
+        """记录规范化文本，返回（是否重复、是否丢弃、窗口内既有次数）。"""
+
+        signature = normalize_transcript_text(text)
+        if not signature:
+            return False, False, 0
+        cutoff = captured_at.timestamp() - self._settings.ambient_repeat_window_s
+        while (
+            self._recent_transcripts
+            and self._recent_transcripts[0][0].timestamp() < cutoff
+        ):
+            self._recent_transcripts.popleft()
+        occurrences = sum(
+            previous == signature for _, previous in self._recent_transcripts
+        )
+        self._recent_transcripts.append((captured_at, signature))
+        return (
+            occurrences >= 1,
+            occurrences >= self._settings.ambient_repeat_drop_after,
+            occurrences,
+        )
 
     def _owner_root(self, *, create: bool) -> Path:
         """Return a real owner root, rejecting a scope path replaced by a symlink."""
@@ -545,6 +683,8 @@ class AmbientCapturePipeline:
         self._stats.last_rms = round(gate.rms, 2)
         self._stats.last_speech_ratio = round(gate.speech_ratio, 4)
         self._stats.last_gate_reason = gate.reason
+        audio_duration_ms = int(len(audio_bytes) / max(1, sample_rate * 2) * 1000)
+        active_speech_ms = int(round(audio_duration_ms * gate.speech_ratio))
 
         stt_segs: list[TranscriptSegment] = []
         speaker_id: str | None = None
@@ -611,6 +751,7 @@ class AmbientCapturePipeline:
 
         # ── 后置 STT 幻觉门控 ──
         hallu_drop = False
+        repeated_for_meeting = False
         if texts:
             joined = " ".join(texts)
             hallu, why = is_likely_hallucination(
@@ -618,6 +759,7 @@ class AmbientCapturePipeline:
                 audio_bytes,
                 max_cps=self._settings.ambient_max_cps,
                 min_chars=self._settings.ambient_min_stt_chars,
+                speech_duration_s=active_speech_ms / 1000,
             )
             if hallu:
                 logger.debug("ambient hallu drop: %s text=%r", why, joined)
@@ -628,6 +770,23 @@ class AmbientCapturePipeline:
                 # 语义（"STT 调用成功且有内容，只是被下游过滤了"）让前端能区分
                 # "STT 健康但被过滤" vs "STT 没听到"。计数器单独记。
                 self._stats.hallu_dropped += 1
+
+        # 跨 chunk 重复门：第二次相同签名仍保留一次供用户核对，但不再作为
+        # meeting 活跃证据；达到 drop_after 后，新副本不再污染转录/RAG。
+        if texts:
+            joined = " ".join(texts)
+            repeated_for_meeting, repeat_drop, previous_count = (
+                self._record_transcript_repeat(joined, captured_at=captured_dt)
+            )
+            if repeat_drop:
+                logger.debug(
+                    "ambient repeat drop: previous=%d text=%r",
+                    previous_count,
+                    joined,
+                )
+                texts = []
+                stt_segs = []
+                self._stats.repeat_dropped += 1
 
         # ── STT 后处理：LLM 加标点 + 分段（fail-soft） ──
         # 仅当：通过幻觉门控（确认 STT 文本有意义）+ punctuator 注入 + flag 打开 时执行。
@@ -752,20 +911,46 @@ class AmbientCapturePipeline:
             if ambient_stored:
                 self._stats.stored += 1
                 self._stats.last_stored_at = captured_at
+                if ambient_segment_id is not None:
+                    self._schedule_recognized_memory(
+                        text=ambient_text,
+                        segment_id=ambient_segment_id,
+                        captured_at=captured_dt,
+                        meeting_id=ctx_meeting_id,
+                    )
             else:
                 self._stats.segment_store_failed += 1
 
         # 自动会议检测：交给 MeetingState（单例状态机）；它内部协调 detector。
         # ambient 主链路只负责"喂观测"，状态/落库由 MeetingState 全权决定。
+        has_meeting_audio_evidence = (
+            gate.pass_
+            and gate.speech_ratio >= self._settings.automeet_min_valid_speech_ratio
+            and active_speech_ms >= self._settings.automeet_min_valid_speech_ms
+        )
+        has_speech_result = bool(texts) or stt_status in {"failed", "circuit_open"}
+        meeting_valid_speech = (
+            has_meeting_audio_evidence
+            and has_speech_result
+            and not hallu_drop
+            and not repeated_for_meeting
+        )
         effective_meeting_id: str | None = meeting_id
-        if self._state is not None and meeting_id is None and not self._settings.public_demo_mode:
-            duration_ms_obs = max((s.end_ms for s in stt_segs), default=0) if stt_segs else 0
+        if self._state is not None and not self._settings.public_demo_mode:
             try:
-                effective_meeting_id = await self._state.observe_chunk(
-                    speaker_id=speaker_id,
-                    duration_ms=duration_ms_obs,
-                    now=captured_dt,
-                )
+                if meeting_id is None:
+                    effective_meeting_id = await self._state.observe_chunk(
+                        speaker_id=speaker_id,
+                        duration_ms=active_speech_ms if meeting_valid_speech else 0,
+                        now=captured_dt,
+                        is_valid_speech=meeting_valid_speech,
+                    )
+                else:
+                    await self._state.note_valid_speech(
+                        meeting_id,
+                        now=captured_dt,
+                        is_valid_speech=meeting_valid_speech,
+                    )
             except Exception as e:
                 logger.warning("meeting_state.observe_chunk failed: %s", e)
 

@@ -2,11 +2,11 @@
 
 策略：
 1. ``@chat`` 显式逃生 → chat_no_rag（不查 RAG，纯 LLM 闲聊）
-2. 强 RAG 信号词组（"基于附件" / "产品手册里" 等）→ search_rag（confidence=0.9）
-3. 现有关键字命中（``@生成 PPT`` / ``@查...``）→ 对应意图（confidence=0.85）
-4. 问句信号（含问号 / 含"什么/介绍" 等）→ search_rag（confidence=0.7，默认走 RAG）
-5. 关键字未命中 → 走 Fast LLM 分类，让 AgentIntentRouter 决定 chat / agent_task 等
-6. LLM 解析失败 / 服务不可达 → chat 兜底
+2. 明确调研/报告/方案产出 → 确定性 generate_*，附真实 artifact contract
+3. 强 RAG 信号词组（"基于附件" / "产品手册里" 等）→ search_rag
+4. 现有关键字/问句信号 → 对应意图
+5. 未命中 → Fast LLM 短熔断分类；失败或非法输出立即切 Echo AI 主模型
+6. 两个分类通道都失败 → chat 兜底
 
 P4-fix-rag-chat（2026-05-28）：旧策略硬把"非 @ 前缀"全归 chat，导致用户
 输入"请基于附件回答（XX.pdf）"被丢到 chat 兜底链路 → 不调 LLM 不查 RAG。
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from app.config import Settings
 from app.ports.llm import LLMPort
@@ -32,6 +33,8 @@ from app.schemas.intent import (
 from app.schemas.llm import ChatMessage
 
 logger = logging.getLogger(__name__)
+
+_MAIN_ROUTE_FALLBACK_TIMEOUT_S = 8.0
 
 _SYS_PROMPT = """你是 EchoDesk 桌面助手的意图路由器。
 
@@ -77,6 +80,8 @@ class LLMIntentRouter:
         self._settings = settings
         self._llm = llm
         self._fast_model = settings.llm_fast_model
+        self._main_model = settings.llm_main_model
+        self._fast_timeout_s = settings.llm_fast_classification_timeout_s
 
     async def route(
         self,
@@ -84,6 +89,7 @@ class LLMIntentRouter:
         *,
         current_meeting_id: str | None = None,
     ) -> IntentResult:
+        started = time.perf_counter()
         stripped = text.strip()
         at_token = parse_at_prefix(stripped)
         has_at = at_token is not None or stripped.startswith("@")
@@ -95,53 +101,104 @@ class LLMIntentRouter:
         if hit is not None:
             kind, conf = hit
             params = self._params_for(kind, stripped, current_meeting_id)
-            return IntentResult(
-                kind=kind,
-                confidence=conf,
-                params=params,
-                rationale="关键字命中",
+            return self._finish_route(
+                IntentResult(
+                    kind=kind,
+                    confidence=conf,
+                    params=params,
+                    rationale="关键字命中",
+                ),
+                started=started,
+                source="deterministic",
             )
 
         # 非 @ 开头且关键字未命中 → 交给 LLM 路由。
         # ADR-012 的 claude_code/agent_task 决策不能靠关键词表；这里让 LLM
         # 判断是否为后台执行任务，闲聊仍会被分类为 chat。
         if not has_at:
-            return await self._llm_classify(stripped, current_meeting_id)
+            result = await self._llm_classify(stripped, current_meeting_id)
+            return self._finish_route(result, started=started, source="llm")
 
         # @ 前缀但关键字未命中 → 走 Fast LLM 分类 + 兜底
-        return await self._llm_classify(stripped, current_meeting_id)
+        result = await self._llm_classify(stripped, current_meeting_id)
+        return self._finish_route(result, started=started, source="llm")
 
     async def _llm_classify(
         self,
         stripped: str,
         current_meeting_id: str | None,
     ) -> IntentResult:
-        try:
-            resp = await self._llm.chat(
-                [
-                    ChatMessage(role="system", content=_SYS_PROMPT),
-                    ChatMessage(role="user", content=stripped),
-                ],
-                model=self._fast_model,
-                max_tokens=80,
-                temperature=0.0,
-                timeout_s=15.0,
-            )
-        except Exception as e:
-            logger.warning("intent LLM failed, fallback to chat: %s", e)
-            return IntentResult(kind="chat", confidence=0.3, rationale="LLM 失败兜底")
+        attempts = [
+            ("fast", self._fast_model, self._fast_timeout_s),
+        ]
+        if self._main_model != self._fast_model:
+            attempts.append(("main_fallback", self._main_model, _MAIN_ROUTE_FALLBACK_TIMEOUT_S))
 
-        raw = self._strip_code_fence((resp.content or "").strip())
+        for channel, model, timeout_s in attempts:
+            attempt_started = time.perf_counter()
+            try:
+                resp = await self._llm.chat(
+                    [
+                        ChatMessage(role="system", content=_SYS_PROMPT),
+                        ChatMessage(role="user", content=stripped),
+                    ],
+                    model=model,
+                    max_tokens=80,
+                    temperature=0.0,
+                    timeout_s=timeout_s,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "intent route model failed channel=%s model=%s elapsed_ms=%.1f "
+                    "error_type=%s",
+                    channel,
+                    model,
+                    (time.perf_counter() - attempt_started) * 1000,
+                    type(exc).__name__,
+                )
+                continue
+
+            result = self._parse_llm_result(resp.content or "", stripped, current_meeting_id)
+            if result is not None:
+                logger.info(
+                    "latency stage=route_classifier channel=%s model=%s elapsed_ms=%.1f",
+                    channel,
+                    model,
+                    (time.perf_counter() - attempt_started) * 1000,
+                )
+                return result
+            logger.warning(
+                "intent route model returned invalid label channel=%s model=%s elapsed_ms=%.1f",
+                channel,
+                model,
+                (time.perf_counter() - attempt_started) * 1000,
+            )
+
+        return IntentResult(kind="chat", confidence=0.3, rationale="分类服务失败兜底")
+
+    def _parse_llm_result(
+        self,
+        content: str,
+        stripped: str,
+        current_meeting_id: str | None,
+    ) -> IntentResult | None:
+        raw = self._strip_code_fence(content.strip())
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
             return self._extract_from_raw(raw, stripped, current_meeting_id)
 
+        if not isinstance(data, dict):
+            return None
+
         kind_raw = str(data.get("kind", "chat"))
         if kind_raw not in SUPPORTED_INTENTS:
-            return IntentResult(kind="chat", confidence=0.2, rationale=f"非法 kind: {kind_raw}")
+            return None
         kind: IntentKind = kind_raw  # type: ignore[assignment]
-        conf = float(data.get("confidence", 0.6))
+        try:
+            conf = min(1.0, max(0.0, float(data.get("confidence", 0.6))))
+        except (TypeError, ValueError):
+            conf = 0.6
         rationale = str(data.get("rationale", ""))[:80]
         params = self._params_for(kind, stripped, current_meeting_id)
         return IntentResult(kind=kind, confidence=conf, params=params, rationale=rationale)
@@ -151,9 +208,10 @@ class LLMIntentRouter:
         raw: str,
         stripped: str,
         current_meeting_id: str | None,
-    ) -> IntentResult:
+    ) -> IntentResult | None:
         lower = raw.lower()
-        for k in SUPPORTED_INTENTS:
+        # 长标签优先，避免 ``chat`` 从 ``chat_no_rag`` 中被提前截出。
+        for k in sorted(SUPPORTED_INTENTS, key=len, reverse=True):
             if k in lower:
                 params = self._params_for(k, stripped, current_meeting_id)  # type: ignore[arg-type]
                 return IntentResult(
@@ -162,7 +220,22 @@ class LLMIntentRouter:
                     params=params,
                     rationale="LLM 非 JSON 提取",
                 )
-        return IntentResult(kind="chat", confidence=0.2, rationale="LLM 解析失败")
+        return None
+
+    @staticmethod
+    def _finish_route(
+        result: IntentResult,
+        *,
+        started: float,
+        source: str,
+    ) -> IntentResult:
+        logger.info(
+            "latency stage=route source=%s kind=%s elapsed_ms=%.1f",
+            source,
+            result.kind,
+            (time.perf_counter() - started) * 1000,
+        )
+        return result
 
     @staticmethod
     def _strip_code_fence(raw: str) -> str:
@@ -195,6 +268,12 @@ class LLMIntentRouter:
         if kind in INTENT_TO_ARTIFACT_TYPE:
             params["brief"] = body
             params["artifact_type"] = INTENT_TO_ARTIFACT_TYPE[kind]
+            params["delivery"] = "artifact"
+            params["output_contract"] = {
+                "required": True,
+                "artifact_type": INTENT_TO_ARTIFACT_TYPE[kind],
+                "download": True,
+            }
         elif kind in {"search_web", "search_rag"}:
             # 问句 / RAG 强信号若没有 @ 前缀，body 会等于完整 text；
             # 一切都好，下游 ragAsk(question) 用这个值检索。

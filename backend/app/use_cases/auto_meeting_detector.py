@@ -3,8 +3,8 @@
 触发规则（保守为先，避免误开会）：
 - 滑动窗口（默认 30s）内 distinct speakers ≥ 2
 - 窗口内总语音 duration ≥ ``min_active_seconds``（默认 6s）
-- 如果声纹暂时识别不出 speaker_id，但 STT 已连续给出有效语音，走更保守的
-  ``unknown_speaker_min_active_seconds`` fallback 自动开始记录
+- 如果声纹暂时识别不出 speaker_id，仅在显式配置
+  ``unknown_speaker_min_active_seconds`` 时才允许 fallback 自动开始记录
 - 当前没在 meeting 中（手动 @开始 优先；用户手动开会时 detector 自动让步）
 - 触发后进入 ``auto_meeting`` 状态，meeting_id = ``auto-<unix_ts>``
 
@@ -65,11 +65,9 @@ class AutoMeetingDetector:
         self._window_s = window_s
         self._min_distinct = min_distinct_speakers
         self._min_active = min_active_seconds
-        self._unknown_min_active = (
-            unknown_speaker_min_active_seconds
-            if unknown_speaker_min_active_seconds is not None
-            else max(min_active_seconds * 1.5, 10.0)
-        )
+        # 默认禁用 unknown-speaker 自动开始。仅凭 ASR 文本无法区分真人语音与
+        # 固定环境音幻觉；显式配置正数才恢复保守 fallback。
+        self._unknown_min_active = unknown_speaker_min_active_seconds
         self._silence = silence_timeout_s
         self._cooldown = cooldown_s
         self._max_meeting_duration_s = max_meeting_duration_s
@@ -120,7 +118,7 @@ class AutoMeetingDetector:
 
         参数：
         - speaker_id: 该 chunk 识别出的说话人；可为 None（静默或未识别）
-        - duration_ms: 该 chunk 语音活动时长（用 STT end_ms 估算）
+        - duration_ms: 该 chunk 经 VAD 判定的有效语音时长（不得使用 STT wall time）
         - now: chunk 的 wall-clock 时间
         - manual_meeting_id: 上层显式传入的会议 id（手动 @开始）；非 None 时 detector 让步
         """
@@ -180,7 +178,10 @@ class AutoMeetingDetector:
                     reason=f"distinct_speakers={len(distinct_now)} active_ms={active_ms}",
                 )
             )
-        elif unknown_active_ms >= self._unknown_min_active * 1000:
+        elif (
+            self._unknown_min_active is not None
+            and unknown_active_ms >= self._unknown_min_active * 1000
+        ):
             new_id = f"auto-{int(now.timestamp())}"
             self._active_meeting_id = new_id
             self._meeting_started_at = now
@@ -198,8 +199,26 @@ class AutoMeetingDetector:
         if self._active_meeting_id is None:
             return None
         ev = DetectorEvent(kind="end", meeting_id=self._active_meeting_id, reason=reason)
-        self._clear_active(now)
+        self.enter_cooldown(now)
         return ev
+
+    def enter_cooldown(self, now: datetime) -> None:
+        """记录任意来源的结束，并清掉上一场的触发窗口。
+
+        manual end 时 detector 通常没有 active id，旧 ``force_end`` 因而是 no-op，
+        实际没有进入 cooldown。MeetingState 对 manual/auto/watchdog 统一调用本入口。
+        """
+
+        self._clear_active(now)
+
+    def tick(self, *, now: datetime) -> list[DetectorEvent]:
+        """在没有新 ambient chunk 时只推进超时，不制造语音观测。"""
+
+        self._prune_window(now)
+        out: list[DetectorEvent] = []
+        if self._active_meeting_id is not None:
+            self._maybe_end_active(now, out)
+        return out
 
     def reset(self) -> None:
         self._window.clear()
@@ -211,8 +230,11 @@ class AutoMeetingDetector:
         self._distinct_active_at = None
 
     def _clear_active(self, now: datetime) -> None:
-        """end auto meeting 时统一清状态（保留 _last_end_at 进 cooldown）。"""
+        """结束时统一清状态并写 cooldown，禁止旧环境窗口参与下一次触发。"""
+        self._window.clear()
+        self._unknown_voice_window.clear()
         self._active_meeting_id = None
+        self._last_voice_at = None
         self._last_end_at = now
         self._meeting_started_at = None
         self._distinct_active_at = None

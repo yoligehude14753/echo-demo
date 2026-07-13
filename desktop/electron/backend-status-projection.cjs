@@ -14,6 +14,8 @@ const RENDERER_BACKEND_STATES = new Set([
 ]);
 
 const SAFE_REASON_TEXT = Object.freeze({
+  "backend-contract-mismatch":
+    "backend build contract does not match this EchoDesk app",
   "backend-health-failed": "backend health check failed",
   "backend-process-exited": "backend process exited unexpectedly",
   "backend-spawn-failed": "backend process failed to start",
@@ -23,6 +25,9 @@ const SAFE_REASON_TEXT = Object.freeze({
 
 function stableReasonCode(payload) {
   const reason = String(payload?.reason || "");
+  if (reason === "external backend contract mismatch") {
+    return "backend-contract-mismatch";
+  }
   if (reason === "external backend unhealthy") return "external-backend-unhealthy";
   if (/^spawn\b/i.test(reason)) return "backend-spawn-failed";
   if (/^child exited\b/i.test(reason)) return "backend-process-exited";

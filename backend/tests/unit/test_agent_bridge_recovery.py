@@ -9,7 +9,7 @@ import pytest
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.repo.migrator import run_migrations
 from app.agents.artifact_transfer import ArtifactDownloadResult
-from app.agents.base import AgentIntent
+from app.agents.base import AgentIntent, AgentTaskState
 from app.agents.events import EchoTaskEvent
 from app.agents.service import AgentTaskRecord, AgentTaskService
 from app.config import Settings
@@ -21,6 +21,9 @@ from app.security.context import bind_principal, reset_principal
 class _EnabledBackend:
     enabled = True
     base_url = "http://127.0.0.1:9"
+
+    async def get_task(self, _runner_task_id: str) -> dict[str, Any] | None:
+        return None
 
 
 async def _settings(tmp_path: Path) -> Settings:
@@ -134,6 +137,85 @@ async def test_periodic_recovery_replays_projection_only_task_without_runner(
     assert recovered is not None
     assert recovered.runner_task_id is None
     assert service._bridge_tasks == {}
+    await service.aclose()
+
+
+@pytest.mark.unit
+async def test_bridge_recovers_completed_task_from_agentos_http_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = await _settings(tmp_path)
+    service = _service(settings, holder_id="http-snapshot-recovery")
+    rec, _created = await service._create_task_with_run(
+        AgentIntent(
+            text="produce a report",
+            device_id="legacy-local",
+            echo_task_id="task-http-snapshot-recovery",
+        ),
+        state=AgentTaskState.PENDING,
+    )
+    async with aiosqlite.connect(str(settings.db_path)) as conn:
+        await conn.execute(
+            """UPDATE agent_tasks
+               SET runner_task_id = 'runner-http-snapshot', state = 'pending'
+               WHERE task_id = ?""",
+            (rec.task_id,),
+        )
+        await conn.commit()
+    rec = await service.get_task(rec.task_id)
+    assert rec is not None
+    assert rec.workflow_run_id is not None
+
+    async def http_snapshot(_runner_task_id: str) -> dict[str, Any]:
+        return {
+            "id": "runner-http-snapshot",
+            "status": "succeeded",
+            "final_text": "报告已完成",
+            "finished_at": "2026-07-13T06:00:00+00:00",
+            "duration_ms": 1234,
+            "artifacts": [
+                {
+                    "relpath": "reports/output.md",
+                    "name": "output.md",
+                    "kind": "text",
+                    "size_bytes": 42,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(service.backend, "get_task", http_snapshot)
+
+    async def fake_download(*_args: Any, **kwargs: Any) -> ArtifactDownloadResult:
+        cache_path = kwargs["cache_path"]
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text("done", encoding="utf-8")
+        return ArtifactDownloadResult(
+            path=cache_path,
+            size_bytes=4,
+            content_type="text/markdown",
+        )
+
+    monkeypatch.setattr("app.agents.service.download_artifact_to_path", fake_download)
+
+    service.start_bridge_for_task(rec)
+    recovered = await _wait_for_bridge_completion(service, rec.task_id)
+    assert recovered.state == AgentTaskState.SUCCEEDED
+    assert recovered.final_text == "报告已完成"
+    assert recovered.artifacts[0]["relpath"] == "reports/output.md"
+    run = await service.workflow.get_run(rec.workflow_run_id)
+    assert run is not None
+    assert run.state == "succeeded"
+    assert run.output["artifacts"][0]["relpath"] == "reports/output.md"
+    async with aiosqlite.connect(str(settings.db_path)) as conn:
+        rows = await (
+            await conn.execute(
+                """SELECT raw_kind FROM agent_task_events
+                   WHERE task_id = ? ORDER BY seq""",
+                (rec.task_id,),
+            )
+        ).fetchall()
+    assert [row[0] for row in rows] == ["artifact_change", "result", "task_state"]
     await service.aclose()
 
 

@@ -185,8 +185,8 @@ class IsolationSmoke:
         self._rag_doc_id: str | None = None
         self._cleanup_failed = False
         headers = {
-            "User-Agent": "EchoDesk-Public-Isolation-Smoke/0.3.1",
-            _CLIENT_VERSION_HEADER: "0.3.1",
+            "User-Agent": "EchoDesk-Public-Isolation-Smoke/0.3.2",
+            _CLIENT_VERSION_HEADER: "0.3.2",
         }
         if deployment_gate_token is not None:
             headers[_DEPLOYMENT_GATE_HEADER] = deployment_gate_token
@@ -309,7 +309,7 @@ class IsolationSmoke:
                 {
                     "type": "client_hello",
                     "last_seq": 0,
-                    "client_version": "0.3.1+public-isolation-no-replay",
+                    "client_version": "0.3.2+public-isolation-no-replay",
                     "auth": {"type": "bearer", "token": identity.token},
                 },
                 separators=(",", ":"),

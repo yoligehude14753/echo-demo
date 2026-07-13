@@ -8,6 +8,27 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.3.2] – 2026-07-13
+
+### 新增
+
+- 新增 L0-L3 分层 memory：当前对话、会议/纪要/产物、带 provenance 的事实/偏好/决策/待办/人物关系，以及仅由用户明确配置写入的稳定偏好。
+- ASR 有效文本可在后台抽取并关联历史会议、工作产物和长期记忆；命中结果以 Echo Memory 来源卡插入对话信息流，支持来源、时间、关联原因和层级展示。
+- 新增 memory recall、确认、编辑、删除、provenance 与用户配置 API；删除会擦除正文与来源，而不是只隐藏 UI。
+- “调研、深度研究、报告、方案”等明确产出请求确定性进入 artifact 流程，并在右侧 outputs 提供真实文件与下载入口。
+
+### 修复
+
+- 快速分类、RAG 仲裁和 memory 匹配/抽取默认实际调用 Yunwu `gpt-5.4-nano`，2 秒熔断；界面显示名仍为 `qwen3 8b`。Echo AI 主回答保持 Yunwu `deepseek-v4-flash`。
+- 用户消息在路由/模型请求前立即进入信息流；长任务和会议 finalize 后台执行，不再长期锁住输入框。
+- RAG 部分证据回答静默省略未覆盖内容，并对引用、数字和结论执行确定性来源约束；零证据只返回一句简短提示。
+- Agent 任务终态覆盖陈旧进度文案；Echo AI 使用独立靛青视觉；WebSocket 断开后可通过 HTTP 恢复任务终态与产物。
+- 手动会议增加可配置无有效语音自动结束与 4 小时兜底上限；结束先切 idle、写 cooldown，再后台生成纪要，避免同一环境音立即重开。
+- FireRedASR2-AED 保持不变，修正 segment 时长混入网络推理耗时的问题，并增加 VAD heartbeat、周期复读、低多样性和跨 chunk 幻觉过滤。
+- Electron 连接已占用的本机 backend 端口前，校验产品版本、API capability、实际 build ID 与迁移目录上限；不兼容进程 fail-closed，不再仅凭 `/healthz` 200 接受。
+- backend 拒绝打开 `schema_version` 高于当前二进制迁移目录上限的数据库，避免旧二进制静默读取新 schema。
+- Desktop、backend 与 Android / TV 源码版本推进到 `0.3.2`，同一产品版本的不同 backend 构建可通过实际 build ID 区分。
+
 ## [0.3.1] – 2026-07-12
 
 EchoDesk 0.3.1 将运行时实现收敛到统一 Workflow Kernel、统一身份策略和统一桌面 API transport；这是源码与本地构建版本。截至 2026-07-13，公共 latest 仍为 `v0.2.50`，0.3.1 尚未发布到公共 Release [F-ECHO-029]。

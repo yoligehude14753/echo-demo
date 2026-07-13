@@ -40,6 +40,7 @@ const DOORS: DoorRow[] = [
   { key: "stt_failed", label: "语音识别失败", tone: "danger" },
   { key: "stt_empty", label: "未识别出文字", tone: "warn" },
   { key: "hallu_dropped", label: "已过滤异常文本", tone: "warn" },
+  { key: "repeat_dropped", label: "已过滤重复文本", tone: "warn" },
   { key: "stored", label: "已保存转写", tone: "good" },
 ];
 

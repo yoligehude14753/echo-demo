@@ -82,7 +82,7 @@ test("public client keeps the device credential out of renderer storage and WS U
 
   await page.goto("/");
   await expect.poll(() => meetingsAuthorization).toBe("Bearer session-from-server");
-  expect(meetingsClientVersion).toBe("0.3.1");
+  expect(meetingsClientVersion).toBe("0.3.2");
   const wsUrl = await page.evaluate(
     () =>
       (
@@ -100,7 +100,7 @@ test("public client keeps the device credential out of renderer storage and WS U
     .toContainEqual(
       expect.objectContaining({
         type: "client_hello",
-        client_version: "0.3.1",
+        client_version: "0.3.2",
         auth: { type: "bearer", token: "session-from-server" },
       }),
     );

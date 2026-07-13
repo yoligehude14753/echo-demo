@@ -19,6 +19,8 @@ export type BusinessEventType =
   | "rag.answer.done"
   | "chat.delta"
   | "chat.done"
+  | "memory.status"
+  | "memory.sources"
   | "tts.suggested"
   | "agent.task.event"
   | "error";
@@ -40,6 +42,35 @@ export interface EchoEvent<T = Record<string, unknown>> {
   ts: string;
   meeting_id?: string | null;
   payload: T;
+}
+
+export interface MemorySourceCard {
+  index: number;
+  candidate_id: string;
+  memory_id?: string | null;
+  level: "L0" | "L1" | "L2" | "L3";
+  kind: string;
+  title: string;
+  excerpt: string;
+  source_ref: string;
+  occurred_at: string;
+  confidence: number;
+  relevance: number;
+  score: number;
+  relation: string;
+  manageable: boolean;
+}
+
+export interface MemoryFramePayload {
+  type: "memory.status" | "memory.sources";
+  state: "recalling" | "found" | "empty" | "complete" | "degraded";
+  label: string;
+  conversation_id?: string;
+  message_id?: string;
+  model_display_name?: string;
+  latency_ms?: number;
+  source_count?: number;
+  sources?: MemorySourceCard[];
 }
 
 export const WS_PROTOCOL_VERSION = "1.0";

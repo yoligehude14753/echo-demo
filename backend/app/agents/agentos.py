@@ -129,6 +129,32 @@ class AgentOSBackend:
             _log.warning("agentos cancel failed task=%s: %s", runner_task_id, exc)
             return False
 
+    async def get_task(self, runner_task_id: str) -> dict[str, object] | None:
+        """Fetch the authoritative AgentOS task snapshot.
+
+        EchoDesk normally follows the AgentOS WebSocket stream, but the stream is
+        intentionally not the only source of truth: if it is unavailable or
+        rejects the connection, this HTTP snapshot lets EchoDesk reconcile the
+        task state and artifacts instead of leaving the UI stuck in "queued".
+        """
+
+        if not self.enabled:
+            return None
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+                trust_env=False,
+            ) as client:
+                resp = await client.get(f"{self.base_url}/api/v1/tasks/{runner_task_id}")
+                if resp.status_code == 404:
+                    return None
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, dict) else None
+        except httpx.HTTPError as exc:
+            _log.warning("agentos task state fetch failed task=%s: %s", runner_task_id, exc)
+            return None
+
 
 def submit_operation_key(*, tenant_id: str, owner_id: str, task_id: str) -> str:
     material = f"v1\0{tenant_id}\0{owner_id}\0{task_id}\0submit".encode()

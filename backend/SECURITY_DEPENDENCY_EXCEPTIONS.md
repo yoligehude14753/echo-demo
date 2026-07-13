@@ -17,7 +17,7 @@
   typecheck, and audit-tool locks do not contain torch.
 - Required product use: torch/torchaudio/SpeechBrain implement the default
   in-process ECAPA speaker diarizer and are imported by the packaged backend
-  dependency boundary. Removing them from the 0.3.1 runtime would remove the
+  dependency boundary. Removing them from the 0.3.2 runtime would remove the
   default speaker-identification path. Splitting ECAPA into an optional install
   also requires coordinated installer, frozen-binary, CI, and product fallback
   changes, so it is not a lock-only security update.

@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("echo", {
   isPublicDemo: ipcRenderer.sendSync("echo:is-public-demo") === true,
   backendHost: ipcRenderer.sendSync("echo:backend-host-sync"),
   getBackendHost: () => ipcRenderer.invoke("echo:backend-host"),
+  getBackendContract: () => ipcRenderer.invoke("echo:backend-contract"),
   getShareBackendHost: () => ipcRenderer.invoke("echo:share-backend-host"),
   loadLocalLegacyHistory: () =>
     ipcRenderer.invoke("echo:load-local-legacy-history"),

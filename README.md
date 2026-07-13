@@ -1,6 +1,8 @@
 # EchoDesk · 数字分身工作台
 
-EchoDesk 是面向会议与办公场景的本地优先桌面应用：持续采集和会议转写进入知识库，用户可以基于会议与资料检索、生成纪要和办公产物，并把长任务交给 Agent 执行。当前源码版本为 **v0.3.1**。
+EchoDesk 是面向会议与办公场景的本地优先桌面应用：持续采集和会议转写进入知识库，用户可以基于会议与资料检索、生成纪要和办公产物，并把长任务交给 Agent 执行。当前源码版本为 **v0.3.2**。
+
+v0.3.2 新增 L0-L3 分层 memory、ASR 文本关联与信息流来源卡，快速任务实际使用 Yunwu `gpt-5.4-nano`（界面显示 `qwen3 8b`），Echo AI 主回答继续使用 Yunwu `deepseek-v4-flash`；同时加入 app/backend build 握手、数据库 schema fail-closed、会议自动结束/cooldown 与 FireRed 复读/幻觉过滤。
 
 - 桌面端默认启动安装包内自带的本机 backend，业务数据写入本机 SQLite。
 - public demo 只有在发布入口显式设置 `ECHO_PUBLIC_DEMO=1` 时启用；Android / TV 作为受限客户端连接配置的服务端。
@@ -24,7 +26,7 @@ v0.3.1 当前本地源码与受控安装态证据 [F-ECHO-028]：
 - Public isolation：self-test 与双 principal 完整 smoke 均通过；release aggregate `31 / 31 passed`，actionlint 与 action pin 检查通过。
 - Android / TV：current exact-SHA phone 与 TV build、JVM `4 / 4`、instrumentation `6 / 6`、APK identity `0.3.1 (301)` 与 unsigned fail-closed 全部通过；聚合 lint 为 `Fatal 0 / Error 0 / Warning 0`，另有 Capacitor `Hint 2`。产物是 debug APK，不可作为公开发布资产。
 - 依赖审计：desktop npm 与内置 `ppt_ib_deck` npm 均为 `0` finding。Python six locks 均有效；runtime/dev/build 三份锁各仍报告同一项上游无 `fix_versions` 的 `torch` `CVE-2025-3000`，按文档化例外控制至 2026-08-12；lint/typecheck/audit-tool 锁为 `0` finding，不能把 Python 总体结果写成 clean 或零漏洞。
-- 版本：Desktop、Backend、Android、package-lock、Commitizen 和安装态断言统一为 `0.3.1`。
+- 版本：v0.3.2 源码中的 Desktop、Backend、Android、package-lock、Commitizen 和版本契约已统一；下述安装态结果仍是 v0.3.1 的历史门禁证据，不冒充 v0.3.2 已验证结果。
 
 current exact-SHA macOS arm64 门禁已通过：fresh ad-hoc DMG、ZIP、metadata、blockmap、codesign、plist、asar、forbidden-file scan、`1066` 组件 SBOM 与 SHA-256 校验通过，read-only mounted DMG smoke `1 / 1 passed`；安装态完整 workflow `1 / 1 passed`，覆盖真实下载 `0600`、marker、安全文件名、无残留 partial，以及 GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart；live contract `2 / 2 passed`，`0 skipped / 0 failed`。Developer ID、notary、staple 与 Gatekeeper 正式链路因缺外部签名输入而 skipped，不能由 ad-hoc 结果替代。
 

@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import httpx
@@ -24,6 +25,8 @@ import httpx
 from app.adapters.audio import normalize_audio_bytes, pcm_to_wav
 from app.config import Settings
 from app.schemas.meeting import TranscriptSegment
+
+logger = logging.getLogger("echodesk.stt.firered")
 
 
 class STTError(RuntimeError):
@@ -89,13 +92,22 @@ class FireRedSTT:
         if not text:
             return []
 
+        # ``end_ms`` 是音频时间轴，不能混入 HTTP/推理 wall time。旧实现取
+        # max(audio_duration, elapsed)，上游慢 20~60s 时会把一个 6s chunk
+        # 伪装成 20~60s 的有效语音，进而错误触发或续命 auto meeting。
         duration_ms = int(len(audio_bytes) / (sample_rate * 2) * 1000)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+        logger.debug(
+            "firered transcription completed audio_duration_ms=%d elapsed_ms=%d chars=%d",
+            duration_ms,
+            elapsed_ms,
+            len(text),
+        )
         return [
             TranscriptSegment(
                 text=text,
                 start_ms=0,
-                end_ms=max(duration_ms, elapsed_ms),
+                end_ms=duration_ms,
                 speaker_id=None,
                 speaker_label=None,
             )

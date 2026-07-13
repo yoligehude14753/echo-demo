@@ -74,11 +74,21 @@ export interface ElectronPublicSession {
   credential_expires_at?: string | null;
 }
 
+export interface ElectronBackendBuildContract {
+  schema_version: number;
+  product_id: string;
+  product_version: string;
+  api_contract: string;
+  build_id: string;
+  schema_catalog_max: number | null;
+}
+
 interface ElectronEchoBridge {
   isElectron?: boolean;
   isPublicDemo?: boolean;
   backendHost?: string;
   getBackendHost?: () => Promise<string>;
+  getBackendContract?: () => Promise<ElectronBackendBuildContract | null>;
   getShareBackendHost?: () => Promise<string>;
   loadLocalLegacyHistory?: () => Promise<unknown | null>;
   ensurePublicSession?: () => Promise<ElectronPublicSession | null>;

@@ -64,11 +64,14 @@ def speech_frame_ratio(
     frame_samples = int(_SAMPLE_RATE * frame_ms / 1000)
     if frame_samples <= 0 or n < frame_samples:
         return 0.0
-    total = (n - frame_samples) // frame_samples
+    # 只统计完整帧。旧实现用 ``n - frame_samples`` 且 range 右边界不包含，
+    # 每个 chunk 都会漏掉最后一帧；短音频甚至会错误返回 0。
+    total = n // frame_samples
     if total <= 0:
         return 0.0
     active = 0
-    for i in range(0, n - frame_samples, frame_samples):
+    for frame_index in range(total):
+        i = frame_index * frame_samples
         chunk = samples[i : i + frame_samples]
         rms = math.sqrt(sum(s * s for s in chunk) / frame_samples)
         if rms > frame_rms_threshold:
@@ -102,29 +105,88 @@ def pre_stt_gate(
     return GateDecision(pass_=True, reason="ok", rms=rms, speech_ratio=ratio)
 
 
+def normalize_transcript_text(text: str) -> str:
+    """生成用于幻觉/重复判断的稳定文本签名。
+
+    仅保留 Unicode 字母和数字，并统一大小写。这样 ``“嗯……”`` 不会因为
+    标点数量达到 ``min_chars`` 而绕过短文本门，跨 chunk 的标点差异也不会
+    绕过重复检测。
+    """
+
+    return "".join(char.casefold() for char in text if char.isalnum())
+
+
+def _repetitive_text_reason(normalized: str) -> str | None:
+    """识别短周期复读，不把普通的少量重复措辞误判为幻觉。"""
+
+    n_chars = len(normalized)
+    if n_chars < 5:
+        return None
+    if len(set(normalized)) == 1:
+        return "single_char"
+
+    # 至少完整重复 3 次，且周期模板覆盖率 ≥ 90% 才拒绝。例如
+    # “嗯嗯嗯…”、“测试测试测试”会命中，“非常非常重要”不会命中。
+    for unit_size in range(1, min(12, n_chars // 3) + 1):
+        unit = normalized[:unit_size]
+        template = (unit * ((n_chars + unit_size - 1) // unit_size))[:n_chars]
+        matches = sum(
+            left == right for left, right in zip(normalized, template, strict=True)
+        )
+        if matches / n_chars >= 0.9:
+            return f"periodic_unit_{unit_size}"
+
+    # 长文本的 3-gram 多样性极低，也通常是 ASR 卡住后的循环输出。
+    if n_chars >= 12:
+        trigrams = [normalized[i : i + 3] for i in range(n_chars - 2)]
+        if len(set(trigrams)) / len(trigrams) <= 0.25:
+            return "low_ngram_diversity"
+    return None
+
+
 def is_likely_hallucination(
     text: str,
     audio_bytes: bytes,
     *,
     max_cps: float = 12.0,
     min_chars: int = 4,
+    speech_duration_s: float | None = None,
 ) -> tuple[bool, str]:
-    """STT 后置过滤：字符速率 + 最短长度。
+    """STT 后置过滤：有效字符、复读模式与字符速率。
 
-    - text 短于 min_chars 直接判幻觉（< 4 字大概率是 "嗯。" "ですね" 等噪声幻觉）
-    - 仅对长音频（≥3s 且 ≥12 chars）跑 cps 阈值；短句 cps 天然偏高，不计
+    - 有效字符短于 min_chars 直接判幻觉，标点不计入长度
+    - 短周期复读或极低 n-gram 多样性直接判幻觉
+    - 常规 cps 仍按完整音频时长计算；简单 RMS-VAD 会漏掉清辅音和停顿，直接按
+      active time 会误杀真实快语速
+    - 调用方提供 ``speech_duration_s`` 时，额外拦截 active-cps 极端异常值
     - cps > max_cps → 视为复读/幻觉
 
     返回 (is_hallu, reason)。
     """
     t = text.strip()
-    if len(t) < min_chars:
-        return True, f"too_short({len(t)}<{min_chars})"
-    duration_s = len(audio_bytes) / (_SAMPLE_RATE * 2)  # int16 mono = 32000 B/s
-    if duration_s >= 3.0 and len(t) >= 12:
-        cps = len(t) / duration_s
+    normalized = normalize_transcript_text(t)
+    if len(normalized) < min_chars:
+        return True, f"too_short({len(normalized)}<{min_chars})"
+
+    repetition_reason = _repetitive_text_reason(normalized)
+    if repetition_reason is not None:
+        return True, f"repetitive_text({repetition_reason})"
+
+    audio_duration_s = len(audio_bytes) / (_SAMPLE_RATE * 2)  # int16 mono = 32000 B/s
+    if audio_duration_s >= 3.0 and len(normalized) >= 12:
+        cps = len(normalized) / audio_duration_s
         if cps > max_cps:
             return True, f"cps_too_high({cps:.1f}>{max_cps})"
+
+    # 真实保存 WAV 的只读抽样显示，简单能量 VAD 下正常中文 active-cps 可到
+    # 20 左右，因此不能直接套用常规阈值。这里只拒绝高出常规上限 2.5 倍的
+    # 极端结果，用来抓“不到 1s 活跃噪声却返回几十字”的典型幻觉。
+    if speech_duration_s is not None and speech_duration_s >= 0.8 and len(normalized) >= 12:
+        active_duration_s = min(audio_duration_s, speech_duration_s)
+        active_cps = len(normalized) / active_duration_s
+        active_cps_limit = max_cps * 2.5
+        if active_cps > active_cps_limit:
+            return True, f"active_cps_too_high({active_cps:.1f}>{active_cps_limit:.1f})"
     return False, "ok"
 
 
@@ -241,6 +303,7 @@ __all__ = [
     "VoicedSegment",
     "integer_rms",
     "is_likely_hallucination",
+    "normalize_transcript_text",
     "pre_stt_gate",
     "speech_frame_ratio",
     "split_into_voiced_segments",
