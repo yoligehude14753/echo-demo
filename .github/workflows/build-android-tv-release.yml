@@ -276,7 +276,7 @@ jobs:
           disable-animations: true
           disable-linux-hw-accel: false
           script: |
-            set -euo pipefail
+            bash -euo pipefail <<'BASH'
             version="$(node -p "require('./desktop/package.json').version")"
             version_code="$(node -p "require('./desktop/android/version-codes.json').releases.at(-1).versionCode")"
             signing_manifest="$GITHUB_WORKSPACE/desktop/release/EchoDesk-${version}-android-signing.json"
@@ -310,6 +310,7 @@ jobs:
             ECHODESK_ANDROID_ROTATION_MIN_SDK_VERSION="$rotation_min_sdk" \
               node desktop/scripts/android-candidate-upgrade-smoke.cjs \
               | tee "desktop/release/EchoDesk-${version}-android-tv-upgrade-smoke.json"
+            BASH
       - name: generate Android and TV CycloneDX SBOM
         shell: bash
         run: |

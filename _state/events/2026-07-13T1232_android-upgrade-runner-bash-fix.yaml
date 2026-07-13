@@ -1,0 +1,38 @@
+event_id: "E-20260713T1232-001"
+event_type: "add"
+timestamp: "2026-07-13T12:32:33+08:00"
+author: "agent/codex-android-release-fix"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-031"
+      claim: "The EchoDesk signed Android upgrade workflow explicitly enters Bash inside android-emulator-runner before using pipefail, because that action launches its script through /bin/sh on the hosted runner."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-13T12:32:33+08:00"
+      observed_by: "agent/codex-android-release-fix"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - ".github/workflows/build-android-tv-release.yml"
+        - "https://github.com/yoligehude14753/echo-demo/actions/runs/29223740420/attempts/2"
+        - "runtime:workflow YAML parse => passed"
+        - "runtime:extracted emulator script /bin/sh syntax check => passed"
+        - "runtime:CI action pin policy => passed"
+      evidence: "The exact-main signed candidate workflow reached a booted Android emulator, then failed before installation with '/usr/bin/sh: set: Illegal option -o pipefail'. The emulator action's multiline script is now a POSIX-compatible Bash heredoc launcher; the Bash body retains fail-fast and pipefail behavior. YAML parsing, outer /bin/sh syntax parsing, diff checks, and immutable action-pin validation passed."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "android"
+        - "release"
+        - "github-actions"
+        - "emulator"
+        - "bash"
+        - "bugfix"
+git_commit: null
