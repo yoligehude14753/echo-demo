@@ -183,6 +183,10 @@ test("Android Gradle and package scripts separate development from public releas
   );
   assert.match(
     verificationMetadata,
+    /junit-bom-5\.9\.2\.module[\s\S]*ab137ba5a8e32c9b066bf9126a1c76dd5614b724ba5c0b02549772b5e9f4cf1f/,
+  );
+  assert.match(
+    verificationMetadata,
     /aapt2-8\.13\.0-13719691-linux\.jar[\s\S]*c1aebd96a144313da65de675cc1f59041b41a52e844228d311bb580ed830b0d9/,
   );
   assert.equal(
