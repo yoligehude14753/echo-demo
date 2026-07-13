@@ -67,6 +67,7 @@ async function verifyWorkspaceRootIdentity({
   root,
   expectedIdentity = null,
   afterInitialLstat = undefined,
+  platform = process.platform,
 }) {
   if (!path.isAbsolute(String(root || ""))) {
     throw new TypeError("workspace root identity requires an absolute path");
@@ -99,7 +100,11 @@ async function verifyWorkspaceRootIdentity({
     throw rootError("WORKSPACE_ROOT_INVALID", cause);
   }
   if (
-    !sameCanonicalWorkspaceRootPath(canonical, resolved) ||
+    // Windows can report a short-name and long-name spelling for the same
+    // directory across realpath implementations.  Its full 64-bit file ID is
+    // the stronger authority; POSIX keeps the strict canonical spelling gate.
+    (platform !== "win32" &&
+      !sameCanonicalWorkspaceRootPath(canonical, resolved, platform)) ||
     !current.isDirectory() ||
     current.isSymbolicLink() ||
     !sameIdentity(current, identityFromStat(initial)) ||

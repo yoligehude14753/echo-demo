@@ -114,6 +114,34 @@ test("64-bit workspace file ids cannot alias through Number rounding", async (t)
   );
 });
 
+test("Windows accepts realpath spelling drift only while the file ID is stable", async (t) => {
+  const { root } = fixture(t);
+  let currentId = 42n;
+  t.mock.method(fs.promises, "lstat", async () => ({
+    dev: 1n,
+    ino: currentId,
+    isDirectory: () => true,
+    isSymbolicLink: () => false,
+  }));
+  t.mock.method(
+    fs.promises,
+    "realpath",
+    async () => "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\root",
+  );
+
+  const captured = await verifyWorkspaceRootIdentity({ root, platform: "win32" });
+  assert.deepEqual(captured.identity, { dev: "1", ino: "42" });
+  currentId = 43n;
+  await assert.rejects(
+    verifyWorkspaceRootIdentity({
+      root,
+      platform: "win32",
+      expectedIdentity: captured.identity,
+    }),
+    (error) => error.code === "WORKSPACE_ROOT_IDENTITY_CHANGED",
+  );
+});
+
 test("configured root swapped to an outside symlink never redefines authorization", async (t) => {
   const { root, outside } = fixture(t);
   const captured = await verifyWorkspaceRootIdentity({ root });
