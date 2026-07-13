@@ -81,6 +81,9 @@ test("signed Android workflow upgrades real pinned historical APKs to candidates
     path.join(repoRoot, ".github/workflows/build-android-tv-release.yml"),
     "utf8",
   );
+  const upgradeRunner = readDesktop(
+    "scripts/run-android-signed-upgrade-smoke.sh",
+  );
   assert.match(workflow, /EchoDesk-0\.2\.34-android\.apk/);
   assert.match(workflow, /EchoDesk-0\.2\.34-android-tv\.apk/);
   assert.match(
@@ -91,16 +94,31 @@ test("signed Android workflow upgrades real pinned historical APKs to candidates
     workflow,
     /be8b0c08004a13dc0e347c0d6edd14653e5c3864db4f78948efb7d80572a6653/,
   );
-  assert.equal(
-    [...workflow.matchAll(/android-candidate-upgrade-smoke\.cjs/g)].length,
-    2,
-  );
   assert.match(
     workflow,
     /reactivecircus\/android-emulator-runner@[0-9a-f]{40}/,
   );
-  assert.match(workflow, /android-upgrade-smoke\.json/);
-  assert.match(workflow, /android-tv-upgrade-smoke\.json/);
+  assert.match(
+    workflow,
+    /script: bash desktop\/scripts\/run-android-signed-upgrade-smoke\.sh/,
+  );
+  assert.doesNotMatch(workflow, /bash -euo pipefail <<'BASH'/);
+  assert.match(upgradeRunner, /set -euo pipefail/);
+  assert.equal(
+    upgradeRunner
+      .split("\n")
+      .filter((line) => line === "run_upgrade_smoke \\").length,
+    2,
+  );
+  assert.equal(
+    [...upgradeRunner.matchAll(/android-candidate-upgrade-smoke\.cjs/g)]
+      .length,
+    1,
+  );
+  assert.match(upgradeRunner, /com\.echodesk\.app/);
+  assert.match(upgradeRunner, /com\.echodesk\.tv/);
+  assert.match(upgradeRunner, /android-upgrade-smoke\.json/);
+  assert.match(upgradeRunner, /android-tv-upgrade-smoke\.json/);
   assert.match(workflow, /ECHODESK_VERSION=%s/);
   assert.doesNotMatch(
     workflow,
