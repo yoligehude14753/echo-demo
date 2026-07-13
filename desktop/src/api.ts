@@ -606,7 +606,16 @@ export function artifactIdFromDownloadHref(href: string | undefined): string | n
  *
  * 为了滚动升级，仍接受旧服务端 `[DONE]`，但提前 EOF 绝不视为成功。
  */
-export async function ragAsk(question: string): Promise<{
+export interface RagAskOptions {
+  conversationId?: string;
+  messageId?: string;
+  onMemoryFrame?: (frame: MemoryFramePayload) => void;
+}
+
+export async function ragAsk(
+  question: string,
+  options: RagAskOptions = {},
+): Promise<{
   answer: string;
   citations: Array<{
     kind: string;
@@ -624,7 +633,11 @@ export async function ragAsk(question: string): Promise<{
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({
+        question,
+        conversation_id: options.conversationId ?? "default",
+        message_id: options.messageId,
+      }),
     },
     RAG_QUERY_TIMEOUT_MS,
     undefined,
@@ -684,6 +697,13 @@ export async function ragAsk(question: string): Promise<{
         const frameType = typeof obj.type === "string" ? obj.type : eventType;
         if (frameType === "error" || typeof obj.error === "string") {
           throw new Error("暂时无法生成回答，请稍后重试");
+        }
+        if (
+          (eventType === "memory.status" || eventType === "memory.sources") &&
+          (obj.type === "memory.status" || obj.type === "memory.sources")
+        ) {
+          options.onMemoryFrame?.(obj as unknown as MemoryFramePayload);
+          continue;
         }
         if (frameType === "done") {
           if (typeof obj.answer === "string") answer = obj.answer;

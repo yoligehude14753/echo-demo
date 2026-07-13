@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from app.memory.models import RecallCandidate, RecallMatch, RecallResult
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
 from app.schemas.rag import RagChunk, WebHit
 from app.use_cases.retrieve_and_answer import retrieve_and_answer
@@ -220,3 +222,61 @@ async def test_zero_evidence_skips_answer_generation_and_returns_short_notice() 
     chunks = [chunk async for chunk in out.chunks]
     assert "".join(chunks) == "当前没有足够的可用证据。"
     assert llm.answer_messages is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_memory_evidence_is_injected_and_precedes_unrelated_rag() -> None:
+    question = "请根据历史会议中关于 RTX5080 的讨论给出核心结论"
+    memory = RecallResult(
+        query=question,
+        matches=[
+            RecallMatch(
+                candidate=RecallCandidate(
+                    candidate_id="l1-meeting-minutes:auto-rtx5080",
+                    level="L1",
+                    content="RTX5080 是会议讨论的旗舰显卡，并处于限量供应状态。",
+                    source_ref="meeting:auto-rtx5080#minutes",
+                    occurred_at=datetime.now(UTC),
+                    salience=0.8,
+                    kind="meeting_minutes",
+                ),
+                relevance=0.94,
+                relation="型号完全匹配",
+                score=0.92,
+            )
+        ],
+    )
+
+    async def recall() -> RecallResult:
+        return memory
+
+    llm = FakeLLM(classify_label="rag")
+    out = await retrieve_and_answer(
+        main_llm=llm,
+        fast_llm=llm,
+        fast_model="gpt-5.4-nano",
+        rag=FakeRag(
+            [
+                RagChunk(
+                    doc_id="unrelated",
+                    doc_title="旧图片 OCR",
+                    chunk_id="c1",
+                    text="ECHO_VL_8F44 PNG KNOWLEDGE TEST",
+                )
+            ]
+        ),
+        web=FakeWeb([]),
+        question=question,
+        memory_recall=recall(),
+    )
+
+    answer = "".join([chunk async for chunk in out.chunks])
+    assert out.memory is memory
+    assert out.retrieval.chosen_source == "memory+rag"
+    assert llm.answer_messages is not None
+    prompt = llm.answer_messages[0].content
+    assert "RTX5080 是会议讨论的旗舰显卡" in prompt
+    assert "[memory:l1-meeting-minutes:auto-rtx5080]" in prompt
+    assert answer.startswith("- RTX5080 是会议讨论的旗舰显卡")
+    assert "旧图片 OCR" not in answer

@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from datetime import UTC, datetime
 
 from app.memory.models import RecallCandidate
 from app.memory.repository import normalize_text
+
+_IDENTIFIER_RE = re.compile(
+    r"(?<![a-z0-9])(?=[a-z0-9._/-]*[a-z])(?=[a-z0-9._/-]*\d)"
+    r"[a-z0-9]+(?:[._/-][a-z0-9]+)*(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _mixed_identifiers(value: str) -> set[str]:
+    """Extract stable model/product identifiers such as RTX5080 or H100.
+
+    Pure numbers are intentionally excluded so a price like ``5080元`` cannot
+    masquerade as a hardware-model match.
+    """
+
+    return {match.group(0).casefold() for match in _IDENTIFIER_RE.finditer(value)}
 
 
 def lexical_relevance(query: str, content: str) -> float:
@@ -15,14 +32,25 @@ def lexical_relevance(query: str, content: str) -> float:
     c = normalize_text(content).replace(" ", "")
     if not q or not c:
         return 0.0
+    query_identifiers = _mixed_identifiers(q)
+    content_identifiers = _mixed_identifiers(c)
+    shared_identifiers = query_identifiers & content_identifiers
     if q in c or c in q:
         coverage = min(len(q), len(c)) / max(len(q), len(c))
-        return min(1.0, 0.72 + coverage * 0.28)
+        base = min(1.0, 0.72 + coverage * 0.28)
+        return max(base, 0.86) if shared_identifiers else base
     q_units = set(q if len(q) < 3 else (q[i : i + 2] for i in range(len(q) - 1)))
     c_units = set(c if len(c) < 3 else (c[i : i + 2] for i in range(len(c) - 1)))
     if not q_units or not c_units:
         return 0.0
-    return len(q_units & c_units) / math.sqrt(len(q_units) * len(c_units))
+    base = len(q_units & c_units) / math.sqrt(len(q_units) * len(c_units))
+    if shared_identifiers:
+        return max(base, 0.86)
+    if query_identifiers:
+        # A different model number (RTX5090) or a bare number (5080元) must not
+        # cross the deterministic fallback threshold through partial bigrams.
+        return min(base, 0.24)
+    return base
 
 
 def _as_utc(value: datetime) -> datetime:

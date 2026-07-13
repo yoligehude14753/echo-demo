@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -23,7 +24,10 @@ from app.adapters.rag import BM25Rag
 from app.adapters.web_search import TavilyWebSearch
 from app.api.deps import get_llm_singleton as get_llm
 from app.api.deps import get_quota_governor, get_workflow_dispatcher
+from app.api.memory import get_memory_dependency
 from app.config import Settings, get_settings
+from app.memory import MemoryScope, MemoryService
+from app.memory.presentation import recall_sources
 from app.ports.llm import LLMPort
 from app.ports.rag import RagPort
 from app.ports.web_search import WebSearchPort
@@ -89,6 +93,8 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_RAG_QUESTION_CHARS)
     rag_top_k: int = 5
     web_top_n: int = 5
+    conversation_id: str = Field(default="default", min_length=1, max_length=128)
+    message_id: str | None = Field(default=None, max_length=128)
 
 
 def _resume_workflow_body(run: WorkflowRunRecord) -> WorkflowRunCreate:
@@ -516,7 +522,14 @@ def _answer_trace(retrieval: RetrievalResult) -> RagAnswerTrace:
     )
 
 
-async def _sse(request: Request, answer: AnswerStream) -> AsyncIterator[bytes]:
+async def _sse(
+    request: Request,
+    answer: AnswerStream,
+    *,
+    conversation_id: str = "default",
+    message_id: str | None = None,
+    memory_model_display_name: str = "qwen3 8b",
+) -> AsyncIterator[bytes]:
     """Forward real provider deltas and terminate with one done or error event.
 
     Protocol:
@@ -531,6 +544,26 @@ async def _sse(request: Request, answer: AnswerStream) -> AsyncIterator[bytes]:
 
     parts: list[str] = []
     try:
+        if answer.memory is not None:
+            memory_sources = recall_sources(answer.memory)
+            memory_payload = {
+                "type": "memory.sources",
+                "state": "found" if memory_sources else "empty",
+                "label": (
+                    f"找到 {len(memory_sources)} 条相关历史信息"
+                    if memory_sources
+                    else "未找到相关历史信息"
+                ),
+                "model_display_name": memory_model_display_name,
+                "latency_ms": answer.memory.latency_ms,
+                "sources": memory_sources,
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+            }
+            yield _sse_frame(
+                "memory.sources",
+                json.dumps(memory_payload, ensure_ascii=False, default=str),
+            )
         async for chunk in answer.chunks:
             if await request.is_disconnected():
                 raise asyncio.CancelledError
@@ -576,9 +609,21 @@ async def rag_ask(
     main_llm: LLMPort = Depends(get_llm),
     rag: RagPort = Depends(get_rag),
     web: WebSearchPort = Depends(get_web),
+    memory: MemoryService = Depends(get_memory_dependency),
 ) -> StreamingResponse:
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="question empty")
+
+    memory_recall = None
+    if settings.memory_enabled:
+        memory_recall = asyncio.create_task(
+            memory.recall(
+                MemoryScope.from_principal(current_principal()),
+                body.question.strip(),
+                conversation_id=body.conversation_id,
+            ),
+            name=f"rag-memory-recall:{body.message_id or 'anonymous'}",
+        )
 
     answer = await retrieve_and_answer(
         main_llm=main_llm,
@@ -592,9 +637,16 @@ async def rag_ask(
         rag_top_k=body.rag_top_k,
         web_top_n=body.web_top_n,
         stream=True,
+        memory_recall=memory_recall,
     )
     return StreamingResponse(
-        _sse(request, answer),
+        _sse(
+            request,
+            answer,
+            conversation_id=body.conversation_id,
+            message_id=body.message_id,
+            memory_model_display_name=settings.llm_fast_display_name,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",

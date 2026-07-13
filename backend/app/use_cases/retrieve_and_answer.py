@@ -11,9 +11,10 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
 
+from app.memory.models import RecallResult
 from app.ports.llm import LLMPort
 from app.ports.rag import RagPort
 from app.ports.web_search import WebSearchPort
@@ -35,10 +36,14 @@ _ANSWER_PROMPT_TEMPLATE = """你是 EchoDesk，会议与办公场景的数字分
 下面是检索到的证据。只能基于这些证据回答用户问题，并严格遵守：
 1) 简洁分点，使用中文。
 2) 每行只写一个事实或结论，并在同一行附上直接支持它的精确引用。
-3) 本地引用只能原样使用 [doc:doc_id-chunk_id]，联网引用只能原样使用 [web:url]；不得编造或改写引用 ID。
+3) 本地引用只能原样使用 [doc:doc_id-chunk_id]，联网引用只能原样使用 [web:url]，记忆引用只能原样使用 [memory:candidate_id]；不得编造或改写引用 ID。
 4) 有部分证据时，只回答证据覆盖的部分，静默省略其余部分；不得主动添加“未覆盖内容”“知识库里没找到”“缺失资料”或类似章节。
 5) {gap_policy}
 6) 一个引用不能支撑与其内容无关的数字、事实或结论；没有直接证据的内容不要输出。
+7) “关联记忆”与当前问题直接匹配时，优先使用关联记忆；不得让主题无关的 RAG/Web 片段覆盖它。
+
+---- 关联记忆 ----
+{memory_block}
 
 ---- 证据（RAG） ----
 {rag_block}
@@ -129,7 +134,7 @@ _FORBIDDEN_GAP_MARKERS = (
     "依据不足",
 )
 _ZERO_EVIDENCE_ANSWER = "当前没有足够的可用证据。"
-_CITATION_RE = re.compile(r"\[(?:doc|web):[^\]\r\n]+\]")
+_CITATION_RE = re.compile(r"\[(?:doc|web|memory):[^\]\r\n]+\]")
 _NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
 _ENGLISH_WORD_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_-]{2,}")
 _CHINESE_RUN_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
@@ -178,6 +183,7 @@ class AnswerStream:
 
     retrieval: RetrievalResult
     chunks: AsyncIterator[str]
+    memory: RecallResult | None = None
 
 
 def _doc_citation(chunk: RagChunk) -> str:
@@ -201,6 +207,23 @@ def _format_web(hits: list[WebHit]) -> str:
     if not hits:
         return "(无)"
     return "\n\n".join(f"[web:{hit.url}] {hit.title}\n{hit.snippet}" for hit in hits[:5])
+
+
+def _memory_citation(candidate_id: str) -> str:
+    return f"[memory:{candidate_id}]"
+
+
+def _format_memory(result: RecallResult | None) -> str:
+    if result is None or not result.matches:
+        return "(无)"
+    return "\n\n".join(
+        (
+            f"{_memory_citation(match.candidate.candidate_id)} "
+            f"（{match.candidate.level} / {match.candidate.kind} / "
+            f"{match.candidate.source_ref}）\n{match.candidate.content}"
+        )
+        for match in result.matches
+    )
 
 
 def _deterministic_source(question: str) -> str | None:
@@ -327,6 +350,16 @@ def _evidence_sources(
         }
     )
     return sources
+
+
+def _memory_evidence_sources(result: RecallResult | None) -> dict[str, str]:
+    if result is None:
+        return {}
+    return {
+        _memory_citation(match.candidate.candidate_id): match.candidate.content
+        for match in result.matches
+        if match.candidate.content.strip()
+    }
 
 
 def _contains_gap_language(text: str) -> bool:
@@ -458,6 +491,7 @@ async def retrieve_and_answer(  # noqa: PLR0915
     stream: bool = False,
     main_model: str | None = None,
     fast_timeout_s: float = 2.0,
+    memory_recall: Awaitable[RecallResult] | None = None,
 ) -> AnswerStream:
     """分类、并行检索并生成只含可追溯事实的回答。"""
 
@@ -512,7 +546,31 @@ async def retrieve_and_answer(  # noqa: PLR0915
             )
             return []
 
-    rag_chunks, web_hits = await asyncio.gather(_retrieve_rag(), _retrieve_web())
+    async def _retrieve_memory() -> RecallResult | None:
+        if memory_recall is None:
+            return None
+        started = time.perf_counter()
+        try:
+            result = await memory_recall
+            logger.info(
+                "latency stage=memory status=ok count=%d elapsed_ms=%.1f",
+                len(result.matches),
+                (time.perf_counter() - started) * 1000,
+            )
+            return result
+        except Exception as exc:
+            logger.warning(
+                "latency stage=memory status=failed count=0 error_type=%s elapsed_ms=%.1f",
+                type(exc).__name__,
+                (time.perf_counter() - started) * 1000,
+            )
+            return None
+
+    rag_chunks, web_hits, memory_result = await asyncio.gather(
+        _retrieve_rag(),
+        _retrieve_web(),
+        _retrieve_memory(),
+    )
 
     if rag_chunks and web_hits:
         chosen = "both"
@@ -522,6 +580,8 @@ async def retrieve_and_answer(  # noqa: PLR0915
         chosen = "web"
     else:
         chosen = "none"
+    if memory_result is not None and memory_result.matches:
+        chosen = "memory" if chosen == "none" else f"memory+{chosen}"
     retrieval = RetrievalResult(
         query=question,
         rag_chunks=rag_chunks,
@@ -530,9 +590,11 @@ async def retrieve_and_answer(  # noqa: PLR0915
         chosen_source=chosen,
     )
 
-    sources = _evidence_sources(rag_chunks, web_hits)
+    sources = _memory_evidence_sources(memory_result)
+    sources.update(_evidence_sources(rag_chunks, web_hits))
     allow_gaps = _asks_for_gaps(question)
     prompt = _ANSWER_PROMPT_TEMPLATE.format(
+        memory_block=_format_memory(memory_result),
         rag_block=_format_rag(rag_chunks),
         web_block=_format_web(web_hits),
         question=question,
@@ -641,4 +703,4 @@ async def retrieve_and_answer(  # noqa: PLR0915
             )
             raise
 
-    return AnswerStream(retrieval=retrieval, chunks=_gen())
+    return AnswerStream(retrieval=retrieval, chunks=_gen(), memory=memory_result)
