@@ -13,6 +13,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -44,10 +45,29 @@ jobs:
           test "${GITHUB_REPOSITORY}" = "yoligehude14753/echo-demo"
           test "${GITHUB_REF}" = "refs/heads/${GITHUB_REF_NAME}"
           test "${RELEASE_TAG}" = "v0.3.2"
-          test "${RELEASE_SHA}" = "7d59dba51e790bd54fcab38166039274fa5d2fd0"
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${RELEASE_SHA}" = "${GITHUB_SHA}"
           test "$(git rev-parse HEAD)" = "${RELEASE_SHA}"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq '.object.sha')" = "${RELEASE_SHA}"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')" = "${RELEASE_SHA}"
+
+          tag_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq '.object.type')"
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq '.object.sha')"
+          if [ "${tag_type}" = "tag" ]; then
+            tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq '.object.sha')"
+          fi
+          test "${tag_sha}" = "${RELEASE_SHA}"
           gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isPrerelease --jq '.isPrerelease' | grep -Fx true
+
+          ci_run_id="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha=${RELEASE_SHA}&per_page=100" \
+              --jq '[.workflow_runs[] | select(.head_sha == "'"${RELEASE_SHA}"'" and .conclusion == "success")] | sort_by(.id) | last | .id // empty'
+          )"
+          test -n "${ci_run_id}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ci_run_id}/jobs?filter=latest&per_page=100" \
+            --jq '[.jobs[] | select(.name == "check" and .status == "completed" and .conclusion == "success")] | length' \
+            | grep -Ev '^0$'
+          printf 'CI_RUN_ID=%s\n' "${ci_run_id}" >> "${GITHUB_ENV}"
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -103,7 +123,7 @@ jobs:
           STATUS: UNSIGNED-TEST / UNTRUSTED
           This package is not Authenticode-signed and is not a trusted formal release.
           Source SHA: ${RELEASE_SHA}
-          Source run: 29268547929 (green main CI)
+          Source run: ${CI_RUN_ID} (green exact-SHA main CI)
           Release tag: ${RELEASE_TAG}
           EOF
           (cd upload && sha256sum * > SHA256SUMS-Windows-UNSIGNED-TEST.txt)
