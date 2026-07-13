@@ -23,6 +23,7 @@ _EXPECTED_FIELDS = {
     "stt_failed",
     "stt_empty",
     "hallu_dropped",
+    "repeat_dropped",
     "diarize_failed",
     # phase4-diar-deep：区分 diarizer 抛异常（failed） vs 正常返回 None
     "diarize_returned_none",

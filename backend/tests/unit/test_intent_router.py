@@ -177,13 +177,13 @@ def test_supported_intents_complete() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_route_no_at_returns_chat(tmp_path: Path) -> None:
+async def test_route_no_at_output_request_is_deterministic_artifact(tmp_path: Path) -> None:
     llm = _MockLLM(content='{"kind":"chat","confidence":0.81,"rationale":"普通对话"}')
     router = LLMIntentRouter(_settings(tmp_path), llm)
     r = await router.route("帮我写个周报", current_meeting_id=None)
-    assert r.kind == "chat"
-    assert r.confidence == 0.81
-    assert len(llm.calls) == 1
+    assert r.kind == "generate_markdown"
+    assert r.confidence == 0.98
+    assert len(llm.calls) == 0
 
 
 @pytest.mark.unit

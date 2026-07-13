@@ -94,6 +94,8 @@ def test_ws_event_type_snapshot_and_single_main_ws() -> None:
         "rag.query",
         "rag.answer.delta",
         "rag.answer.done",
+        "memory.status",
+        "memory.sources",
         "chat.delta",
         "tts.suggested",
         "chat.done",
