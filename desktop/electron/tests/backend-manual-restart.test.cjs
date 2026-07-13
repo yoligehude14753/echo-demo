@@ -135,6 +135,7 @@ test("backend stop waits for a late exit and cancels the stale SIGKILL timer", a
   const timers = [];
   const cancelled = new Set();
   const stopped = stopBackendProcess(child, {
+    platform: "linux",
     schedule: (callback, delay) => {
       const timer = { callback, delay };
       timers.push(timer);
@@ -156,6 +157,7 @@ test("backend stop escalates once and rejects before any replacement can spawn",
   const child = new FakeChild();
   const timers = [];
   const stopped = stopBackendProcess(child, {
+    platform: "linux",
     schedule: (callback, delay) => {
       const timer = { callback, delay };
       timers.push(timer);
