@@ -1051,10 +1051,22 @@ export async function workspacePickDirectory(options: {
   if (capability === "unavailable") {
     throw unavailableWorkspaceError();
   }
-  // The opaque Electron directory handle is a public-runtime bridge contract.
-  // Local/self-hosted mode still lets its colocated backend validate a path, so
-  // avoid sending an HTTP origin through the public HTTPS handle namespace.
+  // Electron must always use the native directory picker. window.prompt() is
+  // unavailable in packaged Electron and previously made local/self-hosted
+  // "添加目录" fail before a path was selected. The main process returns an
+  // absolute path only for the trusted local runtime; public mode still gets
+  // an origin-bound opaque handle.
   if (capability === "host-backend") {
+    if (
+      typeof window !== "undefined" &&
+      window.echo?.isElectron === true &&
+      window.echo.pickDirectory
+    ) {
+      const lease = await localWorkspaceLease();
+      const result = await window.echo.pickDirectory(lease.context, options);
+      assertLocalWorkspaceLease(lease);
+      return result;
+    }
     const entered = window.prompt(
       "输入要加入工作区的目录绝对路径（如 /Users/you/Documents）：",
       options.defaultPath ?? "",

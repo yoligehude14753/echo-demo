@@ -1,0 +1,39 @@
+event_id: "E-20260713T1147-001"
+event_type: "add"
+timestamp: "2026-07-13T11:47:00+08:00"
+author: "agent/codex-workspace-picker-fix"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-030"
+      claim: "EchoDesk 0.3.1 local Electron workspace directory selection uses the native picker instead of unsupported window.prompt, while public mode retains origin-bound opaque handles."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-13T11:47:00+08:00"
+      observed_by: "agent/codex-workspace-picker-fix"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "desktop/src/api.ts"
+        - "desktop/electron/main.cjs"
+        - "desktop/tests/e2e/workspace-knowledge.spec.ts"
+        - "desktop/electron/tests/ipc-security-policy.test.cjs"
+        - "runtime:workspace knowledge Playwright => 3 passed"
+        - "runtime:Electron IPC security contract => 8 passed"
+        - "runtime:desktop typecheck and lint => passed"
+      evidence: "The installed local/self-hosted path selected host-backend capability and called window.prompt, which packaged Electron does not support. The renderer now invokes the native picker for every Electron runtime; main returns a canonical absolute path only outside public mode and retains the existing origin-bound opaque handle in public mode. Focused IPC, Playwright, typecheck, and lint gates passed."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "workspace"
+        - "rag"
+        - "electron"
+        - "native-picker"
+        - "bugfix"
+git_commit: null

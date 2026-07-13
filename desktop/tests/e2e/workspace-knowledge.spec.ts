@@ -1,6 +1,46 @@
 import { expect, test } from "@playwright/test";
 import { installEchoMock } from "./_mock";
 
+test("本机 Electron 添加目录使用系统选择器而不是 window.prompt", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const calls: Array<{ expectedBackendOrigin?: string }> = [];
+    (window as unknown as { __workspacePickCalls: typeof calls }).__workspacePickCalls =
+      calls;
+    (window as unknown as { prompt: typeof window.prompt }).prompt = () => {
+      throw new Error("packaged Electron must not call window.prompt");
+    };
+    (window as unknown as { echo: Record<string, unknown> }).echo = {
+      isElectron: true,
+      backendHost: window.location.origin,
+      pickDirectory: async (context: { expectedBackendOrigin?: string }) => {
+        calls.push(context);
+        return "/Users/test/Knowledge";
+      },
+    };
+  });
+  await installEchoMock(page);
+  await page.goto("/");
+
+  const result = await page.evaluate(async () => {
+    const api = await import("/src/api.ts");
+    return {
+      selected: await api.workspacePickDirectory(),
+      capability: api.workspaceCapability(),
+      calls: (
+        window as unknown as {
+          __workspacePickCalls: Array<{ expectedBackendOrigin?: string }>;
+        }
+      ).__workspacePickCalls,
+    };
+  });
+
+  expect(result.capability).toBe("host-backend");
+  expect(result.selected).toBe("/Users/test/Knowledge");
+  expect(result.calls).toEqual([{ expectedBackendOrigin: new URL(page.url()).origin }]);
+});
+
 test("工作区弹窗展示知识库文档列表并可删除单条文档", async ({ page }) => {
   let deletedDocId: string | null = null;
   const docs = [

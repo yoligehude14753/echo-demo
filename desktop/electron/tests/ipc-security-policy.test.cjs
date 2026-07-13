@@ -66,6 +66,20 @@ test("every renderer-callable IPC channel starts with a trusted-origin guard", (
   }
 });
 
+test("workspace picker exposes local paths only outside public mode", () => {
+  const body = registrationBody("workspace:pick-directory");
+  const localReturn = body.indexOf("if (!PUBLIC_DEMO_MODE) return selectedPath");
+  const publicHandle = body.indexOf(
+    "const handle = workspaceHandle(expectedOrigin, selectedPath)",
+  );
+  const pendingSelection = body.indexOf("pendingWorkspaceSelections.set");
+  assert.ok(localReturn >= 0, "local mode must return the native selected path");
+  assert.ok(
+    localReturn < publicHandle && publicHandle < pendingSelection,
+    "public mode must convert the path to an origin-bound pending handle",
+  );
+});
+
 test("renderer blob downloads stay origin-bound, bounded, and main-owned", () => {
   const body = registrationBody("echo:download-renderer-blob");
   const guard = body.indexOf("assertTrustedIpcOrigin(event)");

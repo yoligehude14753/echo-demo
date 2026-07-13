@@ -2919,6 +2919,10 @@ ipcMain.handle("workspace:pick-directory", async (event, context = {}, opts = {}
       root: selectedCandidate,
     });
     const selectedPath = verifiedRoot.canonical;
+    // A trusted local/self-hosted renderer sends the selected path to its
+    // colocated backend. Public mode must never expose it and continues to use
+    // the origin-bound opaque handle consumed by workspace:add-local-dir.
+    if (!PUBLIC_DEMO_MODE) return selectedPath;
     const handle = workspaceHandle(expectedOrigin, selectedPath);
     pendingWorkspaceSelections.set(expectedOrigin, {
       handle,
