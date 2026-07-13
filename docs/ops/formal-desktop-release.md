@@ -11,7 +11,26 @@ Windows 包和 ad-hoc macOS 包都不是公开 Release。
 upload`。它会生成、验签、测试、attest 并上传候选 artifact，但不会自动公开发布。正式公开
 Release 仍需在独立验收精确提交和候选证据后单独执行。
 
-### 1.1 受保护 environment
+### 1.1 Windows v0.3.2 已知边界与当前阻塞
+
+以下是 2026-07-13 的服务端快照，执行发布前必须重新查询，不能把它当作永久状态：
+
+- [`Build Windows Installer` run 29243474851](https://github.com/yoligehude14753/echo-demo/actions/runs/29243474851)
+  在分支 `codex/runtime-asr-agent-fix` 的提交
+  `c18c98be48a1e8b54f0a30a835f7354873f7c078` 上成功完成 unsigned NSIS/ZIP 构建、安装态
+  smoke、便携 ZIP smoke、内容扫描、SBOM 和 SHA-256 校验。
+- 该 run 只生成名为 `echodesk-windows-unsigned-test` 的测试 artifact；没有 Authenticode
+  身份、RFC 3161 timestamp 或 build provenance，因此不是正式候选，也不得复制、重命名或
+  上传到 GitHub Release。
+- repository environment API 当时只返回 `android-release` 与 `github-pages`，不存在
+  `desktop-release-windows`；repository secret 名称列表也不包含下述四个 Windows
+  Authenticode 输入。正式链当前因此处于 `Blocked`，不能用 unsigned run 的成功替代。
+
+run 29243474851 只证明 unsigned 包装链、安装态/便携启动和本地完整性合同可执行；它不证明
+证书所有权、发布者身份、签名链、timestamp、受保护 environment、provenance 或公开 Release
+资格。后续正式 run 必须来自 `main` 的精确 SHA，并重新执行全部 signed 候选门禁。
+
+### 1.2 受保护 environment
 
 在 canonical repository 中建立两个 environment：
 
@@ -48,7 +67,42 @@ SHA-1 thumbprint 必须是目标 Authenticode 证书的 40 位指纹；publisher
 Subject。缺任一 secret、证书/身份不匹配、签名链或 timestamp 不通过时，工作流以带缺项名称的
 `Blocked` error 结束，不能降级为 unsigned/ad-hoc 候选。
 
-### 1.2 只构建 main 的精确提交
+首次正式运行前，发布操作员必须从服务端验证 environment、保护规则和 secret **名称**。以下
+命令不会读取 secret 值；任一步失败都必须停止，不得先触发 workflow 期待它自动创建 environment：
+
+```bash
+repo="yoligehude14753/echo-demo"
+environment="desktop-release-windows"
+
+environment_json="$(gh api "repos/${repo}/environments/${environment}")"
+jq -e '
+  .name == "desktop-release-windows"
+  and .can_admins_bypass == false
+  and any(.protection_rules[]?; .type == "required_reviewers")
+  and any(.protection_rules[]?; .type == "branch_policy")
+' <<<"${environment_json}" >/dev/null
+
+gh api "repos/${repo}/environments/${environment}/deployment-branch-policies" \
+  --jq 'any(.branch_policies[]; .name == "main")' | grep -Fxq true
+
+required=(
+  ECHODESK_WINDOWS_CERTIFICATE_PFX_BASE64
+  ECHODESK_WINDOWS_CERTIFICATE_PASSWORD
+  ECHODESK_WINDOWS_CERTIFICATE_SHA1
+  ECHODESK_WINDOWS_EXPECTED_PUBLISHER
+)
+secret_names="$(gh secret list --repo "${repo}" --env "${environment}" \
+  --json name --jq '.[].name')"
+for name in "${required[@]}"; do
+  grep -Fxq "${name}" <<<"${secret_names}"
+done
+```
+
+四个 secret 必须只放在 `desktop-release-windows` environment，不得复制到 repository
+secrets、代码、本地 `.env`、日志或发布说明。名称存在只证明配置槽位存在；PFX 内容、私钥、
+thumbprint 和 publisher 的一致性仍由正式 workflow 的 import/preflight 验证。
+
+### 1.3 只构建 main 的精确提交
 
 先取得并记录远端 `main` 的精确 SHA，并确认 `.github/workflows/ci.yml` 对该 SHA 的
 `push/main` workflow run 整体成功，且该 run 内 required `check` job 已经
@@ -89,7 +143,7 @@ gh run list \
 等于输入，且输入等于触发本次 run 的 `GITHUB_SHA`。PR run、其他 workflow 的同名 job、部分
 job 失败、旧 SHA、pending/cancelled/failed 结果都不能授权签名。
 
-### 1.3 必须同时存在的候选证据
+### 1.4 必须同时存在的候选证据
 
 macOS 候选必须包含：
 
@@ -114,6 +168,12 @@ EchoDesk-SBOM.cdx.json
 SHA256SUMS-Windows.txt
 ```
 
+这六个文件是一个不可拆分的集合：EXE 是已签名 NSIS installer，`.exe.blockmap` 与
+`latest.yml` 是 updater 合同，ZIP 是已签名 portable 内容，SBOM 绑定锁文件与 frozen backend
+实际依赖，`SHA256SUMS-Windows.txt` 精确覆盖前五项。GitHub build provenance attestation 不是
+伪装成第七个普通文件；它必须分别绑定上述六个最终字节对象。Actions artifact 的外层 ZIP 只
+是候选传输容器，不能代替内部文件、hash 或 attestation，也不能整体作为 Release 资产上传。
+
 macOS 在真实 hosted macOS runner 上完成 Developer ID 签名、notarization、ticket staple、
 Gatekeeper 检查和只读 DMG 安装态 smoke；作为 updater 主载荷的最终 ZIP 还必须重新解压，
 对其中的 App 与 bundled backend 核验同一 Developer ID/Team，并从该 ZIP 内 App 完成 lifecycle
@@ -126,17 +186,42 @@ ZIP 解压后的 App 与 bundled backend 也必须分别重新验签，再从解
 attestation。Desktop SBOM 必须同时绑定 Python runtime lock、desktop npm lock，以及 frozen
 backend 实际打包的 `ppt_ib_deck/package-lock.json`。
 
-下载候选后再次独立验证：
+下载候选后再次独立验证；Windows 六个对象缺一、manifest 多一项/少一项、任一 hash 不符或
+任一 attestation 无法验证，都必须拒绝整套候选：
 
 ```bash
 shasum -a 256 -c SHA256SUMS-macOS.txt
 sha256sum --check --strict SHA256SUMS-Windows.txt
-gh attestation verify <asset> --repo yoligehude14753/echo-demo
+
+version="0.3.2"
+windows_subjects=(
+  "EchoDesk.Setup.${version}.exe"
+  "EchoDesk.Setup.${version}.exe.blockmap"
+  "EchoDesk-${version}-win-x64.zip"
+  latest.yml
+  EchoDesk-SBOM.cdx.json
+  SHA256SUMS-Windows.txt
+)
+for asset in "${windows_subjects[@]}"; do
+  test -s "${asset}"
+  gh attestation verify "${asset}" --repo yoligehude14753/echo-demo
+done
 ```
 
 只有候选 run 的两个 job、安装态 smoke、hash、SBOM、attestation 全部通过，并且独立审计确认
 候选 SHA 正确后，才可以另行创建 prerelease/release。不得上传 CI 中的
 `echodesk-macos-arm64-adhoc-test` 或 `echodesk-windows-unsigned-test`。
+
+Windows 失败语义必须保持明确且关闭式：
+
+| 失败点 | 必须结果 | 禁止降级 |
+|---|---|---|
+| environment 不存在或保护规则不完整 | 不触发正式候选；先完成服务端配置 | 自动创建无保护 environment |
+| 四个 secret 任一缺失 | 在依赖安装和打包前列出全部缺项并失败 | 改跑 unsigned 构建 |
+| PFX、thumbprint、publisher 或 private key 不匹配 | import/preflight 失败，零候选 | 忽略发布者或换临时证书 |
+| installer/App/backend 签名链或 RFC 3161 timestamp 失败 | 签名验证失败，零候选 | 只验证其中一个文件 |
+| EXE/ZIP/`latest.yml`/SBOM/checksum/provenance 任一缺失 | 整套候选拒绝 | 上传已有子集 |
+| 安装态或便携 smoke 失败 | 整套候选拒绝 | 复用 run 29243474851 的 unsigned smoke |
 
 ## 2. Android secrets 一次性迁移与清理
 

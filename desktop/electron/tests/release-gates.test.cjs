@@ -497,7 +497,11 @@ test("required CI and live workflows encode honest release and network gates", (
   assert.match(live, /route invalid: MISSING_HOST/);
   assert.doesNotMatch(live, /\{host\}:\{port\}|\{raw\}|\{address\}|\{exc\}/);
   assert.doesNotMatch(live, /pytest tests -m live/);
-  assert.match(windows, /name: echodesk-windows-unsigned-test/);
+  assert.doesNotMatch(windows, /name: echodesk-windows-unsigned-test/);
+  assert.doesNotMatch(
+    windows,
+    /path:\s*\|[\s\S]*desktop\/release\/EchoDesk\.Setup\.\$\{\{ env\.ECHODESK_VERSION \}\}\.exe/,
+  );
   assert.doesNotMatch(windows, /name: echodesk-windows-release/);
   assert.match(windows, /Refuse unsigned public publishing/);
   assert.match(windows, /Portable ZIP startup smoke/);

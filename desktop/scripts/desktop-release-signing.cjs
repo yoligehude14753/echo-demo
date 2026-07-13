@@ -80,7 +80,7 @@ function windowsReleaseContract({
   }
 
   const certificateThumbprint = normalizeCertificateThumbprint(
-    env.ECHODESK_WINDOWS_CERTIFICATE_SHA1,
+    requiredText(env, "ECHODESK_WINDOWS_CERTIFICATE_SHA1"),
   );
   const expectedPublisher = requiredText(
     env,
@@ -505,7 +505,17 @@ async function runWindowsRelease({
     ),
     updateMetadata: path.join(desktopRoot, "release", "latest.yml"),
   };
-  ensureArtifactsExist(artifacts, exists);
+  ensureArtifactsExist(
+    {
+      "signed NSIS installer": artifacts.installer,
+      "signed unpacked application": artifacts.application,
+      "signed bundled backend": artifacts.backend,
+      "Windows portable ZIP": artifacts.zip,
+      "NSIS installer blockmap": artifacts.installerBlockmap,
+      "Windows update metadata": artifacts.updateMetadata,
+    },
+    exists,
+  );
 
   for (const [label, artifactPath] of Object.entries(artifacts)) {
     if (!artifactPath.toLowerCase().endsWith(".exe")) continue;
