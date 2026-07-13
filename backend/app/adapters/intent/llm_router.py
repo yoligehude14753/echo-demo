@@ -149,8 +149,7 @@ class LLMIntentRouter:
                 )
             except Exception as exc:
                 logger.warning(
-                    "intent route model failed channel=%s model=%s elapsed_ms=%.1f "
-                    "error_type=%s",
+                    "intent route model failed channel=%s model=%s elapsed_ms=%.1f error_type=%s",
                     channel,
                     model,
                     (time.perf_counter() - attempt_started) * 1000,

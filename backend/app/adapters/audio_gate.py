@@ -130,9 +130,7 @@ def _repetitive_text_reason(normalized: str) -> str | None:
     for unit_size in range(1, min(12, n_chars // 3) + 1):
         unit = normalized[:unit_size]
         template = (unit * ((n_chars + unit_size - 1) // unit_size))[:n_chars]
-        matches = sum(
-            left == right for left, right in zip(normalized, template, strict=True)
-        )
+        matches = sum(left == right for left, right in zip(normalized, template, strict=True))
         if matches / n_chars >= 0.9:
             return f"periodic_unit_{unit_size}"
 

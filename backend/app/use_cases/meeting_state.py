@@ -369,9 +369,7 @@ class MeetingState:
         await self.hydrate()
         ended_at = datetime.now(UTC)
         async with self._lock:
-            current_matches = (
-                self._current is not None and self._current.meeting_id == meeting_id
-            )
+            current_matches = self._current is not None and self._current.meeting_id == meeting_id
             await self._pipeline.end_meeting(meeting_id, ended_at=ended_at)
             if current_matches:
                 self._current = None
@@ -524,7 +522,9 @@ class MeetingState:
         if cur is not None and cur.meeting_id == meeting_id:
             self._last_valid_speech_at = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
 
-    async def _check_lifecycle(self, now: datetime, *, tick_auto: bool = True) -> bool:
+    async def _check_lifecycle(  # noqa: PLR0911
+        self, now: datetime, *, tick_auto: bool = True
+    ) -> bool:
         """推进 hard-limit、断流 silence 和 manual inactivity；命中时返回 True。"""
 
         if await self._meeting_exceeded_max_duration(now):
@@ -578,9 +578,7 @@ class MeetingState:
             started_at = started_at.replace(tzinfo=UTC)
         now_aware = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
         age_s = (now_aware - started_at).total_seconds()
-        uses_system_limit = cur.started_by == "auto" or _should_force_end_on_hydrate(
-            cur.meeting_id
-        )
+        uses_system_limit = cur.started_by == "auto" or _should_force_end_on_hydrate(cur.meeting_id)
         max_duration_s = (
             self._max_meeting_duration_s
             if uses_system_limit

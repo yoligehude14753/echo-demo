@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
@@ -73,7 +73,7 @@ async def extract_explicit_memory(
         text=body.text,
         source_kind="user_explicit",
         source_id=source_id,
-        occurred_at=datetime.now(timezone.utc),
+        occurred_at=datetime.now(UTC),
         metadata={"confirmation": "user_explicit"},
     )
 
@@ -198,9 +198,7 @@ async def clear_working_memory(
     conversation_id: str = Path(min_length=1, max_length=128),
     memory: MemoryService = Depends(get_memory_dependency),
 ) -> WorkingMemoryClearResponse:
-    return WorkingMemoryClearResponse(
-        cleared=await memory.clear_working(_scope(), conversation_id)
-    )
+    return WorkingMemoryClearResponse(cleared=await memory.clear_working(_scope(), conversation_id))
 
 
 __all__ = ["get_memory_dependency", "router"]

@@ -317,11 +317,7 @@ _QUESTION_ONLY_MARKERS: tuple[str, ...] = (
 def _has_output_action_before_noun(text: str) -> bool:
     """只接受位于产物名词之前的动作，避开“报告写得/做得很好”。"""
 
-    noun_positions = [
-        text.find(noun)
-        for noun in _OUTPUT_NOUNS
-        if text.find(noun) >= 0
-    ]
+    noun_positions = [text.find(noun) for noun in _OUTPUT_NOUNS if text.find(noun) >= 0]
     for action in _OUTPUT_ACTIONS:
         action_pos = text.find(action)
         if action_pos < 0:
@@ -334,7 +330,7 @@ def _has_output_action_before_noun(text: str) -> bool:
     return False
 
 
-def _requested_artifact_kind(text: str) -> IntentKind | None:
+def _requested_artifact_kind(text: str) -> IntentKind | None:  # noqa: PLR0911, PLR0912
     """对明确产出型请求做确定性路由。
 
     调研/报告/方案默认产出 Markdown；用户明示指定 PPT/Word/PDF/HTML/
@@ -349,15 +345,9 @@ def _requested_artifact_kind(text: str) -> IntentKind | None:
         return None
 
     request_positions = [
-        lower.find(marker)
-        for marker in _OUTPUT_REQUEST_MARKERS
-        if lower.find(marker) >= 0
+        lower.find(marker) for marker in _OUTPUT_REQUEST_MARKERS if lower.find(marker) >= 0
     ]
-    noun_positions = [
-        lower.find(noun)
-        for noun in _OUTPUT_NOUNS
-        if lower.find(noun) >= 0
-    ]
+    noun_positions = [lower.find(noun) for noun in _OUTPUT_NOUNS if lower.find(noun) >= 0]
     request_targets_output = any(
         request_pos <= noun_pos <= request_pos + 18
         for request_pos in request_positions
@@ -370,12 +360,10 @@ def _requested_artifact_kind(text: str) -> IntentKind | None:
             command_text = command_text[len(prefix) :].lstrip("，, ")
             break
     action_is_command = has_action and (
-        bool(request_positions)
-        or command_text.startswith(_OUTPUT_ACTIONS)
+        bool(request_positions) or command_text.startswith(_OUTPUT_ACTIONS)
     )
-    looks_like_question = (
-        any(mark in lower for mark in ("?", "？"))
-        or any(marker in lower for marker in _QUESTION_ONLY_MARKERS)
+    looks_like_question = any(mark in lower for mark in ("?", "？")) or any(
+        marker in lower for marker in _QUESTION_ONLY_MARKERS
     )
     if looks_like_question and not action_is_command:
         return None
@@ -383,10 +371,7 @@ def _requested_artifact_kind(text: str) -> IntentKind | None:
     direct_research_command = lower.lstrip("@ ").startswith(("调研", "深度研究"))
     exact_output_noun = lower.lstrip("@ ") in _OUTPUT_NOUNS
     if not (
-        request_targets_output
-        or action_is_command
-        or direct_research_command
-        or exact_output_noun
+        request_targets_output or action_is_command or direct_research_command or exact_output_noun
     ):
         return None
 
@@ -402,9 +387,7 @@ def _requested_artifact_kind(text: str) -> IntentKind | None:
         return "generate_html"
     if any(token in lower for token in ("txt", "纯文本", "文本文件")):
         return "generate_txt"
-    if "文档" in lower and not any(
-        token in lower for token in ("调研", "研究", "报告", "方案")
-    ):
+    if "文档" in lower and not any(token in lower for token in ("调研", "研究", "报告", "方案")):
         return "generate_word"
     return "generate_markdown"
 

@@ -286,14 +286,9 @@ class AmbientCapturePipeline:
         if not signature:
             return False, False, 0
         cutoff = captured_at.timestamp() - self._settings.ambient_repeat_window_s
-        while (
-            self._recent_transcripts
-            and self._recent_transcripts[0][0].timestamp() < cutoff
-        ):
+        while self._recent_transcripts and self._recent_transcripts[0][0].timestamp() < cutoff:
             self._recent_transcripts.popleft()
-        occurrences = sum(
-            previous == signature for _, previous in self._recent_transcripts
-        )
+        occurrences = sum(previous == signature for _, previous in self._recent_transcripts)
         self._recent_transcripts.append((captured_at, signature))
         return (
             occurrences >= 1,
@@ -684,7 +679,7 @@ class AmbientCapturePipeline:
         self._stats.last_speech_ratio = round(gate.speech_ratio, 4)
         self._stats.last_gate_reason = gate.reason
         audio_duration_ms = int(len(audio_bytes) / max(1, sample_rate * 2) * 1000)
-        active_speech_ms = int(round(audio_duration_ms * gate.speech_ratio))
+        active_speech_ms = round(audio_duration_ms * gate.speech_ratio)
 
         stt_segs: list[TranscriptSegment] = []
         speaker_id: str | None = None
@@ -775,8 +770,8 @@ class AmbientCapturePipeline:
         # meeting 活跃证据；达到 drop_after 后，新副本不再污染转录/RAG。
         if texts:
             joined = " ".join(texts)
-            repeated_for_meeting, repeat_drop, previous_count = (
-                self._record_transcript_repeat(joined, captured_at=captured_dt)
+            repeated_for_meeting, repeat_drop, previous_count = self._record_transcript_repeat(
+                joined, captured_at=captured_dt
             )
             if repeat_drop:
                 logger.debug(

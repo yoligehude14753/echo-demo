@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
@@ -134,15 +135,24 @@ class MemoryService:
         )
 
     @staticmethod
-    def _collect_layers(layers: list[Any]) -> list[RecallCandidate]:
+    def _collect_layers(layers: Sequence[object]) -> list[RecallCandidate]:
         candidates: list[RecallCandidate] = []
         for layer in layers:
             if isinstance(layer, BaseException):
                 logger.warning("memory recall layer failed: %s", _bounded_error(layer))
                 continue
+            if not isinstance(layer, list):
+                logger.warning("memory recall layer returned a non-list result")
+                continue
             candidates.extend(item for item in layer if isinstance(item, RecallCandidate))
         seen: set[str] = set()
-        return [item for item in candidates if not (item.candidate_id in seen or seen.add(item.candidate_id))]
+        unique: list[RecallCandidate] = []
+        for item in candidates:
+            if item.candidate_id in seen:
+                continue
+            seen.add(item.candidate_id)
+            unique.append(item)
+        return unique
 
     async def _associate(
         self,
@@ -407,11 +417,9 @@ class MemoryService:
         existing: list[RecallCandidate],
     ) -> list[Any]:
         limit = self.settings.memory_extraction_max_items
-        prompt = (
-            MEMORY_EXTRACTION_PROMPT.replace("{limit}", str(limit)).replace(
-                "{min_confidence}",
-                str(self.settings.memory_min_confidence),
-            )
+        prompt = MEMORY_EXTRACTION_PROMPT.replace("{limit}", str(limit)).replace(
+            "{min_confidence}",
+            str(self.settings.memory_min_confidence),
         )
         payload = {
             "INPUT": text,

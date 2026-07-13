@@ -318,11 +318,7 @@ def _evidence_sources(
     rag_chunks: list[RagChunk],
     web_hits: list[WebHit],
 ) -> dict[str, str]:
-    sources = {
-        _doc_citation(chunk): chunk.text
-        for chunk in rag_chunks[:5]
-        if chunk.text.strip()
-    }
+    sources = {_doc_citation(chunk): chunk.text for chunk in rag_chunks[:5] if chunk.text.strip()}
     sources.update(
         {
             f"[web:{hit.url}]": f"{hit.title}\n{hit.snippet}"
@@ -346,11 +342,7 @@ def _contains_forbidden_gap_language(text: str) -> bool:
 def _claim_clauses(line: str) -> list[str]:
     without_citations = _CITATION_RE.sub("", line)
     without_markdown = re.sub(r"^[\s>*#\-+\d.)]+", "", without_citations)
-    return [
-        part.strip()
-        for part in re.split(r"[。；;！？!?]+", without_markdown)
-        if part.strip()
-    ]
+    return [part.strip() for part in re.split(r"[。；;！？!?]+", without_markdown) if part.strip()]
 
 
 def _support_tokens(text: str) -> set[str]:
@@ -407,7 +399,7 @@ class _EvidenceGuard:
     explicit_gap_section: bool = False
     emitted_content: bool = False
 
-    def process_line(self, line: str) -> str | None:
+    def process_line(self, line: str) -> str | None:  # noqa: PLR0911
         stripped = line.strip()
         is_heading = stripped.startswith("#")
 
@@ -453,7 +445,7 @@ class _EvidenceGuard:
         return _fallback_evidence_line(self.sources)
 
 
-async def retrieve_and_answer(
+async def retrieve_and_answer(  # noqa: PLR0915
     *,
     main_llm: LLMPort,
     fast_llm: LLMPort,
@@ -551,7 +543,7 @@ async def retrieve_and_answer(
         ),
     )
 
-    async def _gen() -> AsyncIterator[str]:
+    async def _gen() -> AsyncIterator[str]:  # noqa: PLR0912, PLR0915
         render_started = time.perf_counter()
         if not sources:
             logger.info(

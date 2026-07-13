@@ -2377,7 +2377,7 @@ class AgentTaskService:
 
         task.add_done_callback(_cleanup)
 
-    async def _run_bridge(self, rec: AgentTaskRecord) -> None:
+    async def _run_bridge(self, rec: AgentTaskRecord) -> None:  # noqa: PLR0912, PLR0915
         assert rec.runner_task_id is not None
         key = self._bridge_key(rec)
         lease: LeaseToken | None = None
@@ -2453,11 +2453,7 @@ class AgentTaskService:
                 return
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
-            if await bridge_task:
-                await self._mark_bridge_completed(rec, lease)
-                retry = False
-                self._clear_bridge_retry(key)
-            elif await self._reconcile_runner_http_state(rec, lease):
+            if await bridge_task or await self._reconcile_runner_http_state(rec, lease):
                 await self._mark_bridge_completed(rec, lease)
                 retry = False
                 self._clear_bridge_retry(key)

@@ -47,10 +47,7 @@ def score_candidates(
         relevance = lexical_relevance(query, item.content)
         recency = _recency(item, now)
         item.deterministic_score = (
-            0.58 * relevance
-            + 0.20 * recency
-            + 0.14 * item.salience
-            + 0.08 * item.confidence
+            0.58 * relevance + 0.20 * recency + 0.14 * item.salience + 0.08 * item.confidence
         )
         scored.append(item)
     return sorted(scored, key=lambda item: item.deterministic_score, reverse=True)

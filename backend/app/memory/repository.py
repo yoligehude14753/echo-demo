@@ -10,7 +10,7 @@ import unicodedata
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from app.adapters.repo.connection import (
@@ -42,6 +42,11 @@ def _iso(value: datetime) -> str:
     return value.astimezone(UTC).isoformat()
 
 
+def _datetime(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 def normalize_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return _SPACE_RE.sub(" ", normalized).strip()
@@ -64,60 +69,64 @@ def _json_load(value: object, fallback: Any) -> Any:
 
 
 def _memory_from_row(row: sqlite3.Row) -> MemoryRecord:
-    return MemoryRecord(
-        memory_id=str(row["memory_id"]),
-        kind=str(row["kind"]),
-        content=str(row["content"]),
-        canonical_key=str(row["canonical_key"]),
-        subject=str(row["subject"]) if row["subject"] is not None else None,
-        confidence=float(row["confidence"]),
-        salience=float(row["salience"]),
-        scope=str(row["scope"]),
-        status=str(row["status"]),
-        hit_count=int(row["hit_count"]),
-        source_count=int(row["source_count"]),
-        user_confirmed=bool(row["user_confirmed"]),
-        created_at=str(row["created_at"]),
-        last_seen_at=str(row["last_seen_at"]),
-        updated_at=str(row["updated_at"]),
-        confirmed_at=str(row["confirmed_at"]) if row["confirmed_at"] else None,
-        superseded_at=str(row["superseded_at"]) if row["superseded_at"] else None,
-        superseded_by=str(row["superseded_by"]) if row["superseded_by"] else None,
-        deleted_at=str(row["deleted_at"]) if row["deleted_at"] else None,
-        revision=int(row["revision"]),
-        metadata=_json_load(row["metadata_json"], {}),
+    return MemoryRecord.model_validate(
+        {
+            "memory_id": row["memory_id"],
+            "kind": row["kind"],
+            "content": row["content"],
+            "canonical_key": row["canonical_key"],
+            "subject": row["subject"],
+            "confidence": row["confidence"],
+            "salience": row["salience"],
+            "scope": row["scope"],
+            "status": row["status"],
+            "hit_count": row["hit_count"],
+            "source_count": row["source_count"],
+            "user_confirmed": row["user_confirmed"],
+            "created_at": row["created_at"],
+            "last_seen_at": row["last_seen_at"],
+            "updated_at": row["updated_at"],
+            "confirmed_at": row["confirmed_at"],
+            "superseded_at": row["superseded_at"],
+            "superseded_by": row["superseded_by"],
+            "deleted_at": row["deleted_at"],
+            "revision": row["revision"],
+            "metadata": _json_load(row["metadata_json"], {}),
+        }
     )
 
 
 def _provenance_from_row(row: sqlite3.Row) -> ProvenanceRecord:
-    return ProvenanceRecord(
-        provenance_id=str(row["provenance_id"]),
-        memory_id=str(row["memory_id"]),
-        source_kind=str(row["source_kind"]),
-        source_id=str(row["source_id"]),
-        source_segment_id=(
-            str(row["source_segment_id"]) if row["source_segment_id"] else None
-        ),
-        meeting_id=str(row["meeting_id"]) if row["meeting_id"] else None,
-        artifact_id=str(row["artifact_id"]) if row["artifact_id"] else None,
-        excerpt=str(row["excerpt"]),
-        confidence=float(row["confidence"]),
-        occurred_at=str(row["occurred_at"]),
-        created_at=str(row["created_at"]),
-        metadata=_json_load(row["metadata_json"], {}),
+    return ProvenanceRecord.model_validate(
+        {
+            "provenance_id": row["provenance_id"],
+            "memory_id": row["memory_id"],
+            "source_kind": row["source_kind"],
+            "source_id": row["source_id"],
+            "source_segment_id": row["source_segment_id"],
+            "meeting_id": row["meeting_id"],
+            "artifact_id": row["artifact_id"],
+            "excerpt": row["excerpt"],
+            "confidence": row["confidence"],
+            "occurred_at": row["occurred_at"],
+            "created_at": row["created_at"],
+            "metadata": _json_load(row["metadata_json"], {}),
+        }
     )
 
 
 def _profile_from_row(row: sqlite3.Row) -> ProfileSettingRecord:
-    return ProfileSettingRecord(
-        config_key=str(row["config_key"]),
-        value=_json_load(row["value_json"], None),
-        description=str(row["description"]) if row["description"] else None,
-        created_at=str(row["created_at"]),
-        updated_at=str(row["updated_at"]),
-        confirmed_at=str(row["confirmed_at"]),
-        deleted_at=str(row["deleted_at"]) if row["deleted_at"] else None,
-        revision=int(row["revision"]),
+    return ProfileSettingRecord.model_validate(
+        {
+            "config_key": row["config_key"],
+            "value": _json_load(row["value_json"], None),
+            "description": row["description"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "confirmed_at": row["confirmed_at"],
+            "deleted_at": row["deleted_at"],
+            "revision": row["revision"],
+        }
     )
 
 
@@ -174,7 +183,7 @@ class MemoryRepository:
             row = await cursor.fetchone()
             await cursor.close()
             if row is not None:
-                return row
+                return cast(sqlite3.Row, row)
         cursor = await conn.execute(
             """SELECT * FROM memory_nodes
                WHERE tenant_id = ? AND owner_id = ? AND status = 'active'
@@ -190,7 +199,7 @@ class MemoryRepository:
         )
         row = await cursor.fetchone()
         await cursor.close()
-        return row
+        return cast(sqlite3.Row | None, row)
 
     @staticmethod
     async def _insert_provenance_tx(
@@ -227,7 +236,7 @@ class MemoryRepository:
         )
         inserted = cursor.rowcount > 0
         await cursor.close()
-        return inserted
+        return bool(inserted)
 
     @staticmethod
     async def _insert_relation_tx(
@@ -440,7 +449,7 @@ class MemoryRepository:
             await configure_aiosqlite_connection(conn)
             conn.row_factory = sqlite3.Row
             cursor = await conn.execute(
-                f"""SELECT * FROM memory_nodes WHERE {' AND '.join(clauses)}
+                f"""SELECT * FROM memory_nodes WHERE {" AND ".join(clauses)}
                     ORDER BY user_confirmed DESC, salience DESC, last_seen_at DESC
                     LIMIT ?""",
                 tuple(args),
@@ -630,7 +639,7 @@ class MemoryRepository:
             )
             row = await cursor.fetchone()
             await cursor.close()
-        return _profile_from_row(row)
+        return _profile_from_row(cast(sqlite3.Row, row))
 
     async def list_profile_settings(self, scope: MemoryScope) -> list[ProfileSettingRecord]:
         async with open_aiosqlite_connection(self.db_path) as conn:
@@ -694,7 +703,7 @@ class MemoryRepository:
                 level="L0",
                 content=f"{row['speaker']}：{_bounded_text(row['text'])}",
                 source_ref=f"meeting:{row['meeting_id']}#segment:{row['id']}",
-                occurred_at=str(row["captured_at"]),
+                occurred_at=_datetime(row["captured_at"]),
                 salience=0.72,
                 kind="current_meeting",
                 metadata={"meeting_id": str(row["meeting_id"]), "segment_id": int(row["id"])},
@@ -782,7 +791,7 @@ class MemoryRepository:
                         f"{_bounded_text(row['text'])}"
                     ),
                     source_ref=f"meeting:{row['meeting_id']}#segment:{row['id']}",
-                    occurred_at=str(row["captured_at"]),
+                    occurred_at=_datetime(row["captured_at"]),
                     salience=0.62,
                     kind="meeting_segment",
                     metadata={"meeting_id": str(row["meeting_id"]), "segment_id": int(row["id"])},
@@ -795,7 +804,7 @@ class MemoryRepository:
                     level="L1",
                     content=f"会议《{row['meeting_title']}》纪要：{_minutes_text(row['minutes_json'])}",
                     source_ref=f"meeting:{row['id']}#minutes",
-                    occurred_at=str(row["occurred_at"]),
+                    occurred_at=_datetime(row["occurred_at"]),
                     salience=0.78,
                     kind="meeting_minutes",
                     metadata={"meeting_id": str(row["id"])},
@@ -808,7 +817,7 @@ class MemoryRepository:
                     level="L1",
                     content=f"{row['speaker']}：{_bounded_text(row['text'])}",
                     source_ref=f"ambient:{row['id']}",
-                    occurred_at=str(row["captured_at"]),
+                    occurred_at=_datetime(row["captured_at"]),
                     salience=0.48,
                     kind="ambient_segment",
                     metadata={"segment_id": int(row["id"])},
@@ -831,7 +840,7 @@ class MemoryRepository:
                         f"{f'：{summary}' if summary else ''}"
                     ),
                     source_ref=f"artifact:{row['artifact_id']}",
-                    occurred_at=str(row["created_at"]),
+                    occurred_at=_datetime(row["created_at"]),
                     salience=0.7,
                     kind="artifact",
                     metadata={"artifact_id": str(row["artifact_id"])},
@@ -869,7 +878,7 @@ class MemoryRepository:
                 level="L2",
                 content=str(row["content"]),
                 source_ref=str(row["latest_source_ref"] or f"memory:{row['memory_id']}"),
-                occurred_at=str(row["last_seen_at"]),
+                occurred_at=_datetime(row["last_seen_at"]),
                 salience=float(row["salience"]),
                 confidence=float(row["confidence"]),
                 kind=str(row["kind"]),
