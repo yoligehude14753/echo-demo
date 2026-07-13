@@ -1,0 +1,981 @@
+version: '1.0'
+project: echo
+generated_at: '2026-07-13T03:47:22.094945+00:00'
+generated_by: replay.py
+fact_count: 29
+facts:
+- id: F-ECHO-001
+  claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
+  category: observation
+  volatility: low
+  evidence_strength: code
+  status: confirmed
+  confidence: 0.95
+  observed_at: '2026-07-09T23:28:06+08:00'
+  observed_by: agent/codex-0-3-prep
+  valid_until: null
+  ttl_hours: null
+  source:
+  - commit:e5574e9379e82f10057d5c84f401349c6f8e613b
+  evidence: git describe --tags --exact-match HEAD returned v0.2.50 before the 0.3 preparation branch was created.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - '0.3'
+  - baseline
+- id: F-ECHO-002
+  claim: EchoDesk 0.3 is scoped as a workflow architecture redesign covering meeting, knowledge, artifact, agent, share, and
+    diagnostics flows before implementation starts.
+  category: intent
+  volatility: medium
+  evidence_strength: doc
+  status: superseded
+  confidence: 0.9
+  observed_at: '2026-07-09T23:28:06+08:00'
+  observed_by: agent/codex-0-3-prep
+  valid_until: null
+  ttl_hours: null
+  source:
+  - event:E-20260709T2328-001
+  evidence: The user approved the 0.3 direction and requested all documentation and pre-development preparation before implementation.
+  supersedes: []
+  superseded_by: F-ECHO-020
+  pinned: false
+  tags:
+  - '0.3'
+  - workflow
+  - planning
+- id: F-ECHO-003
+  claim: EchoDesk 0.3 pre-development documentation exists under docs/0.3 and includes architecture, workflows, data contracts,
+    tests, development plan, and checklist.
+  category: observation
+  volatility: low
+  evidence_strength: doc
+  status: confirmed
+  confidence: 0.95
+  observed_at: '2026-07-09T23:34:03+08:00'
+  observed_by: agent/codex-0-3-prep
+  valid_until: null
+  ttl_hours: null
+  source:
+  - docs/0.3/README.md
+  - docs/0.3/ARCHITECTURE.md
+  - docs/0.3/WORKFLOWS.md
+  - docs/0.3/DATA_MODEL_AND_CONTRACTS.md
+  - docs/0.3/TEST_PLAN.md
+  - docs/0.3/DEV_PLAN.md
+  - docs/0.3/PRE_DEV_CHECKLIST.md
+  evidence: The 0.3 documentation package was created before implementation work.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - '0.3'
+  - documentation
+  - pre-development
+- id: F-ECHO-004
+  claim: EchoDesk 0.3.0-alpha.1 Workflow Core is implemented, packaged, installed at /Applications/EchoDesk.app, and passes
+    the deterministic backend gate and installed desktop acceptance flow.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.98
+  observed_at: '2026-07-10T15:53:27+08:00'
+  observed_by: agent/codex-0-3-delivery
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - CHANGELOG.md
+  - docs/0.3/README.md
+  - desktop/tests/e2e-real/installed-local-workflow.spec.ts
+  - desktop/test-results/installed-local/04-installed-restart-restored.png
+  evidence: Backend deterministic gate reported 528 passed, 4 skipped, and 20 deselected after the DS V4 default regression
+    test was added; the installed-local E2E and restart-restoration screenshot were already completed for the packaged alpha.
+  supersedes: []
+  superseded_by: F-ECHO-007
+  pinned: false
+  tags:
+  - '0.3'
+  - workflow
+  - delivery
+- id: F-ECHO-005
+  claim: The installed EchoDesk main LLM is configured as Yunwu deepseek-v4-flash and a real non-streaming request plus the
+    installed desktop status popover both succeeded.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T15:53:27+08:00'
+  observed_by: agent/codex-0-3-delivery
+  valid_until: '2026-07-10T17:53:27+08:00'
+  ttl_hours: 2
+  source:
+  - backend/app/config.py
+  - scripts/install-backend.sh
+  - desktop/test-results/installed-local/05-installed-yunwu-ds-v4-flash.png
+  evidence: Yunwu /v1/chat/completions returned HTTP 200 with model deepseek-v4-flash and content OK; /healthz/full main_model.ok
+    was true; the packaged UI displayed yunwu · deepseek-v4-flash.
+  supersedes: []
+  superseded_by: F-ECHO-008
+  pinned: false
+  tags:
+  - llm
+  - yunwu
+  - runtime
+- id: F-ECHO-006
+  claim: The obsolete EchoDesk 0.2.50 app copies and the pre-workflow-restore alpha backup were removed, leaving /Applications/EchoDesk.app
+    at version 0.3.0-alpha.1 as the sole installed EchoDesk app.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T15:53:27+08:00'
+  observed_by: agent/codex-0-3-delivery
+  valid_until: '2026-07-10T17:53:27+08:00'
+  ttl_hours: 2
+  source:
+  - runtime:/Applications/EchoDesk.app/Contents/Info.plist
+  - runtime:mdfind EchoDesk application bundles
+  evidence: The two /Applications/EchoDesk.app.pre-* bundles and the echo-demo-public-work 0.2.50 build were permanently removed;
+    /Applications contains only EchoDesk.app with CFBundleShortVersionString 0.3.0-alpha.1.
+  supersedes: []
+  superseded_by: F-ECHO-007
+  pinned: false
+  tags:
+  - install
+  - cleanup
+  - '0.3'
+- id: F-ECHO-007
+  claim: EchoDesk 0.3.0 formal is packaged, installed as the sole /Applications/EchoDesk.app, and passes deterministic backend,
+    desktop scenario, installer, and real installed-workflow gates.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T17:26:00+08:00'
+  observed_by: agent/codex-0-3-final
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - CHANGELOG.md
+  - docs/0.3/README.md
+  - desktop/tests/e2e-real/installed-local-workflow.spec.ts
+  - runtime:/Applications/EchoDesk.app/Contents/Info.plist
+  evidence: 'Backend gate: 530 passed, 4 skipped, 20 deselected. Desktop scenarios: 25 passed. Version check, typecheck, lint,
+    production build, package signing verification, isolated backend installer smoke, AgentOS health, and installed real workflow
+    E2E all passed. Alpha release assets were removed and /Applications contains only EchoDesk.app version 0.3.0.'
+  supersedes:
+  - F-ECHO-004
+  - F-ECHO-006
+  superseded_by: F-ECHO-016
+  pinned: false
+  tags:
+  - 0.3.0
+  - workflow
+  - delivery
+  - install
+- id: F-ECHO-008
+  claim: EchoDesk 0.3.0 uses deepseek-v4-flash as the installed main model, hides supplier branding in normal UI, and the
+    real generation plus AgentOS workflow completed successfully.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T17:26:00+08:00'
+  observed_by: agent/codex-0-3-final
+  valid_until: '2026-07-10T19:26:00+08:00'
+  ttl_hours: 2
+  source:
+  - desktop/src/components/StatusBar.tsx
+  - desktop/src/components/SettingsPanel.tsx
+  - desktop/tests/scenarios/s02_status_pills.spec.ts
+  - desktop/tests/e2e-real/installed-local-workflow.spec.ts
+  evidence: The installed E2E received HTTP 200 from the configured chat-completions endpoint, generated and downloaded the
+    Todo artifact, then completed a real Claude Code AgentOS task through the local proxy. UI scenario coverage asserts the
+    model name is visible while the supplier name is absent.
+  supersedes:
+  - F-ECHO-005
+  superseded_by: F-ECHO-016
+  pinned: false
+  tags:
+  - llm
+  - agentos
+  - runtime
+- id: F-ECHO-009
+  claim: The current EchoDesk 0.3 user database and audited legacy databases/local storage contain no persisted historical
+    artifact records or files available for migration.
+  category: observation
+  volatility: medium
+  evidence_strength: code
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T17:30:00+08:00'
+  observed_by: agent/codex-artifact-audit
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - runtime:~/.echodesk/echodesk.db
+  - runtime:~/.echo/echo.db
+  - runtime:~/.echo-demo/echo.db
+  - runtime:~/Library/Application Support/echodesk-desktop/Local Storage/leveldb
+  evidence: 'The current artifacts table and artifact_links table each returned zero rows. Legacy SQLite databases predate
+    the artifact schema or contain only meetings/messages/tasks. Electron local-storage snapshots with the old app state contained
+    artifacts: []. No generated document files were found in the current or legacy EchoDesk storage directories.'
+  supersedes: []
+  superseded_by: F-ECHO-011
+  pinned: false
+  tags:
+  - artifact
+  - migration
+  - history
+- id: F-ECHO-010
+  claim: EchoDesk v0.3.0 is not published on the configured GitHub Releases feed; the latest public release is v0.2.50, blocking
+    public update verification.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T17:35:00+08:00'
+  observed_by: agent/codex-release-audit
+  valid_until: '2026-07-10T19:35:00+08:00'
+  ttl_hours: 2
+  source:
+  - runtime:gh release view v0.3.0 --repo yoligehude14753/echo-demo
+  - runtime:gh release view --repo yoligehude14753/echo-demo
+  - desktop/electron/main.cjs
+  evidence: The v0.3.0 release query returned release not found. The latest-release query returned v0.2.50 with its macOS
+    assets and latest-mac.yml. The installed updater is configured for the same GitHub owner/repository feed.
+  supersedes: []
+  superseded_by: F-ECHO-024
+  pinned: false
+  tags:
+  - release
+  - update
+  - github
+- id: F-ECHO-011
+  claim: EchoDesk recovered 153 historical skill_build output files into artifacts, including 16 verified meeting links, after
+    identifying an omitted 0.3 metadata migration.
+  category: observation
+  volatility: medium
+  evidence_strength: runtime
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T18:02:00+08:00'
+  observed_by: agent/codex-artifact-recovery
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/artifacts/recovery.py
+  - backend/app/main.py
+  - runtime:~/.echodesk/echodesk.db
+  - runtime:http://127.0.0.1:8772/artifacts?limit=500
+  - runtime:http://127.0.0.1:8772/meetings/auto-1782801554/artifacts
+  - runtime:/Users/yoligehude/.echodesk/logs/backend.log
+  evidence: The real user DB now contains 153 artifacts and 16 artifact_links. The installed 0.3.0 app returned 153 artifacts
+    from /artifacts?limit=500, returned 3 artifacts for meeting auto-1782801554 including pptx-297d768314, and logged an idempotent
+    startup recovery scan with discovered=153 recovered=0 existing=153 skipped=47.
+  supersedes:
+  - F-ECHO-009
+  superseded_by: F-ECHO-022
+  pinned: false
+  tags:
+  - artifact
+  - migration
+  - history
+  - recovery
+- id: F-ECHO-012
+  claim: User requested a complete modern EchoDesk UX redesign with Codex-like system typography, clear semantics, consistent
+    visuals and icons, and robust text overflow handling.
+  category: intent
+  volatility: medium
+  evidence_strength: doc
+  status: superseded
+  confidence: 1.0
+  observed_at: '2026-07-10T19:26:00+08:00'
+  observed_by: human/user
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - event:E-20260710T1926-008
+  evidence: The user explicitly requested a function-led, advanced and modern redesign, required Codex-like unified typography,
+    and identified ambiguity, visual inconsistency, excessive fonts, low-quality symbols, and overflow as defects to remove.
+  supersedes: []
+  superseded_by: F-ECHO-021
+  pinned: false
+  tags:
+  - '0.3'
+  - ux
+  - desktop
+  - design-system
+- id: F-ECHO-013
+  claim: EchoDesk's redesigned desktop UX now uses a unified Codex-like system font, separated navigation/workbench/inspector
+    views, human-readable states, and tested responsive overflow handling.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T19:56:00+08:00'
+  observed_by: agent/codex-ux-redesign
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - desktop/src/App.tsx
+  - desktop/src/index.css
+  - desktop/tests/e2e/ux-redesign.spec.ts
+  - desktop/tests/e2e/mobile-layout.spec.ts
+  - docs/0.3/ARCHITECTURE.md
+  evidence: Typecheck, lint, and production build passed; desktop E2E finished with 48 passed and scenarios with 25 passed.
+    Responsive regression covers 411, 960, 1280, and TV 1920 layouts, long-text overflow, the system font stack, and hidden
+    internal IDs.
+  supersedes: []
+  superseded_by: F-ECHO-021
+  pinned: false
+  tags:
+  - '0.3'
+  - ux
+  - desktop
+  - responsive
+  - design-system
+- id: F-ECHO-014
+  claim: 'Computer-driven EchoDesk click validation completed: 25 headed scenarios passed; tests exposed workspace-focus instability,
+    onboarding replay, and 960px inspector-close defects.'
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-10T21:08:00+08:00'
+  observed_by: agent/codex-ux-validation
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - docs/0.3/UX_CLICK_VALIDATION_2026-07-10.md
+  - desktop/tests/e2e/workspace-knowledge.spec.ts
+  - desktop/src/components/OnboardingModal.tsx
+  - desktop/src/components/SettingsPanel.tsx
+  - desktop/src/App.tsx
+  - desktop/src/index.css
+  evidence: Visible browser clicks covered desktop, 960px, and 411px layouts. Headed E2E finished 46/48 with two focus failures,
+    standard E2E rerun finished 47/48 with the same intermittent focus failure, and headed scenarios finished 25/25. Manual
+    DOM checks confirmed onboarding replay remained on step 3 and the 960px inspector toggle remained expanded after close
+    clicks.
+  supersedes: []
+  superseded_by: F-ECHO-021
+  pinned: false
+  tags:
+  - '0.3'
+  - ux
+  - click-validation
+  - desktop
+  - responsive
+- id: F-ECHO-015
+  claim: 'EchoDesk''s four click-validation defects are fixed: onboarding replay resets, the 960px inspector closes accessibly,
+    workspace focus is stable, and all update entry points block downgrades.'
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-11T08:46:38+08:00'
+  observed_by: agent/codex-ux-repair
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - docs/0.3/UX_CLICK_VALIDATION_2026-07-10.md
+  - desktop/src/App.tsx
+  - desktop/src/runtime.ts
+  - desktop/src/components/OnboardingModal.tsx
+  - desktop/src/components/SettingsPanel.tsx
+  - desktop/tests/e2e/onboarding.spec.ts
+  - desktop/tests/e2e/ux-redesign.spec.ts
+  - desktop/tests/e2e/workspace-knowledge.spec.ts
+  - desktop/tests/e2e/public-demo-settings.spec.ts
+  evidence: Complete headed desktop E2E passed 49/49 and headed business scenarios passed 25/25. Tests assert onboarding replay
+    starts on Welcome, the 960px inspector closes and restores focus, workspace settings focus is stable, and stale update
+    metadata cannot expose, install, or open an older release. Typecheck, lint, production build, and diff checks passed.
+  supersedes:
+  - F-ECHO-014
+  superseded_by: F-ECHO-021
+  pinned: false
+  tags:
+  - '0.3'
+  - ux
+  - click-validation
+  - desktop
+  - accessibility
+  - update-safety
+- id: F-ECHO-016
+  claim: EchoDesk 0.3 now passes deterministic backend and desktop gates with principal isolation and dispatcher recovery,
+    while its live installed workflow gate is blocked by a main-provider timeout.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-11T15:31:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-repair
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/workflows/kernel.py
+  - backend/app/workflows/service.py
+  - backend/app/main.py
+  - backend/tests/unit/test_public_principal_http.py
+  - backend/tests/unit/test_workflow_kernel.py
+  - desktop/tests/e2e-real/packaged-local-smoke.spec.ts
+  - desktop/tests/e2e-real/installed-local-workflow.spec.ts
+  - runtime:pytest backend/tests -m not-live => 588 passed, 0 skipped
+  - runtime:desktop mock E2E => 57 passed; scenarios => 29 passed
+  evidence: Deterministic backend finished with 588 passed, zero skips and 16 live tests deselected; desktop mock E2E and
+    scenarios passed 57/57 and 29/29; the packaged local app smoke passed, but the installed end-to-end retry failed after
+    deepseek-v4-flash timed out at 180 seconds. | Final deterministic backend rerun completed with 590 passed, zero skipped
+    and 16 live tests deselected; desktop static/build, mock E2E, scenarios, unpacked packaged smoke, DMG build/signing and
+    mounted-DMG smoke passed; the live installed workflow remains blocked only at the observed main-provider timeout. | Post-audit
+    final rerun completed with 602 deterministic backend tests passed, zero skipped and 16 live contracts deselected. New
+    counterexample coverage confirms atomic Agent task/workflow creation, deterministic Artifact staging and crash replay,
+    atomic meeting output cleanup, recover-vs-restore dedupe, and real finalize retry lineage. Desktop lint/typecheck/build
+    passed; mock E2E passed 57/57, scenarios passed 29/29, production npm audit has zero high/critical issues, and the packaged
+    Electron plus isolated local backend smoke passed 1/1. The previously observed live installed workflow blocker remains
+    the external main-provider timeout.
+  supersedes:
+  - F-ECHO-007
+  - F-ECHO-008
+  superseded_by: F-ECHO-017
+  pinned: false
+  tags:
+  - 0.3.0
+  - workflow
+  - principal-isolation
+  - gates
+  - live-blocker
+- id: F-ECHO-017
+  claim: EchoDesk 0.3.1 unifies public identity, Workflow execution, committed outbox delivery, and desktop transport; deterministic
+    gates pass while live generation is provider-blocked.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-11T18:02:20+08:00'
+  observed_by: agent/codex-echodesk-0-3-1
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/security/access.py
+  - backend/app/workflows/kernel.py
+  - backend/app/workflows/service.py
+  - backend/app/adapters/repo/migrations/017_meeting_minutes_tombstone.sql
+  - desktop/src/session.ts
+  - desktop/electron/main.cjs
+  - desktop/tests/e2e-real/packaged-local-smoke.spec.ts
+  - desktop/tests/e2e-real/installed-local-workflow.spec.ts
+  - runtime:backend deterministic gate => 612 passed, 0 skipped, 16 live deselected
+  - runtime:desktop mock E2E => 58 passed; scenarios => 29 passed
+  - runtime:read-only mounted EchoDesk 0.3.1 DMG smoke => 1 passed
+  evidence: Backend Ruff/format/mypy passed and deterministic pytest completed 612 passed with zero skipped. Desktop version/lint/typecheck/build
+    passed, mock E2E completed 58/58, scenarios 29/29, production npm audit had zero high/critical issues, and the read-only
+    mounted 0.3.1 DMG passed a real Electron/local-backend/version/custom-port/persistence/click smoke. The live installed
+    workflow restored and retried its durable run correctly, then the configured deepseek-v4-flash provider timed out after
+    180 seconds before AgentOS execution. | The separate live contract gate completed with 4 passed, 11 skipped and 1 failed.
+    The failure was qwen3-vl-8b-local stream timeout after 60 seconds; skips were explicit current reachability failures for
+    Yunwu and eight STT/TTS. This independently confirms the remaining blocker is external provider availability, matching
+    the installed deepseek-v4-flash 180-second timeout.
+  supersedes:
+  - F-ECHO-016
+  superseded_by: F-ECHO-020
+  pinned: false
+  tags:
+  - 0.3.1
+  - workflow
+  - principal-isolation
+  - outbox
+  - desktop-transport
+  - gates
+  - live-blocker
+- id: F-ECHO-018
+  claim: EchoDesk Android/TV identity now uses origin-bound Keystore storage, fail-closed 401/409 handling, crash-safe rotation,
+    and explicit same-owner reconnect.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-12T03:29:34+08:00'
+  observed_by: agent/codex-android-tv-identity
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - desktop/android/app/src/main/java/com/echodesk/app/AndroidIdentityVault.java
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoIdentityPlugin.java
+  - desktop/android/app/src/androidTest/java/com/echodesk/app/AndroidIdentityVaultTest.java
+  - desktop/src/identityCredentialStore.ts
+  - desktop/src/session.ts
+  - desktop/src/components/IdentityStatus.tsx
+  - desktop/tests/e2e/identity-session-p0.spec.ts
+  - runtime:Android com.echodesk.app instrumentation => 6 passed
+  - runtime:TV com.echodesk.tv instrumentation => 6 passed
+  - runtime:desktop Playwright => 83 passed
+  evidence: Android and TV debug/test APKs were installed on an API 36 emulator and AndroidJUnitRunner completed 6/6 tests
+    for each applicationId, covering encrypted persistence, origin AAD isolation, lost-marker recovery, and atomic rotation.
+    Desktop typecheck, lint, production build, 18 focused identity Playwright tests, and the full 83-test Playwright suite
+    passed. Static inspection found no localStorage/sessionStorage use in the identity store or native vault.
+  supersedes: []
+  superseded_by: F-ECHO-028
+  pinned: false
+  tags:
+  - 0.3.1
+  - android
+  - tv
+  - identity
+  - keystore
+  - origin-binding
+  - crash-recovery
+- id: F-ECHO-019
+  claim: EchoDesk Agent artifacts now import through bounded atomic streaming, and Agent bridges automatically recover expired
+    or heartbeat-lost leases with exponential backoff.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-12T04:00:06+08:00'
+  observed_by: agent/codex-agent-recovery
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/agents/artifact_transfer.py
+  - backend/app/agents/service.py
+  - backend/tests/unit/test_agent_artifact_transfer.py
+  - backend/tests/unit/test_agent_bridge_recovery.py
+  - backend/tests/unit/test_agent_task_service.py
+  - runtime:focused Agent pytest => 33 passed
+  - runtime:Ruff => clean
+  - runtime:strict mypy source gate => clean
+  evidence: Focused Agent tests passed 33/33, including normal, declared-oversize, chunked-oversize and cancellation cleanup,
+    isolated failure projection, transient heartbeat retry, and automatic two-instance lease failover without restart; Ruff
+    and strict mypy also passed.
+  supersedes: []
+  superseded_by: F-ECHO-028
+  pinned: false
+  tags:
+  - 0.3.1
+  - agent
+  - artifact
+  - streaming
+  - lease
+  - failover
+  - recovery
+- id: F-ECHO-020
+  claim: EchoDesk 0.3.1 implements a unified Workflow, scoped public identity, durable Agent commands, one RAG fact source
+    and an installed recovery path; deterministic and live local gates pass.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-12T12:38:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - ARCHITECTURE.md
+  - backend/app/workflows/kernel.py
+  - backend/app/workflows/service.py
+  - backend/app/agents/command_outbox.py
+  - backend/app/adapters/rag/index_store.py
+  - backend/app/security/access.py
+  - desktop/tests/e2e-real/installed-local-workflow.spec.ts
+  - desktop/scripts/macos-mounted-dmg-smoke.cjs
+  - runtime:backend deterministic => 916 collected, 18 live deselected, 898 passed, 0 skipped, coverage 87%, natural exit
+  - runtime:GLM-5.2-NVFP4 product contract => 2 passed
+  - runtime:installed bundled-backend GLM plus AgentOS workflow => 1 passed
+  - runtime:read-only mounted DMG bundled-backend smoke => 1 passed
+  evidence: The complete deterministic backend suite, Ruff, format, mypy and dependency gates passed. The read-only DMG executed
+    bundled artifact/RAG runtimes, and the installed app used its bundled backend with GLM-5.2 plus AgentOS commit c26b102cf213752f8baa75d4791ded3b33b95bd9
+    to verify failure injection, restart restoration, retry lineage, Agent artifacts, cancel, timeout and final persistence.
+  supersedes:
+  - F-ECHO-002
+  - F-ECHO-017
+  superseded_by: F-ECHO-023
+  pinned: false
+  tags:
+  - 0.3.1
+  - workflow
+  - principal-isolation
+  - agent
+  - rag
+  - installed
+  - live
+  - gates
+- id: F-ECHO-021
+  claim: EchoDesk 0.3.1 desktop UX has one Codex-like system font, semantic controls, a clear three-pane hierarchy, and tested
+    overflow, focus, error and responsive states.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-12T12:38:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - desktop/src/App.tsx
+  - desktop/src/index.css
+  - desktop/src/components/SettingsPanel.tsx
+  - desktop/tests/e2e/ux-redesign.spec.ts
+  - desktop/tests/e2e/backend-transport-policy.spec.ts
+  - desktop/tests/scenarios
+  - runtime:Electron contracts => 70 passed
+  - runtime:Playwright E2E => 95 passed
+  - runtime:recorded click scenarios => 29 passed
+  evidence: Final full reruns passed 70 Electron contracts, 95 browser E2E cases and 29 slow-click recorded scenarios. Coverage
+    includes the custom accessible private-LAN HTTP confirmation, onboarding, settings, meeting four-state loading/error/empty/content
+    behavior, artifact previews, WebSocket 4401/resync, and 411/960/1280/1920 layouts without horizontal overflow.
+  supersedes:
+  - F-ECHO-012
+  - F-ECHO-013
+  - F-ECHO-014
+  - F-ECHO-015
+  superseded_by: F-ECHO-023
+  pinned: false
+  tags:
+  - 0.3.1
+  - ux
+  - desktop
+  - accessibility
+  - responsive
+  - click-validation
+- id: F-ECHO-022
+  claim: The installed EchoDesk 0.3.1 app migrated the real user SQLite database from schema 11 to 37 without changing audited
+    row counts or speaker-label content.
+  category: observation
+  volatility: low
+  evidence_strength: runtime
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-12T12:38:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: null
+  source:
+  - backend/app/adapters/repo/migrator.py
+  - backend/app/adapters/repo/migrations/037_restore_speaker_label_user_set.sql
+  - runtime:~/.echodesk/backups/echodesk.db.pre-0.3.1-final-20260712-122549.sqlite
+  - runtime:~/.echodesk/echodesk.db
+  evidence: The backup passed integrity and foreign-key checks. The installed bundled backend applied migrations 12 through
+    37. Before and after counts remained meetings=366, meeting_segments=18819, speakers=69, ambient_segments=22131, artifacts=153
+    and artifact_links=16; the ordered speaker-label SHA-256 remained e11acdad7dd1d05da684cf8804c877a453384768a4f933e1ed51ba3ac38972e2;
+    final integrity was ok with zero foreign-key violations.
+  supersedes:
+  - F-ECHO-011
+  superseded_by: F-ECHO-028
+  pinned: false
+  tags:
+  - 0.3.1
+  - migration
+  - sqlite
+  - artifact
+  - user-data
+- id: F-ECHO-023
+  claim: EchoDesk 0.3.1 local source gates pass across backend, Electron, browser UX and scenarios with enforced public-client
+    compatibility, aligned defaults and portable packaging contracts.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 0.99
+  observed_at: '2026-07-12T13:45:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/main.py
+  - backend/tests/unit/test_public_principal_http.py
+  - backend/tests/unit/test_config_io.py
+  - desktop/scripts/package-tv-installer.cjs
+  - desktop/electron/tests/release-gates.test.cjs
+  - desktop/tests/e2e/backend-transport-policy.spec.ts
+  - .github/workflows/ci.yml
+  - docs/ops/public-backend-deployment.md
+  - runtime:backend deterministic => 933 collected, 18 live deselected, 915 passed, 0 skipped, coverage 87%, natural exit
+  - runtime:Electron contracts => 74 passed
+  - runtime:Playwright E2E => 121 passed
+  - runtime:recorded click scenarios => 29 passed
+  evidence: The complete deterministic backend suite passed 915 tests with zero skips. Public HTTP, session, Electron IPC
+    and WebSocket paths enforce minimum client 0.3.1 with explicit 426/4426 upgrade states and no retry loop; Electron also
+    binds every bearer to backend_origin and clears stale scope state on origin change. A shared backend-origin lease aborts
+    in-flight transport and fences REST hydration, commands, capture, meetings, artifacts, knowledge-base state, settings,
+    previews and TTS so late A responses cannot enter B state. Configuration-template parsing, Capacitor origins and runtime
+    defaults share one contract. Electron, browser UX and recorded scenarios passed 74, 121 and 29 cases. Local contracts
+    cover CRLF, Windows path normalization, portable file-mode assertions, PowerShell ZIP generation, full TV bundle hashes,
+    Gradle dependency verification and package-specific SBOM generation. Workflow actions use immutable Node 24 revisions.
+    Actual hosted Windows/Linux/Android packaging, public prerelease and production cutover remain external gates.
+  supersedes:
+  - F-ECHO-020
+  - F-ECHO-021
+  superseded_by: F-ECHO-025
+  pinned: false
+  tags:
+  - 0.3.1
+  - deterministic
+  - public-client
+  - windows
+  - packaging
+  - configuration
+  - gates
+- id: F-ECHO-024
+  claim: At 2026-07-12 14:04 +08:00 the configured GitHub Releases feed still reports v0.2.50 as latest and contains no public
+    0.3.1 release or prerelease.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: superseded
+  confidence: 1.0
+  observed_at: '2026-07-12T14:04:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 6
+  source:
+  - https://api.github.com/repos/yoligehude14753/echo-demo/releases
+  - runtime:gh release list --repo yoligehude14753/echo-demo
+  evidence: A direct authenticated GitHub release listing showed v0.2.50 as latest and no tag or prerelease beginning with
+    v0.3.1.
+  supersedes:
+  - F-ECHO-010
+  superseded_by: F-ECHO-027
+  pinned: false
+  tags:
+  - release
+  - 0.3.1
+  - github
+  - observation
+- id: F-ECHO-025
+  claim: EchoDesk 0.3.1 final local source, macOS package and installed GLM plus AgentOS workflow gates pass with zero deterministic
+    skips and completed core consistency fixes.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: superseded
+  confidence: 1.0
+  observed_at: '2026-07-12T21:54:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/workflows/service.py
+  - backend/app/api/meetings.py
+  - backend/app/adapters/repo/migrations/038_rag_projection_recovery.sql
+  - backend/app/adapters/rag/index_store.py
+  - backend/app/security/access.py
+  - desktop/electron/workspace-backend-transport.cjs
+  - desktop/src/ws.ts
+  - .github/workflows/ci.yml
+  - runtime:backend deterministic => 971 collected, 18 live deselected, 953 passed, 0 skipped, coverage 87%, natural exit
+  - runtime:Electron contracts => 95 passed
+  - runtime:Playwright E2E => 127 passed
+  - runtime:recorded click scenarios => 29 passed
+  - runtime:GLM-5.2 product contract => 2 passed
+  - runtime:read-only DMG packaged smoke => 1 passed
+  - runtime:installed GLM-5.2 plus AgentOS full workflow => 1 passed
+  - runtime:Android phone/TV development builds, JVM/lint and API 36.1 instrumentation => passed
+  evidence: The final deterministic backend process selected 953 non-live tests from 971 collected and exited naturally with
+    zero failures, errors or skips and 87% coverage. Ruff, formatting, mypy over 127 files, Python compile, 95 Electron contracts,
+    127 browser interaction cases and 29 recorded scenarios passed. Dependency audits reported zero npm findings and zero
+    known Python findings apart from the documented CVE-2025-3000 exception. GLM-5.2 passed both live product contracts. The
+    exact local source produced an arm64 DMG and ZIP; the read-only mounted DMG exercised the bundled backend and Office/PDF/PPTX/XLSX
+    runtimes. The installed app then passed the full GLM/RAG/failure/restart/retry-lineage/AgentOS artifact/cancel/timeout/persistence
+    workflow. Android phone and TV development APKs, JVM tests, lint and six API 36.1 instrumentation tests passed, while
+    unsigned public release failed closed. Formal signed macOS/Windows assets, exact-main signed Android candidates, hosted
+    cross-platform CI and production public cutover remain separate external gates.
+  supersedes:
+  - F-ECHO-023
+  superseded_by: F-ECHO-028
+  pinned: false
+  tags:
+  - 0.3.1
+  - deterministic
+  - installed
+  - workflow
+  - agentos
+  - rag
+  - identity
+  - release-gates
+- id: F-ECHO-027
+  claim: At 2026-07-12 21:56 +08:00 Releases latest is v0.2.50 with no 0.3.1; production backend is 0.2.49 with legacy bootstrap
+    app_version 0.2.45.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: superseded
+  confidence: 1.0
+  observed_at: '2026-07-12T21:56:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-final
+  valid_until: null
+  ttl_hours: 6
+  source:
+  - https://api.github.com/repos/yoligehude14753/echo-demo/releases
+  - https://echodesk.yoliyoli.uk/healthz
+  - https://echodesk.yoliyoli.uk/bootstrap
+  - runtime:gh release list --repo yoligehude14753/echo-demo
+  evidence: An authenticated GitHub release listing showed v0.2.50 as the latest non-prerelease and no v0.3.1 tag among the
+    newest releases. Direct HTTPS reads returned healthz version 0.2.49 and a legacy bootstrap payload with app_version 0.2.45
+    and no minimum-client session contract. Therefore the 0.3.1 public isolation smoke cannot be claimed against production
+    and a breaking promotion must wait for formally installable 0.3.1 clients.
+  supersedes:
+  - F-ECHO-024
+  superseded_by: F-ECHO-029
+  pinned: false
+  tags:
+  - release
+  - public-backend
+  - 0.3.1
+  - observation
+  - cutover-blocked
+- id: F-ECHO-028
+  claim: EchoDesk 0.3.1 local and hosted backend, dependency, macOS, Linux, Android/TV and Windows package gates pass; formal
+    signing, exact-main provenance and production cutover remain external.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-13T09:10:00+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-closure
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/workflows/service.py
+  - backend/app/api/meetings.py
+  - backend/app/artifacts/recovery.py
+  - backend/app/artifacts/repository.py
+  - backend/app/agents/service.py
+  - backend/app/adapters/repo/migrations/038_rag_projection_recovery.sql
+  - desktop/electron/artifact-download.cjs
+  - desktop/electron/workspace-backend-transport.cjs
+  - desktop/src/ws.ts
+  - desktop/android/build.gradle
+  - .github/workflows/ci.yml
+  - runtime:backend deterministic => 1045 collected, 18 live deselected, 1027 passed, 0 skipped, 0 failed, 0 errors, coverage
+    line-rate 87.46%, natural exit
+  - runtime:Electron contracts => 184 passed
+  - runtime:Playwright E2E => 150 passed
+  - runtime:recorded click scenarios => 29 passed
+  - runtime:release contracts => 31 passed
+  - runtime:public isolation self-test and dual-principal full smoke => passed
+  - runtime:live provider contracts => 2 passed, 0 skipped
+  - runtime:read-only ad-hoc DMG packaged smoke => 1 passed
+  - runtime:installed bundled workflow => 1 passed
+  - runtime:Android phone/TV development builds, JVM, zero-warning lint, and API 36.1 instrumentation => passed
+  - runtime:hosted CI 29214796717 => backend, dependency audits, desktop, macOS arm64 DMG, Linux AppImage/deb, and Android/TV
+    passed; branch-inapplicable exact-main provenance skipped
+  - runtime:hosted Windows workflow 29216263869 at 1e428786 => 184 Electron contracts, installer/content, NSIS installed lifecycle,
+    portable ZIP, public-content guard, SBOM/checksums, and artifact upload passed
+  evidence: The final deterministic backend process selected 1027 non-live tests from 1045 collected and exited naturally
+    with zero failures, errors, or skips and a 87.46% line rate. Ruff formatted 250 files and strict mypy checked 128 source
+    files. Public self-test and the complete dual-principal HTTP, WebSocket, meeting, Artifact, RAG, Workflow, admin-fence,
+    and cleanup smoke passed. Electron passed 184 contracts, Playwright passed 150 browser cases, recorded scenarios passed
+    29 cases, and release contracts passed 31 cases. Six hashed Python locks validated; runtime, dev, and build audits contain
+    only the documented torch CVE-2025-3000 exception with no upstream fix version, while the other audited locks and both
+    npm production trees are clean. Fresh arm64 ad-hoc DMG and ZIP bytes, blockmaps, updater metadata, deep code signature,
+    plist version, asar allowlist, SBOM, and checksums passed; the read-only DMG smoke and installed bundled full workflow
+    passed, including authenticated mode-0600 Artifact download, restart/retry lineage, and Agent success, cancel, timeout,
+    and bridge recovery. Both live provider contracts passed with zero skips. Android phone and TV development builds, four
+    JVM tests, zero Error/Warning aggregate lint, six API 36.1 instrumentation tests, identity/version checks, and unsigned
+    fail-closed contracts passed. A privacy-safe validation of the schema-38 migration copy passed integrity and foreign-key
+    checks without publishing user paths, row counts, hashes, or content. Hosted CI 29214796717 passed backend, all three
+    dependency audits, desktop, macOS arm64 DMG, Linux AppImage/deb three-state smoke, and Android/TV; the exact-main provenance
+    job was branch-inapplicable. Final Windows workflow 29216263869 at 1e428786 passed 184 Electron contracts, installer/content
+    validation, NSIS installed lifecycle including backend process-tree cleanup, portable ZIP, public-content guard, SBOM/checksums,
+    and artifact upload. Developer ID, notarization, stapling, Gatekeeper distribution, Authenticode, exact-main formal candidates,
+    and production cutover remain separate external gates.
+  supersedes:
+  - F-ECHO-018
+  - F-ECHO-019
+  - F-ECHO-022
+  - F-ECHO-025
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.1
+  - deterministic
+  - installed
+  - workflow
+  - agentos
+  - rag
+  - identity
+  - privacy
+  - release-gates
+- id: F-ECHO-029
+  claim: At 2026-07-13 06:28 +08:00, latest release is v0.2.50 with no v0.3.1; production health is 0.2.49 and legacy bootstrap
+    app_version is 0.2.45 without a minimum-client contract.
+  category: observation
+  volatility: high
+  evidence_strength: runtime
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-13T06:28:38+08:00'
+  observed_by: agent/codex-echodesk-0-3-1-closure
+  valid_until: null
+  ttl_hours: 6
+  source:
+  - https://api.github.com/repos/yoligehude14753/echo-demo/releases
+  - https://echodesk.yoliyoli.uk/healthz
+  - https://echodesk.yoliyoli.uk/bootstrap
+  - runtime:gh release list --repo yoligehude14753/echo-demo
+  evidence: An authenticated GitHub release listing showed v0.2.50 as the latest release and no v0.3.1 tag or prerelease among
+    the newest releases. Direct HTTPS reads returned healthz version 0.2.49 and a legacy bootstrap payload with app_version
+    0.2.45 and no minimum_client_version. Therefore the locally validated 0.3.1 isolation contract is not deployed to production,
+    and the breaking public promotion must wait for formally installable 0.3.1 clients.
+  supersedes:
+  - F-ECHO-027
+  superseded_by: null
+  pinned: false
+  tags:
+  - release
+  - public-backend
+  - 0.3.1
+  - observation
+  - cutover-blocked
+- id: F-ECHO-030
+  claim: EchoDesk 0.3.1 local Electron workspace directory selection uses the native picker instead of unsupported window.prompt,
+    while public mode retains origin-bound opaque handles.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-13T11:47:00+08:00'
+  observed_by: agent/codex-workspace-picker-fix
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - desktop/src/api.ts
+  - desktop/electron/main.cjs
+  - desktop/tests/e2e/workspace-knowledge.spec.ts
+  - desktop/electron/tests/ipc-security-policy.test.cjs
+  - runtime:workspace knowledge Playwright => 3 passed
+  - runtime:Electron IPC security contract => 8 passed
+  - runtime:desktop typecheck and lint => passed
+  evidence: The installed local/self-hosted path selected host-backend capability and called window.prompt, which packaged
+    Electron does not support. The renderer now invokes the native picker for every Electron runtime; main returns a canonical
+    absolute path only outside public mode and retains the existing origin-bound opaque handle in public mode. Focused IPC,
+    Playwright, typecheck, and lint gates passed.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.1
+  - workspace
+  - rag
+  - electron
+  - native-picker
+  - bugfix

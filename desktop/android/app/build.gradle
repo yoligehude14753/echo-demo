@@ -1,4 +1,54 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
+
+def androidVersionLedgerFile = file('../version-codes.json')
+if (!androidVersionLedgerFile.isFile()) {
+    throw new GradleException("Missing Android version-code ledger: ${androidVersionLedgerFile}")
+}
+def androidVersionLedger = new JsonSlurper().parse(androidVersionLedgerFile)
+def androidVersionReleases = androidVersionLedger.releases
+if (androidVersionLedger.schemaVersion != 1 || !(androidVersionReleases instanceof List) || androidVersionReleases.isEmpty()) {
+    throw new GradleException("Android version-code ledger must contain schemaVersion=1 and releases")
+}
+def previousAndroidVersionCode = 0
+def seenAndroidVersions = [] as Set
+androidVersionReleases.each { release ->
+    def releaseVersion = release.version?.toString()
+    def releaseCode = release.versionCode as Integer
+    if (!(releaseVersion ==~ /\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/) ||
+        releaseCode <= previousAndroidVersionCode ||
+        !seenAndroidVersions.add(releaseVersion)) {
+        throw new GradleException("Android version-code ledger must be unique and strictly increasing")
+    }
+    previousAndroidVersionCode = releaseCode
+}
+def currentAndroidRelease = androidVersionReleases.last()
+def desktopPackage = new JsonSlurper().parse(file('../../package.json'))
+if (currentAndroidRelease.version?.toString() != desktopPackage.version?.toString()) {
+    throw new GradleException("Android version-code ledger current release must match desktop/package.json")
+}
+
+def releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains("release")
+}
+def externalSigningRequested = project.findProperty("echoExternalSigning")?.toString() == "true"
+def releaseSigningVariables = [
+    "ECHODESK_ANDROID_LEGACY_KEYSTORE",
+    "ECHODESK_ANDROID_LEGACY_KEY_ALIAS",
+    "ECHODESK_ANDROID_LEGACY_KEYSTORE_PASSWORD",
+    "ECHODESK_ANDROID_LEGACY_KEY_PASSWORD",
+    "ECHODESK_ANDROID_EXPECTED_LEGACY_CERT_SHA256",
+    "ECHODESK_ANDROID_CURRENT_KEYSTORE",
+    "ECHODESK_ANDROID_CURRENT_KEY_ALIAS",
+    "ECHODESK_ANDROID_CURRENT_KEYSTORE_PASSWORD",
+    "ECHODESK_ANDROID_CURRENT_KEY_PASSWORD",
+    "ECHODESK_ANDROID_EXPECTED_CURRENT_CERT_SHA256",
+    "ECHODESK_ANDROID_ROTATION_MIN_SDK_VERSION",
+]
+def missingReleaseSigning = releaseSigningVariables.findAll {
+    !System.getenv(it)?.trim()
+}
 
 android {
     namespace = "com.echodesk.app"
@@ -8,8 +58,8 @@ android {
         applicationId project.findProperty("echoApplicationId") ?: "com.echodesk.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 250
-        versionName "0.2.50"
+        versionCode currentAndroidRelease.versionCode as Integer
+        versionName currentAndroidRelease.version.toString()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -22,6 +72,51 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+}
+
+// Public release APKs are signed outside Gradle by build-android-release.cjs.
+// Gradle may only create app-release-unsigned.apk for that controlled pipeline.
+if (releaseTaskRequested) {
+    if (!externalSigningRequested) {
+        throw new GradleException(
+            "Public Android release must use the controlled v3.1 external signing pipeline"
+        )
+    }
+    if (!missingReleaseSigning.isEmpty()) {
+        throw new GradleException(
+            "Public Android release requires legacy/current signing inputs: " +
+            missingReleaseSigning.join(", ")
+        )
+    }
+    def legacyKeystore = file(System.getenv("ECHODESK_ANDROID_LEGACY_KEYSTORE"))
+    def currentKeystore = file(System.getenv("ECHODESK_ANDROID_CURRENT_KEYSTORE"))
+    def currentAlias = System.getenv("ECHODESK_ANDROID_CURRENT_KEY_ALIAS")
+    def legacyFingerprint = System.getenv("ECHODESK_ANDROID_EXPECTED_LEGACY_CERT_SHA256")
+        .replaceAll("[^0-9A-Fa-f]", "")
+    def currentFingerprint = System.getenv("ECHODESK_ANDROID_EXPECTED_CURRENT_CERT_SHA256")
+        .replaceAll("[^0-9A-Fa-f]", "")
+    if (!legacyKeystore.isFile()) {
+        throw new GradleException("Legacy release keystore does not exist: ${legacyKeystore}")
+    }
+    if (!currentKeystore.isFile()) {
+        throw new GradleException("Current release keystore does not exist: ${currentKeystore}")
+    }
+    if (currentKeystore.name.equalsIgnoreCase("debug.keystore") ||
+        currentAlias.equalsIgnoreCase("androiddebugkey")) {
+        throw new GradleException("Current public release signer must not be a debug identity")
+    }
+    if (!(legacyFingerprint ==~ /[0-9A-Fa-f]{64}/) ||
+        !(currentFingerprint ==~ /[0-9A-Fa-f]{64}/)) {
+        throw new GradleException(
+            "Both release certificate SHA-256 fingerprints must contain 64 hex digits"
+        )
+    }
+    if (legacyFingerprint.equalsIgnoreCase(currentFingerprint)) {
+        throw new GradleException("Legacy and current release certificate fingerprints must differ")
+    }
+    if (System.getenv("ECHODESK_ANDROID_ROTATION_MIN_SDK_VERSION") != "33") {
+        throw new GradleException("Android signing-key rotation must start at API 33")
     }
 }
 

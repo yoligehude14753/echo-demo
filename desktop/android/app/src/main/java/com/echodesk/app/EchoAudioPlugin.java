@@ -1,12 +1,14 @@
 package com.echodesk.app;
 
 import android.Manifest;
+import android.content.pm.PackageManager;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
-import android.os.Build;
 import android.util.Base64;
 import android.util.Log;
+
+import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -237,6 +239,14 @@ public class EchoAudioPlugin extends Plugin {
   }
 
   private AudioRecord buildRecorder(int source, int sampleRate) {
+    // RECORD_AUDIO can be revoked after Capacitor's permission callback but
+    // before this recorder is constructed. Re-check at the exact privileged
+    // boundary; the SecurityException catch below covers the remaining race.
+    if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECORD_AUDIO)
+        != PackageManager.PERMISSION_GRANTED) {
+      Log.w(TAG, "RECORD_AUDIO was revoked before AudioRecord construction");
+      return null;
+    }
     int minBuffer = AudioRecord.getMinBufferSize(sampleRate, CHANNEL_CONFIG, AUDIO_FORMAT);
     if (minBuffer <= 0) {
       Log.w(TAG, "Invalid min buffer for " + sourceToName(source) + ": " + minBuffer);
@@ -244,26 +254,24 @@ public class EchoAudioPlugin extends Plugin {
     }
     int bufferSize = Math.max(minBuffer * 4, sampleRate);
     try {
-      AudioRecord rec;
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        AudioFormat format = new AudioFormat.Builder()
-            .setEncoding(AUDIO_FORMAT)
-            .setSampleRate(sampleRate)
-            .setChannelMask(CHANNEL_CONFIG)
-            .build();
-        rec = new AudioRecord.Builder()
-            .setAudioSource(source)
-            .setAudioFormat(format)
-            .setBufferSizeInBytes(bufferSize)
-            .build();
-      } else {
-        rec = new AudioRecord(source, sampleRate, CHANNEL_CONFIG, AUDIO_FORMAT, bufferSize);
-      }
+      AudioFormat format = new AudioFormat.Builder()
+          .setEncoding(AUDIO_FORMAT)
+          .setSampleRate(sampleRate)
+          .setChannelMask(CHANNEL_CONFIG)
+          .build();
+      AudioRecord rec = new AudioRecord.Builder()
+          .setAudioSource(source)
+          .setAudioFormat(format)
+          .setBufferSizeInBytes(bufferSize)
+          .build();
       if (rec.getState() != AudioRecord.STATE_INITIALIZED) {
         rec.release();
         return null;
       }
       return rec;
+    } catch (SecurityException e) {
+      Log.w(TAG, "RECORD_AUDIO was revoked while constructing AudioRecord", e);
+      return null;
     } catch (Throwable t) {
       Log.w(TAG, "AudioRecord build failed for " + sourceToName(source), t);
       return null;

@@ -3,6 +3,7 @@ import { Tooltip, message } from "antd";
 import { Mic, Square } from "lucide-react";
 import {
   endMeeting,
+  finalizeMeeting,
   getCurrentMeeting,
   manualEndMeeting,
   manualStartMeeting,
@@ -11,6 +12,7 @@ import {
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { EchoEvent, MeetingStateSnapshot } from "@/types";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 /**
  * 全局会议状态条：UI 上唯一控制"是否在开会"的入口。
@@ -54,6 +56,12 @@ function newLocalMeetingId(): string {
 }
 
 export default function MeetingStatusBar(): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const [snap, setSnap] = useState<MeetingStateSnapshot>({
     mode: "idle",
     meeting_id: null,
@@ -69,23 +77,44 @@ export default function MeetingStatusBar(): JSX.Element {
   );
   const markMeetingActive = useStore((s) => s.markMeetingActive);
   const markMeetingEnded = useStore((s) => s.markMeetingEnded);
+  const upsertMeeting = useStore((s) => s.upsertMeeting);
+  const currentMeeting = useStore((s) =>
+    s.currentMeetingId ? s.meetings[s.currentMeetingId] : undefined,
+  );
   const hideSharedPublicHistory = shouldHideSharedPublicHistory();
 
   const refresh = useCallback(async () => {
     if (hideSharedPublicHistory) return;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
     try {
-      const s = await getCurrentMeeting();
-      setSnap(s);
+      const s = await getCurrentMeeting({ signal: controller.signal });
+      if (isCurrent(originGeneration) && !controller.signal.aborted) setSnap(s);
     } catch {
       // 后端不通时静默；CaptureStatus 那里已有错误提示
+    } finally {
+      unregisterController();
     }
-  }, [hideSharedPublicHistory]);
+  }, [
+    captureGeneration,
+    hideSharedPublicHistory,
+    isCurrent,
+    registerAbortController,
+  ]);
 
   useEffect(() => {
+    setSnap({
+      mode: "idle",
+      meeting_id: null,
+      started_at: null,
+      started_by: null,
+    });
+    setBusy(false);
     void refresh();
     const t = setInterval(refresh, 10_000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [backendOriginRevision, refresh]);
 
   useEffect(() => {
     if (!hideSharedPublicHistory) return;
@@ -142,12 +171,14 @@ export default function MeetingStatusBar(): JSX.Element {
 
   const onClick = useCallback(async () => {
     if (busy) return;
+    const originGeneration = captureGeneration();
     setBusy(true);
     try {
       if (snap.mode === "idle") {
         if (hideSharedPublicHistory) {
           const meetingId = newLocalMeetingId();
           await startMeeting(meetingId);
+          if (!isCurrent(originGeneration)) return;
           const next: MeetingStateSnapshot = {
             mode: "in_meeting",
             meeting_id: meetingId,
@@ -163,6 +194,7 @@ export default function MeetingStatusBar(): JSX.Element {
           return;
         }
         const s = await manualStartMeeting();
+        if (!isCurrent(originGeneration)) return;
         setSnap(s);
         if (s.meeting_id) {
           markMeetingActive(s.meeting_id, {
@@ -175,19 +207,49 @@ export default function MeetingStatusBar(): JSX.Element {
         if (hideSharedPublicHistory) {
           const meetingId = snap.meeting_id ?? currentMeetingId;
           if (meetingId) {
-            await endMeeting(meetingId).catch(() => undefined);
+            await endMeeting(meetingId);
+            if (!isCurrent(originGeneration)) return;
             markMeetingEnded(meetingId);
+            upsertMeeting(meetingId, {
+              state: "ended",
+              minutes_status: "generating",
+              minutes_error: null,
+            });
+            setSnap({
+              mode: "idle",
+              meeting_id: null,
+              started_at: null,
+              started_by: null,
+            });
+            try {
+              const minutes = await finalizeMeeting(
+                meetingId,
+                currentMeeting?.title || "本机会议",
+              );
+              if (!isCurrent(originGeneration)) return;
+              upsertMeeting(meetingId, {
+                state: "ended",
+                title: minutes.title,
+                minutes,
+                minutes_status: "ok",
+                minutes_error: null,
+              });
+              message.success("已结束本机会议并生成纪要");
+            } catch (e) {
+              if (!isCurrent(originGeneration)) return;
+              console.error("[meeting-status] public finalize failed", e);
+              upsertMeeting(meetingId, {
+                state: "ended",
+                minutes_status: "generation_failed",
+                minutes_error: "纪要生成失败，请重试",
+              });
+              message.error("会议已结束，但纪要生成失败，请在纪要面板重试");
+            }
           }
-          setSnap({
-            mode: "idle",
-            meeting_id: null,
-            started_at: null,
-            started_by: null,
-          });
-          message.success("已结束本机会议");
           return;
         }
         const s = await manualEndMeeting();
+        if (!isCurrent(originGeneration)) return;
         setSnap(s);
         if (s.meeting_id) {
           markMeetingEnded(s.meeting_id);
@@ -195,18 +257,24 @@ export default function MeetingStatusBar(): JSX.Element {
         message.success("已结束会议，正在生成纪要…");
       }
     } catch (e) {
-      message.error(`操作失败：${e instanceof Error ? e.message : String(e)}`);
+      if (!isCurrent(originGeneration)) return;
+      console.error("[meeting-status] meeting action failed", e);
+      message.error("会议状态更新失败，请重试");
     } finally {
-      setBusy(false);
+      if (isCurrent(originGeneration)) setBusy(false);
     }
   }, [
     busy,
+    captureGeneration,
+    currentMeeting?.title,
     currentMeetingId,
     hideSharedPublicHistory,
+    isCurrent,
     markMeetingActive,
     markMeetingEnded,
     snap.meeting_id,
     snap.mode,
+    upsertMeeting,
   ]);
 
   const isMeeting = snap.mode === "in_meeting";
@@ -247,7 +315,7 @@ export default function MeetingStatusBar(): JSX.Element {
           <>
             <Square className="w-3 h-3 fill-current" />
             <span>会议中</span>
-            <span className="font-mono text-[11px] text-rose-600">
+            <span className="tabular-nums text-[11px] text-rose-600">
               {fmtElapsed(snap.started_at)}
             </span>
           </>
@@ -259,7 +327,8 @@ export default function MeetingStatusBar(): JSX.Element {
         ) : (
           <>
             <Mic className="w-3 h-3" />
-            <span>待机</span>
+            <span>开始会议</span>
+            <span className="sr-only">待机</span>
           </>
         )}
       </button>

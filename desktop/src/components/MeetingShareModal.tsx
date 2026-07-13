@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal, message } from "antd";
 import { Copy, Download, ExternalLink, Loader2, QrCode, Trash2 } from "lucide-react";
 import { clearMeetingOutputs, meetingShareUrl } from "@/api";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
+import { meetingDisplayTitle } from "@/lib/meetingDisplay";
 import type { GeneratedArtifact, MeetingCard, MeetingMinutes } from "@/types";
 
 interface Props {
@@ -26,7 +28,6 @@ function minutesMarkdown(minutes: MeetingMinutes | undefined, artifacts: Generat
   const lines: string[] = [
     `# ${minutes.title}`,
     "",
-    `- 会议 ID：${minutes.meeting_id}`,
     `- 时长：${Math.round(minutes.duration_sec)} 秒`,
     `- 生成时间：${new Date(minutes.created_at).toLocaleString()}`,
     "",
@@ -56,7 +57,7 @@ function minutesMarkdown(minutes: MeetingMinutes | undefined, artifacts: Generat
   }
   if (artifacts.length > 0) {
     lines.push("## 会议产物", "");
-    artifacts.forEach((a) => lines.push(`- ${a.title || a.artifact_id} (${a.artifact_type})`));
+    artifacts.forEach((a) => lines.push(`- ${a.title?.trim() || "未命名文件"} (${a.artifact_type})`));
   }
   return `${lines.join("\n").trim()}\n`;
 }
@@ -97,26 +98,52 @@ export default function MeetingShareModal({
   onClose,
   onOutputsCleared,
 }: Props): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+  } = useBackendOriginFence();
   const [shareUrl, setShareUrl] = useState("");
   const [qrDataUrl, setQrDataUrl] = useState("");
   const [loadingQr, setLoadingQr] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const handledOriginRevision = useRef(backendOriginRevision);
   const artifactIds = useMemo(() => uniqueArtifactIds(meeting), [meeting]);
+  const modalOriginGeneration = useMemo(
+    () => (open && meeting ? captureGeneration() : null),
+    [captureGeneration, meeting, open],
+  );
+  const isModalOriginCurrent = (): boolean =>
+    modalOriginGeneration !== null && isCurrent(modalOriginGeneration);
+  const modalOriginCurrent = isModalOriginCurrent();
   const artifactCount = meeting?.artifacts.length ?? 0;
-  const title = meeting?.minutes?.title || meeting?.display_title || meeting?.title || meeting?.meeting_id || "会议资料";
+  const title = meeting?.minutes?.title || meetingDisplayTitle(meeting, "会议资料");
   const loopbackShareUrl = shareUrl ? isLoopbackUrl(shareUrl) : false;
 
   useEffect(() => {
-    let cancelled = false;
-    if (!open || !meeting) {
+    if (handledOriginRevision.current === backendOriginRevision) return;
+    handledOriginRevision.current = backendOriginRevision;
+    setShareUrl("");
+    setQrDataUrl("");
+    setLoadingQr(false);
+    setClearing(false);
+    Modal.destroyAll();
+    onClose();
+  }, [backendOriginRevision, onClose]);
+
+  useEffect(() => {
+    let alive = true;
+    if (!open || !meeting || modalOriginGeneration === null) {
       setShareUrl("");
       setQrDataUrl("");
       return;
     }
+    const canCommit = (): boolean =>
+      alive && isCurrent(modalOriginGeneration);
     setLoadingQr(true);
     meetingShareUrl(meeting.meeting_id, artifactIds)
       .then(async (url) => {
-        if (cancelled) return;
+        if (!canCommit()) return;
         setShareUrl(url);
         const QRCode = await import("qrcode");
         const dataUrl = await QRCode.toDataURL(url, {
@@ -128,29 +155,31 @@ export default function MeetingShareModal({
             light: "#ffffff",
           },
         });
-        if (!cancelled) setQrDataUrl(dataUrl);
+        if (canCommit()) setQrDataUrl(dataUrl);
       })
       .catch((e) => {
-        const msg = e instanceof Error ? e.message : String(e);
-        message.error(`二维码生成失败：${msg}`);
+        if (!canCommit()) return;
+        console.error("[meeting-share] QR generation failed", e);
+        void message.error("二维码生成失败，请稍后重新打开");
       })
       .finally(() => {
-        if (!cancelled) setLoadingQr(false);
+        if (canCommit()) setLoadingQr(false);
       });
     return () => {
-      cancelled = true;
+      alive = false;
     };
-  }, [artifactIds, meeting, open]);
+  }, [artifactIds, isCurrent, meeting, modalOriginGeneration, open]);
 
   const onCopy = async (): Promise<void> => {
-    if (!shareUrl) return;
+    if (!shareUrl || !isModalOriginCurrent()) return;
     await navigator.clipboard.writeText(shareUrl);
-    message.success("已复制分享链接");
+    if (isModalOriginCurrent()) void message.success("已复制分享链接");
   };
 
   const onDownloadMinutes = (): void => {
+    if (!isModalOriginCurrent()) return;
     if (!meeting?.minutes) {
-      message.info("会议纪要尚未生成");
+      void message.info("会议纪要尚未生成");
       return;
     }
     const safeTitle = safeDownloadName(title) || "echodesk-minutes";
@@ -158,22 +187,33 @@ export default function MeetingShareModal({
   };
 
   const onClear = (): void => {
-    if (!meeting) return;
+    if (!meeting || !isModalOriginCurrent() || modalOriginGeneration === null) {
+      return;
+    }
+    const originGeneration = modalOriginGeneration;
+    const meetingId = meeting.meeting_id;
+    const clearingArtifactIds = [...artifactIds];
     Modal.confirm({
       title: "删除本会议输出？",
-      content: `将清空本会议纪要，并删除 ${artifactIds.length} 个已知产物文件。该操作不可撤回。`,
+      content: `将清空本会议纪要，并删除 ${clearingArtifactIds.length} 个已知产物文件。该操作不可撤回。`,
       okText: "删除",
       okType: "danger",
       cancelText: "取消",
       onOk: async () => {
+        if (!isCurrent(originGeneration)) return;
         setClearing(true);
         try {
-          await clearMeetingOutputs(meeting.meeting_id, artifactIds);
-          onOutputsCleared(artifactIds);
-          message.success("本会议输出已删除");
+          await clearMeetingOutputs(meetingId, clearingArtifactIds);
+          if (!isCurrent(originGeneration)) return;
+          onOutputsCleared(clearingArtifactIds);
+          void message.success("本会议输出已删除");
           onClose();
+        } catch (error) {
+          if (!isCurrent(originGeneration)) return;
+          void message.error("删除会议输出失败，请稍后重试");
+          throw error;
         } finally {
-          setClearing(false);
+          if (isCurrent(originGeneration)) setClearing(false);
         }
       },
     });
@@ -181,7 +221,7 @@ export default function MeetingShareModal({
 
   return (
     <Modal
-      open={open}
+      open={open && !!meeting && modalOriginCurrent}
       onCancel={onClose}
       footer={null}
       width={520}
@@ -195,11 +235,6 @@ export default function MeetingShareModal({
       <div className="space-y-4" data-testid="meeting-share-modal">
         <div className="min-w-0">
           <div className="text-[15px] font-semibold text-ink-900 truncate">{title}</div>
-          {meeting && (
-            <div className="mt-1 font-mono text-[11px] text-ink-400 truncate">
-              {meeting.meeting_id}
-            </div>
-          )}
         </div>
 
         <div className="flex flex-col items-center justify-center rounded-lg border border-paper-300 bg-white py-5 min-h-[260px]">
@@ -236,7 +271,7 @@ export default function MeetingShareModal({
           data-testid="meeting-share-network-hint"
         >
           {loopbackShareUrl
-            ? "当前链接只能在本机打开；请用打包版 EchoDesk 或设置 ECHO_SHARE_BASE_URL 后再让手机/电视扫码。"
+            ? "当前开发预览链接只能在本机打开；请使用已安装的 EchoDesk 再让其他设备扫码。"
             : "手机或电视和这台电脑在同一网络时，可扫码打开并保存纪要、下载产物。"}
         </div>
 
@@ -262,7 +297,11 @@ export default function MeetingShareModal({
             <Button
               size="small"
               icon={<ExternalLink className="w-3.5 h-3.5" />}
-              onClick={() => shareUrl && window.open(shareUrl, "_blank", "noopener,noreferrer")}
+              onClick={() => {
+                if (shareUrl && isModalOriginCurrent()) {
+                  window.open(shareUrl, "_blank", "noopener,noreferrer");
+                }
+              }}
               disabled={!shareUrl}
             >
               打开

@@ -1,0 +1,55 @@
+event_id: "E-20260712T1345-001"
+event_type: "supersede"
+timestamp: "2026-07-12T13:45:00+08:00"
+author: "agent/codex-echodesk-0-3-1-final"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-023"
+      claim: "EchoDesk 0.3.1 local source gates pass across backend, Electron, browser UX and scenarios with enforced public-client compatibility, aligned defaults and portable packaging contracts."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-12T13:45:00+08:00"
+      observed_by: "agent/codex-echodesk-0-3-1-final"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "backend/app/main.py"
+        - "backend/tests/unit/test_public_principal_http.py"
+        - "backend/tests/unit/test_config_io.py"
+        - "desktop/scripts/package-tv-installer.cjs"
+        - "desktop/electron/tests/release-gates.test.cjs"
+        - "desktop/tests/e2e/backend-transport-policy.spec.ts"
+        - ".github/workflows/ci.yml"
+        - "docs/ops/public-backend-deployment.md"
+        - "runtime:backend deterministic => 933 collected, 18 live deselected, 915 passed, 0 skipped, coverage 87%, natural exit"
+        - "runtime:Electron contracts => 74 passed"
+        - "runtime:Playwright E2E => 121 passed"
+        - "runtime:recorded click scenarios => 29 passed"
+      evidence: "The complete deterministic backend suite passed 915 tests with zero skips. Public HTTP, session, Electron IPC and WebSocket paths enforce minimum client 0.3.1 with explicit 426/4426 upgrade states and no retry loop; Electron also binds every bearer to backend_origin and clears stale scope state on origin change. A shared backend-origin lease aborts in-flight transport and fences REST hydration, commands, capture, meetings, artifacts, knowledge-base state, settings, previews and TTS so late A responses cannot enter B state. Configuration-template parsing, Capacitor origins and runtime defaults share one contract. Electron, browser UX and recorded scenarios passed 74, 121 and 29 cases. Local contracts cover CRLF, Windows path normalization, portable file-mode assertions, PowerShell ZIP generation, full TV bundle hashes, Gradle dependency verification and package-specific SBOM generation. Workflow actions use immutable Node 24 revisions. Actual hosted Windows/Linux/Android packaging, public prerelease and production cutover remain external gates."
+      supersedes:
+        - "F-ECHO-020"
+        - "F-ECHO-021"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "deterministic"
+        - "public-client"
+        - "windows"
+        - "packaging"
+        - "configuration"
+        - "gates"
+  - action: "supersede"
+    old_fact: "F-ECHO-020"
+    new_fact: "F-ECHO-023"
+    reason: "The 13:45 source rerun expanded and replaced the earlier 12:38 local gate evidence."
+  - action: "supersede"
+    old_fact: "F-ECHO-021"
+    new_fact: "F-ECHO-023"
+    reason: "The 13:45 source rerun expanded and replaced the earlier 12:38 UX gate evidence."
+git_commit: null

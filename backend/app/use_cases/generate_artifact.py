@@ -17,10 +17,12 @@ async def generate_artifact(
     artifact_type: str,
     brief: str,
     extra_instructions: str | None = None,
+    artifact_id: str | None = None,
 ) -> GeneratedArtifact:
     return await runner.generate(
         llm=llm,
         artifact_type=artifact_type,
         brief=brief,
         extra_instructions=extra_instructions,
+        artifact_id=artifact_id,
     )

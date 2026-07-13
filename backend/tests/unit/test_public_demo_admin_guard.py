@@ -24,14 +24,14 @@ def client() -> TestClient:
 def test_public_demo_blocks_admin_without_token(client: TestClient) -> None:
     r = client.get("/admin/data-dir")
     assert r.status_code == 403
-    assert "disabled" in r.json()["detail"]
+    assert r.json()["detail"] == "host-admin authorization required"
 
 
 @pytest.mark.unit
 def test_public_demo_blocks_diagnostics_without_token(client: TestClient) -> None:
     r = client.get("/admin/diagnostics/export")
     assert r.status_code == 403
-    assert "disabled" in r.json()["detail"]
+    assert r.json()["detail"] == "host-admin authorization required"
 
 
 @pytest.mark.unit

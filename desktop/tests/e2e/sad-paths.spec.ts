@@ -128,11 +128,11 @@ test("上传后端拒绝（HTTP 400/500） → 错误 toast 不卡死 UI", async
   });
 
   await expect(
-    page.locator(".ant-message-error").filter({ hasText: /入库失败/ }),
+    page.locator(".ant-message-error").filter({ hasText: /添加失败/ }),
   ).toBeVisible({ timeout: 10_000 });
 
-  // 入库中 spinner 应消失（uploading 计数回到 0）
-  await expect(page.locator("text=/入库中 \\d+/")).toHaveCount(0, { timeout: 5_000 });
+  // 添加中 spinner 应消失（uploading 计数回到 0）
+  await expect(page.locator("text=/正在添加 \\d+ 个文件/")).toHaveCount(0, { timeout: 5_000 });
 
   // 不会留 chip
   await expect(

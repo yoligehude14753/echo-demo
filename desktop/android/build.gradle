@@ -17,10 +17,44 @@ buildscript {
 
 apply from: "variables.gradle"
 
+def capacitorAndroidLock = file('../node_modules/@capacitor/android/capacitor/gradle.lockfile')
+if (!capacitorAndroidLock.isFile()) {
+    throw new GradleException(
+        "Missing installed @capacitor/android dependency lock; run npm ci in desktop first"
+    )
+}
+
 allprojects {
     repositories {
         google()
         mavenCentral()
+    }
+    configurations.configureEach {
+        resolutionStrategy.eachDependency { details ->
+            // Espresso/AndroidX resolves kotlin-stdlib 1.8.22 while older
+            // Capacitor/Cordova transitives still request the pre-1.8 jdk7
+            // and jdk8 split jars. Align the entire test graph so library
+            // instrumentation tasks cannot package duplicate Kotlin classes.
+            if (details.requested.group == 'org.jetbrains.kotlin' &&
+                details.requested.name.startsWith('kotlin-stdlib')) {
+                details.useVersion '1.8.22'
+                details.because 'Kotlin stdlib variants must share one version'
+            }
+        }
+    }
+    dependencyLocking {
+        lockAllConfigurations()
+    }
+}
+
+subprojects { subproject ->
+    if (subproject.name == 'capacitor-cordova-android-plugins') {
+        subproject.plugins.withId('com.android.library') {
+            // Capacitor 8.4.0 generates this bridge with Cordova 14.0.1. Cordova 15 is
+            // a template-governed major upgrade, so do not rewrite the generated
+            // dependency merely to silence version advice.
+            subproject.android.lint.disable.add('NewerVersionAvailable')
+        }
     }
 }
 

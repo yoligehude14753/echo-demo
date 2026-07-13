@@ -1,0 +1,75 @@
+event_id: "E-20260710T1726-004"
+event_type: "supersede"
+timestamp: "2026-07-10T17:26:00+08:00"
+author: "agent/codex-0-3-final"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-007"
+      claim: "EchoDesk 0.3.0 formal is packaged, installed as the sole /Applications/EchoDesk.app, and passes deterministic backend, desktop scenario, installer, and real installed-workflow gates."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-10T17:26:00+08:00"
+      observed_by: "agent/codex-0-3-final"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "CHANGELOG.md"
+        - "docs/0.3/README.md"
+        - "desktop/tests/e2e-real/installed-local-workflow.spec.ts"
+        - "runtime:/Applications/EchoDesk.app/Contents/Info.plist"
+      evidence: "Backend gate: 530 passed, 4 skipped, 20 deselected. Desktop scenarios: 25 passed. Version check, typecheck, lint, production build, package signing verification, isolated backend installer smoke, AgentOS health, and installed real workflow E2E all passed. Alpha release assets were removed and /Applications contains only EchoDesk.app version 0.3.0."
+      supersedes:
+        - "F-ECHO-004"
+        - "F-ECHO-006"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.0"
+        - "workflow"
+        - "delivery"
+        - "install"
+  - action: "add"
+    fact:
+      id: "F-ECHO-008"
+      claim: "EchoDesk 0.3.0 uses deepseek-v4-flash as the installed main model, hides supplier branding in normal UI, and the real generation plus AgentOS workflow completed successfully."
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-10T17:26:00+08:00"
+      observed_by: "agent/codex-0-3-final"
+      valid_until: "2026-07-10T19:26:00+08:00"
+      ttl_hours: 2
+      source:
+        - "desktop/src/components/StatusBar.tsx"
+        - "desktop/src/components/SettingsPanel.tsx"
+        - "desktop/tests/scenarios/s02_status_pills.spec.ts"
+        - "desktop/tests/e2e-real/installed-local-workflow.spec.ts"
+      evidence: "The installed E2E received HTTP 200 from the configured chat-completions endpoint, generated and downloaded the Todo artifact, then completed a real Claude Code AgentOS task through the local proxy. UI scenario coverage asserts the model name is visible while the supplier name is absent."
+      supersedes:
+        - "F-ECHO-005"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "llm"
+        - "agentos"
+        - "runtime"
+  - action: "supersede"
+    old_fact: "F-ECHO-004"
+    new_fact: "F-ECHO-007"
+    reason: "The alpha.1 delivery was replaced by the verified 0.3.0 formal installation and gate results."
+  - action: "supersede"
+    old_fact: "F-ECHO-006"
+    new_fact: "F-ECHO-007"
+    reason: "The alpha.1-only installation observation was replaced by the sole installed formal 0.3.0 app."
+  - action: "supersede"
+    old_fact: "F-ECHO-005"
+    new_fact: "F-ECHO-008"
+    reason: "The formal UI now uses supplier-agnostic copy while retaining the verified deepseek-v4-flash runtime path."
+git_commit: null

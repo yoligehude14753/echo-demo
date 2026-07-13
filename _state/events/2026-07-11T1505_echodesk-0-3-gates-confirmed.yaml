@@ -1,0 +1,11 @@
+event_id: "E-20260711T1505-001"
+event_type: "confirm"
+timestamp: "2026-07-11T15:05:00+08:00"
+author: "agent/codex-echodesk-0-3-repair"
+session_id: null
+changes:
+  - action: "confirm"
+    fact_id: "F-ECHO-016"
+    new_confidence: 0.99
+    new_evidence: "Final deterministic backend rerun completed with 590 passed, zero skipped and 16 live tests deselected; desktop static/build, mock E2E, scenarios, unpacked packaged smoke, DMG build/signing and mounted-DMG smoke passed; the live installed workflow remains blocked only at the observed main-provider timeout."
+git_commit: null

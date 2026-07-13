@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import io
-import wave
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -29,8 +27,19 @@ _EXPECTED_FIELDS = {
     # phase4-diar-deep：区分 diarizer 抛异常（failed） vs 正常返回 None
     "diarize_returned_none",
     "stored",
+    "segment_store_failed",
+    "audio_files_stored",
+    "audio_bytes_stored",
+    "audio_store_failed",
+    "audio_quota_rejected",
+    "audio_files_deleted",
+    "audio_bytes_deleted",
+    "audio_gc_failed",
+    "audio_delete_failed",
+    "audio_missing_reconciled",
     "last_chunk_at",
     "last_stored_at",
+    "last_audio_stored_at",
     "last_rms",
     "last_speech_ratio",
     "last_gate_reason",
@@ -66,12 +75,14 @@ def test_get_stats_returns_expected_fields_on_fresh_pipeline(client: TestClient)
     int_fields = _EXPECTED_FIELDS - {
         "last_chunk_at",
         "last_stored_at",
+        "last_audio_stored_at",
         "last_gate_reason",
     }
     for f in int_fields:
         assert body[f] == 0, f"expect {f}=0 on fresh pipeline, got {body[f]}"
     assert body["last_chunk_at"] is None
     assert body["last_stored_at"] is None
+    assert body["last_audio_stored_at"] is None
     assert body["last_gate_reason"] is None
 
 
@@ -113,10 +124,10 @@ def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:
     assert body["stt_status"] in ("ok", "empty", "failed", "circuit_open", "gated")
 
 
-def test_post_chunk_accepts_frontend_wav_and_persists_valid_wav(
+def test_post_chunk_accepts_frontend_silent_wav_without_persisting(
     client: TestClient,
 ) -> None:
-    """前端上传 WAV 容器时，pipeline 内部要解成 PCM，落盘仍写有效 WAV。"""
+    """前端 WAV 会先解 PCM 做质量门控；静音必须产生零持久文件。"""
     wav = pcm_to_wav(b"\x00\x00" * 16_000, sample_rate=16_000)
     r = client.post(
         "/capture/chunk",
@@ -127,11 +138,7 @@ def test_post_chunk_accepts_frontend_wav_and_persists_valid_wav(
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["stt_status"] == "gated"
-    saved = Path(body["audio_ref"]).read_bytes()
-    with wave.open(io.BytesIO(saved), "rb") as wf:
-        assert wf.getframerate() == 16_000
-        assert wf.getnchannels() == 1
-        assert wf.getnframes() == 16_000
+    assert body["audio_ref"] == ""
 
 
 def test_get_stats_endpoint_independent_of_chunk_count(

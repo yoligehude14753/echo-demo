@@ -35,4 +35,5 @@ class SkillExecutorPort(Protocol):
         artifact_type: str,
         brief: str,
         extra_instructions: str | None = None,
+        artifact_id: str | None = None,
     ) -> GeneratedArtifact: ...

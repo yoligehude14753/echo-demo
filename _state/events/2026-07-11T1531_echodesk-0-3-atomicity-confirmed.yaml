@@ -1,0 +1,11 @@
+event_id: "E-20260711T1531-001"
+event_type: "confirm"
+timestamp: "2026-07-11T15:31:00+08:00"
+author: "agent/codex-echodesk-0-3-repair"
+session_id: null
+changes:
+  - action: "confirm"
+    fact_id: "F-ECHO-016"
+    new_confidence: 0.99
+    new_evidence: "Post-audit final rerun completed with 602 deterministic backend tests passed, zero skipped and 16 live contracts deselected. New counterexample coverage confirms atomic Agent task/workflow creation, deterministic Artifact staging and crash replay, atomic meeting output cleanup, recover-vs-restore dedupe, and real finalize retry lineage. Desktop lint/typecheck/build passed; mock E2E passed 57/57, scenarios passed 29/29, production npm audit has zero high/critical issues, and the packaged Electron plus isolated local backend smoke passed 1/1. The previously observed live installed workflow blocker remains the external main-provider timeout."
+git_commit: null

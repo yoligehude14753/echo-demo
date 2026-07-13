@@ -116,7 +116,7 @@ test.describe("EchoDesk 核心流程", () => {
     await gotoApp(page);
 
     // 待机态下应能看到 "ambient 持续转写" 或 "等待环境音转写"
-    const main = page.locator("text=/转写流/").locator("xpath=ancestor::div[1]/..");
+    const main = page.locator("text=/对话流/").locator("xpath=ancestor::div[1]/..");
     // 应**不会**显示老文案 "从左侧选择会议查看转写流"
     await expect(page.locator("text=从左侧选择会议查看转写流")).toHaveCount(0);
     // 必须有其中之一
@@ -185,11 +185,11 @@ test.describe("EchoDesk 核心流程", () => {
     const tts = page.getByTestId("tts-toggle");
     await expect(tts).toBeVisible();
     const textBefore = ((await tts.textContent()) ?? "").trim();
-    // 文案应为 "TTS" 或 "静音" 之一
-    expect(["TTS", "静音", "播放中"]).toContain(textBefore);
+    // 文案应为语音播报的可读状态之一
+    expect(["语音播报", "已静音", "播报中"]).toContain(textBefore);
 
     await tts.click();
-    // 等待文案翻转（"静音" ↔ "TTS"）
+    // 等待文案翻转（"已静音" ↔ "语音播报"）
     await expect
       .poll(async () => ((await tts.textContent()) ?? "").trim(), {
         timeout: 5_000,

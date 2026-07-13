@@ -33,11 +33,12 @@ from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
 from app.ports.llm import LLMPort
 from app.ports.rag import RagPort
-from app.ports.repository import RepositoryPort
+from app.ports.repository import MeetingRecord, RepositoryPort
 from app.ports.stt import STTPort
 from app.schemas.events import EchoEvent
 from app.schemas.llm import ChatMessage
 from app.schemas.meeting import MeetingMinutes, MinutesSection, TodoItem, TranscriptSegment
+from app.security.scope import physical_resource_id, scoped_directory
 from app.services.audio import normalize_audio_bytes
 
 # M_minutes_refactor（2026-05-28）：把以前只返「summary/sections/decisions/
@@ -116,7 +117,9 @@ class MeetingPipeline:
         self._wall_clock_start: dict[str, float] = {}
         self._finalized: set[str] = set()
         self._lock = asyncio.Lock()
-        self._transcript_dir = Path(settings.storage_dir).expanduser() / "meetings"
+        self._transcript_dir = scoped_directory(
+            Path(settings.storage_dir).expanduser() / "meetings"
+        )
         self._transcript_dir.mkdir(parents=True, exist_ok=True)
 
     async def hydrate_from_repo(self) -> int:
@@ -183,28 +186,46 @@ class MeetingPipeline:
         *,
         title: str | None = None,
         auto_started: bool = False,
-    ) -> None:
-        """启动 / 续接一个会议；如果 repo 里已存在 in_meeting 行则保留旧 started_at。"""
+    ) -> MeetingRecord:
+        """Start a meeting and return the database-authoritative active row.
+
+        Multiple backend instances may race from an idle snapshot.  The
+        repository chooses one winner; every losing pipeline hydrates and
+        adopts that meeting rather than initializing a second phantom id.
+        """
         now = datetime.now(UTC)
-        async with self._lock:
-            self._segments.setdefault(meeting_id, [])
-            self._speaker_labels.setdefault(meeting_id, {})
-            self._started_at.setdefault(meeting_id, now)
-            self._wall_clock_start.setdefault(meeting_id, time.monotonic())
-            self._finalized.discard(meeting_id)
-        # 注意：不再 reset diarizer，避免清掉 ambient 链路累积的 speaker registry
+        record = MeetingRecord(
+            id=meeting_id,
+            title=title,
+            state="in_meeting",
+            started_at=now,
+            auto_started=auto_started,
+        )
+        persisted_segments: list[TranscriptSegment] = []
+        persisted_labels: dict[str, str] = {}
         if self._repo is not None:
-            await self._repo.create_meeting(
+            record = await self._repo.create_meeting(
                 meeting_id,
-                started_at=self._started_at[meeting_id],
+                started_at=now,
                 title=title,
                 auto_started=auto_started,
             )
+            if record.id not in self._wall_clock_start:
+                persisted_segments = await self._repo.list_meeting_segments(record.id)
+                persisted_labels = await self._repo.get_meeting_speaker_labels(record.id)
+        async with self._lock:
+            self._segments.setdefault(record.id, list(persisted_segments))
+            self._speaker_labels.setdefault(record.id, dict(persisted_labels))
+            self._started_at.setdefault(record.id, record.started_at)
+            self._wall_clock_start.setdefault(record.id, time.monotonic())
+            self._finalized.discard(record.id)
+        # 注意：不再 reset diarizer，避免清掉 ambient 链路累积的 speaker registry
         await self._publish(
             "meeting.started",
-            meeting_id,
-            {"auto_started": auto_started, "title": title},
+            record.id,
+            {"auto_started": record.auto_started, "title": record.title},
         )
+        return record
 
     async def end_meeting(self, meeting_id: str) -> None:
         """结束会议叠加层（不生成纪要）；ambient 主链路不受影响。"""
@@ -250,8 +271,7 @@ class MeetingPipeline:
                 self._segments[meeting_id].append(seg)
                 out.append(seg)
         if self._repo is not None:
-            for seg in out:
-                await self._repo.append_meeting_segment(meeting_id, seg, captured_at=captured)
+            await self._persist_active_segments(meeting_id, out, captured_at=captured)
         for seg in out:
             await self._publish("meeting.segment", meeting_id, seg.model_dump(mode="json"))
         return out
@@ -300,8 +320,7 @@ class MeetingPipeline:
                 self._segments[meeting_id].append(seg)
                 out.append(seg)
         if self._repo is not None:
-            for seg in out:
-                await self._repo.append_meeting_segment(meeting_id, seg, captured_at=captured)
+            await self._persist_active_segments(meeting_id, out, captured_at=captured)
         for seg in out:
             await self._publish("meeting.segment", meeting_id, seg.model_dump(mode="json"))
         return out
@@ -319,11 +338,40 @@ class MeetingPipeline:
         async with self._lock:
             self._segments[meeting_id].append(normalized)
         if self._repo is not None:
-            await self._repo.append_meeting_segment(
-                meeting_id, normalized, captured_at=datetime.now(UTC)
+            await self._persist_active_segments(
+                meeting_id,
+                [normalized],
+                captured_at=datetime.now(UTC),
             )
         await self._publish("meeting.segment", meeting_id, normalized.model_dump(mode="json"))
         return normalized
+
+    async def _persist_active_segments(
+        self,
+        meeting_id: str,
+        segments: list[TranscriptSegment],
+        *,
+        captured_at: datetime,
+    ) -> None:
+        """Persist segments or reconcile local memory after a finalize fence."""
+        if self._repo is None:
+            return
+        for segment in segments:
+            accepted = await self._repo.append_meeting_segment(
+                meeting_id,
+                segment,
+                captured_at=captured_at,
+            )
+            # Compatibility repositories historically returned None.  Only an
+            # explicit False means the durable meeting has closed its append
+            # gate while this pipeline was still processing a chunk.
+            if accepted is not False:
+                continue
+            authoritative = await self._repo.list_meeting_segments(meeting_id)
+            async with self._lock:
+                self._segments[meeting_id] = list(authoritative)
+                self._finalized.add(meeting_id)
+            raise MeetingPipelineError(f"meeting {meeting_id} is not active")
 
     async def _label_for(self, meeting_id: str, speaker_id: str | None) -> str:
         if speaker_id is None:
@@ -344,6 +392,7 @@ class MeetingPipeline:
         meeting_id: str,
         *,
         title: str,
+        commit: bool = True,
     ) -> MeetingMinutes:
         """会议结束 → LLM 生成纪要 → 落 DB + 发 ``minutes.ready``。
 
@@ -356,9 +405,10 @@ class MeetingPipeline:
         - 重试（``state=finalized`` 且 ``meeting_id in _finalized``）：放行，重新跑 LLM；
           原 minutes_json 会被新结果覆盖（POST /meetings/{id}/finalize 的幂等语义）。
         """
-        segs = self.get_segments(meeting_id)
+        segs = await self._snapshot_segments_for_finalize(meeting_id)
         if not segs:
-            await self._mark_minutes_failed(meeting_id, "no segments to summarize")
+            if commit:
+                await self._mark_minutes_failed(meeting_id, "no segments to summarize")
             raise MeetingPipelineError(f"meeting {meeting_id} has no segments")
 
         transcript_text = self._render_transcript(segs)
@@ -369,7 +419,8 @@ class MeetingPipeline:
             minutes_payload = await self._llm_minutes(transcript_text, title)
         except Exception as e:
             # LLM / JSON / schema 任一失败：把状态置为 generation_failed，让 UI 给「重试」入口
-            await self._mark_minutes_failed(meeting_id, str(e))
+            if commit:
+                await self._mark_minutes_failed(meeting_id, str(e))
             raise
 
         # title 解析：LLM 返的 title 优先（语义化），失败则回退用户/系统给的 title
@@ -403,24 +454,12 @@ class MeetingPipeline:
 
         transcript_ref = await self._persist_transcript(meeting_id, segs, minutes)
         minutes.raw_transcript_ref = transcript_ref
+        if not commit:
+            return minutes
 
-        # RAG 入库（纪要 summary + 逐字稿一起检索）
-        try:
-            rag_payload = "【纪要】\n" + minutes.summary + "\n\n【逐字稿】\n" + transcript_text
-            await self._rag.ingest_meeting(meeting_id, rag_payload, llm_title)
-        except Exception as e:
-            # RAG 失败不视为纪要失败：纪要已生成，仅检索功能少一条。日志告警即可。
-            import logging
-
-            logging.getLogger("echodesk.meeting_pipeline").warning(
-                "rag.ingest_meeting failed for %s: %s (minutes will still be persisted)",
-                meeting_id,
-                e,
-            )
-
-        self._finalized.add(meeting_id)
+        committed_generation: int | None = None
         if self._repo is not None:
-            await self._repo.update_meeting_state(
+            committed_generation = await self._repo.update_meeting_state(
                 meeting_id,
                 state="finalized",
                 title=title,  # 保留用户/系统传入的原始 title
@@ -429,9 +468,17 @@ class MeetingPipeline:
                 minutes_json=minutes.model_dump_json(),
                 raw_transcript_ref=transcript_ref,
                 minutes_status="ok",
+                rag_projection_state="index_pending",
                 # 显式覆盖之前可能写下的失败信息；空串而非 None 触发 SET（None 会被 SQL 跳过）
                 minutes_error="",
             )
+            if committed_generation is None:
+                raise MeetingPipelineError(f"meeting {meeting_id} disappeared after minutes commit")
+        await self.after_finalize_committed(
+            meeting_id,
+            minutes,
+            expected_generation=committed_generation,
+        )
         await self._publish("meeting.ended", meeting_id, {"duration_sec": duration_sec})
         await self._publish("minutes.ready", meeting_id, minutes.model_dump(mode="json"))
         # 主动建议前端 TTS 播一句简短的纪要 ack（前端可按 tts_enabled 决定真不真的播）
@@ -442,6 +489,265 @@ class MeetingPipeline:
             {"text": ack_text[:400], "kind": "minutes"},
         )
         return minutes
+
+    async def _snapshot_segments_for_finalize(
+        self,
+        meeting_id: str,
+    ) -> list[TranscriptSegment]:
+        """Refresh from the durable source and establish an append cutoff."""
+        if self._repo is None:
+            async with self._lock:
+                segments = list(self._segments.get(meeting_id, []))
+                self._finalized.add(meeting_id)
+            return segments
+
+        snapshotter = getattr(self._repo, "snapshot_meeting_segments_for_finalize", None)
+        if callable(snapshotter):
+            segments = await snapshotter(meeting_id, ended_at=datetime.now(UTC))
+        else:
+            # Compatibility path for lightweight test adapters.  Production
+            # repositories implement the transactional snapshot method.
+            segments = await self._repo.list_meeting_segments(meeting_id)
+        async with self._lock:
+            # Replace instead of merge: an instance may already contain a local
+            # copy of rows now returned by SQLite.  Replacement preserves DB
+            # order and guarantees each segment appears exactly once.
+            self._segments[meeting_id] = list(segments)
+            self._finalized.add(meeting_id)
+        return list(segments)
+
+    async def after_finalize_committed(
+        self,
+        meeting_id: str,
+        minutes: MeetingMinutes,
+        *,
+        expected_generation: int | None = None,
+    ) -> None:
+        """Update replayable in-memory/RAG projections after the SQLite commit."""
+
+        self._finalized.add(meeting_id)
+        segs = self.get_segments(meeting_id)
+        transcript_text = self._render_transcript(segs)
+        try:
+            await self._index_minutes(
+                meeting_id,
+                minutes,
+                transcript_text,
+                expected_generation=expected_generation,
+            )
+            await self._set_rag_projection(
+                meeting_id,
+                state="indexed",
+                projected_at=datetime.now(UTC),
+                expected_generation=expected_generation,
+            )
+        except Exception as e:
+            # RAG is a rebuildable projection.  The meeting/minutes transaction
+            # is authoritative and recovery may re-index it later.
+            import logging
+
+            logging.getLogger("echodesk.meeting_pipeline").warning(
+                "rag.ingest_meeting failed for %s: %s (minutes already committed)",
+                meeting_id,
+                e,
+            )
+            await self._set_rag_projection(
+                meeting_id,
+                state="index_failed",
+                error=str(e),
+                expected_generation=expected_generation,
+            )
+
+    async def _index_minutes(
+        self,
+        meeting_id: str,
+        minutes: MeetingMinutes,
+        transcript_text: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> None:
+        rag_payload = "【纪要】\n" + minutes.summary + "\n\n【逐字稿】\n" + transcript_text
+        await self._rag.ingest_meeting(
+            meeting_id,
+            rag_payload,
+            minutes.title,
+            projection_generation=expected_generation,
+        )
+
+    async def _set_rag_projection(
+        self,
+        meeting_id: str,
+        *,
+        state: str,
+        error: str | None = None,
+        projected_at: datetime | None = None,
+        retry_backoff: bool = False,
+        expected_generation: int | None = None,
+    ) -> bool:
+        if self._repo is None:
+            return True
+        setter = getattr(self._repo, "set_meeting_rag_projection", None)
+        if setter is None:
+            return True
+        updated = await setter(
+            meeting_id,
+            state=state,
+            error=error,
+            projected_at=projected_at,
+            retry_backoff=retry_backoff,
+            expected_generation=expected_generation,
+        )
+        return bool(updated)
+
+    async def delete_meeting_projection(
+        self,
+        meeting_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
+        """Project a committed minutes clear before the request returns.
+
+        SQLite remains authoritative.  A failed BM25 deletion is recorded as
+        replayable ``delete_failed`` state and the background repair loop will
+        retry it; callers never silently lose the durable delete intent.
+        """
+
+        if self._repo is not None and expected_generation is not None:
+            current = await self._repo.get_meeting(meeting_id)
+            if (
+                current is None
+                or current.rag_projection_generation != expected_generation
+                or current.rag_projection_state not in {"delete_pending", "delete_failed"}
+            ):
+                return False
+
+        try:
+            await self._rag.delete(
+                f"meeting-{meeting_id}",
+                projection_generation=expected_generation,
+            )
+        except Exception as exc:
+            await self._set_rag_projection(
+                meeting_id,
+                state="delete_failed",
+                error=str(exc),
+                expected_generation=expected_generation,
+            )
+            return False
+        return await self._set_rag_projection(
+            meeting_id,
+            state="deleted",
+            projected_at=datetime.now(UTC),
+            expected_generation=expected_generation,
+        )
+
+    async def repair_rag_projections(  # noqa: PLR0912 - meeting + legacy ambient replay
+        self,
+        *,
+        limit: int = 100,
+    ) -> tuple[int, int]:
+        """Replay due meeting and ambient projection intent for one principal."""
+
+        if self._repo is None:
+            return 0, 0
+        loader = getattr(self._repo, "list_meetings_needing_rag_projection", None)
+        if loader is None:
+            return 0, 0
+        meetings = await loader(limit=limit)
+        succeeded = 0
+        for meeting in meetings:
+            generation = meeting.rag_projection_generation
+            try:
+                if meeting.rag_projection_state in {"delete_pending", "delete_failed"}:
+                    await self._rag.delete(
+                        f"meeting-{meeting.id}",
+                        projection_generation=generation,
+                    )
+                    projected = await self._set_rag_projection(
+                        meeting.id,
+                        state="deleted",
+                        projected_at=datetime.now(UTC),
+                        expected_generation=generation,
+                    )
+                else:
+                    if not meeting.minutes_json:
+                        raise MeetingPipelineError("minutes missing for RAG index repair")
+                    minutes = MeetingMinutes.model_validate_json(meeting.minutes_json)
+                    segments = await self._repo.list_meeting_segments(meeting.id)
+                    await self._index_minutes(
+                        meeting.id,
+                        minutes,
+                        self._render_transcript(segments),
+                        expected_generation=generation,
+                    )
+                    projected = await self._set_rag_projection(
+                        meeting.id,
+                        state="indexed",
+                        projected_at=datetime.now(UTC),
+                        expected_generation=generation,
+                    )
+                if projected:
+                    succeeded += 1
+            except Exception as exc:
+                operation = (
+                    "delete"
+                    if meeting.rag_projection_state in {"delete_pending", "delete_failed"}
+                    else "index"
+                )
+                await self._set_rag_projection(
+                    meeting.id,
+                    state=f"{operation}_failed",
+                    error=str(exc),
+                    retry_backoff=True,
+                    expected_generation=generation,
+                )
+
+        ambient_loader = getattr(
+            self._repo,
+            "list_ambient_segments_needing_rag_projection",
+            None,
+        )
+        ambient_segments = await ambient_loader(limit=limit) if ambient_loader else []
+        ambient_setter = getattr(self._repo, "set_ambient_rag_projection", None)
+        for segment in ambient_segments:
+            try:
+                if segment.rag_projection_state == "reconcile_pending":
+                    reconciler = getattr(self._rag, "contains_ambient_segment", None)
+                    if reconciler is not None and await reconciler(
+                        segment.text,
+                        captured_at=segment.captured_at.isoformat(),
+                        audio_ref=segment.audio_ref,
+                    ):
+                        if ambient_setter is not None and await ambient_setter(
+                            segment.id,
+                            state="indexed",
+                            projected_at=datetime.now(UTC),
+                        ):
+                            succeeded += 1
+                        continue
+                await self._rag.ingest_ambient_segment(
+                    segment.text,
+                    captured_at=segment.captured_at.isoformat(),
+                    audio_ref=segment.audio_ref,
+                    speaker_id=segment.speaker_id,
+                    speaker_label=segment.speaker_label,
+                    operation_id=f"ambient-segment:{segment.id}",
+                )
+                if ambient_setter is not None and await ambient_setter(
+                    segment.id,
+                    state="indexed",
+                    projected_at=datetime.now(UTC),
+                ):
+                    succeeded += 1
+            except Exception as exc:
+                if ambient_setter is not None:
+                    await ambient_setter(
+                        segment.id,
+                        state="index_failed",
+                        error=str(exc),
+                        retry_backoff=True,
+                    )
+        return len(meetings) + len(ambient_segments), succeeded
 
     @staticmethod
     def _extract_display_title(raw: object, *, fallback: str) -> str:
@@ -642,7 +948,7 @@ class MeetingPipeline:
         segs: list[TranscriptSegment],
         minutes: MeetingMinutes,
     ) -> str:
-        path = self._transcript_dir / f"{meeting_id}.json"
+        path = self._transcript_dir / f"{physical_resource_id(meeting_id, kind='meeting')}.json"
         payload = {
             "meeting_id": meeting_id,
             "title": minutes.title,

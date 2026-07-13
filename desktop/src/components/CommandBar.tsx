@@ -15,10 +15,9 @@
  *   一个紧凑的悬浮输入条。路由细节只用于内部派发，不暴露给普通用户。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Input, Tag, Tooltip, message } from "antd";
-import type { TextAreaRef } from "antd/es/input/TextArea";
-import { FileText, Loader2, Paperclip, Send, Upload, Wand2, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Tag, Tooltip, message } from "antd";
+import { ArrowUp, FileText, Loader2, Paperclip, Upload } from "lucide-react";
 
 import {
   artifactDownloadUrl,
@@ -34,7 +33,9 @@ import {
 } from "@/api";
 import { useStore, type CommandBarPrefillMeta } from "@/store";
 import type { IntentKind, IntentResult } from "@/types";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
+import { meetingDisplayTitle } from "@/lib/meetingDisplay";
 import { isTvLikeViewport } from "@/runtime";
 
 interface PendingDoc {
@@ -125,17 +126,24 @@ export default function CommandBar(): JSX.Element {
   const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
   const [prefillMeta, setPrefillMeta] = useState<CommandBarPrefillMeta | null>(null);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
-  const addArtifact = useStore((s) => s.addArtifact);
+  const currentMeeting = useStore((s) =>
+    s.currentMeetingId ? s.meetings[s.currentMeetingId] : undefined,
+  );
   const applyEvent = useStore((s) => s.applyEvent);
   const upsertAgentTask = useStore((s) => s.upsertAgentTask);
   const registerCommandBarPrefill = useStore((s) => s.registerCommandBarPrefill);
   const tts = useTtsPlayer();
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+  } = useBackendOriginFence();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const textareaRef = useRef<TextAreaRef | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [tvMode, setTvMode] = useState(() => detectTvCommandMode());
   const commandPlaceholder = tvMode
-    ? "输入指令，如 @总结会议"
-    : "输入问题 / @生成 PPT / @查 · 可拖入文件";
+    ? "询问当前记录，或描述要完成的任务"
+    : "询问这段记录，或描述要生成的内容";
   const quickCommands = [
     { label: "总结会议", command: "@总结会议" },
     { label: "现在状态", command: "@chat 现在状态" },
@@ -172,42 +180,81 @@ export default function CommandBar(): JSX.Element {
     const unregister = registerCommandBarPrefill((nextText, meta) => {
       setText(nextText);
       setPrefillMeta(meta ?? null);
-      textareaRef.current?.focus({ cursor: "end" });
+      const textarea = textareaRef.current;
+      if (textarea) {
+        textarea.focus();
+        textarea.setSelectionRange(nextText.length, nextText.length);
+      }
     });
     return unregister;
   }, [registerCommandBarPrefill]);
 
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    const styles = window.getComputedStyle(textarea);
+    const minHeight = Number.parseFloat(styles.minHeight) || 0;
+    const parsedMaxHeight = Number.parseFloat(styles.maxHeight);
+    const maxHeight = Number.isFinite(parsedMaxHeight)
+      ? parsedMaxHeight
+      : Number.POSITIVE_INFINITY;
+    const nextHeight = Math.max(
+      minHeight,
+      Math.min(textarea.scrollHeight, maxHeight),
+    );
+    textarea.style.height = `${nextHeight}px`;
+  }, [text, tvMode]);
+
   // P4-fix-rag-chat 智能提示节流：每条会话最多提示一次，避免每次发问都弹。
   const workspaceHintShownRef = useRef(false);
 
+  useEffect(() => {
+    // doc_id、待办 prefill 与 busy/uploading 都属于创建它们的 backend origin。
+    // origin 切换后立即清空，旧异步链路再晚返回也只能被 generation fence 丢弃。
+    setText("");
+    setPrefillMeta(null);
+    setPendingDocs([]);
+    setBusy(false);
+    setUploading(0);
+    setDropActive(false);
+    workspaceHintShownRef.current = false;
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, [backendOriginRevision]);
+
   // 当用户走 search_rag 但 RAG docs 数太少（< 3）且没配置 workspace_dirs 时，
-  // toast 提示「📂 想覆盖整个文件夹？点 设置 → 工作区目录 配置」。
-  const maybePromptWorkspaceConfig = useCallback(async (): Promise<void> => {
-    if (workspaceHintShownRef.current) return;
+  // 当资料过少时提示用户添加文件夹，避免依赖隐藏命令记忆。
+  const maybePromptWorkspaceConfig = useCallback(async (
+    originGeneration: number,
+  ): Promise<void> => {
+    if (!isCurrent(originGeneration) || workspaceHintShownRef.current) return;
     try {
       const [docs, ws] = await Promise.all([
         listRagDocs(),
         workspaceStatus(),
       ]);
+      if (!isCurrent(originGeneration)) return;
       const nDocs = docs.total ?? 0;
       const nConfigured = ws.configured_dirs?.length ?? 0;
       if (nDocs < 3 && nConfigured === 0) {
         workspaceHintShownRef.current = true;
         message.info({
           content:
-            "📂 想覆盖整个文件夹？点 设置（齿轮） → 工作区目录，加一个 ~/Documents 之类的目录，EchoDesk 会自动扫描索引",
+            "资料较少。可在“知识库设置”中添加文件夹，EchoDesk 会自动建立索引。",
           duration: 8,
         });
       }
     } catch {
       /* 静默：智能提示不应阻塞用户主问答 */
     }
-  }, []);
+  }, [isCurrent]);
 
   const handleFiles = useCallback(async (files: FileList | File[]): Promise<void> => {
     const arr = Array.from(files);
     if (!arr.length) return;
+    const originGeneration = captureGeneration();
     for (const f of arr) {
+      if (!isCurrent(originGeneration)) return;
       const ext = pickExt(f.name);
       if (!ACCEPT_EXT_SET.has(ext)) {
         message.warning(`不支持的文件类型：${f.name}（${ext || "无后缀"}）`);
@@ -216,19 +263,23 @@ export default function CommandBar(): JSX.Element {
       setUploading((n) => n + 1);
       try {
         const r = await ingestFile(f, f.name);
+        if (!isCurrent(originGeneration)) return;
         setPendingDocs((prev) => [
           ...prev,
           { doc_id: r.doc_id, title: r.title, filename: f.name },
         ]);
-        message.success(`已入库：${f.name}`);
+        message.success(`已添加到知识库：${f.name}`);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        message.error(`${f.name} 入库失败：${msg}`);
+        if (!isCurrent(originGeneration)) return;
+        console.error("[command-bar] failed to add file to knowledge base", e);
+        message.error(`${f.name} 添加失败，请检查文件后重试`);
       } finally {
-        setUploading((n) => Math.max(0, n - 1));
+        if (isCurrent(originGeneration)) {
+          setUploading((n) => Math.max(0, n - 1));
+        }
       }
     }
-  }, []);
+  }, [captureGeneration, isCurrent]);
 
   const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -297,10 +348,14 @@ export default function CommandBar(): JSX.Element {
     clearPendingAfterSubmit: boolean,
   ): Promise<void> {
     if (!value) return;
+    const originGeneration = captureGeneration();
+    if (!isCurrent(originGeneration)) return;
     setBusy(true);
     try {
       const r = routeExplicitGenerateCommand(value) ?? (await routeIntent(value, currentMeetingId));
-      await dispatch(r, value, activePrefillMeta);
+      if (!isCurrent(originGeneration)) return;
+      await dispatch(r, value, activePrefillMeta, originGeneration);
+      if (!isCurrent(originGeneration)) return;
       setText("");
       setPrefillMeta(null);
       // 附件已被发出，清空 pendingDocs（后端 RAG 检索复用 doc_id）
@@ -308,10 +363,11 @@ export default function CommandBar(): JSX.Element {
         setPendingDocs([]);
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      message.error(`发送失败：${msg}`);
+      if (!isCurrent(originGeneration)) return;
+      console.error("[command-bar] submit failed", e);
+      message.error("发送失败，请稍后重试");
     } finally {
-      setBusy(false);
+      if (isCurrent(originGeneration)) setBusy(false);
     }
   }
 
@@ -331,7 +387,10 @@ export default function CommandBar(): JSX.Element {
     r: IntentResult,
     originalText: string,
     meta: CommandBarPrefillMeta | null,
+    originGeneration: number,
   ): Promise<void> {
+    if (!isCurrent(originGeneration)) return;
+    const interactionMeetingId = meta?.meeting_id ?? currentMeetingId ?? undefined;
     switch (r.kind) {
       case "generate_html":
       case "generate_pptx":
@@ -343,7 +402,7 @@ export default function CommandBar(): JSX.Element {
         const kind = (r.params.artifact_type as string | undefined) ?? "html";
         const brief = (r.params.brief as string | undefined) ?? originalText;
         if (!brief) {
-          message.warning("brief 为空，无法生成产物");
+          message.warning("请先描述想生成的内容");
           return;
         }
         const now = new Date().toISOString();
@@ -351,18 +410,20 @@ export default function CommandBar(): JSX.Element {
           type: "rag.query",
           seq: 0,
           ts: now,
+          meeting_id: interactionMeetingId,
           payload: { question: originalText },
         });
         applyEvent({
           type: "chat.done",
           seq: 0,
           ts: new Date(Date.now() + 1).toISOString(),
+          meeting_id: interactionMeetingId,
           payload: {
             question: originalText,
-            answer: `已开始${kindLabel[r.kind]}：${brief}\n\n我会先检索本地知识库和联网搜索结果，再基于检索材料生成，完成后会自动出现在右侧 outputs。`,
+            answer: `已开始${kindLabel[r.kind]}：${brief}\n\n我会先检索本地知识库和联网资料，再基于证据生成。完成后可在右侧“工作产物”中查看。`,
           },
         });
-        message.info(`已派发：先检索知识库和联网搜索，再生成${kindLabel[r.kind]}（后台进行中）`);
+        message.info(`正在整理资料并${kindLabel[r.kind]}`);
         // 异步触发，结果通过 WS artifact.ready event 反馈到 store
         // 不 await，避免 busy/textarea 在 60-180s LLM 链路上一直锁住
         void generateArtifact({
@@ -384,33 +445,45 @@ export default function CommandBar(): JSX.Element {
           ].join("\n"),
           meeting_id: meta?.meeting_id ?? currentMeetingId ?? undefined,
           todo_id: meta?.todo_id,
+          retry_of_run_id: meta?.retry_of_run_id,
         })
           .then((art) => {
-            addArtifact(art);
-            const title = art.title || art.artifact_id;
+            if (!isCurrent(originGeneration)) return;
+            const title = art.title?.trim() || `未命名${kindLabel[r.kind].replace("生成 ", "")}`;
+            const completedAt = Date.now();
             applyEvent({
               type: "chat.done",
               seq: 0,
-              ts: new Date().toISOString(),
+              ts: new Date(completedAt).toISOString(),
+              meeting_id: interactionMeetingId,
               payload: {
                 question: originalText,
                 answer: `已生成 ${art.artifact_type.toUpperCase()}：${title}\n\n[下载/打开产物](${artifactDownloadUrl(art.artifact_id)})`,
               },
             });
+            applyEvent({
+              type: "artifact.ready",
+              seq: 0,
+              ts: new Date(completedAt + 1).toISOString(),
+              meeting_id: interactionMeetingId,
+              payload: art as unknown as Record<string, unknown>,
+            });
             message.success(`已生成 ${art.artifact_type}`);
           })
           .catch((e) => {
-            const msg = e instanceof Error ? e.message : String(e);
+            if (!isCurrent(originGeneration)) return;
+            console.error("[command-bar] artifact generation failed", e);
             applyEvent({
               type: "chat.done",
               seq: 0,
               ts: new Date().toISOString(),
+              meeting_id: interactionMeetingId,
               payload: {
                 question: originalText,
-                answer: `生成 ${kindLabel[r.kind]} 失败：${msg}`,
+                answer: `${kindLabel[r.kind]}失败。请检查要求后重试；已有文件不会受影响。`,
               },
             });
-            message.error(`生成失败：${msg}`);
+            message.error("生成失败，请稍后重试");
           });
         return;
       }
@@ -420,15 +493,19 @@ export default function CommandBar(): JSX.Element {
           message.warning("当前没有进行中的会议");
           return;
         }
-        message.info(`正在总结会议 ${mid}…`);
-        const minutes = await finalizeMeeting(mid, `会议 ${mid}`);
+        message.info("正在生成会议纪要…");
+        const minutes = await finalizeMeeting(
+          mid,
+          meetingDisplayTitle(currentMeeting, "会议纪要"),
+        );
+        if (!isCurrent(originGeneration)) return;
         message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
         return;
       }
       case "agent_task": {
         const taskText = (r.params.text as string | undefined) ?? originalText;
         if (!taskText) {
-          message.warning("任务内容为空");
+          message.warning("请先描述需要完成的任务");
           return;
         }
         const task = await createAgentTask({
@@ -439,6 +516,7 @@ export default function CommandBar(): JSX.Element {
             current_meeting_id: currentMeetingId,
           },
         });
+        if (!isCurrent(originGeneration)) return;
         upsertAgentTask(task);
         message.info(
           task.state === "waiting_permission" ? "需要授权后开始执行" : "已开始后台执行",
@@ -450,22 +528,25 @@ export default function CommandBar(): JSX.Element {
         // 注意：本 case 必须放在 default 之前，否则 fall-through 永远不会到。
         const question = (r.params.text as string | undefined) ?? originalText;
         if (!question) {
-          message.warning("text 为空");
+          message.warning("请输入问题");
           return;
         }
         applyEvent({
           type: "rag.query",
           seq: 0,
           ts: new Date().toISOString(),
+          meeting_id: interactionMeetingId,
           payload: { question },
         });
         message.info("正在回复…");
         void chatAsk(question)
           .then((answer) => {
+            if (!isCurrent(originGeneration)) return;
             applyEvent({
               type: "chat.done",
               seq: 0,
               ts: new Date().toISOString(),
+              meeting_id: interactionMeetingId,
               payload: {
                 question,
                 answer,
@@ -475,8 +556,9 @@ export default function CommandBar(): JSX.Element {
             void tts.speak(answer);
           })
           .catch((e) => {
-            const msg = e instanceof Error ? e.message : String(e);
-            message.error(`回复失败：${msg}`);
+            if (!isCurrent(originGeneration)) return;
+            console.error("[command-bar] direct chat failed", e);
+            message.error("暂时无法回复，请稍后重试");
           });
         return;
       }
@@ -500,28 +582,31 @@ export default function CommandBar(): JSX.Element {
           ?? (r.params.text as string | undefined)
           ?? originalText;
         if (!question) {
-          message.warning("question 为空");
+          message.warning("请输入问题");
           return;
         }
         applyEvent({
           type: "rag.query",
           seq: 0,
           ts: new Date().toISOString(),
+          meeting_id: interactionMeetingId,
           payload: { question },
         });
-        message.info("已派发：检索中（后台进行中）");
+        message.info("正在检索相关资料…");
 
         // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
         // 让 RAG 覆盖整个文件夹，而不是只能用一两个手动上传的 PDF。
         // 不阻塞 ragAsk 主链路（并发触发）。
-        void maybePromptWorkspaceConfig();
+        void maybePromptWorkspaceConfig(originGeneration);
 
         void ragAsk(question)
           .then((ans) => {
+            if (!isCurrent(originGeneration)) return;
             applyEvent({
               type: "rag.answer.done",
               seq: 0,
               ts: new Date().toISOString(),
+              meeting_id: interactionMeetingId,
               payload: {
                 question,
                 answer: ans.answer,
@@ -535,8 +620,9 @@ export default function CommandBar(): JSX.Element {
             void tts.speak(ans.answer);
           })
           .catch((e) => {
-            const msg = e instanceof Error ? e.message : String(e);
-            message.error(`检索失败：${msg}`);
+            if (!isCurrent(originGeneration)) return;
+            console.error("[command-bar] retrieval failed", e);
+            message.error("检索失败，请稍后重试");
           });
         return;
       }
@@ -577,7 +663,7 @@ export default function CommandBar(): JSX.Element {
               icon={<FileText className="w-3 h-3 inline -mt-0.5 mr-1" />}
               color="processing"
               className="!m-0 max-w-[200px] truncate"
-              title={`${d.filename} → ${d.doc_id}`}
+              title={d.filename}
             >
               {d.filename}
             </Tag>
@@ -585,7 +671,7 @@ export default function CommandBar(): JSX.Element {
           {uploading > 0 && (
             <span className="inline-flex items-center gap-1 text-[11px] text-ink-500">
               <Loader2 className="w-3 h-3 animate-spin" />
-              入库中 {uploading}…
+              正在添加 {uploading} 个文件…
             </span>
           )}
         </div>
@@ -616,16 +702,19 @@ export default function CommandBar(): JSX.Element {
       )}
 
       <div className="echodesk-command-row flex items-center gap-2">
-        <Wand2 className="echodesk-command-leading-icon w-4 h-4 text-ink-500 shrink-0" />
-        <Input.TextArea
+        <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
             if (!e.target.value.trim()) setPrefillMeta(null);
           }}
-          onPressEnter={(e) => {
-            if (!e.shiftKey) {
+          onKeyDown={(e) => {
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing
+            ) {
               e.preventDefault();
               void onSubmit();
             }
@@ -633,11 +722,6 @@ export default function CommandBar(): JSX.Element {
           onPaste={onPaste}
           placeholder={commandPlaceholder}
           rows={1}
-          style={{
-            minHeight: "44px",
-            height: "44px",
-            maxHeight: "44px",
-          }}
           disabled={busy}
           className="echodesk-command-textarea !rounded-md"
           data-testid="command-textarea"
@@ -690,7 +774,7 @@ export default function CommandBar(): JSX.Element {
             {busy ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <Send className="w-4 h-4" />
+              <ArrowUp className="w-4 h-4" />
             )}
           </button>
         </Tooltip>
@@ -698,6 +782,3 @@ export default function CommandBar(): JSX.Element {
     </div>
   );
 }
-
-// 占位防止未来扩展时 lint 警告（X 用于 chip 关闭按钮的扩展位）
-void X;

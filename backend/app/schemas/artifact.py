@@ -75,6 +75,8 @@ class ArtifactRequest(BaseModel):
     # → status="done" + artifact_id，并发 ``meeting.todo.completed`` 事件。
     meeting_id: str | None = None
     todo_id: str | None = None
+    # 0.3：失败卡片重试时保留父 workflow run，便于追踪 retry 链。
+    retry_of_run_id: str | None = None
 
 
 class GeneratedArtifact(BaseModel):
@@ -88,6 +90,20 @@ class GeneratedArtifact(BaseModel):
     artifact_type: str  # canonical kind
     title: str = ""
     file_path: str
+    mime_type: str
+    size_bytes: int
+    generation_latency_ms: float
+    model: str
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class GeneratedArtifactDTO(BaseModel):
+    """Client projection; public transports redact the server filesystem path."""
+
+    artifact_id: str
+    artifact_type: str
+    title: str = ""
+    file_path: str | None = None
     mime_type: str
     size_bytes: int
     generation_latency_ms: float

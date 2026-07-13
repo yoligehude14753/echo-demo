@@ -1,0 +1,143 @@
+event_id: "E-20260712T1238-001"
+event_type: "supersede"
+timestamp: "2026-07-12T12:38:00+08:00"
+author: "agent/codex-echodesk-0-3-1-final"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-020"
+      claim: "EchoDesk 0.3.1 implements a unified Workflow, scoped public identity, durable Agent commands, one RAG fact source and an installed recovery path; deterministic and live local gates pass."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-12T12:38:00+08:00"
+      observed_by: "agent/codex-echodesk-0-3-1-final"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "ARCHITECTURE.md"
+        - "backend/app/workflows/kernel.py"
+        - "backend/app/workflows/service.py"
+        - "backend/app/agents/command_outbox.py"
+        - "backend/app/adapters/rag/index_store.py"
+        - "backend/app/security/access.py"
+        - "desktop/tests/e2e-real/installed-local-workflow.spec.ts"
+        - "desktop/scripts/macos-mounted-dmg-smoke.cjs"
+        - "runtime:backend deterministic => 916 collected, 18 live deselected, 898 passed, 0 skipped, coverage 87%, natural exit"
+        - "runtime:GLM-5.2-NVFP4 product contract => 2 passed"
+        - "runtime:installed bundled-backend GLM plus AgentOS workflow => 1 passed"
+        - "runtime:read-only mounted DMG bundled-backend smoke => 1 passed"
+      evidence: "The complete deterministic backend suite, Ruff, format, mypy and dependency gates passed. The read-only DMG executed bundled artifact/RAG runtimes, and the installed app used its bundled backend with GLM-5.2 plus AgentOS commit c26b102cf213752f8baa75d4791ded3b33b95bd9 to verify failure injection, restart restoration, retry lineage, Agent artifacts, cancel, timeout and final persistence."
+      supersedes:
+        - "F-ECHO-002"
+        - "F-ECHO-017"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "workflow"
+        - "principal-isolation"
+        - "agent"
+        - "rag"
+        - "installed"
+        - "live"
+        - "gates"
+  - action: "supersede"
+    old_fact: "F-ECHO-002"
+    new_fact: "F-ECHO-020"
+    reason: "The pre-development redesign intent is now represented by the implemented and tested 0.3.1 architecture."
+  - action: "supersede"
+    old_fact: "F-ECHO-017"
+    new_fact: "F-ECHO-020"
+    reason: "The previous provider-blocked conclusion is obsolete because the GLM product contract and complete installed bundled-backend workflow now pass."
+  - action: "add"
+    fact:
+      id: "F-ECHO-021"
+      claim: "EchoDesk 0.3.1 desktop UX has one Codex-like system font, semantic controls, a clear three-pane hierarchy, and tested overflow, focus, error and responsive states."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-12T12:38:00+08:00"
+      observed_by: "agent/codex-echodesk-0-3-1-final"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "desktop/src/App.tsx"
+        - "desktop/src/index.css"
+        - "desktop/src/components/SettingsPanel.tsx"
+        - "desktop/tests/e2e/ux-redesign.spec.ts"
+        - "desktop/tests/e2e/backend-transport-policy.spec.ts"
+        - "desktop/tests/scenarios"
+        - "runtime:Electron contracts => 70 passed"
+        - "runtime:Playwright E2E => 95 passed"
+        - "runtime:recorded click scenarios => 29 passed"
+      evidence: "Final full reruns passed 70 Electron contracts, 95 browser E2E cases and 29 slow-click recorded scenarios. Coverage includes the custom accessible private-LAN HTTP confirmation, onboarding, settings, meeting four-state loading/error/empty/content behavior, artifact previews, WebSocket 4401/resync, and 411/960/1280/1920 layouts without horizontal overflow."
+      supersedes:
+        - "F-ECHO-012"
+        - "F-ECHO-013"
+        - "F-ECHO-014"
+        - "F-ECHO-015"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "ux"
+        - "desktop"
+        - "accessibility"
+        - "responsive"
+        - "click-validation"
+  - action: "supersede"
+    old_fact: "F-ECHO-012"
+    new_fact: "F-ECHO-021"
+    reason: "The requested UX redesign is now implemented and covered by the final interaction gates."
+  - action: "supersede"
+    old_fact: "F-ECHO-013"
+    new_fact: "F-ECHO-021"
+    reason: "The final full interaction suite replaces the earlier partial redesign evidence."
+  - action: "supersede"
+    old_fact: "F-ECHO-014"
+    new_fact: "F-ECHO-021"
+    reason: "The defects exposed by the historical click audit are fixed and pass the final full rerun."
+  - action: "supersede"
+    old_fact: "F-ECHO-015"
+    new_fact: "F-ECHO-021"
+    reason: "The final 95-case E2E and 29-scenario run supersede the older 49/25 repair snapshot."
+  - action: "add"
+    fact:
+      id: "F-ECHO-022"
+      claim: "The installed EchoDesk 0.3.1 app migrated the real user SQLite database from schema 11 to 37 without changing audited row counts or speaker-label content."
+      category: "observation"
+      volatility: "low"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-12T12:38:00+08:00"
+      observed_by: "agent/codex-echodesk-0-3-1-final"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "backend/app/adapters/repo/migrator.py"
+        - "backend/app/adapters/repo/migrations/037_restore_speaker_label_user_set.sql"
+        - "runtime:~/.echodesk/backups/echodesk.db.pre-0.3.1-final-20260712-122549.sqlite"
+        - "runtime:~/.echodesk/echodesk.db"
+      evidence: "The backup passed integrity and foreign-key checks. The installed bundled backend applied migrations 12 through 37. Before and after counts remained meetings=366, meeting_segments=18819, speakers=69, ambient_segments=22131, artifacts=153 and artifact_links=16; the ordered speaker-label SHA-256 remained e11acdad7dd1d05da684cf8804c877a453384768a4f933e1ed51ba3ac38972e2; final integrity was ok with zero foreign-key violations."
+      supersedes:
+        - "F-ECHO-011"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "migration"
+        - "sqlite"
+        - "artifact"
+        - "user-data"
+  - action: "supersede"
+    old_fact: "F-ECHO-011"
+    new_fact: "F-ECHO-022"
+    reason: "The historical artifact recovery counts are now revalidated through the real schema-11-to-37 installed migration with an integrity-protected backup and unchanged label hash."
+git_commit: null

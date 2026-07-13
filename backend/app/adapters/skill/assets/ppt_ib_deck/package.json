@@ -12,6 +12,7 @@
   "type": "commonjs",
   "dependencies": {
     "docxtemplater": "3.68",
-    "pizzip": "^3.2.0"
+    "pizzip": "3.2.0",
+    "pptxgenjs": "3.12.0"
   }
 }

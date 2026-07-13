@@ -1,0 +1,82 @@
+event_id: "E-20260710T1553-003"
+event_type: "add"
+timestamp: "2026-07-10T15:53:27+08:00"
+author: "agent/codex-0-3-delivery"
+session_id: "019f4795-76fa-7c71-b162-d5d90f6869e3"
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-004"
+      claim: "EchoDesk 0.3.0-alpha.1 Workflow Core is implemented, packaged, installed at /Applications/EchoDesk.app, and passes the deterministic backend gate and installed desktop acceptance flow."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.98
+      observed_at: "2026-07-10T15:53:27+08:00"
+      observed_by: "agent/codex-0-3-delivery"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "CHANGELOG.md"
+        - "docs/0.3/README.md"
+        - "desktop/tests/e2e-real/installed-local-workflow.spec.ts"
+        - "desktop/test-results/installed-local/04-installed-restart-restored.png"
+      evidence: "Backend deterministic gate reported 528 passed, 4 skipped, and 20 deselected after the DS V4 default regression test was added; the installed-local E2E and restart-restoration screenshot were already completed for the packaged alpha."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3"
+        - "workflow"
+        - "delivery"
+  - action: "add"
+    fact:
+      id: "F-ECHO-005"
+      claim: "The installed EchoDesk main LLM is configured as Yunwu deepseek-v4-flash and a real non-streaming request plus the installed desktop status popover both succeeded."
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-10T15:53:27+08:00"
+      observed_by: "agent/codex-0-3-delivery"
+      valid_until: "2026-07-10T17:53:27+08:00"
+      ttl_hours: 2
+      source:
+        - "backend/app/config.py"
+        - "scripts/install-backend.sh"
+        - "desktop/test-results/installed-local/05-installed-yunwu-ds-v4-flash.png"
+      evidence: "Yunwu /v1/chat/completions returned HTTP 200 with model deepseek-v4-flash and content OK; /healthz/full main_model.ok was true; the packaged UI displayed yunwu · deepseek-v4-flash."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "llm"
+        - "yunwu"
+        - "runtime"
+  - action: "add"
+    fact:
+      id: "F-ECHO-006"
+      claim: "The obsolete EchoDesk 0.2.50 app copies and the pre-workflow-restore alpha backup were removed, leaving /Applications/EchoDesk.app at version 0.3.0-alpha.1 as the sole installed EchoDesk app."
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-10T15:53:27+08:00"
+      observed_by: "agent/codex-0-3-delivery"
+      valid_until: "2026-07-10T17:53:27+08:00"
+      ttl_hours: 2
+      source:
+        - "runtime:/Applications/EchoDesk.app/Contents/Info.plist"
+        - "runtime:mdfind EchoDesk application bundles"
+      evidence: "The two /Applications/EchoDesk.app.pre-* bundles and the echo-demo-public-work 0.2.50 build were permanently removed; /Applications contains only EchoDesk.app with CFBundleShortVersionString 0.3.0-alpha.1."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "install"
+        - "cleanup"
+        - "0.3"
+git_commit: null

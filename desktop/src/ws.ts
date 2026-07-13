@@ -14,14 +14,74 @@
  * - 超过 WS_INACTIVE_RECONNECT_MS 没收到任何消息 → 主动重连
  */
 import { useEffect, useRef } from "react";
+import { BACKEND_ORIGIN_EVENT } from "@/runtime";
 import { useStore } from "@/store";
 import {
   type EchoEvent,
   WS_INACTIVE_RECONNECT_MS,
 } from "@/types";
-import { backendWsUrl, shouldHideSharedPublicHistory } from "@/runtime";
+import {
+  ClientUpgradeRequiredError,
+  SESSION_IDENTITY_EVENT,
+  authenticatedWsConnection,
+  ensureServerSession,
+  isIdentityLostError,
+  markClientUpgradeRequired,
+  type SessionIdentityStatus,
+} from "@/session";
 
 type ConnState = "connecting" | "open" | "closed";
+
+interface WsCursor {
+  epoch: string | null;
+  seq: number;
+}
+
+const WS_CURSOR_PREFIX = "echodesk.wsCursor.v1";
+// WebSocket event payloads are control-plane notifications, not artifact data.
+// Keep the renderer bound well below browser/uvicorn frame allocation limits.
+export const WS_MAX_INBOUND_BYTES = 1024 * 1024;
+const wsFrameEncoder = new TextEncoder();
+const wsFrameScratch = new Uint8Array(WS_MAX_INBOUND_BYTES + 1);
+
+function isBoundedWsTextFrame(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  // UTF-8 uses at least one byte per UTF-16 code unit, so this cheap check
+  // rejects obviously oversized input before any encoding work.
+  if (value.length > WS_MAX_INBOUND_BYTES) return false;
+  // encodeInto writes into one fixed-size buffer instead of allocating an
+  // attacker-sized Uint8Array. A partial read proves the UTF-8 frame exceeds cap.
+  const encoded = wsFrameEncoder.encodeInto(value, wsFrameScratch);
+  return encoded.read === value.length && encoded.written <= WS_MAX_INBOUND_BYTES;
+}
+
+function cursorStorageKey(url: string, principalScope: string): string {
+  const endpoint = new URL(url);
+  return `${WS_CURSOR_PREFIX}:${endpoint.origin}${endpoint.pathname}:${principalScope}`;
+}
+
+function loadCursor(key: string): WsCursor {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) ?? "null") as Partial<WsCursor>;
+    return {
+      epoch: typeof parsed?.epoch === "string" ? parsed.epoch : null,
+      seq:
+        typeof parsed?.seq === "number" && Number.isSafeInteger(parsed.seq) && parsed.seq >= 0
+          ? parsed.seq
+          : 0,
+    };
+  } catch {
+    return { epoch: null, seq: 0 };
+  }
+}
+
+function saveCursor(key: string, cursor: WsCursor): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(cursor));
+  } catch {
+    // Storage can be disabled; in-memory refs still preserve reconnect continuity.
+  }
+}
 
 export function useEchoWS(): void {
   const setConnected = useStore((s) => s.setConnected);
@@ -30,11 +90,15 @@ export function useEchoWS(): void {
   const retryRef = useRef(0);
   const stopRef = useRef(false);
   const lastSeqRef = useRef(0);
-  const replayFenceSeqRef = useRef(0);
-  const appStartedAtRef = useRef(Date.now());
+  const streamEpochRef = useRef<string | null>(null);
+  const cursorKeyRef = useRef<string | null>(null);
+  const lastRehydrateFenceRef = useRef<string | null>(null);
   const lastActivityRef = useRef(Date.now());
   const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stateRef = useRef<ConnState>("closed");
+  const authBlockedRef = useRef(false);
+  const originGenerationRef = useRef(0);
 
   useEffect(() => {
     stopRef.current = false;
@@ -42,12 +106,35 @@ export function useEchoWS(): void {
       "server_hello",
       "server_ping",
       "server_resync",
+      "server_sync",
     ]);
+
+    const persistCursor = (): void => {
+      if (!cursorKeyRef.current) return;
+      saveCursor(cursorKeyRef.current, {
+        epoch: streamEpochRef.current,
+        seq: lastSeqRef.current,
+      });
+    };
+
+    const requestRehydrate = (epoch: string | null, fenceSeq: number): void => {
+      const key = `${epoch ?? "unknown"}:${fenceSeq}`;
+      if (lastRehydrateFenceRef.current === key) return;
+      lastRehydrateFenceRef.current = key;
+      useStore.getState().requestRehydrate(fenceSeq);
+    };
 
     const stopWatchdog = (): void => {
       if (watchdogRef.current) {
         clearInterval(watchdogRef.current);
         watchdogRef.current = null;
+      }
+    };
+
+    const stopReconnectTimer = (): void => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
     };
 
@@ -67,57 +154,139 @@ export function useEchoWS(): void {
       }, 5_000);
     };
 
-    const noSharedReplay = shouldHideSharedPublicHistory();
-
-    const isSharedPublicBusinessEvent = (e: EchoEvent): boolean => {
-      if (!noSharedReplay) return false;
-      if (e.meeting_id && useStore.getState().meetings[e.meeting_id]) {
-        return false;
-      }
-      if (e.type === "agent.task.event") {
-        const taskId = (e.payload as { task_id?: unknown })?.task_id;
-        if (typeof taskId === "string" && useStore.getState().agentTasks[taskId]) {
-          return false;
-        }
-      }
-      if (typeof e.seq === "number" && e.seq <= replayFenceSeqRef.current) {
-        return true;
-      }
-      const ts = Date.parse(e.ts);
-      if (Number.isFinite(ts) && ts < appStartedAtRef.current - 10_000) {
-        return true;
-      }
-      // 当前公共 backend 还没有 per-device/client_id 事件隔离。Android/TV
-      // 公共演示包只能相信本机 capture/chunk 返回的文本，不能消费共享 WS 业务事件，
-      // 否则新安装设备会立刻显示其它设备的会议、纪要和产物。
-      return !e.type.startsWith("server_") && e.type !== "error";
-    };
-
     const handleProtocol = (e: EchoEvent): void => {
       if (e.type === "server_resync") {
-        console.warn("[ws] server_resync, drop client cache", e.payload);
-        lastSeqRef.current = 0;
-        if (!noSharedReplay) {
+        console.warn("[ws] server_resync, rehydrate from REST", e.payload);
+        const payload = e.payload as {
+          reason?: string;
+          fence_seq?: number;
+          max_seq?: number;
+          stream_epoch?: string;
+        };
+        const nextEpoch = e.stream_epoch ?? payload.stream_epoch ?? null;
+        if (
+          payload.reason === "stream_epoch_changed" ||
+          (streamEpochRef.current && nextEpoch && streamEpochRef.current !== nextEpoch)
+        ) {
           useStore.getState().reset();
         }
+        streamEpochRef.current = nextEpoch;
+        lastSeqRef.current = 0;
+        requestRehydrate(nextEpoch, payload.fence_seq ?? payload.max_seq ?? 0);
+      } else if (e.type === "server_sync") {
+        const payload = e.payload as { fence_seq?: number; stream_epoch?: string };
+        const fenceSeq = payload.fence_seq ?? e.seq ?? 0;
+        streamEpochRef.current = e.stream_epoch ?? payload.stream_epoch ?? null;
+        lastSeqRef.current = Math.max(0, fenceSeq);
+        persistCursor();
+        requestRehydrate(streamEpochRef.current, lastSeqRef.current);
       } else if (e.type === "server_hello") {
-        const max = (e.payload as { max_seq?: number })?.max_seq ?? 0;
-        if (noSharedReplay) {
-          replayFenceSeqRef.current = Math.max(replayFenceSeqRef.current, max);
+        const payload = e.payload as { max_seq?: number; stream_epoch?: string };
+        const max = payload.max_seq ?? 0;
+        const serverEpoch = e.stream_epoch ?? payload.stream_epoch ?? null;
+        if (
+          streamEpochRef.current &&
+          serverEpoch &&
+          streamEpochRef.current !== serverEpoch
+        ) {
+          useStore.getState().reset();
+          lastSeqRef.current = 0;
+          requestRehydrate(serverEpoch, max);
         }
+        streamEpochRef.current = serverEpoch;
         if (max < lastSeqRef.current) lastSeqRef.current = max;
+        persistCursor();
       }
       // server_ping: 啥也不做，watchdog 已在 onmessage 刷新 lastActivity
     };
 
+    const scheduleReconnect = (delayMs?: number): void => {
+      if (stopRef.current || authBlockedRef.current) return;
+      stopReconnectTimer();
+      retryRef.current = Math.min(retryRef.current + 1, 8);
+      const backoff =
+        delayMs ?? Math.min(500 * 2 ** retryRef.current, 8_000);
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        void connect();
+      }, backoff);
+    };
+
     const connect = async (): Promise<void> => {
-      if (stopRef.current) return;
+      if (
+        stopRef.current ||
+        authBlockedRef.current ||
+        stateRef.current === "connecting" ||
+        stateRef.current === "open"
+      ) {
+        return;
+      }
       stateRef.current = "connecting";
-      const url = await backendWsUrl();
+      const originGeneration = originGenerationRef.current;
+      let connection: Awaited<ReturnType<typeof authenticatedWsConnection>>;
+      try {
+        connection = await authenticatedWsConnection();
+      } catch (error) {
+        if (stopRef.current) {
+          stateRef.current = "closed";
+          setConnected(false);
+          stopWatchdog();
+          stopReconnectTimer();
+          return;
+        }
+        if (originGeneration !== originGenerationRef.current) return;
+        stateRef.current = "closed";
+        setConnected(false);
+        stopWatchdog();
+        if (error instanceof ClientUpgradeRequiredError) {
+          authBlockedRef.current = true;
+          stopReconnectTimer();
+          return;
+        }
+        if (isIdentityLostError(error)) {
+          authBlockedRef.current = true;
+          stopReconnectTimer();
+          return;
+        }
+        scheduleReconnect();
+        return;
+      }
+      if (stopRef.current) {
+        stateRef.current = "closed";
+        setConnected(false);
+        stopWatchdog();
+        stopReconnectTimer();
+        return;
+      }
+      if (originGeneration !== originGenerationRef.current) {
+        return;
+      }
+      const { url, token, cursorKey } = connection;
+      const endpoint = new URL(url);
+      const connectionOrigin = `${
+        endpoint.protocol === "wss:" ? "https:" : "http:"
+      }//${endpoint.host}`;
+      const storageKey = cursorStorageKey(url, cursorKey);
+      if (cursorKeyRef.current !== storageKey) {
+        const stored = loadCursor(storageKey);
+        cursorKeyRef.current = storageKey;
+        streamEpochRef.current = stored.epoch;
+        lastSeqRef.current = stored.seq;
+        lastRehydrateFenceRef.current = null;
+      }
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (
+          stopRef.current ||
+          originGeneration !== originGenerationRef.current ||
+          wsRef.current !== ws
+        ) {
+          ws.close(4001, "backend origin changed");
+          return;
+        }
+        authBlockedRef.current = false;
         stateRef.current = "open";
         setConnected(true);
         retryRef.current = 0;
@@ -127,9 +296,9 @@ export function useEchoWS(): void {
             JSON.stringify({
               type: "client_hello",
               last_seq: lastSeqRef.current,
-              client_version: noSharedReplay
-                ? "echodesk-native-public-no-replay"
-                : "desktop-1.0",
+              stream_epoch: streamEpochRef.current ?? undefined,
+              client_version: __APP_VERSION__,
+              auth: token ? { type: "bearer", token } : undefined,
             })
           );
         } catch (err) {
@@ -139,24 +308,54 @@ export function useEchoWS(): void {
       };
 
       ws.onmessage = (evt) => {
+        if (
+          stopRef.current ||
+          originGeneration !== originGenerationRef.current ||
+          wsRef.current !== ws
+        ) {
+          return;
+        }
+        if (!isBoundedWsTextFrame(evt.data)) {
+          ws.close(4008, "invalid or oversized event frame");
+          return;
+        }
         lastActivityRef.current = Date.now();
         let data: EchoEvent | null = null;
         try {
           data = JSON.parse(evt.data) as EchoEvent;
         } catch {
+          ws.close(4008, "invalid event JSON");
           return;
         }
         if (!data || typeof data.type !== "string") return;
 
-        if (typeof data.seq === "number" && data.seq > lastSeqRef.current) {
-          lastSeqRef.current = data.seq;
-        }
         if (protocolHandled.has(data.type)) {
           handleProtocol(data);
           return;
         }
-        if (isSharedPublicBusinessEvent(data)) {
+        if (
+          data.stream_epoch &&
+          streamEpochRef.current &&
+          data.stream_epoch !== streamEpochRef.current
+        ) {
+          console.warn("[ws] event epoch mismatch; reconnecting");
+          ws.close(4002, "stream epoch mismatch");
           return;
+        }
+        if (data.stream_epoch) streamEpochRef.current = data.stream_epoch;
+        if (typeof data.seq === "number" && data.seq > 0) {
+          if (data.seq <= lastSeqRef.current) {
+            return;
+          }
+          if (data.seq !== lastSeqRef.current + 1) {
+            console.warn(
+              `[ws] sequence gap ${lastSeqRef.current} → ${data.seq}; reconnecting`
+            );
+            ws.close(4003, "event sequence gap");
+            return;
+          }
+          lastSeqRef.current = data.seq;
+          persistCursor();
         }
         applyEvent(data);
       };
@@ -165,25 +364,127 @@ export function useEchoWS(): void {
         /* close handler 会触发重连 */
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        if (
+          originGeneration !== originGenerationRef.current ||
+          wsRef.current !== ws
+        ) {
+          return;
+        }
+        wsRef.current = null;
         stateRef.current = "closed";
         setConnected(false);
         stopWatchdog();
         if (stopRef.current) return;
-        retryRef.current = Math.min(retryRef.current + 1, 8);
-        const backoff = Math.min(500 * 2 ** retryRef.current, 8_000);
-        setTimeout(() => {
-          void connect();
-        }, backoff);
+        if (event.code === 4426) {
+          authBlockedRef.current = true;
+          stopReconnectTimer();
+          const minimumVersion =
+            event.reason.match(/client upgrade required:([^\s]+)/)?.[1] ?? null;
+          markClientUpgradeRequired(minimumVersion, connectionOrigin);
+          return;
+        }
+        if (event.code !== 4401) {
+          scheduleReconnect();
+          return;
+        }
+        void (async () => {
+          try {
+            await ensureServerSession(true);
+            if (
+              originGeneration !== originGenerationRef.current ||
+              stopRef.current ||
+              authBlockedRef.current
+            ) {
+              return;
+            }
+            retryRef.current = 0;
+            scheduleReconnect(0);
+          } catch (error) {
+            if (
+              originGeneration !== originGenerationRef.current ||
+              stopRef.current
+            ) {
+              return;
+            }
+            if (error instanceof ClientUpgradeRequiredError) {
+              authBlockedRef.current = true;
+              stopReconnectTimer();
+              return;
+            }
+            if (isIdentityLostError(error)) {
+              authBlockedRef.current = true;
+              stopReconnectTimer();
+              return;
+            }
+            scheduleReconnect();
+          }
+        })();
       };
     };
 
+    const handleIdentityStatus = (event: Event): void => {
+      const status = (event as CustomEvent<SessionIdentityStatus>).detail;
+      if (status?.phase === "upgrade-required") {
+        authBlockedRef.current = true;
+        originGenerationRef.current += 1;
+        stopReconnectTimer();
+        stopWatchdog();
+        setConnected(false);
+        const activeSocket = wsRef.current;
+        wsRef.current = null;
+        stateRef.current = "closed";
+        activeSocket?.close(4004, "client upgrade required");
+        return;
+      }
+      if (
+        (status?.phase !== "ready" && status?.phase !== "idle") ||
+        !authBlockedRef.current ||
+        stopRef.current
+      ) {
+        return;
+      }
+      authBlockedRef.current = false;
+      retryRef.current = 0;
+      stopReconnectTimer();
+      void connect();
+    };
+
+    const handleBackendOriginChange = (): void => {
+      if (stopRef.current) return;
+      originGenerationRef.current += 1;
+      authBlockedRef.current = false;
+      retryRef.current = 0;
+      stopReconnectTimer();
+      stopWatchdog();
+      setConnected(false);
+      useStore.getState().reset();
+      cursorKeyRef.current = null;
+      streamEpochRef.current = null;
+      lastSeqRef.current = 0;
+      lastRehydrateFenceRef.current = null;
+      const previousSocket = wsRef.current;
+      wsRef.current = null;
+      stateRef.current = "closed";
+      previousSocket?.close(4001, "backend origin changed");
+      void connect();
+    };
+
+    window.addEventListener(SESSION_IDENTITY_EVENT, handleIdentityStatus);
+    window.addEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
     void connect();
 
     return () => {
       stopRef.current = true;
+      window.removeEventListener(SESSION_IDENTITY_EVENT, handleIdentityStatus);
+      window.removeEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
       stopWatchdog();
-      wsRef.current?.close();
+      stopReconnectTimer();
+      const activeSocket = wsRef.current;
+      wsRef.current = null;
+      stateRef.current = "closed";
+      setConnected(false);
+      activeSocket?.close();
     };
   }, [setConnected, applyEvent]);
 }

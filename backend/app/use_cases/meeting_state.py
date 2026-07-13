@@ -20,12 +20,13 @@ import asyncio
 import contextlib
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
 from app.ports.event_bus import EventBusPort
-from app.ports.repository import RepositoryPort
+from app.ports.repository import MeetingRecord, RepositoryPort
 from app.schemas.events import EchoEvent
 from app.use_cases.auto_meeting_detector import AutoMeetingDetector
 from app.use_cases.meeting_pipeline import MeetingPipeline
@@ -76,15 +77,26 @@ class MeetingState:
         repository: RepositoryPort | None = None,
         event_bus: EventBusPort | None = None,
         max_meeting_duration_s: float = 1800.0,
+        recovery_max_age_s: float = 24 * 60 * 60,
+        finalize_callback: Callable[[str, str], Awaitable[object]] | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._detector = detector
         self._repo = repository
         self._event_bus = event_bus
         self._max_meeting_duration_s = max_meeting_duration_s
+        self._recovery_max_age_s = recovery_max_age_s
+        self._finalize_callback = finalize_callback
         self._current: CurrentMeeting | None = None
         self._lock = asyncio.Lock()
+        self._hydrate_lock = asyncio.Lock()
+        self._hydrated = False
         self._watchdog_task: asyncio.Task[None] | None = None
+
+    async def _finalize(self, meeting_id: str, title: str) -> object:
+        if self._finalize_callback is not None:
+            return await self._finalize_callback(meeting_id, title)
+        return await self._pipeline.finalize_meeting(meeting_id, title=title)
 
     @property
     def current(self) -> CurrentMeeting | None:
@@ -120,6 +132,7 @@ class MeetingState:
         while True:
             await asyncio.sleep(interval_s)
             try:
+                await self.hydrate()
                 await self._system_meeting_exceeded_max_duration(datetime.now(UTC))
             except asyncio.CancelledError:
                 raise
@@ -127,6 +140,23 @@ class MeetingState:
                 logger.warning("meeting watchdog tick failed: %s", e)
 
     async def hydrate(self) -> None:
+        """Load the principal's durable active meeting exactly once per runtime.
+
+        Scoped runtimes may be created lazily after process startup or recreated
+        after the idle-TTL janitor evicts them. Every async state transition calls
+        this gate, so no request can observe a fresh in-memory ``idle`` state
+        before the repository has been consulted.
+        """
+
+        if self._hydrated:
+            return
+        async with self._hydrate_lock:
+            if self._hydrated:
+                return
+            await self._hydrate_from_repo()
+            self._hydrated = True
+
+    async def _hydrate_from_repo(self) -> None:
         """启动时恢复唯一的 in_meeting 会议；多于 1 个时强制结束所有旧的。
 
         旧 bug：detector reset 后新 chunk 又开新 auto-meeting → sqlite 里堆出
@@ -138,8 +168,9 @@ class MeetingState:
         sqlite 里残留的 auto-* in_meeting 行会让顶栏继续显示"会议中"，
         但 detector 已经丢了内存状态，永远不会再 emit silence_timeout。
 
-        2026-07 扩展：同样清理历史桌面端遗留的 m-local-*。这些会议不是当前
-        进程可接管的手动会议，若跨天仍是 in_meeting，也应按陈旧状态结束。
+        2026-07 扩展：同样清理历史桌面端遗留的 m-local-*；所有普通手动会议
+        超过 recovery_max_age_s（默认 24h）也视为陈旧。短时崩溃重启仍可续接，
+        但跨天状态不能继续让顶栏无限累计。
         """
         if self._repo is None:
             return
@@ -163,7 +194,9 @@ class MeetingState:
         if kept_started_at.tzinfo is None:
             kept_started_at = kept_started_at.replace(tzinfo=UTC)
         age_s = (now - kept_started_at).total_seconds()
-        if _should_force_end_on_hydrate(keep.id) and age_s > self._max_meeting_duration_s:
+        uses_system_limit = _should_force_end_on_hydrate(keep.id)
+        expiry_s = self._max_meeting_duration_s if uses_system_limit else self._recovery_max_age_s
+        if age_s > expiry_s:
             try:
                 await self._repo.update_meeting_state(keep.id, state="ended", ended_at=now)
             except Exception as e:
@@ -172,15 +205,24 @@ class MeetingState:
                 "hydrate: stale meeting force-ended %s (age=%.1fs > max=%.1fs)",
                 keep.id,
                 age_s,
-                self._max_meeting_duration_s,
+                expiry_s,
             )
             self._current = None
             return
 
+        # Scoped runtimes are created lazily and may be evicted independently of
+        # the process lifespan.  Restoring only the state-machine pointer would
+        # leave a fresh MeetingPipeline with no pre-eviction transcript.  The
+        # first new chunk would then make the in-memory list non-empty and the
+        # finalize path would silently summarize only post-eviction segments.
+        # Hydrate the pipeline before exposing the durable meeting as current so
+        # every subsequent ingest/finalize sees the complete transcript.
+        await self._pipeline.hydrate_from_repo()
+
         self._current = CurrentMeeting(
             meeting_id=keep.id,
             started_at=keep.started_at,
-            started_by="auto" if keep.id.startswith("auto-") else "manual",
+            started_by="auto" if keep.auto_started else "manual",
         )
         if self._current.started_by == "auto":
             self._adopt_current_auto_meeting(now)
@@ -202,7 +244,14 @@ class MeetingState:
         if self._repo is None:
             return 0
         meetings = await self._repo.list_meetings(state="ended", limit=20)
-        stuck = [m for m in meetings if (not m.minutes_json) and m.minutes_status != "ok"]
+        stuck = [
+            m
+            for m in meetings
+            if (not m.minutes_json)
+            and m.minutes_status != "ok"
+            and m.minutes_cleared_at is None
+            and m.minutes_generation_cancelled_at is None
+        ]
         if not stuck:
             return 0
         logger.info("hydrate: %d stuck meeting(s) detected, retrying finalize", len(stuck))
@@ -217,7 +266,7 @@ class MeetingState:
                 continue
             title = _resolve_meeting_title(m.title, m.id)
             try:
-                await self._pipeline.finalize_meeting(m.id, title=title)
+                await self._finalize(m.id, title)
                 logger.info("recover: meeting %s minutes regenerated successfully", m.id)
             except Exception as e:
                 # finalize_meeting 内部已经把 minutes_status 置为 generation_failed
@@ -228,22 +277,34 @@ class MeetingState:
 
     async def manual_start(self, *, title: str | None = None) -> CurrentMeeting:
         """用户点击状态栏开始会议。已在会议中则原样返回当前会议。"""
+        await self.hydrate()
         async with self._lock:
             if self._current is not None:
                 return self._current
             mid = f"m-{uuid.uuid4().hex[:12]}"
-            await self._pipeline.start_meeting(mid, title=title, auto_started=False)
+            record = await self._pipeline.start_meeting(mid, title=title, auto_started=False)
+            authoritative = (
+                record
+                if isinstance(record, MeetingRecord)
+                else MeetingRecord(
+                    id=mid,
+                    title=title,
+                    state="in_meeting",
+                    started_at=datetime.now(UTC),
+                    auto_started=False,
+                )
+            )
             self._current = CurrentMeeting(
-                meeting_id=mid,
-                started_at=datetime.now(UTC),
-                started_by="manual",
+                meeting_id=authoritative.id,
+                started_at=authoritative.started_at,
+                started_by="auto" if authoritative.auto_started else "manual",
             )
             await self._publish(
                 "meeting.state_changed",
-                mid,
+                authoritative.id,
                 {
                     "mode": "in_meeting",
-                    "started_by": "manual",
+                    "started_by": self._current.started_by,
                     "reason": "user_clicked",
                 },
             )
@@ -260,7 +321,11 @@ class MeetingState:
         - finalize 失败时**不再**调 ``end_meeting``（那个会用空 minutes 把 state
           置 ended 但没有错误状态）。直接让 ``finalize_meeting`` 内部把状态置成
           ``state=ended`` + ``minutes_status="generation_failed"``，UI 据此给「重试」入口。
+        - durable workflow callback 必须先创建可恢复的 run，然后由 handler 在终态
+          事务中更新 meeting。这里不能先写 ``minutes_status="generating"``，
+          否则两步之间崩溃会留下没有 run 可 restore 的假进行中状态。
         """
+        await self.hydrate()
         async with self._lock:
             cur = self._current
             if cur is None:
@@ -268,10 +333,11 @@ class MeetingState:
             self._current = None
         title = await self._resolve_title(cur.meeting_id)
         ended_at = datetime.now(UTC)
-        await self._mark_meeting_ended_for_generation(cur.meeting_id, ended_at=ended_at)
-        # finalize 放到 lock 外（LLM 调用耗时，避免堵 ambient 链路）
+        # finalize 放到 lock 外（LLM 调用耗时，避免堵 ambient 链路）。
+        # callback 进入后才创建 durable run；meeting 终态由 workflow handler
+        # 或旧的 pipeline fallback 自己提交，此前保持 in_meeting 以便崩溃恢复。
         try:
-            await self._pipeline.finalize_meeting(cur.meeting_id, title=title)
+            await self._finalize(cur.meeting_id, title)
         except Exception as e:
             # pipeline 内部已经把 state/minutes_status 落到 ended/generation_failed
             logger.warning("manual_end finalize failed for %s: %s", cur.meeting_id, e)
@@ -286,26 +352,6 @@ class MeetingState:
             },
         )
         return cur.meeting_id
-
-    async def _mark_meeting_ended_for_generation(
-        self,
-        meeting_id: str,
-        *,
-        ended_at: datetime,
-    ) -> None:
-        """会议生命周期先落库结束，纪要可继续后台生成。"""
-        if self._repo is None:
-            return
-        try:
-            await self._repo.update_meeting_state(
-                meeting_id,
-                state="ended",
-                ended_at=ended_at,
-                minutes_status="generating",
-                minutes_error="",
-            )
-        except Exception as e:
-            logger.warning("mark meeting ended before minutes generation failed for %s: %s", meeting_id, e)
 
     async def _resolve_title(self, meeting_id: str) -> str:
         """优先取 repo 里 user 启动时落库的 title；缺则回退 ``"会议 <id>"``。
@@ -338,6 +384,7 @@ class MeetingState:
         - 当前 in_meeting(manual)：把 manual_meeting_id 喂进 detector 让其让步
         - 返回 effective_meeting_id，供 ambient pipeline 叠加 meeting overlay
         """
+        await self.hydrate()
         if await self._system_meeting_exceeded_max_duration(now):
             return None
         self._adopt_current_auto_meeting(now)
@@ -412,20 +459,38 @@ class MeetingState:
                 # 已有会议（多半是 manual 进来后 detector 才触发的）→ 忽略 detector start
                 logger.debug("auto-start ignored (already in meeting): %s", reason)
                 return
-            self._current = CurrentMeeting(
-                meeting_id=meeting_id,
-                started_at=datetime.now(UTC),
-                started_by="auto",
+            record = await self._pipeline.start_meeting(meeting_id, auto_started=True)
+            authoritative = (
+                record
+                if isinstance(record, MeetingRecord)
+                else MeetingRecord(
+                    id=meeting_id,
+                    state="in_meeting",
+                    started_at=datetime.now(UTC),
+                    auto_started=True,
+                )
             )
-        await self._pipeline.start_meeting(meeting_id, auto_started=True)
-        await self._publish("meeting.auto_detected", meeting_id, {"reason": reason})
+            self._current = CurrentMeeting(
+                meeting_id=authoritative.id,
+                started_at=authoritative.started_at,
+                started_by="auto" if authoritative.auto_started else "manual",
+            )
+            current = self._current
+        if current.started_by == "auto":
+            self._adopt_current_auto_meeting(datetime.now(UTC))
+            await self._publish("meeting.auto_detected", current.meeting_id, {"reason": reason})
+        else:
+            # A different process won with a manual meeting while this detector
+            # was deciding to auto-start.  Adopt it without emitting a false
+            # auto-detected event; the next detector observation yields to it.
+            logger.info("auto-start adopted concurrent manual meeting %s", current.meeting_id)
         await self._publish(
             "meeting.state_changed",
-            meeting_id,
+            current.meeting_id,
             {
                 "mode": "in_meeting",
-                "started_by": "auto",
-                "reason": reason,
+                "started_by": current.started_by,
+                "reason": reason if current.started_by == "auto" else "concurrent_active_meeting",
             },
         )
 
@@ -436,10 +501,8 @@ class MeetingState:
                 return
             self._current = None
         title = await self._resolve_title(meeting_id)
-        ended_at = datetime.now(UTC)
-        await self._mark_meeting_ended_for_generation(meeting_id, ended_at=ended_at)
         try:
-            await self._pipeline.finalize_meeting(meeting_id, title=title)
+            await self._finalize(meeting_id, title)
         except Exception as e:
             # pipeline 内部已经标记 minutes_status="generation_failed"，UI 给重试入口
             logger.warning("auto-end finalize failed for %s: %s", meeting_id, e)

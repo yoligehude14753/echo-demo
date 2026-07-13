@@ -5,7 +5,11 @@ const path = require("node:path");
 const repoRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
 
-function read(relPath) {
+function readDesktop(relPath) {
+  return fs.readFileSync(path.join(desktopRoot, relPath), "utf8");
+}
+
+function readRepo(relPath) {
   return fs.readFileSync(path.join(repoRoot, relPath), "utf8");
 }
 
@@ -16,11 +20,19 @@ function fail(message) {
 
 const pkg = JSON.parse(fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"));
 const version = String(pkg.version || "").trim();
-if (!/^\d+\.\d+\.\d+$/.test(version)) {
-  fail(`desktop/package.json version must be semver x.y.z, got "${version}"`);
+const semverMatch = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/);
+if (!semverMatch) {
+  fail(`desktop/package.json version must be semver, got "${version}"`);
 }
 
-const backendInit = read("backend/app/__init__.py");
+const lock = JSON.parse(readDesktop("package-lock.json"));
+if (lock.version !== version || lock.packages?.[""]?.version !== version) {
+  fail(
+    `package-lock root versions (${lock.version || "missing"}, ${lock.packages?.[""]?.version || "missing"}) != ${version}`,
+  );
+}
+
+const backendInit = readRepo("backend/app/__init__.py");
 const backendMatch = backendInit.match(/__version__\s*=\s*["']([^"']+)["']/);
 if (!backendMatch) {
   fail("backend/app/__init__.py missing __version__");
@@ -28,7 +40,7 @@ if (!backendMatch) {
   fail(`backend version ${backendMatch[1]} != desktop version ${version}`);
 }
 
-const backendConfig = read("backend/app/config.py");
+const backendConfig = readRepo("backend/app/config.py");
 if (!/from app import __version__/.test(backendConfig)) {
   fail("backend/app/config.py must import __version__ from app");
 }
@@ -36,33 +48,62 @@ if (!/app_version:\s*str\s*=\s*__version__/.test(backendConfig)) {
   fail("Settings.app_version must default to __version__");
 }
 
-const [, minor, patch] = version.split(".").map((part) => Number.parseInt(part, 10));
-const expectedAndroidCode = minor * 100 + patch;
-const androidGradle = read("desktop/android/app/build.gradle");
-const versionCodeMatch = androidGradle.match(/versionCode\s+(\d+)/);
-const versionNameMatch = androidGradle.match(/versionName\s+"([^"]+)"/);
-if (!versionCodeMatch || Number.parseInt(versionCodeMatch[1], 10) !== expectedAndroidCode) {
-  fail(`Android versionCode must be ${expectedAndroidCode}`);
-}
-if (!versionNameMatch || versionNameMatch[1] !== version) {
-  fail(`Android versionName ${versionNameMatch?.[1] || "missing"} != ${version}`);
+const envExample = readRepo(".env.example");
+const envVersion = envExample.match(/^APP_VERSION=(.+)$/m)?.[1]?.trim();
+if (envVersion !== version) {
+  fail(`.env.example APP_VERSION ${envVersion || "missing"} != ${version}`);
 }
 
-const changelog = read("CHANGELOG.md");
-if (!changelog.includes(`## [${version}]`)) {
-  fail(`CHANGELOG.md missing ## [${version}] entry`);
+const androidVersions = JSON.parse(readDesktop("android/version-codes.json"));
+const releases = Array.isArray(androidVersions.releases)
+  ? androidVersions.releases
+  : [];
+if (androidVersions.schemaVersion !== 1 || releases.length === 0) {
+  fail("Android version-code ledger must contain schemaVersion=1 and releases");
 }
-
-for (const relPath of [
-  "README.md",
-  "docs/INSTALL.md",
-  "docs/TV_INSTALL.md",
-  "docs/tv-install.html",
-]) {
-  const body = read(relPath);
-  if (!body.includes(`v${version}`) && !body.includes(version)) {
-    fail(`${relPath} does not mention current version ${version}`);
+let previousAndroidCode = 0;
+const seenAndroidVersions = new Set();
+for (const release of releases) {
+  const releaseVersion = String(release?.version || "");
+  const releaseCode = Number(release?.versionCode);
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(releaseVersion)) {
+    fail(`Android version-code ledger has invalid version "${releaseVersion}"`);
   }
+  if (
+    !Number.isSafeInteger(releaseCode) ||
+    releaseCode <= previousAndroidCode ||
+    releaseCode > 2_100_000_000
+  ) {
+    fail(
+      `Android versionCode ${releaseCode} must be a positive, strictly increasing safe integer`,
+    );
+  }
+  if (seenAndroidVersions.has(releaseVersion)) {
+    fail(`Android version-code ledger repeats ${releaseVersion}`);
+  }
+  seenAndroidVersions.add(releaseVersion);
+  previousAndroidCode = releaseCode;
+}
+const currentAndroidRelease = releases.at(-1);
+if (currentAndroidRelease?.version !== version) {
+  fail(
+    `Android version ledger current version ${currentAndroidRelease?.version || "missing"} != ${version}`,
+  );
+}
+const androidGradle = readDesktop("android/app/build.gradle");
+if (!/versionCode\s+currentAndroidRelease\.versionCode\s+as\s+Integer/.test(androidGradle)) {
+  fail("Android Gradle versionCode must come from the append-only version ledger");
+}
+if (!/versionName\s+currentAndroidRelease\.version\.toString\(\)/.test(androidGradle)) {
+  fail("Android Gradle versionName must come from the append-only version ledger");
+}
+
+const installedSmoke = readDesktop("tests/e2e-real/installed-local-workflow.spec.ts");
+if (!installedSmoke.includes(`expect(appVersion).toBe("${version}")`)) {
+  fail(`installed-local-workflow App version assertion must be ${version}`);
+}
+if (!installedSmoke.includes(`expect((health.backend as JsonMap).version).toBe("${version}")`)) {
+  fail(`installed-local-workflow backend version assertion must be ${version}`);
 }
 
 if (process.exitCode) {

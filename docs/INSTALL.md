@@ -1,355 +1,348 @@
-# EchoDesk 安装指南
+# EchoDesk v0.3.1 安装与运行
 
-当前源码版本：`v0.2.50`
-公开下载页：<https://github.com/yoligehude14753/echo-demo/releases/latest>
+当前源码版本：`0.3.1`
 
-> 本轮已本机构建 v0.2.50 macOS 资产；发布到 GitHub Release 后可下载。其它平台需要对应构建产物上传后才算发布。
+公开下载：[GitHub Releases](https://github.com/yoligehude14753/echo-demo/releases/latest)
 
-| 平台 | Release 资产命名 | 说明 |
-|---|---|---|
-| macOS Apple Silicon | `EchoDesk-0.2.50-arm64.dmg` | 桌面版安装包 |
-| macOS 备用 zip | `EchoDesk-0.2.50-arm64-mac.zip` | dmg 打不开时使用 |
-| Windows 安装器 | `EchoDesk.Setup.0.2.50.exe` | 需 Windows 构建 workflow 产出后才可下载 |
-| Windows 便携包 | `EchoDesk-0.2.50-win-x64.zip` | 需 Windows 构建 workflow 产出后才可下载 |
-| Linux AppImage | `EchoDesk-0.2.50.AppImage` | 需 Linux 构建产出后才可下载 |
-| Linux deb | `echodesk-desktop_0.2.50_amd64.deb` | 需 Linux 构建产出后才可下载 |
-| Android 手机 / 平板 | `EchoDesk-0.2.50-android.apk` | 需 Android 构建产出后才可下载 |
-| Android TV / 智能电视 | `EchoDesk-0.2.50-smart-tv.apk` | 需 TV 打包产出后才可下载 |
-| 智能电视一键安装 | `EchoDesk-0.2.50-smart-tv-oneclick.zip` | 需 TV 打包产出后才可下载 |
-| 校验文件 | `SHA256SUMS-0.2.50.txt` | 随已发布资产一起上传 |
+公开页面实际存在的文件才是已发布资产。本机构建目录和 GitHub Actions artifact 不等同于公开 Release。
 
-EchoDesk demo 现在是多端客户端 + 公共演示服务。macOS / Windows / Linux 是桌面端；
-Android / TV 是客户端壳。公开安装包默认连接 `https://echodesk.yoliyoli.uk`，
-模型服务和密钥都留在服务端。
+## 1. 先选择运行模式
 
-应用内也可以在「设置 → 更新」里主动检查 GitHub Release。桌面端会在启动后自动检查
-新版本；用户点击「下载并安装」后才会退出覆盖安装，本机数据目录会保留。
-Android / TV 因系统限制，会打开对应 APK 下载并由系统安装器确认。
+| 模式 | 适用对象 | Backend | 启用方式 |
+|---|---|---|---|
+| Desktop Pro | macOS / Windows / Linux 桌面用户 | 安装包内本机 backend | 默认 |
+| Public demo | 明确发布的公共演示桌面入口 | HTTPS backend | `ECHO_PUBLIC_DEMO=1` |
+| 强制本机 | 兼容旧 public 启动方式 | 本机 backend | `ECHO_FORCE_LOCAL_BACKEND=1` |
+| Android / TV | 手机、平板、会议室电视 | HTTPS backend | 客户端配置 |
 
-私有本地部署仍支持 Electron + React UI + Python FastAPI 服务。需要本机服务时，
-先跑 install 脚本，再以 `ECHO_FORCE_LOCAL_BACKEND=1` 启动桌面端。
+Desktop Pro 默认 local-first。Electron main process 启动 bundled backend，数据写到本机 `~/.echodesk/`；普通用户不需要安装 Python、Node 或先运行 `install-backend.sh`。
 
----
+public 模式不启动本机 backend。模型密钥留在服务端，客户端使用服务端签发的设备身份和 session。
 
-## 前置要求
+公共服务的最低客户端版本为 **0.3.1**。当前稳定版 v0.2.50 不具备设备 enrollment / session
+协议，不能连接 0.3.1 公共后端；这是明确的 breaking cutover，不是向后兼容发布。公共后端
+切换前必须先发布并验证可安装的 0.3.1 GitHub prerelease。渠道可以标记为 prerelease，
+但二进制内的客户端版本必须自报 `0.3.1`；若自报 `0.3.1-rc.1`，会按低于稳定最低版本
+fail closed。缺失、非法或低于最低版本的客户端
+收到 `426 client_upgrade_required`；版本受支持但缺少 session 的请求才收到
+`401 session_required`。两种响应都携带最低版本和升级地址，客户端必须停止自动重试并
+进入明确的升级状态。
 
-| 项 | 要求 | 怎么装 |
-|---|---|---|
-| macOS | 12+ (arm64 / intel 都行) | — |
-| Python | 3.11 或 3.12 | `brew install python@3.11` 或从 [python.org](https://www.python.org/downloads/) 下安装包 |
-| Node | 18+（仅 dev 期；prod 用户不需要） | `brew install node@20` |
-| 磁盘 | ~3 GB（torch / speechbrain 大件） | — |
-| 麦克风权限 | 首次开启后系统弹授权 | 系统设置 → 隐私与安全 → 麦克风 |
+## 2. 从安装包安装
 
-> Python 3.13 暂未实测；如果你只有 3.13，先装 3.11 兼容。
+### macOS
 
----
-
-## 第 1 步：下载安装包
-
-公开发布后优先从 GitHub Releases 下载当前 demo 包：
-
-- macOS: `EchoDesk-0.2.50-arm64.dmg`
-- Windows / Linux / Android / TV: 对应构建产物上传后，会出现在同一个 Release 页面。
-- 电视浏览器短安装页：`https://yoligehude14753.github.io/echo-demo/`
-
-源码构建仅用于开发：
-
-```bash
-git clone <repo_url> ~/echo-demo
-cd ~/echo-demo/desktop
-npm install
-```
-
-## 第 2 步：安装 / 运行客户端
-
-macOS 打开 dmg，把 `EchoDesk.app` 拖到 `/Applications/`。如果从源码构建，可用：
-
-### 安装包产物
-
-macOS 当前可直接构建：
-
-```bash
-cd ~/echo-demo/desktop
-npm run app:dist:mac
-```
-
-产物：
+预期 v0.3.1 资产名：
 
 ```text
-desktop/release/EchoDesk-0.2.50-arm64.dmg
-desktop/release/EchoDesk-0.2.50-arm64-mac.zip
-desktop/release/mac-arm64/EchoDesk.app
+EchoDesk-0.3.1-arm64.dmg
+EchoDesk-0.3.1-arm64.dmg.blockmap
+EchoDesk-0.3.1-arm64-mac.zip
+EchoDesk-0.3.1-arm64-mac.zip.blockmap
+latest-mac.yml
 ```
 
-Windows exe 有脚本入口，但建议在 Windows 机器或带 Wine/NSIS 的构建环境跑：
+打开 DMG，把 `EchoDesk.app` 拖到 `/Applications`。第一次打开时授予麦克风权限。
 
-```bash
-cd ~/echo-demo/desktop
-npm run app:dist:win
-```
+`npm run app:dist:mac` 是正式发布入口：缺少 Developer ID、notarytool 凭证，或构建后的
+codesign / Gatekeeper / stapled ticket 任一验证失败都会中止。本机和 CI 的
+`app:dist:mac:adhoc-test` 只用于开发验证。DMG、ZIP、两个 blockmap 和
+`latest-mac.yml` 是同一套正式 updater 资产契约，缺一项都不能发布。正式 hosted 候选还会
+解压最终 updater ZIP，重新验证其中 App 与 bundled backend 的 Developer ID/Team、notary、
+Gatekeeper，并直接从该 ZIP 完成安装态 lifecycle smoke；blockmap 必须能由最终 artifact
+字节重新生成并逐字节匹配。
 
-如果 Windows 机器出现 Device Guard / 组织策略拦截 `.exe` 安装器，请改用
-`EchoDesk-0.2.50-win-x64.zip`。解压后直接运行 `EchoDesk.exe`，本机数据仍保存在
-Windows 用户目录；后续升级只需要下载新版 zip 并替换解压目录。
+### Windows
 
-Linux x64 可构建 AppImage + deb：
-
-```bash
-cd ~/echo-demo/desktop
-npm run app:dist:linux
-```
-
-产物：
+预期资产名：
 
 ```text
-desktop/release/EchoDesk-0.2.50.AppImage
-desktop/release/echodesk-desktop_0.2.50_amd64.deb
+EchoDesk.Setup.0.3.1.exe
+EchoDesk.Setup.0.3.1.exe.blockmap
+EchoDesk-0.3.1-win-x64.zip
+latest.yml
 ```
 
-Android 当前用 Capacitor 打非 debuggable 的 release APK：
+常规机器使用 NSIS installer。受管环境若拦截安装器，可在可信来源和 hash 校验通过后使用 zip 便携包。
 
-```bash
-cd ~/echo-demo/desktop
-npm run app:dist:android
-npm run app:package:tv
-```
+`npm run app:dist:win` 是正式发布入口：缺少 Authenticode 证书，或 installer、app、bundled
+backend 的发布者、证书链、RFC 3161 timestamp 任一验证失败都会中止。Actions 的
+`app:dist:win:unsigned-test` 只用于 installed smoke，不能作为正式发布资产。正式 portable
+ZIP 解压后的 `EchoDesk.exe` 与 bundled backend 必须再次独立通过 Authenticode 验证后才运行
+smoke，不能用 `win-unpacked` 原件的验签结果代替。
 
-产物：
+### Linux x64
+
+预期资产名：
 
 ```text
-desktop/android/app/build/outputs/apk/release/app-release-unsigned.apk
-desktop/release/EchoDesk-0.2.50-android.apk
-desktop/release/EchoDesk-0.2.50-android-tv.apk
-desktop/release/EchoDesk-0.2.50-smart-tv.apk
-desktop/release/EchoDesk-0.2.50-smart-tv-oneclick.zip
+EchoDesk-0.3.1-linux-x86_64.AppImage
+EchoDesk-0.3.1-linux-amd64.deb
 ```
 
-Android / TV APK 是前端客户端，不会在手机或电视里启动 Electron 的本机 Python 服务。
-桌面公开安装包同样默认连 `https://echodesk.yoliyoli.uk` 公共演示服务；
-模型 key 留在服务端，不打进客户端包。
-电视端录音优先使用原生 Android `AudioRecord`。如果某台电视系统没有把内置/遥控器麦克风
-开放给三方 app，EchoDesk 会提示接入 USB / 蓝牙会议麦克风，并停止上传静音音频，避免把
-硬件输入问题误判成 STT 熔断。
+两种包都应携带 x64 backend binary。AppImage 需要先赋予执行权限；deb 使用系统包管理器安装。实际可用资产和支持发行版以 Release 说明为准。
 
-内网调试时，可以让 Mac 本机服务监听局域网地址：
+### Android / TV
+
+Android / TV 是远程客户端，不在设备内运行 Electron 或 Python backend。
+
+- development APK 只用于本机、emulator 和 CI。
+- 历史公开 APK 已使用 legacy signer；public APK 通过 APK Signature Scheme v3.1
+  proof-of-rotation 平滑迁移，不能直接改成“只用一把新 key”。
+- API 24–32 继续由 legacy signer 签名；API 33+ 由 current signer 签名，并保留旧证书历史。
+- API 24–32 的签名安全性不会自动升级。legacy 私钥必须离线备份并按生产凭证保护，直到
+  产品停止支持 API 32 以下；不能删除、重建或换成另一把同名 key。
+- current signer 禁止 debug、自动生成或临时身份；两枚证书指纹、固定 API 33 阈值、
+  phone/TV `applicationId` 或 lineage 任一不匹配都会 fail closed。
+- TV 包名与手机/平板包名分离；带合法 lineage 的覆盖升级保留 app data 和设备身份。
+
+电视侧载、ADB 授权和 one-click 包操作见 [`TV_INSTALL.md`](TV_INSTALL.md)。
+
+## 3. 第一次启动
+
+Desktop Pro 启动顺序：
+
+1. Electron 计算最终 local/public mode。
+2. local 模式解析 bundled backend path 和端口。
+3. BackendSupervisor 启动服务并等待 `/healthz`。
+4. renderer 从 main process 获取权威 endpoint，不自行根据 URL 猜模式。
+5. backend 完成 migration、恢复 durable workflow/outbox/lease 后进入 ready。
+6. UI bootstrap 当前会议、Workflow、Artifact 和身份状态。
+
+默认端口为 `8769`。退出 App 后，App 自己启动的 backend 应随之退出；外部手动启动的 backend 不由 App 强杀。
+
+## 4. 模型与工作区配置
+
+Desktop Pro 的本机配置位于：
+
+```text
+~/.echodesk/config.json
+```
+
+可以通过应用设置页配置模型 endpoint/model/key、Web Search 和工作区。不要把 key 写入仓库、客户端包、截图或诊断包。
+
+public / Android / TV 的模型配置属于服务端部署；客户端只保存 backend endpoint、设备身份和必要 UI 状态。
+
+工作区目录必须由用户显式授权。Full Access Agent 可以在受信任的本机模式中使用这些目录；public 普通 principal 不获得 host filesystem 或 Agent grant。
+
+## 5. 本机数据目录
+
+```text
+~/.echodesk/
+├── config.json
+├── echodesk.db
+├── logs/
+├── storage/
+│   └── scopes/<opaque-scope>/
+├── rag_index/
+├── skill_build/
+└── agentos/
+```
+
+目录实际创建项取决于启用功能。业务备份应在 App 退出后进行，并保护其中的会议、文件、模型配置和身份材料。
+
+## 6. 从源码开发
+
+要求：Python 3.11、Node.js 24。
 
 ```bash
-cd ~/echo-demo/backend
-source .venv/bin/activate
-ECHO_LAN_FULL_API_ENABLED=true python -m uvicorn app.main:app --host 0.0.0.0 --port 8769
+git clone <repo-url> echo-demo
+cd echo-demo
+
+python3.11 -m venv backend/.venv
+backend/.venv/bin/pip install --require-hashes -r backend/requirements-dev.lock
+npm ci --prefix backend/app/adapters/skill/assets/ppt_ib_deck
+
+backend/.venv/bin/uvicorn app.main:app \
+  --app-dir backend --host 127.0.0.1 --port 8769 --ws-max-size 4096
 ```
 
-然后在 APK 里打开设置 → 移动端连接，把后端地址设成 Mac 的局域网 IP，例如
-`http://10.10.12.32:8769`。
-普通扫码保存会议资料不需要打开 `ECHO_LAN_FULL_API_ENABLED`；打包版桌面端会只暴露
-分享页、纪要下载和产物下载这些只读保存端点。
-
-### 智能电视安装
-
-图里这种有「我的应用」入口的会议室电视，如果底层是 Android TV / Google TV /
-国产 Android 或 AOSP TV，可以直接安装 `EchoDesk-0.2.50-smart-tv.apk`。
-
-推荐路径：
-
-1. 下载 `EchoDesk-0.2.50-smart-tv-oneclick.zip`。
-2. 电视打开开发者模式和 ADB 网络调试。
-3. 电脑和电视在同一个局域网。
-4. macOS 执行 `./install-tv-macos.sh 电视IP`；Windows 执行
-   `install-tv-windows.ps1 -TvIp 电视IP`。
-   如果电视的 ADB 端口不是默认 `5555`，macOS 可执行
-   `./install-tv-macos.sh 电视IP 5556`，Windows 可执行
-   `install-tv-windows.ps1 -TvIp 电视IP -AdbPort 5556`。
-   如果你希望脚本等待电视 RSA 授权后自动继续，macOS 可执行
-   `ECHODESK_TV_WAIT_FOR_AUTH=1 ./install-tv-macos.sh 电视IP`，Windows 可执行
-   `install-tv-windows.ps1 -TvIp 电视IP -WaitForAuth`。
-5. 首次安装脚本默认清理旧 WebView / app data、授权麦克风并尝试自动打开 EchoDesk。
-   升级保留数据时，运行前设置 `ECHODESK_TV_KEEP_DATA=1`。
-   TV 包名是 `com.echodesk.tv`，和 Android 手机 / 平板包 `com.echodesk.app` 分离；
-   默认一键安装会卸载旧 TV 遗留包 `com.echodesk.app`，避免历史数据串包。
-   如需保留旧包，额外设置 `ECHODESK_TV_KEEP_LEGACY=1`。
-
-如果脚本提示 `ADB 尚未授权`，或 `adb devices` 显示 `offline` / `unauthorized`，
-说明电脑已连到电视调试端口，但电视没有接受这台电脑的 RSA 授权。请在电视上关闭再打开
-「ADB 调试 / 网络调试」，看到 RSA 授权弹窗时选择允许；没有弹窗时重启电视后重试。
-
-也可以用电视浏览器打开 `https://yoligehude14753.github.io/echo-demo/`，
-遥控器选择「下载电视 APK」。
-Samsung Tizen、LG webOS、Apple TV 不能安装 APK；这类设备需要外接 Android 盒子或后续浏览器/PWA 版本。
-
-## 第 3 步：跑 install-backend.sh
+另开终端：
 
 ```bash
-bash ~/echo-demo/scripts/install-backend.sh
+cd echo-demo/desktop
+npm ci
+npm run dev
 ```
 
-脚本会：
+Electron 联调：
 
-1. 检查 Python 3.11/3.12 是否存在
-2. 创建 `~/.echodesk/` 目录结构
-3. rsync backend 源码到 `~/.echodesk/source/backend/`
-4. 在 `~/.echodesk/source/backend/.venv/` 建独立 venv
-5. `pip install -r requirements.txt`（首次 3-10 分钟，含 torch / speechbrain）
-6. 写默认 `~/.echodesk/config.json`（已存在则保留）
-7. smoke test：启服务 → curl `/healthz` → kill
-
-成功的尾巴：
-
-```
-╔══════════════════════════════════════════════════════════╗
-║                  安装完成                                  ║
-╚══════════════════════════════════════════════════════════╝
-```
-
-## 第 4 步：填密钥（可选）
-
-`~/.echodesk/config.json` 里这两类 key 不填会让对应功能灰：
-
-```json
-{
-  "main_model_api_key": "sk-...", // 不填 → @生成 / 会议纪要不可用
-  "web_search_api_key": "..."     // 不填 → @查 联网检索不可用
-}
-```
-
-填完后下次重启服务生效（`user.json` 会在服务启动时读取；也可以在 UI 里点「重启服务」）。
-
-## 第 5 步：双击 EchoDesk.app
-
-完事。第一次启动会：
-- Electron BackendSupervisor 自动启动本机服务（PID 在 main log 可见）
-- 等 `/healthz` 200 后 UI 进入工作状态
-- 第一次录音时弹麦克风权限
-
----
-
-## 验收 checklist
-
-正常装好的 mac 上应该满足：
-
-- [ ] `curl http://127.0.0.1:8769/healthz` → `{"status":"ok"}`（.app 跑着时）
-- [ ] `curl http://127.0.0.1:8769/healthz/full` → 模型服务健康项为 `ok: true`
-- [ ] `~/.echodesk/logs/服务日志` 持续 append（按天 rotate）
-- [ ] `~/.echodesk/echodesk.db` 存在（启动后建空表）
-- [ ] 双击 .app → UI 出现 → 顶部不出现"后端连接断开"红条
-- [ ] 关掉 .app 几秒后 `lsof -ti tcp:8769` 为空（本机服务跟着干净退出）
-- [ ] `kill -9 $(lsof -ti tcp:8769)` 强杀 → 10s 内 UI 自动恢复（BackendSupervisor 重启服务）
-
----
-
-## 故障排查
-
-### "找不到 Python 3.11 或 3.12"
-
-脚本试了这些路径都没有：
-```
-/opt/homebrew/bin/python3.11
-/opt/homebrew/bin/python3.12
-/usr/local/bin/python3.11
-/usr/local/bin/python3.12
-python3.11 / python3.12 / python3 (PATH)
-```
-
-解决：装 Python 3.11，或者指定路径：
 ```bash
-ECHO_INSTALL_PYTHON=/Users/me/.pyenv/versions/3.11.10/bin/python \
-  bash scripts/install-backend.sh
+cd echo-demo/desktop
+npm run electron:dev
 ```
 
-### "pip install 失败"
-
-最常见是网络问题。换源：
-```bash
-~/.echodesk/source/backend/.venv/bin/pip install \
-  -r ~/.echodesk/source/backend/requirements.txt \
-  -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-或者 torch wheel 太大下载断了：手动单装一遍 `torch==2.4.1`。
-
-### ".app 双击后顶部一直显示'后端连接断开'"
-
-主进程没成功 启动本机服务。看 Electron main log：
-- dev：`npm run electron-dev` 的 terminal 里
-- prod：mac Console.app 搜 `EchoDesk` 或看 `~/Library/Logs/EchoDesk/main.log`
-
-常见原因：
-- Python 还是没装好 → main log 应该有 `python-not-found`
-- 服务日志 `~/.echodesk/logs/服务日志` 里有 traceback → 修对应 import 错
-- 端口 8769 被别的进程占了 → `lsof -ti tcp:8769` 看是谁，kill 掉或改 `ECHO_BACKEND_PORT`
-
-### "想跑 dev 模式但不要 .app 自动 启动本机服务"
+如果要手动管理 backend：
 
 ```bash
 ECHO_SPAWN_BACKEND=0 npm run electron:dev
-# 然后你自己开 uvicorn
-cd backend && source .venv/bin/activate
-python -m uvicorn app.main:app --port 8769
 ```
 
-Supervisor 看到端口已占会走 external 模式，监控存活但不重启。
+然后自行启动 `uvicorn`。仅在确认端口与 data dir 隔离后这样做。
 
-### "模型服务连不上"
-
-`curl http://127.0.0.1:8769/healthz/full` 里 `remote.*.ok` 显示状态：
-
-| 健康项 | 含义 | 看哪个 |
-|---|---|---|
-| 语音识别 | STT | 模型服务网络 + 权限 |
-| 语音合成 | TTS | 模型服务网络 + 权限 |
-| 快速智能引擎 | Fast LLM | 主模型 key + 网络 |
-| 主模型 | LLM | 主模型 key + 网络 |
-| 联网检索 | Web Search | 检索 key + 网络 |
-
-`ok: null` + `reason: "no_api_key"` 说明 key 没填，相关功能灰；`ok: false` 才是真断了。
-
-### "离远了声音记录不清楚 / 怀疑 STT"
-
-先不要只看最终文字，按这几层定位：
-
-1. 看顶部麦克风 / “自动记录中”状态的 tooltip：新增的最近 RMS、活跃帧率、最近门控原因能区分“麦克风输入太小 / 被静音底噪门过滤 / 已进 STT 但识别差”。
-2. 导出诊断包：设置 → 诊断 → 导出诊断包，里面会带 `服务日志` 当前和最近 rotated 日志，以及 `/capture/stats` 等运行状态。
-3. 直接看日志：`~/.echodesk/logs/服务日志`，重点搜 `echodesk.stt`、`echodesk.workspace`、`capture`、`diagnostics`。
-4. 如需核对原始数据：本地数据库在 `~/.echodesk/echodesk.db`，录音/转写相关文件在 `~/.echodesk/storage/`。
-
-经验判断：如果最近 RMS 长期接近 0、活跃帧率很低或最近门控是 `rms_too_low`，优先排查麦克风距离、系统输入音量、设备选择，而不是 STT 服务本身；如果 RMS/活跃帧率正常但文字质量差，再查 STT endpoint、网络和上游服务日志。
-
----
-
-## 卸载
+## 7. 从源码构建安装包
 
 ```bash
-bash ~/echo-demo/scripts/install-backend.sh --uninstall
-# 会要求输入 yes 确认；删 ~/.echodesk/ 整个目录（含数据库 / 录音 / 配置）
-# 然后手动把 /Applications/EchoDesk.app 拖到废纸篓
+cd desktop
+npm ci
+
+npm run app:dist:mac
+npm run app:dist:win
+npm run app:dist:linux
+npm run app:build:android:development
 ```
 
-仅重置配置（保留数据库 / log / venv）：
+macOS / Windows 正式发布凭证变量见 `desktop/README.md`。开发或 CI 构建使用名称明确的
+`app:build:mac:test`、`app:dist:mac:adhoc-test`、`app:dist:win:unsigned-test`，不能把
+这些测试产物上传为正式 Release。
+
+受保护 environment、精确 main SHA、真实 hosted runner 签名、安装态 smoke、完整 updater
+资产、SHA-256、CycloneDX SBOM、provenance 与候选下载核验的操作步骤见
+[`ops/formal-desktop-release.md`](ops/formal-desktop-release.md)。该工作流只生成候选，不会
+自动公开 Release；缺凭证时会精确列出缺项并阻断，不能降级为 unsigned/ad-hoc。
+
+Python dependency audit 在 Linux x64、macOS arm64、Windows x64 的 Python 3.11 runner 上分别
+保留 raw JSON、原始 exit code 与 OS/arch 证据。runtime/dev/build 只接受文档化且仍无上游修复的
+`torch` 单一非零 finding；lint/typecheck/audit-tool 必须为零 finding。三平台任一出现额外 finding、
+架构漂移或把非零伪装成 clean 都会失败。Desktop SBOM 同时绑定 Python runtime、desktop npm，
+以及 frozen backend 内 `ppt_ib_deck` 的 npm lock。
+
+公开 Android / TV release 使用受控发布 workflow 和双签名输入，不应在普通开发命令中
+临时生成发布身份。仓库需要配置以下 Actions Secrets（只列名称，不把值写进文档或日志）：
+
+```text
+ECHODESK_ANDROID_LEGACY_KEYSTORE_BASE64
+ECHODESK_ANDROID_LEGACY_KEY_ALIAS
+ECHODESK_ANDROID_LEGACY_KEYSTORE_PASSWORD
+ECHODESK_ANDROID_LEGACY_KEY_PASSWORD
+ECHODESK_ANDROID_LEGACY_CERT_SHA256
+ECHODESK_ANDROID_CURRENT_KEYSTORE_BASE64
+ECHODESK_ANDROID_CURRENT_KEY_ALIAS
+ECHODESK_ANDROID_CURRENT_KEYSTORE_PASSWORD
+ECHODESK_ANDROID_CURRENT_KEY_PASSWORD
+ECHODESK_ANDROID_CURRENT_CERT_SHA256
+```
+
+这 10 个值只应存在于受保护 `android-release` environment。当前一次性迁移 workflow 的
+执行、迁移后验证、删除 workflow 与对应 release-gates 断言，以及删除并在签发端吊销
+`PUBLIC_RELEASE_TOKEN` 的完整收尾步骤见
+[`ops/formal-desktop-release.md`](ops/formal-desktop-release.md#2-android-secrets-一次性迁移与清理)。
+
+工作流固定 `ECHODESK_ANDROID_ROTATION_MIN_SDK_VERSION=33`。Gradle 只生成
+`app-release-unsigned.apk`；`build-android-release.cjs` 负责生成 old→new lineage、签名并
+验证 API 24–32 / API 33+、非 debuggable、zipalign、证书指纹和两个包名。公开产物包含
+`EchoDesk-0.3.1-android-signing.json` 与不含私钥的
+`EchoDesk-0.3.1-android-signing-lineage.bin`，并随附
+`EchoDesk-0.3.1-Android-SBOM.cdx.json` 和覆盖全部 Android/TV 候选证据的
+`SHA256SUMS-Android.txt`。签名 workflow 只接受 canonical repository 的 `main`，且调用方必须
+传入与触发提交完全相同的 40 位 `release_sha`；命令见正式候选 SOP。
+
+在一次性 emulator 上做真实覆盖安装验证：
+
 ```bash
-bash ~/echo-demo/scripts/install-backend.sh --reset-config
+export ECHODESK_ANDROID_HISTORICAL_APK=/secure/EchoDesk-0.2.34-android.apk
+# 同时提供 ECHODESK_ANDROID_LEGACY_KEYSTORE / ALIAS / 两个密码 / 旧证书 SHA-256
+npm run smoke:android:rotation
 ```
 
----
+smoke 必须先观察到新 key 无 lineage 时 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，再观察到
+v3.1 覆盖成功且 UID、`firstInstallTime`、麦克风授权和 `past signatures` 保持。脚本默认
+拒绝物理设备和已有同包名安装，临时 current key、lineage 与对照 APK 在结束时删除。
 
-## 数据目录结构
+构建前门禁：
 
-下面目录只适用于私有本地后端 / `ECHO_FORCE_LOCAL_BACKEND=1` 场景。public demo 安装包
-默认连接 `https://echodesk.yoliyoli.uk`，客户端本地只保存 UI 配置、设备标识和临时缓存；
-模型服务、密钥和服务端会议处理都在 EchoDesk 服务端 上。
-
-```
-~/.echodesk/
-├── config.json                  ← 用户配置（你可以编辑）
-├── echodesk.db                  ← SQLite：meetings / ambient_segments / speakers / ...
-├── logs/
-│   └── 服务日志              ← uvicorn / app 日志，按天 rotate，保留 14 天
-├── storage/                     ← 录音 wav / meeting transcripts
-├── rag_index/                   ← BM25 倒排索引
-├── skill_build/                 ← @生成 HTML/PPT/Word/Excel 中间产物
-└── source/
-    └── backend/                 ← install-backend.sh 拷贝过来的 backend 源码副本
-        └── .venv/               ← 独立 venv，Electron resolvePython 第一候选
+```bash
+node ../scripts/check-npm-lock-registries.cjs
+python3 ../scripts/check-ci-action-pins.py
+python3 ../scripts/check-python-locks.py
+npm run test:electron
+npm run version:check
+npm run lint
+npm run typecheck
+npm run build
 ```
 
-私有本地后端模式下，业务数据保存在本机 `~/.echodesk/`，要备份可 tar 这个目录
-（排除 `source/.venv` 没意义的大文件）。public demo 模式不是 100% 本地数据模式。
+## 8. 安装态验收
+
+### 通用检查
+
+- App 显示版本 `0.3.1`，backend `/healthz` 同样返回 `0.3.1`。
+- local 模式 `isPublicDemo=false`，没有显式开关时不连接 public backend。
+- 创建会议后本机 SQLite 有记录，重启后仍可见。
+- 退出由 App 启动的 backend 后端口释放。
+- 设置、会议、知识库、Artifact 和失败重试入口可点击。
+
+### 自动化层次
+
+- packaged local smoke：bundled binary、端口、版本、持久化、点击。
+- installed full workflow：真实 GLM、Artifact 故障注入、退出重启、retry、AgentOS、cancel、timeout 和最终恢复。
+- public isolation smoke：两个 principal 的 HTTP/WS/RAG/Artifact/Workflow/Agent 负例。
+
+current exact-SHA macOS arm64 fresh ad-hoc DMG/ZIP、metadata/blockmap、codesign/plist/asar/forbidden scan、SBOM `1066` 与 SHA-256 通过，read-only DMG smoke `1 / 1 passed`；真实安装态 GLM + AgentOS 完整 workflow `1 / 1 passed`，覆盖下载 `0600`、marker、安全文件名、无 partial、GLM/RAG、失败注入、重启、retry、AgentOS success/cancel/timeout/restart；live contract `2 / 2 passed`、`0 skipped / 0 failed` [F-ECHO-028]。Developer ID、notary、staple、Gatekeeper 正式链路为 external skipped；ad-hoc 结果不自动证明其它操作系统安装包或公开部署。
+
+## 9. 旧 `install-backend.sh`
+
+`scripts/install-backend.sh` 只保留给：
+
+- 旧版本源码安装迁移；
+- 明确需要把 backend 源码复制到 `~/.echodesk/source/backend` 的开发环境；
+- 独立 backend 运维。
+
+v0.3.1 自包含桌面包不要求运行它。不要同时让 legacy source backend 和 bundled backend 抢占同一个端口/data dir。
+
+## 10. Public backend 验收
+
+部署前先在独立 staged user dir/DB/storage 启动 public mode，然后运行：
+
+```bash
+backend/.venv/bin/python scripts/public-isolation-smoke.py --self-test
+backend/.venv/bin/python scripts/public-isolation-smoke.py \
+  --base-url <staged-https-url>
+```
+
+只有 loopback 调试允许 HTTP。非 loopback 明文 HTTP 默认被脚本拒绝，避免泄露 bearer。
+
+切流前必须确认：
+
+- migration 和 checksum 通过；
+- 双 principal isolation smoke 通过；
+- session enroll/renew/revoke 与 WS revalidate 通过；
+- 客户端版本兼容；
+- 旧服务和数据库快照可以 rollback。
+
+## 11. 故障排查
+
+### 顶栏一直显示后端断开
+
+1. 确认没有另一个进程占用 `8769`。
+2. 查看 Electron main log 和 `~/.echodesk/logs/`。
+3. 确认安装包内存在 `resources/backend/echodesk-backend`（Windows 为 `.exe`）。
+4. 开发模式确认 backend 与 Vite 使用同一 endpoint。
+
+### 426 / 必须升级客户端
+
+- 停止身份创建、续签、业务请求和 WebSocket 重连；不要把 426 当成临时网络错误。
+- 使用响应里的最低版本与升级地址安装新版本，确认版本满足后再恢复连接。
+
+### 401 / 身份丢失
+
+- public 客户端停止普通重连，按 UI 提示重新认证或恢复设备身份。
+- 不要清 local storage 后继续沿用旧 bearer，也不要静默创建新 owner。
+- 409 表示身份冲突，需要用户选择恢复或明确新建身份。
+
+### Artifact 或 Agent 卡住
+
+- 查看对应 Workflow run 和 event，而不是只看 UI spinner。
+- 检查 state、deadline、lease、outbox recovery 与 Agent bridge event。
+- `cancel_requested` 长时间未收口时检查 `agent_command_outbox` 的 outcome、attempts、next_attempt_at，以及 execution lease 的 holder/fence；不要手工修改 Agent 或 Workflow 终态。
+
+### RAG 更新后查不到
+
+- 检查 RAG workflow terminal、`rag_documents` status 与 BM25 revision。
+- 不要通过重启某个内存索引实例作为正常修复手段；SQLite manifest/revision 才是提交点。
+
+## 12. 卸载与数据
+
+删除应用本身不会自动删除 `~/.echodesk/`。若需要彻底清除，请先备份，再通过受控卸载/重置流程处理；不要在 App 运行时直接删除数据库或身份文件。
+
+旧源码安装用户可以使用 `scripts/install-backend.sh --uninstall`，但它可能涉及完整用户数据目录，执行前必须阅读脚本提示并确认备份。

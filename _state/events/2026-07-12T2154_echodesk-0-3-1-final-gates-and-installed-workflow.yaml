@@ -1,0 +1,55 @@
+event_id: "E-20260712T2154-001"
+event_type: "supersede"
+timestamp: "2026-07-12T21:54:00+08:00"
+author: "agent/codex-echodesk-0-3-1-final"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-025"
+      claim: "EchoDesk 0.3.1 final local source, macOS package and installed GLM plus AgentOS workflow gates pass with zero deterministic skips and completed core consistency fixes."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-12T21:54:00+08:00"
+      observed_by: "agent/codex-echodesk-0-3-1-final"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "backend/app/workflows/service.py"
+        - "backend/app/api/meetings.py"
+        - "backend/app/adapters/repo/migrations/038_rag_projection_recovery.sql"
+        - "backend/app/adapters/rag/index_store.py"
+        - "backend/app/security/access.py"
+        - "desktop/electron/workspace-backend-transport.cjs"
+        - "desktop/src/ws.ts"
+        - ".github/workflows/ci.yml"
+        - "runtime:backend deterministic => 971 collected, 18 live deselected, 953 passed, 0 skipped, coverage 87%, natural exit"
+        - "runtime:Electron contracts => 95 passed"
+        - "runtime:Playwright E2E => 127 passed"
+        - "runtime:recorded click scenarios => 29 passed"
+        - "runtime:GLM-5.2 product contract => 2 passed"
+        - "runtime:read-only DMG packaged smoke => 1 passed"
+        - "runtime:installed GLM-5.2 plus AgentOS full workflow => 1 passed"
+        - "runtime:Android phone/TV development builds, JVM/lint and API 36.1 instrumentation => passed"
+      evidence: "The final deterministic backend process selected 953 non-live tests from 971 collected and exited naturally with zero failures, errors or skips and 87% coverage. Ruff, formatting, mypy over 127 files, Python compile, 95 Electron contracts, 127 browser interaction cases and 29 recorded scenarios passed. Dependency audits reported zero npm findings and zero known Python findings apart from the documented CVE-2025-3000 exception. GLM-5.2 passed both live product contracts. The exact local source produced an arm64 DMG and ZIP; the read-only mounted DMG exercised the bundled backend and Office/PDF/PPTX/XLSX runtimes. The installed app then passed the full GLM/RAG/failure/restart/retry-lineage/AgentOS artifact/cancel/timeout/persistence workflow. Android phone and TV development APKs, JVM tests, lint and six API 36.1 instrumentation tests passed, while unsigned public release failed closed. Formal signed macOS/Windows assets, exact-main signed Android candidates, hosted cross-platform CI and production public cutover remain separate external gates."
+      supersedes:
+        - "F-ECHO-023"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "deterministic"
+        - "installed"
+        - "workflow"
+        - "agentos"
+        - "rag"
+        - "identity"
+        - "release-gates"
+  - action: "supersede"
+    old_fact: "F-ECHO-023"
+    new_fact: "F-ECHO-025"
+    reason: "The final 21:54 rerun includes the completed core consistency fixes, packaged app and installed full workflow and therefore replaces the earlier source-only gate snapshot."
+git_commit: null

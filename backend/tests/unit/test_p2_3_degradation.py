@@ -10,31 +10,34 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import LLMError
+from app.adapters.repo.migrator import run_migrations
 from app.api.artifacts import generate as artifacts_generate
+from app.artifacts.repository import ArtifactRepository
+from app.config import Settings
 from app.schemas.artifact import ArtifactRequest
-from app.schemas.events import EchoEvent
 from app.use_cases.retrieve_and_answer import _classify
-
-
-class _FakeBus:
-    def __init__(self) -> None:
-        self.events: list[EchoEvent] = []
-
-    async def publish(self, event: EchoEvent) -> None:
-        self.events.append(event)
+from app.workflows.kernel import WorkflowDispatcher
+from app.workflows.service import WorkflowService
 
 
 @pytest.mark.asyncio
-async def test_artifacts_emits_failed_on_llm_error() -> None:
+async def test_artifacts_emits_failed_on_llm_error(tmp_path: Path) -> None:
     """artifacts.generate 调用 LLM 失败 → emit artifact.failed + 502。"""
-    bus = _FakeBus()
+    settings = Settings(db_path=tmp_path / "echo.db", storage_dir=tmp_path / "storage")
+    assert (await run_migrations(settings.db_path)).errors == []
+    bus = InMemoryEventBus()
+    workflow = WorkflowService(settings, bus)
+    dispatcher = WorkflowDispatcher(workflow)
     fake_llm = AsyncMock()
     fake_skill = AsyncMock()
+    artifact_repo = ArtifactRepository(settings)
 
     async def boom(*_: Any, **__: Any) -> Any:
         raise LLMError("Yunwu connect timeout")
@@ -52,19 +55,26 @@ async def test_artifacts_emits_failed_on_llm_error() -> None:
                 body=ArtifactRequest(artifact_type="html", brief="test brief"),
                 llm=fake_llm,
                 runner=fake_skill,
-                event_bus=bus,  # type: ignore[arg-type]
+                event_bus=bus,
+                dispatcher=dispatcher,
+                artifact_repo=artifact_repo,
             )
         assert ei.value.status_code == 502, "LLM 不可达应映射到 502（gateway 类）"
     finally:
         artifacts_module.generate_artifact = original  # type: ignore[assignment]
 
-    assert len(bus.events) == 2, "应该 emit generating + failed 两条事件"
-    assert bus.events[0].type == "artifact.generating"
-    assert bus.events[1].type == "artifact.failed"
-    payload = bus.events[1].payload
+    domain_events = [
+        event
+        for event in bus.recent_events_for_current_scope()
+        if event.type in {"artifact.generating", "artifact.failed"}
+    ]
+    assert [event.type for event in domain_events] == ["artifact.generating", "artifact.failed"]
+    payload = domain_events[1].payload
     assert payload["artifact_type"] == "html"
     assert payload["reason"] == "remote_llm", "前端用 reason 字段区分 LLM 失败 vs Skill 失败"
     assert "Yunwu" in payload["error"] or "timeout" in payload["error"]
+    runs = await workflow.list_runs()
+    assert len(runs) == 1 and runs[0].state == "failed"
 
 
 @pytest.mark.asyncio

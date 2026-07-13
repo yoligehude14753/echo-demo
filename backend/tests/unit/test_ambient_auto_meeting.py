@@ -33,10 +33,6 @@ from tests.unit.test_meeting_pipeline import (
     FakeRag as MeetingFakeRag,
 )
 
-pytestmark = pytest.mark.skip(
-    reason="async sqlite lock 死锁，待 m6 重构 MeetingState 与 ambient 解耦后恢复"
-)
-
 
 def _audible_audio(duration_s: float = 2.0, amp: int = 4_000) -> bytes:
     """生成可通过 RMS+VAD 门控的伪音频（16kHz int16 三角波）。"""
@@ -86,7 +82,9 @@ class AmbientFakeRag(MeetingFakeRag):
         audio_ref: str,
         speaker_id: str | None = None,
         speaker_label: str | None = None,
+        operation_id: str | None = None,
     ) -> str:
+        _ = operation_id
         return "ambient-doc"
 
 

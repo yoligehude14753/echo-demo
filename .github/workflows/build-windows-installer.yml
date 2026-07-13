@@ -1,113 +1,236 @@
 name: Build Windows Installer
 
 on:
+  workflow_call:
+    inputs:
+      publish_release:
+        description: "Reserved: rejected until Authenticode signing is configured"
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Reserved: rejected until Authenticode signing is configured"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
   build-windows:
+    timeout-minutes: 60
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Parse Windows installed smoke
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          $script = (Resolve-Path "./desktop/scripts/windows-installed-smoke.ps1").Path
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $script,
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object {
+              Write-Error ("{0}:{1}:{2}: {3}" -f $script, $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message)
+            }
+            exit 1
+          }
+          Write-Host "PowerShell parser accepted $script ($($tokens.Count) tokens)"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
 
-      - name: Build backend binary
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            backend/app/adapters/skill/assets/ppt_ib_deck/package-lock.json
+
+      - name: Require official npm lock registries
+        run: |
+          node scripts/check-npm-lock-registries.cjs
+          python scripts/check-ci-action-pins.py
+          python scripts/check-python-locks.py
+
+      - name: Refuse unsigned public publishing
+        if: ${{ inputs.publish_release == true }}
+        shell: bash
+        run: |
+          echo "Public Windows publishing is disabled until Authenticode signing and verification are configured." >&2
+          exit 1
+
+      - name: Install backend build dependencies
         working-directory: backend
         shell: bash
         run: |
           if [ ! -f packaging/echodesk-backend.spec ]; then
-            echo "No backend PyInstaller spec found; public demo Windows build uses the remote backend."
-            exit 0
+            echo "Missing packaging/echodesk-backend.spec: refusing to build a local-first installer without a backend." >&2
+            exit 1
           fi
           python -m venv .venv
           PY=.venv/Scripts/python
-          "$PY" -m pip install --upgrade pip
-          "$PY" -m pip install -r requirements.txt
-          if [ -f packaging/requirements-build.txt ]; then
-            "$PY" -m pip install -r packaging/requirements-build.txt
-          else
-            "$PY" -m pip install pyinstaller
-          fi
-          "$PY" -m PyInstaller --noconfirm packaging/echodesk-backend.spec
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          "$PY" -m pip install --require-hashes -r packaging/requirements-build.lock
+          npm ci --prefix app/adapters/skill/assets/ppt_ib_deck
+          npm audit --prefix app/adapters/skill/assets/ppt_ib_deck --audit-level=high --registry=https://registry.npmjs.org
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm ci
+        run: |
+          npm ci
+          npm audit --audit-level=high --registry=https://registry.npmjs.org
+
+      - name: Run Electron main-process contracts
+        working-directory: desktop
+        run: npm run test:electron
+
+      - name: Verify release version
+        working-directory: desktop
+        run: npm run version:check
 
       - name: Build Windows installer
         working-directory: desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npm run app:dist:win
+        run: npm run app:dist:win:unsigned-test
+
+      - name: Verify Windows release contents
+        shell: bash
+        run: |
+          version="$(node -p "require('./desktop/package.json').version")"
+          test -f backend/dist/echodesk-backend.exe || {
+            echo "backend/dist/echodesk-backend.exe is missing; installer would be unusable" >&2
+            exit 1
+          }
+          test -f desktop/release/win-unpacked/resources/backend/echodesk-backend.exe || {
+            echo "win-unpacked resources do not contain echodesk-backend.exe" >&2
+            exit 1
+          }
+          test -f "desktop/release/EchoDesk.Setup.${version}.exe" || {
+            echo "versioned NSIS installer is missing for ${version}" >&2
+            exit 1
+          }
+          test -f "desktop/release/EchoDesk-${version}-win-x64.zip" || {
+            echo "versioned Windows zip is missing for ${version}" >&2
+            exit 1
+          }
+          grep -F "version: ${version}" desktop/release/latest.yml >/dev/null || {
+            echo "latest.yml does not describe ${version}" >&2
+            exit 1
+          }
+          node desktop/scripts/verify-release-update-metadata.cjs windows
+
+      - name: Installed startup smoke (NSIS + bundled backend + Electron)
+        shell: pwsh
+        run: ./desktop/scripts/windows-installed-smoke.ps1
+
+      - name: Portable ZIP startup smoke (expanded ZIP + bundled backend + Electron)
+        shell: pwsh
+        run: |
+          $version = node -p "require('./desktop/package.json').version"
+          $archive = (Resolve-Path "desktop/release/EchoDesk-$version-win-x64.zip").Path
+          $destination = Join-Path $env:RUNNER_TEMP "echodesk-windows-portable-$version"
+          if (Test-Path $destination) {
+            Remove-Item $destination -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $app = Get-ChildItem $destination -Filter "EchoDesk.exe" -File -Recurse |
+            Select-Object -First 1
+          if ($null -eq $app) {
+            throw "expanded Windows ZIP does not contain EchoDesk.exe"
+          }
+          $backend = Join-Path $app.DirectoryName "resources/backend/echodesk-backend.exe"
+          if (-not (Test-Path $backend -PathType Leaf)) {
+            throw "expanded Windows ZIP does not contain its bundled backend: $backend"
+          }
+          ./desktop/scripts/windows-installed-smoke.ps1 `
+            -ApplicationDirectory $app.DirectoryName `
+            -Port 18770 `
+            -ExpectedVersion $version `
+            -EvidenceDirectory (Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence/portable")
+
+      - name: Upload Windows installed smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-windows-installed-smoke-evidence
+          path: ${{ runner.temp }}/echodesk-windows-smoke-evidence
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Guard public build contents
         shell: bash
         run: |
-          found="$(find desktop/dist backend/dist desktop/release \
+          set -euo pipefail
+          scan_roots=(desktop/dist backend/dist desktop/release)
+          for scan_root in "${scan_roots[@]}"; do
+            test -d "${scan_root}" || {
+              echo "public build scan root is missing: ${scan_root}" >&2
+              exit 1
+            }
+          done
+          found="$(find "${scan_roots[@]}" \
             \( -name '*.map' -o -name '.env' -o -name '*.pem' -o -name '*.key' \) \
             ! -path '*/certifi/cacert.pem' \
-            -print 2>/dev/null || true)"
+            -print)"
           if [ -n "$found" ]; then
             echo "Forbidden files found in public build:" >&2
             echo "$found" >&2
             exit 1
           fi
 
-      - name: Generate checksums
+      - name: Generate CycloneDX SBOM and checksums
         shell: bash
         run: |
+          set -euo pipefail
+          python scripts/generate-release-sbom.py desktop/release/EchoDesk-SBOM.cdx.json
           cd desktop/release
-          shopt -s nullglob
+          version="$(node -p "require('../package.json').version")"
           files=(
-            EchoDesk.Setup.*.exe
-            EchoDesk.Setup.*.exe.blockmap
-            EchoDesk-*-win-x64.zip
+            "EchoDesk.Setup.${version}.exe"
+            "EchoDesk.Setup.${version}.exe.blockmap"
+            "EchoDesk-${version}-win-x64.zip"
             latest.yml
+            EchoDesk-SBOM.cdx.json
           )
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "No Windows release files found" >&2
-            exit 1
-          fi
+          for file in "${files[@]}"; do test -s "${file}"; done
           sha256sum "${files[@]}" > SHA256SUMS-Windows.txt
+          sha256sum --check --strict SHA256SUMS-Windows.txt
+          expected=("${files[@]}" "SHA256SUMS-Windows.txt")
+          candidates=()
+          for file in \
+            EchoDesk.Setup.*.exe \
+            EchoDesk.Setup.*.exe.blockmap \
+            EchoDesk-*-win-x64.zip \
+            latest.yml EchoDesk-SBOM.cdx.json SHA256SUMS-Windows.txt; do
+            test -f "${file}" && candidates+=("${file}")
+          done
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
+            <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort)
+          printf 'ECHODESK_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: echodesk-windows-release
+          name: echodesk-windows-unsigned-test
           path: |
-            desktop/release/*.exe
-            desktop/release/*.exe.blockmap
-            desktop/release/*-win-x64.zip
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe.blockmap
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-win-x64.zip
             desktop/release/latest.yml
             desktop/release/SHA256SUMS-Windows.txt
+            desktop/release/EchoDesk-SBOM.cdx.json
           if-no-files-found: error
-
-      - name: Upload to public release
-        env:
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
-        shell: bash
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "Missing PUBLIC_RELEASE_TOKEN secret" >&2
-            exit 1
-          fi
-          tag="v$(node -p "require('./desktop/package.json').version")"
-          gh release upload "$tag" \
-            desktop/release/*.exe \
-            desktop/release/*.exe.blockmap \
-            desktop/release/*-win-x64.zip \
-            desktop/release/latest.yml \
-            desktop/release/SHA256SUMS-Windows.txt \
-            --repo yoligehude14753/echo-demo \
-            --clobber
+          compression-level: 0

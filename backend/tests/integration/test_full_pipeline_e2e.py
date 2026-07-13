@@ -41,7 +41,10 @@ def _yunwu_alive() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _yunwu_alive(), reason="Yunwu 不可达")
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(not _yunwu_alive(), reason="Yunwu 不可达"),
+]
 
 
 @pytest.fixture
@@ -132,8 +135,8 @@ def test_full_meeting_flow_via_http_and_ws_with_real_llm(client: TestClient) -> 
     r = client.post("/rag/ask", json={"question": "Q3 预算讨论的结论是什么"})
     assert r.status_code == 200
     body = r.text
-    assert "chosen_source" in body  # meta event 透出来源
-    assert "[DONE]" in body
+    assert "chosen_source" in body  # done event 透出来源与引用 trace
+    assert "event: done" in body
 
 
 @pytest.mark.integration

@@ -5,14 +5,16 @@ const {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } = require("node:fs");
+const { createHash } = require("node:crypto");
 const { join } = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const ROOT = join(__dirname, "..");
-const RELEASE_DIR = join(ROOT, "release");
+const RELEASE_DIR = process.env.ECHODESK_RELEASE_DIR || join(ROOT, "release");
 const { version } = require(join(ROOT, "package.json"));
 
 const SOURCE_APK = join(RELEASE_DIR, `EchoDesk-${version}-android-tv.apk`);
@@ -38,6 +40,28 @@ function run(command, args, options = {}) {
     shell: false,
   });
   return result.status === 0;
+}
+
+function powershellLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function createBundleZip() {
+  if (process.platform !== "win32") {
+    return run("zip", ["-qr", BUNDLE_ZIP, "."], { cwd: BUNDLE_DIR });
+  }
+
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    `Get-ChildItem -LiteralPath ${powershellLiteral(BUNDLE_DIR)} | Compress-Archive -DestinationPath ${powershellLiteral(BUNDLE_ZIP)} -CompressionLevel Optimal -Force`,
+  ].join("; ");
+  return run("powershell.exe", [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    command,
+  ]);
 }
 
 if (!existsSync(SOURCE_APK)) {
@@ -66,8 +90,23 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APK="$SCRIPT_DIR/${SMART_TV_APK_NAME}"
+MANIFEST="$SCRIPT_DIR/MANIFEST.sha256"
 PKG="com.echodesk.tv"
 LEGACY_PKG="com.echodesk.app"
+
+EXPECTED_SHA256="$(awk -v apk="${SMART_TV_APK_NAME}" '$2 == apk { print $1 }' "$MANIFEST")"
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_SHA256="$(sha256sum "$APK" | awk '{ print $1 }')"
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL_SHA256="$(shasum -a 256 "$APK" | awk '{ print $1 }')"
+else
+  echo "没有找到 SHA-256 校验工具；已停止安装。"
+  exit 1
+fi
+if [ -z "$EXPECTED_SHA256" ] || [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+  echo "APK SHA-256 校验失败；已停止安装。"
+  exit 1
+fi
 
 if command -v adb >/dev/null 2>&1; then
   ADB="$(command -v adb)"
@@ -116,30 +155,25 @@ if [ "$STATE" != "device" ]; then
   exit 2
 fi
 
-if [ "\${ECHODESK_TV_KEEP_DATA:-0}" != "1" ]; then
-  echo "[EchoDesk TV] clearing old local WebView / app data ..."
-  "\${ADB_DEVICE[@]}" shell am force-stop "$PKG" >/dev/null 2>&1 || true
-  "\${ADB_DEVICE[@]}" shell pm clear "$PKG" >/dev/null 2>&1 || true
-  if [ "\${ECHODESK_TV_KEEP_LEGACY:-0}" != "1" ]; then
-    "\${ADB_DEVICE[@]}" shell am force-stop "$LEGACY_PKG" >/dev/null 2>&1 || true
-    "\${ADB_DEVICE[@]}" shell pm clear "$LEGACY_PKG" >/dev/null 2>&1 || true
-    "\${ADB_DEVICE[@]}" shell pm uninstall "$LEGACY_PKG" >/dev/null 2>&1 || true
-  fi
+if [ "\${ECHODESK_TV_REMOVE_LEGACY:-0}" = "1" ]; then
+  echo "[EchoDesk TV] explicitly removing legacy package ..."
+  "\${ADB_DEVICE[@]}" shell am force-stop "$LEGACY_PKG" >/dev/null 2>&1 || true
+  "\${ADB_DEVICE[@]}" shell pm clear "$LEGACY_PKG" >/dev/null 2>&1 || true
+  "\${ADB_DEVICE[@]}" shell pm uninstall "$LEGACY_PKG" >/dev/null 2>&1 || true
 fi
 
 echo "[EchoDesk TV] installing $APK ..."
-"\${ADB_DEVICE[@]}" install -r -d "$APK"
+"\${ADB_DEVICE[@]}" install -r "$APK"
 
-"\${ADB_DEVICE[@]}" shell pm grant "$PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
-"\${ADB_DEVICE[@]}" shell appops set "$PKG" RECORD_AUDIO allow >/dev/null 2>&1 || true
 "\${ADB_DEVICE[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
 "\${ADB_DEVICE[@]}" shell dumpsys package "$PKG" | grep -E "versionName|versionCode" | head -3 || true
 
 echo
 echo "安装完成，已尝试自动打开 EchoDesk。"
+echo "安装器不会更改麦克风授权；首次采集时请在电视界面确认系统权限。"
 echo "如果电视弹出调试授权，请先在电视上点允许，再重新运行本脚本。"
-echo "如需保留旧配置更新，请用：ECHODESK_TV_KEEP_DATA=1 ./install-tv-macos.sh $TV_IP $TV_PORT"
-echo "如需保留旧 com.echodesk.app 包，请同时设置：ECHODESK_TV_KEEP_LEGACY=1"
+echo "更新默认保留当前应用数据与设备身份。"
+echo "仅在明确不再需要旧包时使用：ECHODESK_TV_REMOVE_LEGACY=1 ./install-tv-macos.sh $TV_IP $TV_PORT"
 `;
 
 const winInstaller = `param(
@@ -166,8 +200,16 @@ $WaitSeconds = if ($env:ECHODESK_TV_AUTH_TIMEOUT_SECONDS) {
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Apk = Join-Path $ScriptDir "${SMART_TV_APK_NAME}"
+$Manifest = Join-Path $ScriptDir "MANIFEST.sha256"
 $Pkg = "com.echodesk.tv"
 $LegacyPkg = "com.echodesk.app"
+
+$ExpectedSha256 = ((Get-Content -LiteralPath $Manifest | Select-Object -First 1) -split "\\s+")[0].ToLowerInvariant()
+$ActualSha256 = (Get-FileHash -LiteralPath $Apk -Algorithm SHA256).Hash.ToLowerInvariant()
+if (-not $ExpectedSha256 -or $ActualSha256 -ne $ExpectedSha256) {
+  Write-Error "APK SHA-256 校验失败；已停止安装。"
+  exit 1
+}
 
 $Candidates = @(
   "adb.exe",
@@ -224,26 +266,20 @@ if ($State -ne "device") {
   exit 2
 }
 
-if ($env:ECHODESK_TV_KEEP_DATA -ne "1") {
-  Write-Host "[EchoDesk TV] clearing old local WebView / app data ..."
-  & $Adb -s $Serial shell am force-stop $Pkg | Out-Null
-  & $Adb -s $Serial shell pm clear $Pkg | Out-Null
-  if ($env:ECHODESK_TV_KEEP_LEGACY -ne "1") {
-    & $Adb -s $Serial shell am force-stop $LegacyPkg | Out-Null
-    & $Adb -s $Serial shell pm clear $LegacyPkg | Out-Null
-    & $Adb -s $Serial shell pm uninstall $LegacyPkg | Out-Null
-  }
+if ($env:ECHODESK_TV_REMOVE_LEGACY -eq "1") {
+  Write-Host "[EchoDesk TV] explicitly removing legacy package ..."
+  & $Adb -s $Serial shell am force-stop $LegacyPkg | Out-Null
+  & $Adb -s $Serial shell pm clear $LegacyPkg | Out-Null
+  & $Adb -s $Serial shell pm uninstall $LegacyPkg | Out-Null
 }
 
 Write-Host "[EchoDesk TV] installing $Apk ..."
-& $Adb -s $Serial install -r -d "$Apk"
+& $Adb -s $Serial install -r "$Apk"
 if ($LASTEXITCODE -ne 0) {
   Write-Error "安装失败，adb install exit code=$LASTEXITCODE。"
   exit $LASTEXITCODE
 }
 
-$null = & $Adb -s $Serial shell pm grant $Pkg android.permission.RECORD_AUDIO
-$null = & $Adb -s $Serial shell appops set $Pkg RECORD_AUDIO allow
 $null = & $Adb -s $Serial shell monkey -p $Pkg -c android.intent.category.LAUNCHER 1
 & $Adb -s $Serial shell dumpsys package $Pkg |
   Select-String "versionName|versionCode" |
@@ -251,9 +287,10 @@ $null = & $Adb -s $Serial shell monkey -p $Pkg -c android.intent.category.LAUNCH
 
 Write-Host ""
 Write-Host "安装完成，已尝试自动打开 EchoDesk。"
+Write-Host "安装器不会更改麦克风授权；首次采集时请在电视界面确认系统权限。"
 Write-Host "如果电视弹出调试授权，请先在电视上点允许，再重新运行本脚本。"
-Write-Host "如需保留旧配置更新，请先设置 ECHODESK_TV_KEEP_DATA=1。"
-Write-Host "如需保留旧 com.echodesk.app 包，请同时设置 ECHODESK_TV_KEEP_LEGACY=1。"
+Write-Host "更新默认保留当前应用数据与设备身份。"
+Write-Host "仅在明确不再需要旧包时设置 ECHODESK_TV_REMOVE_LEGACY=1。"
 `;
 
 const readme = `EchoDesk 智能电视一键安装包 ${version}
@@ -279,10 +316,11 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
    powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP -AdbPort 5556
    如果希望脚本等待电视授权后自动继续，运行：
    powershell -ExecutionPolicy Bypass -File .\\install-tv-windows.ps1 -TvIp 电视IP -WaitForAuth
-6. 脚本默认清理旧的本地 WebView / app data，授权麦克风并自动打开 EchoDesk。
-   如需保留旧配置更新，设置 ECHODESK_TV_KEEP_DATA=1 后再运行。
-   新 TV 版包名是 com.echodesk.tv，默认会卸载旧 com.echodesk.app 电视遗留包，避免历史数据串包。
-   如需保留旧包，额外设置 ECHODESK_TV_KEEP_LEGACY=1。
+6. 脚本默认保留当前 WebView、app data 和设备身份，也保留现有权限状态，随后自动打开 EchoDesk。
+   安装器不会代替用户授予麦克风权限；首次采集时请在电视界面确认系统权限。
+   安装器不会允许版本降级；如设备上的版本更新，请使用更高版本安装包。
+   新 TV 版包名是 com.echodesk.tv；更新默认也不会移除旧包。
+   安装器不提供清空当前应用数据的能力；如需移除旧包，显式设置 ECHODESK_TV_REMOVE_LEGACY=1。
 7. 如果电视弹出 RSA 调试授权，选择允许，再重新运行脚本。
 
 手动安装
@@ -297,8 +335,28 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
 
 writeFileSync(join(BUNDLE_DIR, "install-tv-macos.sh"), macInstaller, "utf-8");
 chmodSync(join(BUNDLE_DIR, "install-tv-macos.sh"), 0o755);
-writeFileSync(join(BUNDLE_DIR, "install-tv-windows.ps1"), winInstaller, "utf-8");
+writeFileSync(
+  join(BUNDLE_DIR, "install-tv-windows.ps1"),
+  winInstaller,
+  "utf-8",
+);
 writeFileSync(join(BUNDLE_DIR, "README-TV-INSTALL.txt"), readme, "utf-8");
+
+const manifestFiles = [
+  SMART_TV_APK_NAME,
+  "install-tv-macos.sh",
+  "install-tv-windows.ps1",
+  "README-TV-INSTALL.txt",
+];
+const manifest = manifestFiles
+  .map((name) => {
+    const sha256 = createHash("sha256")
+      .update(readFileSync(join(BUNDLE_DIR, name)))
+      .digest("hex");
+    return `${sha256}  ${name}`;
+  })
+  .join("\n");
+writeFileSync(join(BUNDLE_DIR, "MANIFEST.sha256"), `${manifest}\n`, "utf-8");
 
 const tvInstallPage = `<!doctype html>
 <html lang="zh-CN">
@@ -364,14 +422,17 @@ const tvInstallPage = `<!doctype html>
 </html>
 `;
 writeFileSync(join(RELEASE_DIR, "tv.html"), tvInstallPage, "utf-8");
-copyFileSync(join(ROOT, "..", "docs", "tv-install.html"), join(RELEASE_DIR, "tv-install.html"));
+copyFileSync(
+  join(ROOT, "..", "docs", "tv-install.html"),
+  join(RELEASE_DIR, "tv-install.html"),
+);
 writeFileSync(
   join(RELEASE_DIR, "t"),
   '<!doctype html><meta http-equiv="refresh" content="0; url=/tv.html"><a href="/tv.html">EchoDesk TV</a>\n',
   "utf-8",
 );
 
-if (!run("zip", ["-qr", BUNDLE_ZIP, "."], { cwd: BUNDLE_DIR })) {
+if (!createBundleZip()) {
   fail("zip command failed while creating the TV one-click package.");
 }
 

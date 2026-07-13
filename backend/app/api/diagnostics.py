@@ -12,12 +12,12 @@ Zip 结构（详见任务 P2.6 描述）：
   ├── db_schema.json       各表 schema + 行数（不含数据本体；隐私）
   ├── logs/                backend.log 当前 + 最近 7 天 rotated
   ├── probes.json          远程探针 cache（health._cache）
-  └── recent_events.jsonl  最近 200 条 WS 事件（InMemoryEventBus._history）
+  └── recent_events.jsonl  当前 principal 最近 200 条 WS 事件
 
 隐私底线（绝不能漏）：
 - API key / token / secret / password 全部走 ``_mask`` 脱敏
 - DB 行内容**不导出**，只导 schema + row_count
-- recent_events 直接 dump，payload 里如有用户文本会原样进 zip
+- recent_events 仅导出当前 principal；payload 里如有用户文本会原样进 zip
   （用户报 bug 时主动操作；接受这个 trade-off）
 
 性能上限：
@@ -32,7 +32,6 @@ import json
 import logging
 import os
 import platform
-import re
 import sqlite3
 import sys
 import tempfile
@@ -47,10 +46,19 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from app import __version__
+from app.adapters.repo.connection import configure_sqlite_connection
 from app.api import health as health_mod
-from app.api.deps import get_event_bus
+from app.api.deps import get_event_bus, get_workflow_dispatcher
 from app.config import Settings, get_settings
 from app.config_io import user_config_dir
+from app.schemas.workflow import WorkflowRunCreate
+from app.security.redaction import (
+    SENSITIVE_KEY_RE,
+    redact_secret,
+    redact_structure,
+    sanitize_text,
+)
+from app.workflows.kernel import WorkflowContext, WorkflowDispatcher, WorkflowExecutionError
 
 logger = logging.getLogger("echodesk.diagnostics")
 
@@ -64,25 +72,13 @@ _LOG_ROTATED_MAX_FILES = 7
 _EVENTS_MAX = 200
 
 # 名字含这些子串的字段判定为敏感，输出走 _mask
-_SENSITIVE_KEY_RE = re.compile(r"(key|token|secret|password)", re.IGNORECASE)
+_SENSITIVE_KEY_RE = SENSITIVE_KEY_RE
 
 
 def _mask(s: Any) -> str:
-    """对敏感字符串做"首4*末4"脱敏，保留长度。
+    """Fully redact secrets; prefixes and suffixes are identifying data too."""
 
-    - 空 / None → ""
-    - 长度 < 12 → "***"（短到无法稳定标识来源）
-    - 否则 → "abcd***wxyz (len=20)"
-    """
-    if s is None:
-        return ""
-    if not isinstance(s, str):
-        s = str(s)
-    if not s:
-        return ""
-    if len(s) < 12:
-        return "***"
-    return f"{s[:4]}***{s[-4:]} (len={len(s)})"
+    return redact_secret(s)
 
 
 def _redact_settings(data: Any, *, _path: str = "") -> Any:
@@ -95,12 +91,14 @@ def _redact_settings(data: Any, *, _path: str = "") -> Any:
         out: dict[str, Any] = {}
         for k, v in data.items():
             if isinstance(k, str) and _SENSITIVE_KEY_RE.search(k):
-                out[k] = _mask(v) if isinstance(v, str | int | float) else "***"
+                out[k] = _mask(v)
             else:
                 out[k] = _redact_settings(v, _path=f"{_path}.{k}")
         return out
     if isinstance(data, list):
         return [_redact_settings(v, _path=f"{_path}[]") for v in data]
+    if isinstance(data, str):
+        return sanitize_text(data)
     return data
 
 
@@ -172,6 +170,7 @@ def _db_schema_snapshot(settings: Settings) -> dict[str, Any]:
     try:
         uri = f"file:{db_path}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
+        configure_sqlite_connection(conn)
     except sqlite3.Error as e:
         return {"ok": False, "error": f"open failed: {e}", "path": str(db_path), "tables": []}
 
@@ -240,7 +239,7 @@ def _probes_snapshot() -> dict[str, Any]:
 
 
 def _recent_events_jsonl() -> tuple[str, int] | None:
-    """从 InMemoryEventBus._history 取最近 N 条事件，转 JSONL 字符串。
+    """Export the active principal's recent events as JSONL.
 
     返回 None 表示"事件 buffer 不可用 / 为空 / 拿不到"——manifest 里
     应该跳过 ``recent_events``。
@@ -250,14 +249,18 @@ def _recent_events_jsonl() -> tuple[str, int] | None:
     except Exception as e:
         logger.warning("diagnostics: get_event_bus failed: %s", e)
         return None
-    history = getattr(bus, "_history", None)
+    history = bus.recent_events_for_current_scope(limit=_EVENTS_MAX)
     if not history:
         return None
-    tail = list(history)[-_EVENTS_MAX:]
     lines: list[str] = []
-    for evt in tail:
+    for evt in history:
         try:
-            lines.append(evt.model_dump_json())
+            lines.append(
+                json.dumps(
+                    redact_structure(evt.model_dump(mode="json")),
+                    ensure_ascii=False,
+                )
+            )
         except Exception as e:
             logger.warning("diagnostics: drop event due to dump failure: %s", e)
     if not lines:
@@ -273,7 +276,7 @@ def _read_log_truncated(path: Path) -> tuple[bytes, dict[str, Any]]:
     size = path.stat().st_size
     meta = {"name": path.name, "size_bytes": size, "truncated": False}
     if size <= _LOG_FILE_MAX_BYTES:
-        return path.read_bytes(), meta
+        return sanitize_text(path.read_text(encoding="utf-8", errors="replace")).encode(), meta
 
     with path.open("rb") as f:
         f.seek(-_LOG_FILE_MAX_BYTES, os.SEEK_END)
@@ -283,7 +286,7 @@ def _read_log_truncated(path: Path) -> tuple[bytes, dict[str, Any]]:
         f"showing last {_LOG_FILE_MAX_BYTES / (1024 * 1024):.0f} MB]\n"
     ).encode()
     meta["truncated"] = True
-    return banner + tail, meta
+    return banner + sanitize_text(tail.decode("utf-8", errors="replace")).encode(), meta
 
 
 def _collect_log_files() -> list[Path]:
@@ -397,9 +400,34 @@ def _build_zip_bytes(settings: Settings) -> tuple[bytes, dict[str, Any]]:
     return buf.getvalue(), manifest
 
 
+def bind_diagnostics_workflow_handler(
+    dispatcher: WorkflowDispatcher,
+    settings: Settings,
+) -> None:
+    async def handler(context: WorkflowContext, _payload: dict[str, Any]) -> dict[str, Any]:
+        export_dir = Path(settings.storage_dir).expanduser() / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        final_path = export_dir / f"echodesk-diagnostics-{context.run_id}.zip"
+        if not final_path.exists():
+            tmp_path, _manifest = _build_zip(settings)
+            try:
+                tmp_path.replace(final_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        return {
+            "path": str(final_path),
+            "filename": final_path.name,
+            "size_bytes": final_path.stat().st_size,
+        }
+
+    if dispatcher.registry.resolve("diagnostics.export") is None:
+        dispatcher.registry.register("diagnostics.export", handler)
+
+
 @router.get("/diagnostics/export", summary="导出诊断包（zip）")
 async def export_diagnostics(
     settings: Settings = Depends(get_settings),
+    dispatcher: WorkflowDispatcher = Depends(get_workflow_dispatcher),
 ) -> FileResponse:
     """打包系统/配置/log/db schema/探针/事件，返回单个 zip 文件下载。
 
@@ -410,21 +438,56 @@ async def export_diagnostics(
     - 单次导出耗时上限取决于 db / log 大小；典型 < 2s
     - 不做鉴权（EchoDesk 是本地桌面 app，仅监听 127.0.0.1）
     """
-    tmp_path, manifest = _build_zip(settings)
+    # Diagnostics must remain available precisely when the DB is missing or
+    # migration failed.  In that recovery-only case there is no workflow table
+    # to record into, so fall back to the legacy direct bundle path.
+    workflow_schema_ready = False
+    try:
+        if Path(settings.db_path).expanduser().exists():
+            with sqlite3.connect(settings.db_path) as conn:
+                configure_sqlite_connection(conn)
+                workflow_schema_ready = (
+                    conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_runs'"
+                    ).fetchone()
+                    is not None
+                )
+    except sqlite3.Error:
+        workflow_schema_ready = False
+    if not workflow_schema_ready:
+        tmp_path, manifest = _build_zip(settings)
+        return FileResponse(
+            path=str(tmp_path),
+            media_type="application/zip",
+            filename=f"{manifest['root']}.zip",
+            background=BackgroundTask(_safe_unlink, tmp_path),
+        )
+
+    bind_diagnostics_workflow_handler(dispatcher, settings)
+    try:
+        done = await dispatcher.execute(
+            WorkflowRunCreate(
+                kind="diagnostics.export",
+                source="diagnostics_api",
+                intent_text="Export local diagnostics bundle",
+                timeout_s=120,
+                active_key="diagnostics.export",
+            )
+        )
+    except WorkflowExecutionError as exc:
+        raise RuntimeError(str(exc)) from exc
+    tmp_path = Path(str(done.output["path"]))
     size_kb = tmp_path.stat().st_size / 1024
     logger.info(
-        "diagnostics export: %.1f KB, items=%s, events=%d, logs=%d",
+        "diagnostics export: %.1f KB workflow=%s",
         size_kb,
-        manifest["items"],
-        manifest["events_count"],
-        len(manifest["log_files"]),
+        done.run_id,
     )
 
-    fname = f"{manifest['root']}.zip"
     return FileResponse(
         path=str(tmp_path),
         media_type="application/zip",
-        filename=fname,
+        filename=str(done.output["filename"]),
         background=BackgroundTask(_safe_unlink, tmp_path),
     )
 

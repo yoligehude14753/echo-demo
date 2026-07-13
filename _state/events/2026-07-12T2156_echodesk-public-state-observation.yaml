@@ -1,0 +1,40 @@
+event_id: "E-20260712T2156-001"
+event_type: "supersede"
+timestamp: "2026-07-12T21:56:00+08:00"
+author: "agent/codex-echodesk-0-3-1-final"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-027"
+      claim: "At 2026-07-12 21:56 +08:00 Releases latest is v0.2.50 with no 0.3.1; production backend is 0.2.49 with legacy bootstrap app_version 0.2.45."
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-12T21:56:00+08:00"
+      observed_by: "agent/codex-echodesk-0-3-1-final"
+      valid_until: null
+      ttl_hours: 6
+      source:
+        - "https://api.github.com/repos/yoligehude14753/echo-demo/releases"
+        - "https://echodesk.yoliyoli.uk/healthz"
+        - "https://echodesk.yoliyoli.uk/bootstrap"
+        - "runtime:gh release list --repo yoligehude14753/echo-demo"
+      evidence: "An authenticated GitHub release listing showed v0.2.50 as the latest non-prerelease and no v0.3.1 tag among the newest releases. Direct HTTPS reads returned healthz version 0.2.49 and a legacy bootstrap payload with app_version 0.2.45 and no minimum-client session contract. Therefore the 0.3.1 public isolation smoke cannot be claimed against production and a breaking promotion must wait for formally installable 0.3.1 clients."
+      supersedes:
+        - "F-ECHO-024"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "release"
+        - "public-backend"
+        - "0.3.1"
+        - "observation"
+        - "cutover-blocked"
+  - action: "supersede"
+    old_fact: "F-ECHO-024"
+    new_fact: "F-ECHO-027"
+    reason: "The release feed and production backend state were re-observed after the previous six-hour TTL expired."
+git_commit: null

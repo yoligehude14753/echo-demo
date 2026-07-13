@@ -7,6 +7,9 @@ const {
   ipcMain,
   systemPreferences,
   session,
+  safeStorage,
+  protocol,
+  net,
 } = require("electron");
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
@@ -14,6 +17,85 @@ const http = require("node:http");
 const https = require("node:https");
 const fs = require("node:fs");
 const os = require("node:os");
+const { randomBytes } = require("node:crypto");
+const backendConfig = require("../backend.config.json");
+const {
+  resolveBackendEndpoint,
+  resolveShareBackendBase,
+} = require("./backend-endpoint.cjs");
+const {
+  createManualBackendRestart,
+  stopBackendProcess,
+} = require("./backend-manual-restart.cjs");
+const {
+  electronNodeRuntimeEnvironment,
+} = require("./backend-runtime-env.cjs");
+const { createCredentialVault } = require("./credential-vault.cjs");
+const {
+  backendBoundJsonFetch,
+  createPublicIdentitySessionManager,
+} = require("./public-identity-session.cjs");
+const {
+  createWorkspaceBackendTransport,
+  readWorkspaceJsonResponse,
+} = require("./workspace-backend-transport.cjs");
+const {
+  atomicWritePrivateJsonFile,
+  readPrivateJsonFile,
+} = require("./private-json-store.cjs");
+const {
+  installMediaPermissionHandlers,
+} = require("./media-permission-policy.cjs");
+const {
+  verifyWorkspaceRootIdentity,
+} = require("./workspace-root-identity.cjs");
+const {
+  normalizedWorkspaceRegistry,
+  prepareWorkspaceUploadsForClear,
+  reapOrphanedWorkspaceDocIds,
+  shouldRetainWorkspaceFileOnScanFailure,
+  withWorkspaceState,
+  workspaceDocReferenceCount,
+  workspacePendingSnapshotDirectories,
+  workspaceProjectionAfterCleanup,
+  workspaceProjectionAfterUpload,
+  workspaceRegistryPendingSnapshotDirectories,
+  workspaceRendererHandle,
+  workspaceStateForOrigin,
+} = require("./workspace-registry.cjs");
+const {
+  pathContains: controlledPathContains,
+  resolveControlledLocalArtifactPath,
+} = require("./controlled-local-file.cjs");
+const { downloadRendererBlob } = require("./artifact-download.cjs");
+const {
+  WORKSPACE_SNAPSHOT_PREFIX,
+  cleanupStaleWorkspaceSnapshotDirs,
+  cleanupWorkspaceSnapshotDirectory,
+  copyRetainedWorkspaceSnapshot,
+  createWorkspaceFileSnapshot,
+  ensurePrivateWorkspaceSnapshotRoot,
+  removeRetainedWorkspaceSnapshotFile,
+} = require("./workspace-file-snapshot.cjs");
+const {
+  fetchBoundedHttpsJson,
+  isGithubReleasePayload,
+} = require("./bounded-https-json.cjs");
+const {
+  APP_ENTRY_URL,
+  APP_HOST,
+  APP_SCHEME,
+  installAppProtocol,
+  registerAppScheme,
+} = require("./app-protocol.cjs");
+const { preferredReleaseAsset } = require("./release-assets.cjs");
+const {
+  projectBackendStatusForRenderer,
+} = require("./backend-status-projection.cjs");
+
+// Electron 要求 privileged scheme 在 app ready 前完成声明。打包态只从该
+// secure/standard origin 加载静态资源，不再使用具有 opaque Origin 的 file://。
+registerAppScheme(protocol);
 
 app.commandLine.appendSwitch("enable-media-stream");
 
@@ -24,16 +106,17 @@ try {
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowPrerelease = false;
 } catch (e) {
-  console.warn("[updates] electron-updater unavailable:", e?.message ?? e);
+  console.warn(
+    `[updates] electron-updater unavailable: ${safeFailureCode(e)}`,
+  );
 }
 
 const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
-const BACKEND_PORT = parseInt(process.env.ECHO_BACKEND_PORT || "8772", 10);
-const LOCAL_BACKEND_HOST = `http://127.0.0.1:${BACKEND_PORT}`;
-const PUBLIC_BACKEND_HOST =
-  normalizeHttpBase(process.env.ECHO_PUBLIC_BACKEND_BASE) ||
-  "https://echodesk.yoliyoli.uk";
+const BACKEND_ENDPOINT = resolveBackendEndpoint(backendConfig, process.env);
+const BACKEND_PORT = BACKEND_ENDPOINT.port;
+const LOCAL_BACKEND_HOST = BACKEND_ENDPOINT.localBase;
+const PUBLIC_BACKEND_HOST = BACKEND_ENDPOINT.publicBase;
 const RELEASE_OWNER = "yoligehude14753";
 const RELEASE_REPO = "echo-demo";
 const RELEASES_URL = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest`;
@@ -49,16 +132,15 @@ const AUTO_UPDATE_CHECK_INTERVAL_MS = Math.max(
 );
 const AUTO_UPDATE_DOWNLOAD_ENABLED =
   process.env.ECHODESK_DISABLE_AUTO_UPDATE_DOWNLOAD !== "1";
-const FORCE_LOCAL_BACKEND = process.env.ECHO_FORCE_LOCAL_BACKEND === "1";
-const PUBLIC_DEMO_MODE =
-  process.env.ECHO_PUBLIC_DEMO === "1" || (!IS_DEV && !FORCE_LOCAL_BACKEND);
-const BACKEND_HOST = PUBLIC_DEMO_MODE ? PUBLIC_BACKEND_HOST : LOCAL_BACKEND_HOST;
-const BACKEND_BIND_HOST = process.env.ECHO_BACKEND_BIND_HOST || "127.0.0.1";
+const PUBLIC_DEMO_MODE = BACKEND_ENDPOINT.mode === "public";
+const BACKEND_HOST = BACKEND_ENDPOINT.backendBase;
+const BACKEND_BIND_HOST = BACKEND_ENDPOINT.bindHost;
+const ALLOW_PACKAGED_SOURCE_BACKEND =
+  process.env.ECHO_ALLOW_PACKAGED_SOURCE_BACKEND === "1";
 
-// 公开发布包默认走 public backend：key 与模型服务留在服务端，新用户不需要本机 Python。
-// 私有/离线部署可以显式 ECHO_FORCE_LOCAL_BACKEND=1 恢复本地 backend spawn。
-const SPAWN_BACKEND =
-  FORCE_LOCAL_BACKEND && !PUBLIC_DEMO_MODE && process.env.ECHO_SPAWN_BACKEND !== "0";
+// 0.3 Desktop Pro 默认 local-first。public demo 仍保留，但必须由发布入口显式设置
+// ECHO_PUBLIC_DEMO=1；ECHO_FORCE_LOCAL_BACKEND=1 作为旧部署兼容开关并拥有更高优先级。
+const SPAWN_BACKEND = BACKEND_ENDPOINT.spawnBackend;
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
 // node_modules/electron/dist/Electron.app/Info.plist 的 CFBundleName。
@@ -78,6 +160,7 @@ const SIGKILL_GRACE_MS = 3000;
 
 // ---------- 运行时状态 ----------
 let backendProc = null;
+let backendLifecycleGeneration = 0;
 let mainWindow = null;
 let healthTimer = null;
 let externalHealthTimer = null;
@@ -101,6 +184,7 @@ let updateCheckTimer = null;
 let updateCheckInFlight = false;
 let updateDownloadPromise = null;
 let downloadedUpdateVersion = null;
+const activeArtifactDownloadSenders = new WeakSet();
 
 // 主进程未捕获异常不弹 fatal dialog；UI 应该自己感知 backend 状态
 process.on("uncaughtException", (err) => {
@@ -114,47 +198,231 @@ function log(msg) {
   console.log(msg);
 }
 
-function normalizeHttpBase(raw) {
-  const value = String(raw || "").trim().replace(/\/+$/, "");
-  if (!value) return null;
-  return /^https?:\/\//i.test(value) ? value : `http://${value}`;
-}
-
 function isTrustedRenderer(webContents) {
   try {
     const url = webContents?.getURL?.() || "";
+    return isTrustedAppRendererUrl(url);
+  } catch {
+    return false;
+  }
+}
+
+const PUBLIC_CREDENTIAL_FILENAME = "public-device-credential.bin";
+
+function isTrustedAppRendererUrl(rawUrl) {
+  try {
+    const candidate = new URL(rawUrl);
+    if (IS_DEV) {
+      return candidate.origin === new URL(VITE_URL).origin;
+    }
     return (
-      url.startsWith("file://") ||
-      url.startsWith(VITE_URL) ||
-      url.startsWith(LOCAL_BACKEND_HOST) ||
-      url.startsWith(PUBLIC_BACKEND_HOST)
+      candidate.protocol === `${APP_SCHEME}:` &&
+      candidate.hostname === APP_HOST &&
+      !candidate.port &&
+      !candidate.username &&
+      !candidate.password &&
+      candidate.pathname === "/index.html" &&
+      !candidate.search &&
+      !candidate.hash
     );
   } catch {
     return false;
   }
 }
 
-function installMediaPermissionHandlers() {
-  const mediaPermissions = new Set(["media", "microphone", "audioCapture"]);
-  const shouldAllowMedia = (webContents, permission, details = {}) => {
-    if (!isTrustedRenderer(webContents)) return false;
-    if (permission === "media") {
-      const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
-      return mediaTypes.length === 0 || mediaTypes.includes("audio");
+function isTrustedAppRendererOrigin(rawOrigin) {
+  try {
+    const candidate = new URL(rawOrigin);
+    if (candidate.username || candidate.password || candidate.search || candidate.hash) {
+      return false;
     }
-    return mediaPermissions.has(permission);
+    if (IS_DEV) {
+      return candidate.origin === new URL(VITE_URL).origin &&
+        (candidate.pathname === "" || candidate.pathname === "/");
+    }
+    return (
+      candidate.protocol === `${APP_SCHEME}:` &&
+      candidate.hostname === APP_HOST &&
+      !candidate.port &&
+      (candidate.pathname === "" || candidate.pathname === "/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function assertTrustedIpcOrigin(event) {
+  const senderUrl = event.senderFrame?.url || event.sender?.getURL?.() || "";
+  if (!isTrustedAppRendererUrl(senderUrl)) {
+    const error = new Error("IPC denied for untrusted renderer origin");
+    error.code = "UNTRUSTED_RENDERER_IPC";
+    throw error;
+  }
+}
+
+function trustedRendererBlobInnerOrigin() {
+  if (IS_DEV) return new URL(VITE_URL).origin;
+  return `${APP_SCHEME}://${APP_HOST}`;
+}
+
+function publicCredentialPath() {
+  return path.join(app.getPath("userData"), PUBLIC_CREDENTIAL_FILENAME);
+}
+
+let publicCredentialVault = null;
+let publicIdentityManager = null;
+let publicSessionEnsurePromise = null;
+let currentPublicSession = null;
+
+function credentialVault() {
+  if (publicCredentialVault === null) {
+    publicCredentialVault = createCredentialVault({
+      safeStorage,
+      target: publicCredentialPath(),
+      backendBase: BACKEND_HOST,
+      officialBackendBase: backendConfig.public.baseUrl,
+      enabled: PUBLIC_DEMO_MODE,
+      logger: (message) => log(`[credential] ${message}`),
+    });
+  }
+  return publicCredentialVault;
+}
+
+function clearPublicCredential() {
+  if (PUBLIC_DEMO_MODE) {
+    const origin = credentialVault().backendOrigin;
+    cancelWorkspaceOperations(origin);
+    pendingWorkspaceSelections.delete(origin);
+    const store = readLocalWorkspaceStore(origin);
+    const retainedSnapshots = Object.values(store.pending_uploads || {})
+      .map((pending) => pending?.snapshot_path)
+      .filter((snapshotPath) => typeof snapshotPath === "string");
+    // Remote document ids belong to the authenticated principal. Retaining
+    // them across credential rotation could let a replacement principal act
+    // on the previous owner's projection, even at the same backend origin.
+    writeLocalWorkspaceStore(origin, {
+      ...store,
+      files: {},
+      doc_ids: [],
+      pending_uploads: {},
+      lastScan: null,
+    });
+    for (const snapshotPath of retainedSnapshots) {
+      void removeRetainedWorkspaceSnapshot(snapshotPath);
+    }
+  }
+  credentialVault().clear();
+  publicIdentityManager = null;
+  publicSessionEnsurePromise = null;
+  currentPublicSession = null;
+}
+
+function newDeviceSecret() {
+  return randomBytes(32).toString("base64url");
+}
+
+async function postPublicIdentity(pathname, body, { token = null } = {}) {
+  const vault = credentialVault();
+  const headers = {
+    "Content-Type": "application/json",
+    "X-EchoDesk-Client-Version": app.getVersion(),
   };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return backendBoundJsonFetch({
+    backendOrigin: vault.backendOrigin,
+    pathname,
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+}
 
-  session.defaultSession.setPermissionRequestHandler(
-    (webContents, permission, callback, details) => {
-      callback(shouldAllowMedia(webContents, permission, details));
-    },
-  );
+function publicIdentitySessionManager() {
+  if (publicIdentityManager === null) {
+    publicIdentityManager = createPublicIdentitySessionManager({
+      vault: credentialVault(),
+      request: postPublicIdentity,
+      newSecret: newDeviceSecret,
+      // Enrollment does not need the user's machine hostname. Keep the
+      // server-visible label generic unless a future explicit consent UI is added.
+      displayName: "EchoDesk Desktop",
+    });
+  }
+  return publicIdentityManager;
+}
 
-  session.defaultSession.setPermissionCheckHandler(
-    (webContents, permission, _requestingOrigin, details) =>
-      shouldAllowMedia(webContents, permission, details),
-  );
+async function renewPublicSessionFromCredential() {
+  const session = await publicIdentitySessionManager().renew();
+  const bound = session
+    ? { ...session, backend_origin: credentialVault().backendOrigin }
+    : null;
+  currentPublicSession = bound;
+  return bound;
+}
+
+function reusablePublicSession() {
+  if (!currentPublicSession?.token) return null;
+  const expiresAt = Date.parse(currentPublicSession.expires_at || "");
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now() + 5_000) {
+    currentPublicSession = null;
+    return null;
+  }
+  return currentPublicSession;
+}
+
+async function ensurePublicSessionInMain() {
+  if (!PUBLIC_DEMO_MODE) return null;
+  const active = reusablePublicSession();
+  if (active) return active;
+  if (publicSessionEnsurePromise) return publicSessionEnsurePromise;
+  const pending = (async () => {
+    const session = await publicIdentitySessionManager().ensure();
+    if (session) {
+      currentPublicSession = {
+        ...session,
+        backend_origin: credentialVault().backendOrigin,
+      };
+      return currentPublicSession;
+    }
+    const error = new Error(
+      "device identity is no longer valid; refusing to enroll a replacement owner",
+    );
+    error.code = "IDENTITY_LOST";
+    throw error;
+  })();
+  publicSessionEnsurePromise = pending;
+  try {
+    return await pending;
+  } finally {
+    if (publicSessionEnsurePromise === pending) publicSessionEnsurePromise = null;
+  }
+}
+
+async function rotatePublicCredential(sessionToken) {
+  return publicIdentitySessionManager().rotate(sessionToken);
+}
+
+let publicWorkspaceBackendTransport = null;
+
+function workspaceBackendTransport() {
+  if (!PUBLIC_DEMO_MODE) {
+    const error = new Error(
+      "local workspace IPC is only available for the public desktop runtime",
+    );
+    error.code = "WORKSPACE_BACKEND_DISABLED";
+    throw error;
+  }
+  if (publicWorkspaceBackendTransport === null) {
+    const vault = credentialVault();
+    publicWorkspaceBackendTransport = createWorkspaceBackendTransport({
+      backendBase: BACKEND_HOST,
+      vault,
+      ensureSession: ensurePublicSessionInMain,
+      renewSession: renewPublicSessionFromCredential,
+      clientVersion: app.getVersion(),
+    });
+  }
+  return publicWorkspaceBackendTransport;
 }
 
 function normalizeVersion(raw) {
@@ -303,7 +571,6 @@ function loadLegacyEchodeskHistory() {
     meetings,
     ambientSegments,
     artifacts: [],
-    sourcePath: dbPath,
     sourceSize: stat.size,
     sourceMtimeMs: stat.mtimeMs,
     importedAt: new Date().toISOString(),
@@ -317,6 +584,7 @@ const WORKSPACE_MAX_FILE_MB = Math.max(
   Number.parseFloat(process.env.ECHO_WORKSPACE_MAX_FILE_MB || "100") || 100,
 );
 const WORKSPACE_MAX_BYTES = Math.floor(WORKSPACE_MAX_FILE_MB * 1024 * 1024);
+const WORKSPACE_DURABLE_SNAPSHOT_DIRNAME = "workspace-upload-snapshots";
 const WORKSPACE_SUPPORTED_EXTS = new Set([
   ".pdf",
   ".docx",
@@ -380,9 +648,62 @@ const WORKSPACE_EXCLUDED_DIRS = new Set([
   "venv",
   "__pycache__",
 ]);
+const workspaceHandleSecret = randomBytes(32);
+const pendingWorkspaceSelections = new Map();
+
+function safeFailureCode(error) {
+  const raw = String(error?.code || error?.name || "ERROR").toUpperCase();
+  return raw.replace(/[^A-Z0-9_-]/g, "_").slice(0, 64) || "ERROR";
+}
+
+function safeWorkspaceLabel(raw) {
+  return (path.basename(String(raw || "")) || "工作区")
+    .replace(/[\r\n]/g, " ")
+    .trim()
+    .slice(0, 100) || "工作区";
+}
+
+function workspaceHandle(expectedOrigin, absolutePath) {
+  return workspaceRendererHandle(
+    expectedOrigin,
+    absolutePath,
+    workspaceHandleSecret,
+  );
+}
+
+function workspaceHandles(expectedOrigin, paths) {
+  return (paths || []).map((workspacePath) =>
+    workspaceHandle(expectedOrigin, workspacePath),
+  );
+}
 
 function workspaceStorePath() {
   return path.join(app.getPath("userData"), "workspaces.json");
+}
+
+function workspaceSnapshotAllowedRoots() {
+  const durableRoot = ensurePrivateWorkspaceSnapshotRoot(
+    path.join(app.getPath("userData"), WORKSPACE_DURABLE_SNAPSHOT_DIRNAME),
+  );
+  return Array.from(new Set([durableRoot, path.resolve(os.tmpdir())]));
+}
+
+async function createWorkspaceSnapshotDirectory() {
+  const [durableRoot] = workspaceSnapshotAllowedRoots();
+  const directory = await fs.promises.mkdtemp(
+    path.join(durableRoot, WORKSPACE_SNAPSHOT_PREFIX),
+  );
+  await fs.promises.chmod(directory, 0o700);
+  return directory;
+}
+
+async function sweepWorkspaceSnapshotRoots(protectedDirectories) {
+  for (const root of workspaceSnapshotAllowedRoots()) {
+    await cleanupStaleWorkspaceSnapshotDirs(root, {
+      logger: (message) => log(`[workspace] ${message}`),
+      protectedDirectories,
+    });
+  }
 }
 
 function expandHome(raw) {
@@ -399,102 +720,84 @@ function normalizeLocalWorkspaceDir(raw) {
   const resolved = path.resolve(expanded);
   let stat;
   try {
-    stat = fs.statSync(resolved);
-  } catch (e) {
-    throw new Error(`目录不存在：${resolved}`);
+    stat = fs.lstatSync(resolved);
+  } catch {
+    const error = new Error("所选工作区目录不可用");
+    error.code = "WORKSPACE_DIRECTORY_UNAVAILABLE";
+    throw error;
   }
-  if (!stat.isDirectory()) throw new Error(`不是目录：${resolved}`);
-  return resolved;
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    const error = new Error("所选工作区不是目录");
+    error.code = "WORKSPACE_DIRECTORY_INVALID";
+    throw error;
+  }
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    const error = new Error("所选工作区目录不可用");
+    error.code = "WORKSPACE_DIRECTORY_UNAVAILABLE";
+    throw error;
+  }
 }
 
-function readLocalWorkspaceStore() {
+function readLocalWorkspaceRegistry({ strict = false } = {}) {
   const storePath = workspaceStorePath();
   try {
-    if (!fs.existsSync(storePath)) {
-      return { workspaces: [], files: {}, lastScan: null };
-    }
-    const raw = JSON.parse(fs.readFileSync(storePath, "utf8"));
-    const workspaces = Array.isArray(raw.workspaces)
-      ? raw.workspaces.filter((d) => typeof d === "string" && d.trim())
-      : [];
-    return {
-      workspaces: Array.from(new Set(workspaces)),
-      files: raw.files && typeof raw.files === "object" ? raw.files : {},
-      lastScan: raw.lastScan && typeof raw.lastScan === "object" ? raw.lastScan : null,
-    };
-  } catch (e) {
-    log(`[workspace] read store failed: ${e?.message ?? e}`);
-    return { workspaces: [], files: {}, lastScan: null };
+    const raw = readPrivateJsonFile(storePath);
+    return normalizedWorkspaceRegistry(raw, BACKEND_HOST);
+  } catch (error) {
+    log(`[workspace] read store failed: ${safeFailureCode(error)}`);
+    if (strict) throw error;
+    return normalizedWorkspaceRegistry(null, BACKEND_HOST);
   }
 }
 
-function writeLocalWorkspaceStore(store) {
+function readLocalWorkspaceStore(expectedOrigin) {
+  return workspaceStateForOrigin(readLocalWorkspaceRegistry(), expectedOrigin);
+}
+
+function writeLocalWorkspaceStore(expectedOrigin, store) {
   const storePath = workspaceStorePath();
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   const payload = {
-    schema: 2,
-    workspaces: Array.from(new Set(store.workspaces || [])),
-    files: store.files || {},
-    lastScan: store.lastScan || null,
+    ...withWorkspaceState(
+      readLocalWorkspaceRegistry({ strict: true }),
+      expectedOrigin,
+      store,
+    ),
     updatedAt: new Date().toISOString(),
   };
-  const tmp = `${storePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf8");
-  fs.renameSync(tmp, storePath);
+  atomicWritePrivateJsonFile(storePath, payload);
 }
 
-function localWorkspaceDirs() {
-  const store = readLocalWorkspaceStore();
+function localWorkspaceDirs(expectedOrigin) {
+  const store = readLocalWorkspaceStore(expectedOrigin);
   return store.workspaces.filter((d) => typeof d === "string" && d.trim());
 }
 
-function localAuthorizedWorkspaceDirs() {
-  return localWorkspaceDirs().filter((d) => {
-    try {
-      return fs.statSync(d).isDirectory();
-    } catch {
-      return false;
+function resolveWorkspaceHandle(
+  expectedOrigin,
+  rawHandle,
+  { includePending = false } = {},
+) {
+  if (typeof rawHandle === "string" && rawHandle) {
+    for (const configuredPath of localWorkspaceDirs(expectedOrigin)) {
+      if (workspaceHandle(expectedOrigin, configuredPath) === rawHandle) {
+        return configuredPath;
+      }
     }
-  });
-}
-
-function appendApiPath(apiPath) {
-  const base = BACKEND_HOST.replace(/\/+$/, "");
-  return `${base}${apiPath.startsWith("/") ? apiPath : `/${apiPath}`}`;
-}
-
-async function fetchWithTimeout(url, init = {}, timeoutMs = 30_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
+    const pending = pendingWorkspaceSelections.get(expectedOrigin);
+    if (includePending && pending?.handle === rawHandle) return pending.path;
   }
+  const error = new Error("工作区句柄无效或已过期");
+  error.code = "WORKSPACE_HANDLE_INVALID";
+  throw error;
 }
 
-async function readJsonResponse(resp) {
-  const text = await resp.text();
-  if (!resp.ok) {
-    throw new Error(`HTTP ${resp.status}: ${text.slice(0, 300)}`);
-  }
-  return text ? JSON.parse(text) : {};
-}
-
-async function listRemoteRagDocs() {
-  const resp = await fetchWithTimeout(appendApiPath("/rag/docs"), {}, 15_000);
-  const json = await readJsonResponse(resp);
-  return Array.isArray(json.docs) ? json.docs : [];
-}
-
-async function countRemoteWorkspaceDocs(fallback) {
-  try {
-    const docs = await listRemoteRagDocs();
-    return docs.filter((doc) => doc && doc.source === "workspace").length;
-  } catch (e) {
-    log(`[workspace] count remote docs failed: ${e?.message ?? e}`);
-    return fallback;
-  }
+function throwIfWorkspaceAborted(signal) {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new DOMException("workspace operation cancelled", "AbortError");
 }
 
 function shouldSkipWorkspaceDir(name) {
@@ -507,43 +810,82 @@ function hasHiddenPathPart(root, target) {
   return rel.split(path.sep).some((part) => part.startsWith("."));
 }
 
-async function sha1Head(filePath, maxBytes = 1024 * 1024) {
-  const crypto = require("node:crypto");
-  const handle = await fs.promises.open(filePath, "r");
-  try {
-    const stat = await handle.stat();
-    const length = Math.min(maxBytes, stat.size);
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, 0);
-    return crypto.createHash("sha1").update(buffer).digest("hex");
-  } finally {
-    await handle.close();
-  }
-}
-
-async function collectWorkspaceFiles(root, result, out) {
+async function collectWorkspaceFiles(
+  root,
+  authorizedRoot,
+  canonicalAuthorizedRoot,
+  result,
+  out,
+  failedPaths,
+  signal,
+  expectedAuthorizedIdentity = null,
+) {
+  throwIfWorkspaceAborted(signal);
+  const outputStart = out.length;
   let entries;
+  let openedStat;
+  let openedCanonical;
+  let stableAuthorizedRoot = canonicalAuthorizedRoot;
   try {
+    [openedStat, openedCanonical] = await Promise.all([
+      fs.promises.lstat(root, { bigint: true }),
+      fs.promises.realpath(root),
+    ]);
+    if (!stableAuthorizedRoot) {
+      stableAuthorizedRoot = await fs.promises.realpath(authorizedRoot);
+    }
+    if (
+      !openedStat.isDirectory() ||
+      openedStat.isSymbolicLink() ||
+      (path.resolve(root) === path.resolve(authorizedRoot) &&
+        expectedAuthorizedIdentity &&
+        (String(openedStat.dev) !== String(expectedAuthorizedIdentity.dev) ||
+          String(openedStat.ino) !== String(expectedAuthorizedIdentity.ino))) ||
+      !controlledPathContains(stableAuthorizedRoot, openedCanonical)
+    ) {
+      const error = new Error("workspace directory escaped its authorized root");
+      error.code = "WORKSPACE_DIRECTORY_OUTSIDE_ROOT";
+      throw error;
+    }
     entries = await fs.promises.readdir(root, { withFileTypes: true });
   } catch (e) {
+    throwIfWorkspaceAborted(signal);
+    failedPaths.add(path.resolve(root));
     result.n_failed += 1;
-    result.errors.push(`读取目录失败 ${root}: ${e?.message ?? e}`);
+    result.errors.push(
+      `读取目录失败 ${safeWorkspaceLabel(root)} [${safeFailureCode(e)}]`,
+    );
     return;
   }
 
   for (const entry of entries) {
+    throwIfWorkspaceAborted(signal);
     const fullPath = path.join(root, entry.name);
     try {
       if (entry.isDirectory()) {
         if (shouldSkipWorkspaceDir(entry.name)) continue;
-        await collectWorkspaceFiles(fullPath, result, out);
+        await collectWorkspaceFiles(
+          fullPath,
+          authorizedRoot,
+          stableAuthorizedRoot,
+          result,
+          out,
+          failedPaths,
+          signal,
+          expectedAuthorizedIdentity,
+        );
         continue;
       }
       if (!entry.isFile()) continue;
       if (hasHiddenPathPart(root, fullPath)) continue;
       const ext = path.extname(entry.name).toLowerCase();
       if (!WORKSPACE_SUPPORTED_EXTS.has(ext)) continue;
-      const stat = await fs.promises.stat(fullPath);
+      const stat = await fs.promises.lstat(fullPath);
+      if (!stat.isFile()) {
+        const error = new Error("workspace source changed during enumeration");
+        error.code = "WORKSPACE_SOURCE_INVALID";
+        throw error;
+      }
       if (stat.size > WORKSPACE_MAX_BYTES) {
         result.n_skipped += 1;
         result.errors.push(
@@ -557,63 +899,338 @@ async function collectWorkspaceFiles(root, result, out) {
         name: entry.name,
         size: stat.size,
         mtime: stat.mtimeMs,
+        authorizedRoot: stableAuthorizedRoot,
+        configuredRoot: authorizedRoot,
+        authorizedRootIdentity: expectedAuthorizedIdentity,
       });
     } catch (e) {
+      throwIfWorkspaceAborted(signal);
+      failedPaths.add(path.resolve(fullPath));
       result.n_failed += 1;
-      result.errors.push(`读取文件失败 ${fullPath}: ${e?.message ?? e}`);
+      result.errors.push(
+        `读取文件失败 ${safeWorkspaceLabel(fullPath)} [${safeFailureCode(e)}]`,
+      );
     }
+  }
+
+  try {
+    const [currentStat, currentCanonical] = await Promise.all([
+      fs.promises.lstat(root, { bigint: true }),
+      fs.promises.realpath(root),
+    ]);
+    if (
+      !currentStat.isDirectory() ||
+      currentStat.isSymbolicLink() ||
+      currentStat.dev !== openedStat.dev ||
+      currentStat.ino !== openedStat.ino ||
+      currentCanonical !== openedCanonical
+    ) {
+      const error = new Error("workspace directory changed during enumeration");
+      error.code = "WORKSPACE_DIRECTORY_CHANGED";
+      throw error;
+    }
+  } catch (e) {
+    throwIfWorkspaceAborted(signal);
+    const discarded = out.splice(outputStart);
+    result.n_total = Math.max(0, result.n_total - discarded.length);
+    failedPaths.add(path.resolve(root));
+    result.n_failed += 1;
+    result.errors.push(
+      `读取目录失败 ${safeWorkspaceLabel(root)} [${safeFailureCode(e)}]`,
+    );
   }
 }
 
-async function uploadWorkspaceFile(fileInfo) {
-  const content = await fs.promises.readFile(fileInfo.path);
+async function uploadWorkspaceFile(expectedOrigin, fileInfo, snapshot, signal) {
+  throwIfWorkspaceAborted(signal);
+  const content = await fs.promises.readFile(snapshot.path, { signal });
+  if (content.byteLength !== snapshot.size || content.byteLength > WORKSPACE_MAX_BYTES) {
+    const error = new Error("workspace snapshot size changed unexpectedly");
+    error.code = "WORKSPACE_SNAPSHOT_INVALID";
+    throw error;
+  }
+  throwIfWorkspaceAborted(signal);
   const form = new FormData();
   const BlobCtor = globalThis.Blob || require("node:buffer").Blob;
-  form.append("file", new BlobCtor([content]), path.basename(fileInfo.path));
-  form.append("title", path.basename(fileInfo.path, path.extname(fileInfo.path)));
+  const fileName = path.basename(String(fileInfo.name || "workspace-file"));
+  form.append("file", new BlobCtor([content]), fileName);
+  form.append("title", path.basename(fileName, path.extname(fileName)));
   form.append("source", "workspace");
-  form.append("source_path", fileInfo.path);
-  const resp = await fetchWithTimeout(
-    appendApiPath("/rag/ingest"),
-    { method: "POST", body: form },
-    120_000,
-  );
-  return readJsonResponse(resp);
-}
-
-async function deleteRemoteRagDoc(docId) {
-  if (!docId) return;
-  const resp = await fetchWithTimeout(
-    appendApiPath(`/rag/docs/${encodeURIComponent(docId)}`),
-    { method: "DELETE" },
-    30_000,
-  );
-  await readJsonResponse(resp);
-}
-
-async function localWorkspaceStatus() {
-  const store = readLocalWorkspaceStore();
-  const authorized = store.workspaces.filter((d) => {
-    try {
-      return fs.statSync(d).isDirectory();
-    } catch {
-      return false;
-    }
+  const resp = await workspaceBackendTransport().request({
+    expectedOrigin,
+    pathname: "/rag/ingest",
+    init: { method: "POST", body: form, signal },
+    timeoutMs: 120_000,
   });
-  const fallbackCount =
-    typeof store.lastScan?.n_indexed === "number"
-      ? store.lastScan.n_indexed
-      : Object.keys(store.files || {}).length;
+  const payload = await readWorkspaceJsonResponse(resp);
+  if (typeof payload?.doc_id !== "string" || !payload.doc_id.trim()) {
+    throw new Error("workspace ingest returned no doc_id");
+  }
+  return payload;
+}
+
+async function deleteRemoteRagDoc(expectedOrigin, docId, signal) {
+  if (!docId) return;
+  throwIfWorkspaceAborted(signal);
+  const resp = await workspaceBackendTransport().request({
+    expectedOrigin,
+    pathname: `/rag/docs/${encodeURIComponent(docId)}`,
+    init: { method: "DELETE", signal },
+    timeoutMs: 30_000,
+  });
+  if (resp.status === 404) return;
+  await readWorkspaceJsonResponse(resp);
+}
+
+async function localWorkspaceStatus(expectedOrigin) {
+  const store = readLocalWorkspaceStore(expectedOrigin);
+  const authorized = [];
+  for (const directory of store.workspaces) {
+    try {
+      await verifyWorkspaceRootIdentity({
+        root: directory,
+        expectedIdentity: store.root_identities?.[directory] || null,
+      });
+      authorized.push(directory);
+    } catch {
+      // Status exposes only roots that still match the selected inode.
+    }
+  }
   return {
-    configured_dirs: store.workspaces,
-    authorized_dirs: authorized,
-    n_indexed: await countRemoteWorkspaceDocs(fallbackCount),
+    configured_dirs: workspaceHandles(expectedOrigin, store.workspaces),
+    authorized_dirs: workspaceHandles(expectedOrigin, authorized),
+    n_indexed: store.doc_ids.length,
     max_file_mb: WORKSPACE_MAX_FILE_MB,
     scan_on_startup: false,
   };
 }
 
-async function scanLocalWorkspaces() {
+function workspaceScanCheckpoint(
+  store,
+  nextFiles,
+  managedDocIds,
+  pendingUploads,
+  result,
+) {
+  return {
+    ...store,
+    files: { ...nextFiles },
+    doc_ids: Array.from(managedDocIds),
+    pending_uploads: { ...pendingUploads },
+    lastScan: {
+      n_indexed: managedDocIds.size,
+      scannedAt: new Date().toISOString(),
+      errors: result.errors.slice(0, 20),
+    },
+  };
+}
+
+function replaceWorkspaceScanProjection(
+  projection,
+  nextFiles,
+  managedDocIds,
+  pendingUploads,
+) {
+  for (const key of Object.keys(nextFiles)) delete nextFiles[key];
+  Object.assign(nextFiles, projection.files);
+  managedDocIds.clear();
+  for (const docId of projection.doc_ids) managedDocIds.add(docId);
+  for (const key of Object.keys(pendingUploads)) delete pendingUploads[key];
+  Object.assign(pendingUploads, projection.pending_uploads);
+}
+
+async function removeRetainedWorkspaceSnapshot(retainedPath) {
+  await removeRetainedWorkspaceSnapshotFile(retainedPath, {
+    logger: (message) => log(`[workspace] ${message}`),
+    allowedRoots: workspaceSnapshotAllowedRoots(),
+  });
+}
+
+async function recoverPendingWorkspaceUploads({
+  expectedOrigin,
+  store,
+  nextFiles,
+  managedDocIds,
+  pendingUploads,
+  snapshotDirectory,
+  signal,
+  persist,
+  result,
+}) {
+  for (const [sourcePath, durablePending] of Object.entries({ ...pendingUploads })) {
+    throwIfWorkspaceAborted(signal);
+    let recoverySnapshot = null;
+    let converged = false;
+    const hadPreviousMapping = Boolean(nextFiles[sourcePath]);
+    try {
+      let activePending = durablePending;
+      let uploaded = durablePending.uploaded_doc_id
+        ? { doc_id: durablePending.uploaded_doc_id, title: durablePending.title }
+        : null;
+      if (!uploaded) {
+        recoverySnapshot = await copyRetainedWorkspaceSnapshot({
+          retainedPath: durablePending.snapshot_path,
+          snapshotDirectory,
+          expectedSha256: durablePending.sha256,
+          expectedSize: durablePending.size,
+          maxBytes: WORKSPACE_MAX_BYTES,
+          signal,
+          allowedRoots: workspaceSnapshotAllowedRoots(),
+        });
+        if (activePending.upload_started_at === null) {
+          activePending = {
+            ...activePending,
+            upload_started_at: Date.now(),
+          };
+          pendingUploads[sourcePath] = activePending;
+          persist();
+        }
+        uploaded = await uploadWorkspaceFile(
+          expectedOrigin,
+          { name: durablePending.file_name },
+          recoverySnapshot,
+          signal,
+        );
+      }
+
+      if (activePending.clear_requested === true) {
+        const uploadedDocId = uploaded.doc_id.trim();
+        pendingUploads[sourcePath] = {
+          ...activePending,
+          uploaded_doc_id: uploadedDocId,
+        };
+        managedDocIds.add(uploadedDocId);
+        if (activePending.previous_doc_id) {
+          managedDocIds.add(activePending.previous_doc_id);
+        }
+        // Persist the tombstone and every possibly-created remote id before
+        // cleanup. Clear can return without blocking forever; future scans keep
+        // retrying this tombstone but never apply it as an active mapping.
+        persist();
+        let cleanupFailed = false;
+        const sourceMappedDocId =
+          typeof nextFiles[sourcePath]?.doc_id === "string"
+            ? nextFiles[sourcePath].doc_id.trim()
+            : "";
+        for (const docId of new Set([
+          uploadedDocId,
+          activePending.previous_doc_id,
+        ])) {
+          if (!docId) continue;
+          const otherReferences =
+            workspaceDocReferenceCount(nextFiles, docId) -
+            (sourceMappedDocId === docId ? 1 : 0);
+          if (otherReferences > 0) continue;
+          try {
+            await deleteRemoteRagDoc(expectedOrigin, docId, signal);
+            managedDocIds.delete(docId);
+          } catch (error) {
+            throwIfWorkspaceAborted(signal);
+            cleanupFailed = true;
+            result.n_failed += 1;
+            result.errors.push(
+              `清理取消入库失败 ${activePending.file_name} [${safeFailureCode(error)}]`,
+            );
+          }
+        }
+        if (cleanupFailed) {
+          persist();
+          continue;
+        }
+        delete nextFiles[sourcePath];
+        delete pendingUploads[sourcePath];
+        persist();
+        converged = true;
+        continue;
+      }
+
+      const afterUpload = workspaceProjectionAfterUpload(
+        workspaceScanCheckpoint(
+          store,
+          nextFiles,
+          managedDocIds,
+          pendingUploads,
+          result,
+        ),
+        sourcePath,
+        activePending,
+        uploaded,
+      );
+      replaceWorkspaceScanProjection(
+        afterUpload,
+        nextFiles,
+        managedDocIds,
+        pendingUploads,
+      );
+      // This is the crash boundary: both the new mapping and old/new remote ids
+      // are durable before any destructive remote cleanup begins.
+      persist();
+
+      const previousDocId = durablePending.previous_doc_id;
+      const uploadedDocId = uploaded.doc_id.trim();
+      let previousDeleted = false;
+      if (
+        previousDocId &&
+        previousDocId !== uploadedDocId &&
+        workspaceDocReferenceCount(nextFiles, previousDocId) === 0
+      ) {
+        try {
+          await deleteRemoteRagDoc(expectedOrigin, previousDocId, signal);
+          previousDeleted = true;
+        } catch (error) {
+          throwIfWorkspaceAborted(signal);
+          result.n_failed += 1;
+          result.errors.push(
+            `清理旧索引失败 ${durablePending.file_name} [${safeFailureCode(error)}]`,
+          );
+        }
+      }
+
+      const afterCleanup = workspaceProjectionAfterCleanup(
+        workspaceScanCheckpoint(
+          store,
+          nextFiles,
+          managedDocIds,
+          pendingUploads,
+          result,
+        ),
+        sourcePath,
+        { previousDeleted },
+      );
+      replaceWorkspaceScanProjection(
+        afterCleanup,
+        nextFiles,
+        managedDocIds,
+        pendingUploads,
+      );
+      persist();
+      converged = true;
+      if (hadPreviousMapping) result.n_updated += 1;
+      else result.n_added += 1;
+    } catch (error) {
+      throwIfWorkspaceAborted(signal);
+      result.n_failed += 1;
+      result.errors.push(
+        `恢复待入库文件失败 ${durablePending.file_name} [${safeFailureCode(error)}]`,
+      );
+    } finally {
+      if (recoverySnapshot?.path) {
+        try {
+          await fs.promises.unlink(recoverySnapshot.path);
+        } catch (error) {
+          if (error?.code !== "ENOENT") {
+            log(`[workspace] recovery copy cleanup deferred: ${safeFailureCode(error)}`);
+          }
+        }
+      }
+      if (converged) {
+        await removeRetainedWorkspaceSnapshot(durablePending.snapshot_path);
+      }
+    }
+  }
+}
+
+async function scanLocalWorkspaces(expectedOrigin, signal, leaseEpoch) {
   const started = Date.now();
   const result = {
     n_total: 0,
@@ -625,122 +1242,542 @@ async function scanLocalWorkspaces() {
     duration_s: 0,
     errors: [],
   };
-  const store = readLocalWorkspaceStore();
+  const store = readLocalWorkspaceStore(expectedOrigin);
   const files = [];
-  for (const dir of localAuthorizedWorkspaceDirs()) {
-    await collectWorkspaceFiles(dir, result, files);
-  }
-
+  const failedPaths = new Set();
   const nextFiles = { ...(store.files || {}) };
-  const currentPaths = new Set(files.map((f) => f.path));
-  for (const [sourcePath, meta] of Object.entries(store.files || {})) {
-    if (currentPaths.has(sourcePath)) continue;
+  const managedDocIds = new Set(store.doc_ids || []);
+  const pendingUploads = { ...(store.pending_uploads || {}) };
+  let snapshotDirectory = null;
+  const persist = () => {
+    assertWorkspaceOperationCurrent(expectedOrigin, leaseEpoch, signal);
+    writeLocalWorkspaceStore(
+      expectedOrigin,
+      workspaceScanCheckpoint(
+        store,
+        nextFiles,
+        managedDocIds,
+        pendingUploads,
+        result,
+      ),
+    );
+  };
+  try {
+    let protectedDirectories = null;
     try {
-      await deleteRemoteRagDoc(meta?.doc_id);
+      protectedDirectories = workspaceRegistryPendingSnapshotDirectories(
+        readLocalWorkspaceRegistry({ strict: true }),
+      );
+    } catch (error) {
+      log(`[workspace] snapshot sweep skipped: ${safeFailureCode(error)}`);
+    }
+    if (protectedDirectories !== null) {
+      await sweepWorkspaceSnapshotRoots(protectedDirectories);
+    }
+    snapshotDirectory = await createWorkspaceSnapshotDirectory();
+    await recoverPendingWorkspaceUploads({
+      expectedOrigin,
+      store,
+      nextFiles,
+      managedDocIds,
+      pendingUploads,
+      snapshotDirectory,
+      signal,
+      persist,
+      result,
+    });
+    for (const dir of store.workspaces) {
+      let verifiedRoot;
+      try {
+        verifiedRoot = await verifyWorkspaceRootIdentity({
+          root: dir,
+          expectedIdentity: store.root_identities?.[dir] || null,
+        });
+        if (!store.root_identities?.[dir]) {
+          store.root_identities = {
+            ...(store.root_identities || {}),
+            [dir]: verifiedRoot.identity,
+          };
+          // Legacy roots acquire an inode fence before enumeration or network I/O.
+          persist();
+        }
+      } catch (error) {
+        failedPaths.add(path.resolve(dir));
+        result.n_failed += 1;
+        result.errors.push(
+          `读取目录失败 ${safeWorkspaceLabel(dir)} [${safeFailureCode(error)}]`,
+        );
+        continue;
+      }
+      await collectWorkspaceFiles(
+        dir,
+        dir,
+        verifiedRoot.canonical,
+        result,
+        files,
+        failedPaths,
+        signal,
+        verifiedRoot.identity,
+      );
+    }
+
+    const orphanCleanup = await reapOrphanedWorkspaceDocIds(
+      {
+        ...store,
+        files: nextFiles,
+        doc_ids: Array.from(managedDocIds),
+      },
+      {
+        deleteDoc: (docId) => deleteRemoteRagDoc(expectedOrigin, docId, signal),
+        signal,
+      },
+    );
+    for (const docId of orphanCleanup.deletedDocIds) {
+      managedDocIds.delete(docId);
+      result.n_removed += 1;
+    }
+    for (const { docId, error } of orphanCleanup.failures) {
+      throwIfWorkspaceAborted(signal);
+      result.n_failed += 1;
+      result.errors.push(
+        `清理孤立索引失败 ${String(docId).slice(0, 40)} [${safeFailureCode(error)}]`,
+      );
+    }
+
+    const currentPaths = new Set(files.map((f) => f.path));
+    for (const [sourcePath, meta] of Object.entries({ ...nextFiles })) {
+      throwIfWorkspaceAborted(signal);
+      if (currentPaths.has(sourcePath)) continue;
+      if (
+        shouldRetainWorkspaceFileOnScanFailure(
+          sourcePath,
+          store.workspaces,
+          failedPaths,
+        )
+      ) {
+        continue;
+      }
       delete nextFiles[sourcePath];
       result.n_removed += 1;
-    } catch (e) {
-      result.n_failed += 1;
-      result.errors.push(`删除旧索引失败 ${sourcePath}: ${e?.message ?? e}`);
-    }
-  }
-
-  for (const file of files) {
-    const prev = nextFiles[file.path];
-    if (prev && prev.size === file.size && prev.mtime === file.mtime) {
-      result.n_skipped += 1;
-      continue;
-    }
-
-    let sha1 = "";
-    try {
-      sha1 = await sha1Head(file.path);
-    } catch (e) {
-      result.errors.push(`读取摘要失败 ${file.name}: ${e?.message ?? e}`);
-    }
-    if (prev && prev.size === file.size && prev.sha1 && prev.sha1 === sha1) {
-      nextFiles[file.path] = {
-        ...prev,
-        mtime: file.mtime,
-        size: file.size,
-        sha1,
-      };
-      result.n_skipped += 1;
-      continue;
+      const previousDocId =
+        typeof meta?.doc_id === "string" ? meta.doc_id.trim() : "";
+      if (!previousDocId || workspaceDocReferenceCount(nextFiles, previousDocId) > 0) {
+        continue;
+      }
+      try {
+        await deleteRemoteRagDoc(expectedOrigin, previousDocId, signal);
+        managedDocIds.delete(previousDocId);
+      } catch (e) {
+        throwIfWorkspaceAborted(signal);
+        result.n_failed += 1;
+        result.errors.push(
+          `删除旧索引失败 ${safeWorkspaceLabel(sourcePath)} [${safeFailureCode(e)}]`,
+        );
+      }
     }
 
-    try {
-      if (prev?.doc_id) {
-        await deleteRemoteRagDoc(prev.doc_id).catch((e) => {
-          log(`[workspace] delete previous doc failed: ${e?.message ?? e}`);
+    for (const file of files) {
+      throwIfWorkspaceAborted(signal);
+      if (pendingUploads[file.path]) {
+        // A failed recovery (including a deferred clear tombstone) owns this
+        // source until it converges. Never overwrite its durable snapshot/id set.
+        result.n_skipped += 1;
+        continue;
+      }
+      const prev = nextFiles[file.path];
+      let snapshot = null;
+      try {
+        await verifyWorkspaceRootIdentity({
+          root: file.configuredRoot,
+          expectedIdentity: file.authorizedRootIdentity,
+        });
+        snapshot = await createWorkspaceFileSnapshot({
+          sourcePath: file.path,
+          authorizedRoot: file.authorizedRoot,
+          snapshotDirectory,
+          maxBytes: WORKSPACE_MAX_BYTES,
+          signal,
+          onCleanupError: (error) =>
+            log(
+              `[workspace] snapshot handle cleanup failed: ${safeFailureCode(error)}`,
+            ),
+        });
+        await verifyWorkspaceRootIdentity({
+          root: file.configuredRoot,
+          expectedIdentity: file.authorizedRootIdentity,
+        });
+      } catch (e) {
+        throwIfWorkspaceAborted(signal);
+        if (snapshot?.path) {
+          try {
+            await fs.promises.unlink(snapshot.path);
+          } catch (cleanupError) {
+            if (cleanupError?.code !== "ENOENT") {
+              log(
+                `[workspace] rejected snapshot cleanup deferred: ${safeFailureCode(cleanupError)}`,
+              );
+            }
+          }
+        }
+        failedPaths.add(file.path);
+        result.n_failed += 1;
+        result.errors.push(
+          `创建安全快照失败 ${file.name} [${safeFailureCode(e)}]`,
+        );
+        continue;
+      }
+      let intentDurable = false;
+      let converged = false;
+      try {
+        if (prev?.sha256 && prev.sha256 === snapshot.sha256) {
+          nextFiles[file.path] = {
+            ...prev,
+            mtime: snapshot.mtime,
+            size: snapshot.size,
+            sha256: snapshot.sha256,
+          };
+          result.n_skipped += 1;
+          continue;
+        }
+
+        const previousDocId =
+          typeof prev?.doc_id === "string" ? prev.doc_id.trim() : "";
+        pendingUploads[file.path] = {
+          snapshot_path: snapshot.path,
+          sha256: snapshot.sha256,
+          size: snapshot.size,
+          mtime: snapshot.mtime,
+          file_name: file.name,
+          title: file.name,
+          previous_doc_id: previousDocId,
+          uploaded_doc_id: "",
+          upload_started_at: null,
+          queued_at: Date.now(),
+        };
+        try {
+          // Upload is not started until its exact private snapshot and previous
+          // mapping are durable. A lost response can then be retried through the
+          // backend's content-hash idempotency contract.
+          persist();
+          intentDurable = true;
+        } catch (error) {
+          delete pendingUploads[file.path];
+          throw error;
+        }
+
+        pendingUploads[file.path] = {
+          ...pendingUploads[file.path],
+          upload_started_at: Date.now(),
+        };
+        persist();
+
+        const uploaded = await uploadWorkspaceFile(
+          expectedOrigin,
+          file,
+          snapshot,
+          signal,
+        );
+        const uploadedDocId = uploaded.doc_id.trim();
+        const afterUpload = workspaceProjectionAfterUpload(
+          workspaceScanCheckpoint(
+            store,
+            nextFiles,
+            managedDocIds,
+            pendingUploads,
+            result,
+          ),
+          file.path,
+          pendingUploads[file.path],
+          uploaded,
+        );
+        replaceWorkspaceScanProjection(
+          afterUpload,
+          nextFiles,
+          managedDocIds,
+          pendingUploads,
+        );
+        persist();
+
+        // Commit the new local mapping before cleaning up the previous remote
+        // projection. If cleanup is interrupted or fails, the old doc id stays
+        // in doc_ids as a durable orphan and is retried on the next scan.
+        let previousDeleted = false;
+        if (
+          previousDocId &&
+          previousDocId !== uploadedDocId &&
+          workspaceDocReferenceCount(nextFiles, previousDocId) === 0
+        ) {
+          try {
+            await deleteRemoteRagDoc(expectedOrigin, previousDocId, signal);
+            previousDeleted = true;
+          } catch (e) {
+            throwIfWorkspaceAborted(signal);
+            log(
+              `[workspace] delete previous doc failed: ${safeFailureCode(e)}`,
+            );
+            result.n_failed += 1;
+            result.errors.push(
+              `清理旧索引失败 ${file.name} [${safeFailureCode(e)}]`,
+            );
+          }
+        }
+        const afterCleanup = workspaceProjectionAfterCleanup(
+          workspaceScanCheckpoint(
+            store,
+            nextFiles,
+            managedDocIds,
+            pendingUploads,
+            result,
+          ),
+          file.path,
+          { previousDeleted },
+        );
+        replaceWorkspaceScanProjection(
+          afterCleanup,
+          nextFiles,
+          managedDocIds,
+          pendingUploads,
+        );
+        persist();
+        converged = true;
+        if (prev) result.n_updated += 1;
+        else result.n_added += 1;
+      } catch (e) {
+        throwIfWorkspaceAborted(signal);
+        result.n_failed += 1;
+        result.errors.push(`入库失败 ${file.name} [${safeFailureCode(e)}]`);
+      } finally {
+        if (snapshot?.path && (!intentDurable || converged)) {
+          try {
+            await fs.promises.unlink(snapshot.path);
+          } catch (error) {
+            if (error?.code !== "ENOENT") {
+              log(
+                `[workspace] snapshot file cleanup deferred: ${safeFailureCode(error)}`,
+              );
+            }
+          }
+        }
+      }
+    }
+    return result;
+  } finally {
+    result.duration_s = Number(((Date.now() - started) / 1000).toFixed(3));
+    if (snapshotDirectory) {
+      const retainedDirectories = new Set(
+        workspacePendingSnapshotDirectories({ pending_uploads: pendingUploads }).map(
+          (directory) => path.resolve(directory),
+        ),
+      );
+      if (!retainedDirectories.has(path.resolve(snapshotDirectory))) {
+        await cleanupWorkspaceSnapshotDirectory(snapshotDirectory, {
+          logger: (message) => log(`[workspace] ${message}`),
         });
       }
-      const uploaded = await uploadWorkspaceFile(file);
-      nextFiles[file.path] = {
-        doc_id: uploaded.doc_id,
-        title: uploaded.title || file.name,
-        size: file.size,
-        mtime: file.mtime,
-        sha1,
-        ingested_at: Date.now(),
-      };
-      if (prev) result.n_updated += 1;
-      else result.n_added += 1;
-    } catch (e) {
-      result.n_failed += 1;
-      result.errors.push(`入库失败 ${file.name}: ${e?.message ?? e}`);
     }
+    persist();
   }
-
-  result.duration_s = Number(((Date.now() - started) / 1000).toFixed(3));
-  const nIndexed = Object.keys(nextFiles).length;
-  writeLocalWorkspaceStore({
-    ...store,
-    files: nextFiles,
-    lastScan: {
-      n_indexed: nIndexed,
-      scannedAt: new Date().toISOString(),
-      errors: result.errors.slice(0, 20),
-    },
-  });
-  return result;
 }
 
-async function clearLocalWorkspaceDocs() {
-  const store = readLocalWorkspaceStore();
+async function clearLocalWorkspaceDocs(expectedOrigin, signal, leaseEpoch) {
+  const store = readLocalWorkspaceStore(expectedOrigin);
   let removed = 0;
+  const nextFiles = { ...(store.files || {}) };
+  const remainingDocIds = new Set(store.doc_ids || []);
+  const pendingUploads = { ...(store.pending_uploads || {}) };
+  const result = { errors: [], n_failed: 0, n_added: 0, n_updated: 0 };
+  let snapshotDirectory = null;
+  const persist = () => {
+    assertWorkspaceOperationCurrent(expectedOrigin, leaseEpoch, signal);
+    writeLocalWorkspaceStore(
+      expectedOrigin,
+      workspaceScanCheckpoint(
+        store,
+        nextFiles,
+        remainingDocIds,
+        pendingUploads,
+        result,
+      ),
+    );
+  };
   try {
-    const docs = await listRemoteRagDocs();
-    for (const doc of docs) {
-      if (doc?.source !== "workspace") continue;
+    snapshotDirectory = await createWorkspaceSnapshotDirectory();
+    const prepared = prepareWorkspaceUploadsForClear(
+      workspaceScanCheckpoint(
+        store,
+        nextFiles,
+        remainingDocIds,
+        pendingUploads,
+        result,
+      ),
+    );
+    replaceWorkspaceScanProjection(
+      prepared.state,
+      nextFiles,
+      remainingDocIds,
+      pendingUploads,
+    );
+    if (Object.keys(pendingUploads).length > 0 || prepared.abandonedSnapshotPaths.length > 0) {
+      persist();
+    }
+    for (const snapshotPath of prepared.abandonedSnapshotPaths) {
+      await removeRetainedWorkspaceSnapshot(snapshotPath);
+    }
+    await recoverPendingWorkspaceUploads({
+      expectedOrigin,
+      store,
+      nextFiles,
+      managedDocIds: remainingDocIds,
+      pendingUploads,
+      snapshotDirectory,
+      signal,
+      persist,
+      result,
+    });
+    for (const docId of Array.from(remainingDocIds)) {
+      throwIfWorkspaceAborted(signal);
       try {
-        await deleteRemoteRagDoc(doc.doc_id);
+        await deleteRemoteRagDoc(expectedOrigin, docId, signal);
+        remainingDocIds.delete(docId);
+        for (const [sourcePath, pending] of Object.entries(pendingUploads)) {
+          if (
+            pending.previous_doc_id === docId ||
+            pending.uploaded_doc_id === docId
+          ) {
+            pendingUploads[sourcePath] = {
+              ...pending,
+              previous_doc_id:
+                pending.previous_doc_id === docId ? "" : pending.previous_doc_id,
+              uploaded_doc_id:
+                pending.uploaded_doc_id === docId ? "" : pending.uploaded_doc_id,
+            };
+          }
+        }
         removed += 1;
       } catch (e) {
-        log(`[workspace] delete remote workspace doc failed: ${e?.message ?? e}`);
+        throwIfWorkspaceAborted(signal);
+        log(`[workspace] delete managed doc failed: ${safeFailureCode(e)}`);
+        result.errors.push(`删除索引失败 [${safeFailureCode(e)}]`);
       }
     }
-  } catch (e) {
-    log(`[workspace] list remote docs before clear failed: ${e?.message ?? e}`);
-    for (const meta of Object.values(store.files || {})) {
-      try {
-        await deleteRemoteRagDoc(meta?.doc_id);
-        removed += 1;
-      } catch (deleteError) {
-        log(`[workspace] delete stored doc failed: ${deleteError?.message ?? deleteError}`);
-      }
+    return { n_removed: removed };
+  } finally {
+    const remainingFiles = Object.fromEntries(
+      Object.entries(nextFiles).filter(([, metadata]) =>
+        remainingDocIds.has(metadata?.doc_id),
+      ),
+    );
+    for (const key of Object.keys(nextFiles)) delete nextFiles[key];
+    Object.assign(nextFiles, remainingFiles);
+    if (snapshotDirectory) {
+      await cleanupWorkspaceSnapshotDirectory(snapshotDirectory, {
+        logger: (message) => log(`[workspace] ${message}`),
+      });
     }
+    persist();
   }
-  writeLocalWorkspaceStore({
-    ...store,
-    files: {},
-    lastScan: {
-      n_indexed: 0,
-      scannedAt: new Date().toISOString(),
-      errors: [],
-    },
+}
+
+const workspaceOperationEpochs = new Map();
+const activeWorkspaceOperations = new Map();
+const workspaceMutationTails = new Map();
+
+function rendererExpectedMainBackendOrigin(event, context) {
+  assertTrustedIpcOrigin(event);
+  const rawExpectedOrigin = context?.expectedBackendOrigin;
+  if (typeof rawExpectedOrigin !== "string" || !rawExpectedOrigin.trim()) {
+    const error = new Error("workspace IPC requires an expected backend origin");
+    error.code = "WORKSPACE_BACKEND_ORIGIN_REQUIRED";
+    throw error;
+  }
+  let expectedOrigin;
+  try {
+    const parsed = new URL(rawExpectedOrigin);
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new Error("not an HTTP(S) origin");
+    }
+    expectedOrigin = parsed.origin;
+  } catch (cause) {
+    const error = new Error("workspace IPC received an invalid backend origin", {
+      cause,
+    });
+    error.code = "WORKSPACE_BACKEND_ORIGIN_INVALID";
+    throw error;
+  }
+  const mainOrigin = new URL(BACKEND_HOST).origin;
+  if (expectedOrigin !== mainOrigin) {
+    const error = new Error(
+      "renderer backend origin no longer matches the Electron main process",
+    );
+    error.code = "WORKSPACE_BACKEND_ORIGIN_MISMATCH";
+    throw error;
+  }
+  return expectedOrigin;
+}
+
+function workspaceExpectedOrigin(event, context) {
+  const expectedOrigin = rendererExpectedMainBackendOrigin(event, context);
+  return workspaceBackendTransport().assertExpectedOrigin(expectedOrigin);
+}
+
+function workspaceOperationEpoch(expectedOrigin) {
+  return workspaceOperationEpochs.get(expectedOrigin) || 0;
+}
+
+function assertWorkspaceOperationCurrent(expectedOrigin, leaseEpoch, signal) {
+  throwIfWorkspaceAborted(signal);
+  if (leaseEpoch !== workspaceOperationEpoch(expectedOrigin)) {
+    throw new DOMException("workspace origin lease expired", "AbortError");
+  }
+}
+
+function cancelWorkspaceOperations(expectedOrigin) {
+  workspaceOperationEpochs.set(
+    expectedOrigin,
+    workspaceOperationEpoch(expectedOrigin) + 1,
+  );
+  const controllers = activeWorkspaceOperations.get(expectedOrigin);
+  if (!controllers) return 0;
+  for (const controller of controllers) {
+    controller.abort(new DOMException("backend origin changed", "AbortError"));
+  }
+  return controllers.size;
+}
+
+async function runWorkspaceMutation(expectedOrigin, operation) {
+  const leaseEpoch = workspaceOperationEpoch(expectedOrigin);
+  const previous = workspaceMutationTails.get(expectedOrigin) || Promise.resolve();
+  const running = previous.catch(() => undefined).then(async () => {
+    assertWorkspaceOperationCurrent(expectedOrigin, leaseEpoch);
+    const controller = new AbortController();
+    let controllers = activeWorkspaceOperations.get(expectedOrigin);
+    if (!controllers) {
+      controllers = new Set();
+      activeWorkspaceOperations.set(expectedOrigin, controllers);
+    }
+    controllers.add(controller);
+    try {
+      const value = await operation(controller.signal, leaseEpoch);
+      assertWorkspaceOperationCurrent(
+        expectedOrigin,
+        leaseEpoch,
+        controller.signal,
+      );
+      return value;
+    } finally {
+      controllers.delete(controller);
+      if (controllers.size === 0) activeWorkspaceOperations.delete(expectedOrigin);
+    }
   });
-  return { n_removed: removed };
+  workspaceMutationTails.set(expectedOrigin, running.catch(() => undefined));
+  return running;
 }
 
 function compareVersions(a, b) {
@@ -755,53 +1792,15 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function preferredReleaseAsset(assets) {
-  const names = (assets || []).map((asset) => asset.name || "");
-  const patterns =
-    process.platform === "darwin"
-      ? [/arm64\.dmg$/i, /arm64-mac\.zip$/i, /\.dmg$/i]
-      : process.platform === "win32"
-        ? [/Setup\.[\d.]+\.exe$/i, /\.exe$/i]
-        : [/\.AppImage$/i, /\.deb$/i];
-  for (const pattern of patterns) {
-    const name = names.find((n) => pattern.test(n));
-    if (name) return (assets || []).find((asset) => asset.name === name) || null;
-  }
-  return (assets || [])[0] || null;
-}
-
 function fetchJson(url) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(
-      url,
-      {
-        headers: {
-          "Accept": "application/vnd.github+json",
-          "User-Agent": `EchoDesk/${app.getVersion()}`,
-        },
-        timeout: 8000,
-      },
-      (res) => {
-        const chunks = [];
-        res.on("data", (chunk) => chunks.push(chunk));
-        res.on("end", () => {
-          const body = Buffer.concat(chunks).toString("utf8");
-          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
-            reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
-            return;
-          }
-          try {
-            resolve(JSON.parse(body));
-          } catch (e) {
-            reject(e);
-          }
-        });
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy(new Error("request timeout"));
-    });
+  return fetchBoundedHttpsJson(url, {
+    headers: {
+      "Accept": "application/vnd.github+json",
+      "User-Agent": `EchoDesk/${app.getVersion()}`,
+    },
+    maxBytes: 1024 * 1024,
+    timeoutMs: 8_000,
+    validate: isGithubReleasePayload,
   });
 }
 
@@ -845,9 +1844,13 @@ function emitUpdateStatus(payload) {
     try {
       mainWindow.webContents.send("updates:status", lastUpdateStatus);
     } catch (e) {
-      log(`[updates] emit failed: ${e.message}`);
+      log(`[updates] emit failed: ${safeFailureCode(e)}`);
     }
   }
+}
+
+function safeUpdateFailure(error, fallback = "更新服务暂时不可用") {
+  return `${fallback} [${safeFailureCode(error)}]`;
 }
 
 async function checkForUpdatesWithFallback() {
@@ -868,7 +1871,7 @@ async function checkForUpdatesWithFallback() {
       assetName: null,
       assetUrl: null,
       canAutoInstall: false,
-      error: e?.message || String(e),
+      error: safeUpdateFailure(e),
     };
   }
 
@@ -905,7 +1908,7 @@ async function checkForUpdatesWithFallback() {
     const merged = {
       ...fallback,
       status: fallback.updateAvailable ? "available" : "checked",
-      error: e?.message || String(e),
+      error: safeUpdateFailure(e),
       canAutoInstall: false,
     };
     emitUpdateStatus(merged);
@@ -943,7 +1946,7 @@ function maybeDownloadUpdateInBackground(status, reason) {
     .catch((e) => {
       emitUpdateStatus({
         status: "error",
-        error: e?.message || String(e),
+        error: safeUpdateFailure(e, "更新包下载失败"),
         canAutoInstall: false,
       });
     })
@@ -1029,7 +2032,7 @@ if (autoUpdater) {
   autoUpdater.on("error", (err) =>
     emitUpdateStatus({
       status: "error",
-      error: err?.message || String(err),
+      error: safeUpdateFailure(err),
       canAutoInstall: false,
     }),
   );
@@ -1057,10 +2060,11 @@ function firstLanAddress() {
 }
 
 function shareBackendHost() {
-  const configured = normalizeHttpBase(process.env.ECHO_SHARE_BASE_URL);
-  if (configured) return configured;
-  if (PUBLIC_DEMO_MODE) return PUBLIC_BACKEND_HOST;
-  return `http://${firstLanAddress()}:${BACKEND_PORT}`;
+  return resolveShareBackendBase(BACKEND_ENDPOINT, {
+    shareBaseUrl: process.env.ECHO_SHARE_BASE_URL,
+    lanAddress: firstLanAddress(),
+    allowLan: !externalMode,
+  });
 }
 
 function projectRoot() {
@@ -1086,6 +2090,34 @@ function resolveBackendCwd() {
   }
   // 全找不到时退化用第一个（spawn 会失败，让上层走 handleBackendDeath）
   return cands[0];
+}
+
+function bundledBackendPath() {
+  const name = process.platform === "win32" ? "echodesk-backend.exe" : "echodesk-backend";
+  return path.join(process.resourcesPath, "backend", name);
+}
+
+function bundledBackendExecutable() {
+  if (!app.isPackaged) return null;
+  const candidate = bundledBackendPath();
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return candidate;
+  } catch (error) {
+    log(`[backend] bundled executable unavailable [${safeFailureCode(error)}]`);
+    return null;
+  }
+}
+
+function refusePackagedSourceFallback() {
+  if (!app.isPackaged || ALLOW_PACKAGED_SOURCE_BACKEND) return false;
+  emitStatus({
+    state: "bundled-backend-unavailable",
+    reason: "packaged backend is missing or not executable",
+    searched: [bundledBackendPath()],
+    help_url: "docs/INSTALL.md",
+  });
+  return true;
 }
 
 // ---------- Python 解析（P1.6） ----------
@@ -1122,7 +2154,7 @@ function resolvePython() {
       // python --version 走 stdout（3.4+）或 stderr（旧版）；任一含 "Python" 即可
       const out = `${r.stdout || ""}${r.stderr || ""}`;
       if (r.status === 0 && /Python/i.test(out)) {
-        log(`[backend] python resolved: ${c} (${out.trim()})`);
+        log(`[backend] python resolved candidate=${searched.length}`);
         return { python: c, searched };
       }
     } catch {
@@ -1150,11 +2182,12 @@ function isPortListening(port) {
 // ---------- IPC 状态广播 ----------
 
 function emitStatus(payload) {
-  lastStatus = payload;
-  log(`[backend] status -> ${JSON.stringify(payload)}`);
+  const rendererPayload = projectBackendStatusForRenderer(payload);
+  lastStatus = rendererPayload;
+  log(`[backend] status -> ${JSON.stringify(rendererPayload)}`);
   if (mainWindow && !mainWindow.isDestroyed() && rendererReady) {
     try {
-      mainWindow.webContents.send("backend:status", payload);
+      mainWindow.webContents.send("backend:status", rendererPayload);
     } catch (e) {
       log(`[backend] emit failed: ${e.message}`);
     }
@@ -1283,34 +2316,34 @@ function startExternalHealthWatcher() {
 
 // ---------- 进程生命周期 ----------
 
-function killBackendProc() {
-  if (!backendProc || backendProc.killed) {
+async function killBackendProc() {
+  if (!backendProc || backendProc.exitCode !== null) {
     backendProc = null;
     return;
   }
   const proc = backendProc;
   backendProc = null;
   try {
-    proc.kill("SIGTERM");
-  } catch {
-    /* ignore */
+    await stopBackendProcess(proc, { graceMs: SIGKILL_GRACE_MS });
+  } catch (error) {
+    log(`[backend] stop failed during recovery: ${safeFailureCode(error)}`);
   }
-  // 异步 SIGKILL 兜底，避免 uvicorn lifespan shutdown 卡住
-  setTimeout(() => {
-    if (proc && proc.exitCode === null) {
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
-    }
-  }, SIGKILL_GRACE_MS);
+}
+
+function stopBackendProcForRestart() {
+  if (!backendProc || backendProc.exitCode !== null) {
+    backendProc = null;
+    return Promise.resolve();
+  }
+  const proc = backendProc;
+  backendProc = null;
+  return stopBackendProcess(proc, { graceMs: SIGKILL_GRACE_MS });
 }
 
 async function handleBackendDeath(reason) {
   if (shuttingDown) return;
   stopHealthWatcher();
-  killBackendProc();
+  await killBackendProc();
 
   if (restartAttempts >= RESTART_BACKOFFS_MS.length) {
     // 3 次重启都没救活 → 进入 degraded，停止自动循环，等 renderer 手动触发
@@ -1331,14 +2364,19 @@ async function handleBackendDeath(reason) {
     backoff_ms: backoff,
     reason,
   });
+  const lifecycleGeneration = backendLifecycleGeneration;
   setTimeout(() => {
-    if (shuttingDown) return;
+    if (shuttingDown || lifecycleGeneration !== backendLifecycleGeneration) return;
     spawnBackendAndWatch();
   }, backoff);
 }
 
 function spawnBackendAndWatch() {
   if (shuttingDown) return;
+  if (backendProc && backendProc.exitCode === null && !backendProc.killed) {
+    log("[backend] spawn ignored because a supervised child is already running");
+    return;
+  }
 
   if (!SPAWN_BACKEND) {
     externalMode = true;
@@ -1361,11 +2399,15 @@ function spawnBackendAndWatch() {
     return;
   }
 
-  // resolvePython 在 startBackend 已经跑过；这里防御性兜底
-  if (!pythonResolved || !pythonResolved.python) {
+  const bundledBackend = bundledBackendExecutable();
+  if (!bundledBackend && refusePackagedSourceFallback()) {
+    return;
+  }
+  // 开发/源码安装仍走 Python；打包安装优先运行随安装器携带的 backend executable。
+  if (!bundledBackend && (!pythonResolved || !pythonResolved.python)) {
     pythonResolved = resolvePython();
   }
-  if (!pythonResolved.python) {
+  if (!bundledBackend && !pythonResolved.python) {
     emitStatus({
       state: "python-not-found",
       searched: pythonResolved.searched,
@@ -1374,8 +2416,8 @@ function spawnBackendAndWatch() {
     return;
   }
 
-  const cwd = resolveBackendCwd();
-  if (!cwd || !fs.existsSync(path.join(cwd, "app", "main.py"))) {
+  const cwd = bundledBackend ? path.dirname(bundledBackend) : resolveBackendCwd();
+  if (!bundledBackend && (!cwd || !fs.existsSync(path.join(cwd, "app", "main.py")))) {
     emitStatus({
       state: "backend-source-not-found",
       searched: [
@@ -1388,12 +2430,19 @@ function spawnBackendAndWatch() {
     return;
   }
   emitStatus({ state: "starting" });
-  log(`[backend] spawn ${pythonResolved.python} -m uvicorn (cwd=${cwd})`);
-
-  try {
-    backendProc = spawn(
-      pythonResolved.python,
-      [
+  const executable = bundledBackend || pythonResolved.python;
+  const args = bundledBackend
+    ? [
+        "--host",
+        BACKEND_BIND_HOST,
+        "--port",
+        String(BACKEND_PORT),
+        "--ws-max-size",
+        "4096",
+        "--log-level",
+        "info",
+      ]
+    : [
         "-m",
         "uvicorn",
         "app.main:app",
@@ -1401,13 +2450,33 @@ function spawnBackendAndWatch() {
         BACKEND_BIND_HOST,
         "--port",
         String(BACKEND_PORT),
+        "--ws-max-size",
+        "4096",
         "--log-level",
         "info",
-      ],
+      ];
+  log(`[backend] spawn mode=${bundledBackend ? "bundled" : "source"} port=${BACKEND_PORT}`);
+
+  try {
+    backendProc = spawn(
+      executable,
+      args,
       {
         cwd,
         env: {
           ...process.env,
+          // The packaged app already contains a platform-correct Node runtime.
+          // The backend reuses it for deterministic PPT rendering instead of
+          // requiring users to install node/npm separately.
+          ...electronNodeRuntimeEnvironment(process.execPath),
+          // The supervisor-selected endpoint is authoritative for both the
+          // uvicorn socket and backend Settings/health/bootstrap diagnostics.
+          PORT: String(BACKEND_PORT),
+          PUBLIC_HTTP_URL:
+            process.env.PUBLIC_HTTP_URL || LOCAL_BACKEND_HOST,
+          PUBLIC_WS_URL:
+            process.env.PUBLIC_WS_URL ||
+            `${LOCAL_BACKEND_HOST.replace(/^http/, "ws")}/ws/echo`,
           // localhost 流量走代理会导致 uvicorn 自己 GET healthz 都失败
           HTTP_PROXY: "",
           HTTPS_PROXY: "",
@@ -1420,15 +2489,15 @@ function spawnBackendAndWatch() {
       },
     );
   } catch (e) {
-    log(`[backend] spawn threw: ${e.message}`);
+    log(`[backend] spawn threw [${safeFailureCode(e)}]`);
     backendProc = null;
-    handleBackendDeath(`spawn threw: ${e.message}`);
+    handleBackendDeath("spawn failed");
     return;
   }
 
   // ENOENT / EACCES 走 'error' 事件而不是 throw；不挂监听 electron 会判 fatal
   backendProc.on("error", (err) => {
-    log(`[backend] spawn error: ${err.message}`);
+    log(`[backend] spawn error [${safeFailureCode(err)}]`);
   });
   backendProc.stdout?.on("data", (b) =>
     process.stdout.write(`[backend] ${b.toString()}`),
@@ -1467,11 +2536,20 @@ function startBackend() {
     return;
   }
 
-  // P1.6: 启动第一步验证 Python 存在；找不到就直接 emit python-not-found
+  if (bundledBackendExecutable()) {
+    spawnBackendAndWatch();
+    return;
+  }
+
+  if (refusePackagedSourceFallback()) {
+    return;
+  }
+
+  // P1.6: 源码安装启动第一步验证 Python 存在；找不到就直接 emit python-not-found
   // 不 spawn uvicorn 是为了避免 ENOENT 太晚才暴露
   pythonResolved = resolvePython();
   if (!pythonResolved.python) {
-    log(`[backend] python not found. searched=${JSON.stringify(pythonResolved.searched)}`);
+    log(`[backend] python not found searched_count=${pythonResolved.searched.length}`);
     emitStatus({
       state: "python-not-found",
       searched: pythonResolved.searched,
@@ -1482,7 +2560,32 @@ function startBackend() {
   spawnBackendAndWatch();
 }
 
-function createWindow() {
+function validatedExternalHttpsUrl(rawUrl) {
+  let target;
+  try {
+    target = new URL(String(rawUrl || ""));
+  } catch (cause) {
+    const error = new Error("valid HTTPS URL required", { cause });
+    error.code = "EXTERNAL_URL_INVALID";
+    throw error;
+  }
+  if (
+    target.protocol !== "https:" ||
+    target.username ||
+    target.password
+  ) {
+    const error = new Error("valid HTTPS URL required");
+    error.code = "EXTERNAL_URL_INVALID";
+    throw error;
+  }
+  return target.href;
+}
+
+function openExternalHttps(rawUrl) {
+  return shell.openExternal(validatedExternalHttpsUrl(rawUrl));
+}
+
+async function createWindow() {
   mainWindow = new BrowserWindow({
     title: IS_DEV ? "EchoDesk (dev)" : "EchoDesk",
     width: 1280,
@@ -1496,7 +2599,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 
@@ -1517,7 +2620,7 @@ function createWindow() {
       try {
         mainWindow.webContents.send("updates:status", lastUpdateStatus);
       } catch (e) {
-        log(`[updates] replay failed: ${e.message}`);
+        log(`[updates] replay failed: ${safeFailureCode(e)}`);
       }
     }
   });
@@ -1527,29 +2630,90 @@ function createWindow() {
     rendererReady = false;
   });
 
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (isTrustedAppRendererUrl(url)) return;
+    event.preventDefault();
+    try {
+      void openExternalHttps(url);
+    } catch {
+      // Untrusted navigation remains denied without handing a custom scheme to OS.
+    }
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    try {
+      void openExternalHttps(url);
+    } catch {
+      // Invalid/non-HTTPS popups are denied below.
+    }
     return { action: "deny" };
   });
 
-  if (IS_DEV) {
-    mainWindow.loadURL(VITE_URL);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+  try {
+    if (IS_DEV) {
+      await mainWindow.loadURL(VITE_URL);
+    } else {
+      await mainWindow.loadURL(APP_ENTRY_URL);
+    }
+  } catch (error) {
+    const currentUrl = mainWindow?.webContents.getURL() || "";
+    const initialNavigationWasReloaded =
+      error?.code === "ERR_ABORTED" && isTrustedAppRendererUrl(currentUrl);
+    if (!initialNavigationWasReloaded) throw error;
+    log(`[renderer] initial navigation was replaced by a trusted reload: ${currentUrl}`);
   }
 }
 
 // ---------- IPC handlers ----------
 
-ipcMain.handle("echo:backend-host", () => BACKEND_HOST);
-ipcMain.handle("echo:share-backend-host", () => shareBackendHost());
+ipcMain.handle("echo:backend-host", (event) => {
+  assertTrustedIpcOrigin(event);
+  return BACKEND_HOST;
+});
+ipcMain.handle("echo:share-backend-host", (event) => {
+  assertTrustedIpcOrigin(event);
+  return shareBackendHost();
+});
+ipcMain.on("echo:backend-host-sync", (event) => {
+  assertTrustedIpcOrigin(event);
+  event.returnValue = BACKEND_HOST;
+});
+ipcMain.on("echo:is-public-demo", (event) => {
+  assertTrustedIpcOrigin(event);
+  event.returnValue = PUBLIC_DEMO_MODE;
+});
 
-ipcMain.handle("echo:load-local-legacy-history", async () => {
+ipcMain.handle("credential:ensure-session", async (event) => {
+  assertTrustedIpcOrigin(event);
+  return ensurePublicSessionInMain();
+});
+
+ipcMain.handle("credential:renew-session", async (event) => {
+  assertTrustedIpcOrigin(event);
+  return renewPublicSessionFromCredential();
+});
+
+ipcMain.handle("credential:rotate", async (event, sessionToken) => {
+  assertTrustedIpcOrigin(event);
+  if (typeof sessionToken !== "string" || sessionToken.length < 20) {
+    throw new Error("valid session token required for credential rotation");
+  }
+  return rotatePublicCredential(sessionToken);
+});
+
+ipcMain.handle("credential:clear-public", async (event) => {
+  assertTrustedIpcOrigin(event);
+  clearPublicCredential();
+  return { cleared: true };
+});
+
+ipcMain.handle("echo:load-local-legacy-history", async (event) => {
+  assertTrustedIpcOrigin(event);
   if (process.platform !== "darwin") return null;
   try {
     return loadLegacyEchodeskHistory();
   } catch (e) {
-    log(`[legacy-history] import failed: ${e?.message ?? e}`);
+    log(`[legacy-history] import failed: ${safeFailureCode(e)}`);
     return {
       schema: 1,
       appVersion: app.getVersion(),
@@ -1558,28 +2722,31 @@ ipcMain.handle("echo:load-local-legacy-history", async () => {
       meetings: [],
       ambientSegments: [],
       artifacts: [],
-      error: e?.message || String(e),
+      error: "legacy history import failed",
     };
   }
 });
 
-ipcMain.handle("shell:open-external", async (_event, url) => {
-  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
-    throw new Error("http(s) url required");
-  }
-  await shell.openExternal(url);
+ipcMain.handle("shell:open-external", async (event, url) => {
+  assertTrustedIpcOrigin(event);
+  await openExternalHttps(url);
   return { ok: true };
 });
 
-ipcMain.handle("updates:check", async () => {
+ipcMain.handle("updates:check", async (event) => {
+  assertTrustedIpcOrigin(event);
   return checkForUpdatesWithFallback();
 });
 
-ipcMain.handle("updates:last-status", async () => lastUpdateStatus);
+ipcMain.handle("updates:last-status", async (event) => {
+  assertTrustedIpcOrigin(event);
+  return lastUpdateStatus;
+});
 
-ipcMain.handle("updates:download-and-install", async () => {
+ipcMain.handle("updates:download-and-install", async (event) => {
+  assertTrustedIpcOrigin(event);
   if (!autoUpdater || IS_DEV) {
-    await shell.openExternal(RELEASES_URL);
+    await openExternalHttps(RELEASES_URL);
     return { ok: false, reason: "manual-release-page", releaseUrl: RELEASES_URL };
   }
   try {
@@ -1596,15 +2763,18 @@ ipcMain.handle("updates:download-and-install", async () => {
   } catch (e) {
     emitUpdateStatus({
       status: "error",
-      error: e?.message || String(e),
+      error: safeUpdateFailure(e, "更新包下载或安装失败"),
       canAutoInstall: false,
     });
-    throw e instanceof Error ? e : new Error(String(e));
+    const error = new Error("更新包下载或安装失败");
+    error.code = safeFailureCode(e);
+    throw error;
   }
 });
 
-ipcMain.handle("updates:open-release", async () => {
-  await shell.openExternal(RELEASES_URL);
+ipcMain.handle("updates:open-release", async (event) => {
+  assertTrustedIpcOrigin(event);
+  await openExternalHttps(RELEASES_URL);
   return { ok: true, releaseUrl: RELEASES_URL };
 });
 
@@ -1620,44 +2790,100 @@ ipcMain.handle("updates:open-release", async () => {
 //   返回 'not-determined'|'granted'|'denied'|'restricted'|'unknown'（非 mac 直接 unknown）
 // - mic:open-system-prefs shell.openExternal 一键打开 macOS 隐私设置-麦克风分页
 
-ipcMain.handle("mic:status", () => {
+ipcMain.handle("mic:status", (event) => {
+  assertTrustedIpcOrigin(event);
   if (process.platform !== "darwin") return "unknown";
   try {
     return systemPreferences.getMediaAccessStatus("microphone");
   } catch (e) {
-    log("[mic] getMediaAccessStatus failed:", e?.message ?? e);
+    log(`[mic] getMediaAccessStatus failed: ${safeFailureCode(e)}`);
     return "unknown";
   }
 });
 
-ipcMain.handle("mic:request", async () => {
+ipcMain.handle("mic:request", async (event) => {
+  assertTrustedIpcOrigin(event);
   if (process.platform !== "darwin") return false;
   try {
     return await systemPreferences.askForMediaAccess("microphone");
   } catch (e) {
-    log("[mic] askForMediaAccess failed:", e?.message ?? e);
+    log(`[mic] askForMediaAccess failed: ${safeFailureCode(e)}`);
     return false;
   }
 });
 
-// P4.1 M4：把 backend 落盘的产物文件交给系统默认应用打开（如 .pptx 走 Keynote）。
-// Electron 与 backend 跑在同一台 mac，artifact.file_path 是绝对路径，可直接传给 shell.openPath。
-// 安全：只接受字符串绝对路径；不在主进程做任何 file system 修改，仅委派给 OS。
-// 失败：shell.openPath 把错误字符串作为 resolve 值返回（非 reject），所以这里手动 throw 让 renderer catch。
-ipcMain.handle("echo:open-artifact-in-system", async (_event, filePath) => {
-  if (typeof filePath !== "string" || !filePath.trim()) {
-    throw new Error("filePath required");
+function localArtifactRoots() {
+  return [
+    process.env.SKILL_EXECUTOR_BUILD_DIR || "~/.echodesk/skill_build",
+    process.env.STORAGE_DIR || "~/.echodesk/storage",
+  ].map((root) => path.resolve(expandHome(root)));
+}
+
+// 只允许本机 backend 受控生成根下的真实普通文件。public runtime 的
+// file_path 属于远端服务器，既无本机语义，也绝不能成为 renderer 选择本机文件的通道。
+ipcMain.handle("echo:open-artifact-in-system", async (event, filePath) => {
+  assertTrustedIpcOrigin(event);
+  if (PUBLIC_DEMO_MODE) {
+    const error = new Error("remote artifacts must be downloaded through the backend");
+    error.code = "ARTIFACT_LOCAL_OPEN_DISABLED";
+    throw error;
+  }
+  let controlledPath;
+  try {
+    controlledPath = resolveControlledLocalArtifactPath(
+      filePath,
+      localArtifactRoots(),
+    );
+  } catch (cause) {
+    log(`[artifact] path denied: ${safeFailureCode(cause)}`);
+    const error = new Error("artifact file is unavailable");
+    error.code = cause?.code || "ARTIFACT_PATH_DENIED";
+    throw error;
   }
   try {
-    const err = await shell.openPath(filePath);
+    const err = await shell.openPath(controlledPath);
     if (err) {
-      // err 不为空字符串 = 系统层失败（文件不存在 / 没有匹配 app / 权限不足）
-      throw new Error(err);
+      const error = new Error("system application could not open the artifact");
+      error.code = "ARTIFACT_SYSTEM_OPEN_FAILED";
+      throw error;
     }
   } catch (e) {
-    log(`[artifact] openPath failed (${filePath}): ${e?.message ?? e}`);
-    throw e instanceof Error ? e : new Error(String(e));
+    log(`[artifact] openPath failed: ${safeFailureCode(e)}`);
+    const error = new Error("system application could not open the artifact");
+    error.code = e?.code || "ARTIFACT_SYSTEM_OPEN_FAILED";
+    throw error;
   }
+});
+
+ipcMain.handle("echo:download-renderer-blob", async (
+  event,
+  blobUrl,
+  suggestedFilename,
+) => {
+    assertTrustedIpcOrigin(event);
+    const sender = event.sender;
+    if (activeArtifactDownloadSenders.has(sender)) {
+      const error = new Error("an artifact download is already active");
+      error.code = "ARTIFACT_DOWNLOAD_BUSY";
+      throw error;
+    }
+    activeArtifactDownloadSenders.add(sender);
+    try {
+      return await downloadRendererBlob({
+        blobUrl,
+        expectedInnerOrigin: trustedRendererBlobInnerOrigin(),
+        suggestedFilename,
+        sender,
+        senderFrame: event.senderFrame,
+        downloadDirectory: app.getPath("downloads"),
+      });
+    } catch (cause) {
+      const error = new Error("artifact download failed");
+      error.code = cause?.code || "ARTIFACT_DOWNLOAD_FAILED";
+      throw error;
+    } finally {
+      activeArtifactDownloadSenders.delete(sender);
+    }
 });
 
 // P4-fix-rag-chat（2026-05-28）：让 SettingsPanel"工作区目录"section 能用系统
@@ -1665,9 +2891,20 @@ ipcMain.handle("echo:open-artifact-in-system", async (_event, filePath) => {
 //
 // 安全：dialog 由 electron 主进程出，用户必须看到/点确认；返回 null 时表示
 // 用户取消，不写任何配置。失败 reject 让 renderer message.error。
-ipcMain.handle("workspace:pick-directory", async (_event, opts = {}) => {
+ipcMain.handle("workspace:pick-directory", async (event, context = {}, opts = {}) => {
+  assertTrustedIpcOrigin(event);
+  const expectedOrigin = rendererExpectedMainBackendOrigin(event, context);
   const win = BrowserWindow.getFocusedWindow();
-  const defaultPath = typeof opts.defaultPath === "string" ? opts.defaultPath : os.homedir();
+  let defaultPath = os.homedir();
+  if (typeof opts.defaultPath === "string" && opts.defaultPath) {
+    try {
+      defaultPath = resolveWorkspaceHandle(expectedOrigin, opts.defaultPath, {
+        includePending: true,
+      });
+    } catch {
+      // Renderer input is an opaque convenience hint; invalid hints fall back home.
+    }
+  }
   try {
     const r = await dialog.showOpenDialog(win || undefined, {
       title: "选择工作区目录（EchoDesk 会扫描索引整个文件夹）",
@@ -1677,38 +2914,130 @@ ipcMain.handle("workspace:pick-directory", async (_event, opts = {}) => {
       buttonLabel: "选中此目录",
     });
     if (r.canceled || r.filePaths.length === 0) return null;
-    return r.filePaths[0];
+    const selectedCandidate = path.resolve(expandHome(r.filePaths[0]));
+    const verifiedRoot = await verifyWorkspaceRootIdentity({
+      root: selectedCandidate,
+    });
+    const selectedPath = verifiedRoot.canonical;
+    // A trusted local/self-hosted renderer sends the selected path to its
+    // colocated backend. Public mode must never expose it and continues to use
+    // the origin-bound opaque handle consumed by workspace:add-local-dir.
+    if (!PUBLIC_DEMO_MODE) return selectedPath;
+    const handle = workspaceHandle(expectedOrigin, selectedPath);
+    pendingWorkspaceSelections.set(expectedOrigin, {
+      handle,
+      path: selectedPath,
+      identity: verifiedRoot.identity,
+    });
+    return handle;
   } catch (e) {
-    log(`[workspace] pick-directory failed: ${e?.message ?? e}`);
-    throw e instanceof Error ? e : new Error(String(e));
+    log(`[workspace] pick-directory failed: ${safeFailureCode(e)}`);
+    if (
+      e?.code === "WORKSPACE_DIRECTORY_UNAVAILABLE" ||
+      e?.code === "WORKSPACE_DIRECTORY_INVALID"
+    ) {
+      throw e;
+    }
+    const error = new Error("无法打开工作区目录选择器");
+    error.code = "WORKSPACE_DIRECTORY_PICK_FAILED";
+    throw error;
   }
 });
 
-ipcMain.handle("workspace:local-status", async () => localWorkspaceStatus());
-
-ipcMain.handle("workspace:add-local-dir", async (_event, dir) => {
-  const normalized = normalizeLocalWorkspaceDir(dir);
-  const store = readLocalWorkspaceStore();
-  const exists = store.workspaces.includes(normalized);
-  const workspaces = exists ? store.workspaces : [...store.workspaces, normalized];
-  writeLocalWorkspaceStore({ ...store, workspaces });
-  return { added: !exists, path: normalized, configured_dirs: workspaces };
+ipcMain.handle("workspace:local-status", async (event, context = {}) => {
+  assertTrustedIpcOrigin(event);
+  const expectedOrigin = workspaceExpectedOrigin(event, context);
+  return localWorkspaceStatus(expectedOrigin);
 });
 
-ipcMain.handle("workspace:remove-local-dir", async (_event, dir) => {
-  const normalized = path.resolve(expandHome(dir));
-  const store = readLocalWorkspaceStore();
-  const workspaces = store.workspaces.filter((d) => d !== normalized);
-  const removed = workspaces.length !== store.workspaces.length;
-  writeLocalWorkspaceStore({ ...store, workspaces });
-  return { removed, path: normalized, configured_dirs: workspaces };
+ipcMain.handle("workspace:add-local-dir", async (event, context = {}, dir) => {
+  assertTrustedIpcOrigin(event);
+  const expectedOrigin = workspaceExpectedOrigin(event, context);
+  return runWorkspaceMutation(expectedOrigin, async (signal, leaseEpoch) => {
+    const pendingSelection = pendingWorkspaceSelections.get(expectedOrigin);
+    const selectedPath = resolveWorkspaceHandle(expectedOrigin, dir, {
+      includePending: true,
+    });
+    const normalized = normalizeLocalWorkspaceDir(selectedPath);
+    const store = readLocalWorkspaceStore(expectedOrigin);
+    const expectedIdentity =
+      pendingSelection?.handle === dir
+        ? pendingSelection.identity
+        : store.root_identities?.[normalized] || null;
+    const verifiedRoot = await verifyWorkspaceRootIdentity({
+      root: normalized,
+      expectedIdentity,
+    });
+    const exists = store.workspaces.includes(normalized);
+    const workspaces = exists ? store.workspaces : [...store.workspaces, normalized];
+    const rootIdentities = {
+      ...(store.root_identities || {}),
+      [normalized]: verifiedRoot.identity,
+    };
+    assertWorkspaceOperationCurrent(expectedOrigin, leaseEpoch, signal);
+    writeLocalWorkspaceStore(expectedOrigin, {
+      ...store,
+      workspaces,
+      root_identities: rootIdentities,
+    });
+    pendingWorkspaceSelections.delete(expectedOrigin);
+    return {
+      added: !exists,
+      path: workspaceHandle(expectedOrigin, normalized),
+      configured_dirs: workspaceHandles(expectedOrigin, workspaces),
+    };
+  });
 });
 
-ipcMain.handle("workspace:scan-local", async () => scanLocalWorkspaces());
+ipcMain.handle("workspace:remove-local-dir", async (event, context = {}, dir) => {
+  assertTrustedIpcOrigin(event);
+  const expectedOrigin = workspaceExpectedOrigin(event, context);
+  return runWorkspaceMutation(expectedOrigin, async (signal, leaseEpoch) => {
+    const normalized = resolveWorkspaceHandle(expectedOrigin, dir);
+    const store = readLocalWorkspaceStore(expectedOrigin);
+    const workspaces = store.workspaces.filter((d) => d !== normalized);
+    const rootIdentities = { ...(store.root_identities || {}) };
+    delete rootIdentities[normalized];
+    const removed = workspaces.length !== store.workspaces.length;
+    assertWorkspaceOperationCurrent(expectedOrigin, leaseEpoch, signal);
+    writeLocalWorkspaceStore(expectedOrigin, {
+      ...store,
+      workspaces,
+      root_identities: rootIdentities,
+    });
+    return {
+      removed,
+      path: workspaceHandle(expectedOrigin, normalized),
+      configured_dirs: workspaceHandles(expectedOrigin, workspaces),
+    };
+  });
+});
 
-ipcMain.handle("workspace:clear-local-docs", async () => clearLocalWorkspaceDocs());
+ipcMain.handle("workspace:scan-local", async (event, context = {}) => {
+  assertTrustedIpcOrigin(event);
+  const expectedOrigin = workspaceExpectedOrigin(event, context);
+  return runWorkspaceMutation(expectedOrigin, (signal, leaseEpoch) =>
+    scanLocalWorkspaces(expectedOrigin, signal, leaseEpoch),
+  );
+});
 
-ipcMain.handle("mic:open-system-prefs", async () => {
+ipcMain.handle("workspace:clear-local-docs", async (event, context = {}) => {
+  assertTrustedIpcOrigin(event);
+  const expectedOrigin = workspaceExpectedOrigin(event, context);
+  return runWorkspaceMutation(expectedOrigin, (signal, leaseEpoch) =>
+    clearLocalWorkspaceDocs(expectedOrigin, signal, leaseEpoch),
+  );
+});
+
+ipcMain.handle("workspace:cancel-origin-operations", async (event, context = {}) => {
+  assertTrustedIpcOrigin(event);
+  const expectedOrigin = workspaceExpectedOrigin(event, context);
+  pendingWorkspaceSelections.delete(expectedOrigin);
+  return { cancelled: cancelWorkspaceOperations(expectedOrigin) };
+});
+
+ipcMain.handle("mic:open-system-prefs", async (event) => {
+  assertTrustedIpcOrigin(event);
   if (process.platform !== "darwin") {
     return { ok: false, reason: "non-darwin" };
   }
@@ -1720,72 +3049,93 @@ ipcMain.handle("mic:open-system-prefs", async () => {
     );
     return { ok: true };
   } catch (e) {
-    log("[mic] openExternal failed:", e?.message ?? e);
-    return { ok: false, reason: String(e?.message ?? e) };
+    log(`[mic] openExternal failed: ${safeFailureCode(e)}`);
+    return { ok: false, reason: "system-preferences-open-failed" };
   }
 });
 
-// 让 renderer 在 degraded UI 上按钮触发一次干净重启：清 backoff 计数 + 重新 spawn
-ipcMain.handle("backend:manual-restart", async () => {
+// 让 renderer 在 degraded UI 上按钮触发一次干净重启。重新启动必须回到
+// spawnBackendAndWatch() 的 bundled-first 选择，打包安装不能依赖系统 Python。
+const manualRestartBackend = createManualBackendRestart({
+  isPublicDemo: () => PUBLIC_DEMO_MODE,
+  healthcheckOnce,
+  emitStatus,
+  resetRestartState: () => {
+    backendLifecycleGeneration += 1;
+    restartAttempts = 0;
+    externalMode = false;
+  },
+  stopHealthWatcher,
+  stopExternalHealthWatcher,
+  stopBackendProc: stopBackendProcForRestart,
+  spawnBackendAndWatch,
+  isShuttingDown: () => shuttingDown,
+});
+
+ipcMain.handle("backend:manual-restart", async (event) => {
+  assertTrustedIpcOrigin(event);
   log("[backend] manual restart requested");
-  if (PUBLIC_DEMO_MODE) {
-    const ok = await healthcheckOnce();
-    emitStatus(
-      ok
-        ? { state: "ready", mode: "public-demo" }
-        : {
-            state: "degraded",
-            reason: "public backend unhealthy",
-            attempts: 0,
-            last_error: "healthz failed",
-          },
-    );
-    return { ok };
-  }
-  restartAttempts = 0;
-  externalMode = false;
-  stopHealthWatcher();
-  stopExternalHealthWatcher();
-  killBackendProc();
-  // 给端口一点时间释放（SIGTERM → close socket）
-  setTimeout(() => {
-    if (shuttingDown) return;
-    if (!pythonResolved || !pythonResolved.python) {
-      pythonResolved = resolvePython();
-    }
-    if (!pythonResolved.python) {
-      emitStatus({
-        state: "python-not-found",
-        searched: pythonResolved.searched,
-        help_url: "docs/INSTALL.md",
-      });
-      return;
-    }
-    spawnBackendAndWatch();
-  }, 500);
-  return { ok: true };
+  return manualRestartBackend();
 });
 
 // ---------- app 生命周期 ----------
 
-app.whenReady().then(() => {
-  installMediaPermissionHandlers();
-  // 主窗口先起，让用户看到 UI；backend 状态由 renderer 自己渲染（degraded UI 等）
-  createWindow();
-  startBackend();
-  scheduleStartupUpdateCheck();
+app.whenReady()
+  .then(async () => {
+    let protectedDirectories = [];
+    let workspaceSweepSafe = true;
+    try {
+      protectedDirectories = workspaceRegistryPendingSnapshotDirectories(
+        readLocalWorkspaceRegistry({ strict: true }),
+      );
+    } catch {
+      // A registry that cannot be opened safely may still reference retained
+      // snapshots, including after switching from public to local runtime.
+      // Fail closed instead of sweeping recoverable upload intents.
+      workspaceSweepSafe = false;
+    }
+    if (workspaceSweepSafe) {
+      await sweepWorkspaceSnapshotRoots(protectedDirectories);
+    }
+    if (!IS_DEV) {
+      installAppProtocol(
+        protocol,
+        path.join(__dirname, "..", "dist"),
+        (url) => net.fetch(url),
+        { backendBase: BACKEND_HOST },
+      );
+    }
+    installMediaPermissionHandlers(session.defaultSession, {
+      isTrustedRendererUrl: isTrustedAppRendererUrl,
+      isTrustedRendererOrigin: isTrustedAppRendererOrigin,
+    });
+    // 主窗口先起，让用户看到 UI；backend 状态由 renderer 自己渲染（degraded UI 等）
+    await createWindow();
+    startBackend();
+    scheduleStartupUpdateCheck();
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        void createWindow().catch((error) => {
+          console.error("[app] failed to recreate the main window:", error);
+          app.quit();
+        });
+      }
+    });
+  })
+  .catch((error) => {
+    console.error("[app] secure renderer startup failed:", error);
+    app.quit();
   });
-});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// 优雅退出：先通知 renderer（避免它弹"断开"红条），再 SIGTERM child，超时 SIGKILL，
-// 最后真正 app.quit()。preventDefault 第一次拦下 quit；等子进程清干净再放行。
+// 优雅退出：先通知 renderer（避免它弹"断开"红条），再停止完整 backend
+// process tree，最后真正 app.quit()。preventDefault 第一次拦下 quit；等子进程
+// 清干净再放行。Windows 的 PyInstaller one-file backend 有 bootloader + server
+// 两层进程，必须由 stopBackendProcess 使用 taskkill /T 一并回收。
 app.on("before-quit", (event) => {
   if (quittingForReal) return;
   shuttingDown = true;
@@ -1793,7 +3143,7 @@ app.on("before-quit", (event) => {
   stopHealthWatcher();
   stopExternalHealthWatcher();
 
-  if (!backendProc || backendProc.killed) {
+  if (!backendProc || backendProc.exitCode !== null) {
     quittingForReal = true;
     return;
   }
@@ -1801,12 +3151,11 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   const proc = backendProc;
   backendProc = null;
-  log("[backend] SIGTERM child (graceful)");
-  try {
-    proc.kill("SIGTERM");
-  } catch (e) {
-    log(`[backend] SIGTERM failed: ${e.message}`);
-  }
+  log(
+    process.platform === "win32"
+      ? "[backend] stopping Windows process tree"
+      : "[backend] SIGTERM child (graceful)",
+  );
 
   let finished = false;
   const finalize = () => {
@@ -1815,19 +3164,9 @@ app.on("before-quit", (event) => {
     quittingForReal = true;
     app.quit();
   };
-  const t = setTimeout(() => {
-    if (proc && proc.exitCode === null) {
-      log("[backend] grace expired, SIGKILL");
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
-    }
-    finalize();
-  }, SIGKILL_GRACE_MS);
-  proc.once("exit", () => {
-    clearTimeout(t);
-    finalize();
-  });
+  void stopBackendProcess(proc, { graceMs: SIGKILL_GRACE_MS })
+    .catch((error) => {
+      log(`[backend] stop failed: ${safeFailureCode(error)}`);
+    })
+    .finally(finalize);
 });

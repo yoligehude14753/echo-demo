@@ -12,19 +12,23 @@ old 实现的 silent output 会被原样返回给前端 → 前端 console.warn 
 
 from __future__ import annotations
 
+import asyncio
 import io
 import wave
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
-from app.adapters.tts import Qwen3TTS
-from app.api.tts import _reset_diag_cache_for_tests, get_tts_singleton
+from app.adapters.tts import Qwen3TTS, SynthesisResult, TTSError
+from app.api.tts import _reset_diag_cache_for_tests, get_tts_singleton, tts_diag
 from app.config import Settings
 from app.main import create_app
+from app.security.context import bind_principal, reset_principal
+from app.security.models import Principal
 from fastapi.testclient import TestClient
+from numpy.typing import NDArray
 
 
 # ── 工具：构造 heyi 返回的 wav bytes ─────────────────────────────────
@@ -32,7 +36,7 @@ from fastapi.testclient import TestClient
 # heyi 真实 wav 头部有 ``0xFFFFFFFF`` 长度（流式 placeholder），但 Python
 # ``wave`` 模块仍能把 PCM 字节读出来，所以构造正常 wav 即可——验证 backend
 # 对 wav→pcm 的转换链路。
-def _make_wav(samples: np.ndarray) -> bytes:
+def _make_wav(samples: NDArray[np.int16]) -> bytes:
     assert samples.dtype == np.int16
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -72,6 +76,19 @@ def _patch_httpx_raising(exc: Exception) -> Any:
     fake.__aenter__ = AsyncMock(return_value=fake)
     fake.__aexit__ = AsyncMock(return_value=None)
     return patch("app.adapters.tts.qwen3_tts.httpx.AsyncClient", return_value=fake)
+
+
+def _mock_probe_tts(
+    *,
+    result: SynthesisResult | None = None,
+    error: Exception | None = None,
+) -> tuple[Qwen3TTS, AsyncMock]:
+    tts = MagicMock(spec=Qwen3TTS)
+    tts.default_voice = "aiden"
+    tts.base_url = "http://10.20.30.40:8094"
+    synthesize = AsyncMock(return_value=result, side_effect=error)
+    tts.synthesize_detailed = synthesize
+    return cast(Qwen3TTS, tts), synthesize
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -160,11 +177,14 @@ def test_speak_rejects_silent_upstream_with_502(
 def test_speak_502_on_upstream_connection_error(
     make_client: Callable[..., TestClient],
 ) -> None:
-    with _patch_httpx_raising(RuntimeError("connection refused")):
+    private_error = "connection refused by http://10.20.30.40:8094?token=secret"
+    with _patch_httpx_raising(RuntimeError(private_error)):
         client = make_client()
         r = client.post("/tts/speak", json={"text": "你好"})
     assert r.status_code == 502
-    assert "tts_upstream_error" in r.json()["detail"]
+    assert r.json()["detail"] == "tts_upstream_error"
+    assert "10.20.30.40" not in r.text
+    assert "secret" not in r.text
 
 
 @pytest.mark.unit
@@ -268,7 +288,7 @@ def test_diag_cache_avoids_repeated_upstream_calls(
 
 
 @pytest.mark.unit
-def test_diag_fresh_query_param_bypasses_cache(
+def test_local_diag_fresh_query_param_bypasses_cache(
     make_client: Callable[..., TestClient],
 ) -> None:
     """?fresh=true 强刷绕过 cache（前端"重测合成"按钮用）。"""
@@ -285,6 +305,54 @@ def test_diag_fresh_query_param_bypasses_cache(
     with _patch_httpx_with_response(wav_silent):
         r2 = client.get("/tts/diag?fresh=true")
     assert r2.json()["state"] == "silent_output"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_public_diag_concurrent_and_sequential_fresh_share_one_probe() -> None:
+    result = SynthesisResult(
+        pcm=b"\x01\x00" * 100,
+        raw_bytes=b"wav",
+        raw_content_type="audio/wav",
+        rms=120.0,
+        max_abs=256,
+        latency_s=0.01,
+    )
+    tts, synthesize = _mock_probe_tts(result=result)
+    settings = _make_tts_settings(public_demo_mode=True)
+    principal = Principal("tenant-a", "device-a", "owner-a", "session-a", "public")
+    context_token = bind_principal(principal)
+    try:
+        concurrent = await asyncio.gather(*(tts_diag(settings, tts, fresh=True) for _ in range(4)))
+        sequential = await tts_diag(settings, tts, fresh=True)
+    finally:
+        reset_principal(context_token)
+
+    assert synthesize.await_count == 1
+    assert {item.checked_at for item in [*concurrent, sequential]} == {concurrent[0].checked_at}
+    assert all(item.base_url is None for item in [*concurrent, sequential])
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_public_diag_redacts_upstream_address_and_raw_error() -> None:
+    tts, synthesize = _mock_probe_tts(
+        error=TTSError("credential rejected by http://10.20.30.40:8094?token=secret")
+    )
+    settings = _make_tts_settings(public_demo_mode=True)
+    principal = Principal("tenant-a", "device-a", "owner-a", "session-a", "public")
+    context_token = bind_principal(principal)
+    try:
+        result = await tts_diag(settings, tts, fresh=True)
+    finally:
+        reset_principal(context_token)
+
+    assert synthesize.await_count == 1
+    assert result.state == "upstream_error"
+    assert result.detail == "语音合成服务暂时不可用"
+    assert result.base_url is None
+    assert "10.20.30.40" not in result.model_dump_json()
+    assert "secret" not in result.model_dump_json()
 
 
 # ── 兼容性：silent_output 的 RMS 阈值能解释清楚 ───────────────────────

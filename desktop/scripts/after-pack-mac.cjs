@@ -1,21 +1,32 @@
+/* eslint-disable @typescript-eslint/no-var-requires, no-undef */
 const { existsSync, readdirSync, statSync } = require("node:fs");
 const { join } = require("node:path");
 const { execFileSync } = require("node:child_process");
 
 const USAGE_DESCRIPTIONS = {
-  NSMicrophoneUsageDescription: "EchoDesk needs microphone access to transcribe meetings.",
-  NSCameraUsageDescription: "EchoDesk may use camera access when system media APIs enumerate devices.",
+  NSMicrophoneUsageDescription:
+    "EchoDesk needs microphone access to transcribe meetings.",
+  NSCameraUsageDescription:
+    "EchoDesk may use camera access when system media APIs enumerate devices.",
 };
 
 function setPlistValue(plistPath, key, value) {
   try {
-    execFileSync("/usr/libexec/PlistBuddy", ["-c", `Set :${key} ${value}`, plistPath], {
-      stdio: "ignore",
-    });
+    execFileSync(
+      "/usr/libexec/PlistBuddy",
+      ["-c", `Set :${key} ${value}`, plistPath],
+      {
+        stdio: "ignore",
+      },
+    );
   } catch {
-    execFileSync("/usr/libexec/PlistBuddy", ["-c", `Add :${key} string ${value}`, plistPath], {
-      stdio: "ignore",
-    });
+    execFileSync(
+      "/usr/libexec/PlistBuddy",
+      ["-c", `Add :${key} string ${value}`, plistPath],
+      {
+        stdio: "ignore",
+      },
+    );
   }
 }
 
@@ -53,11 +64,22 @@ module.exports = async function afterPack(context) {
 
   patchHelperUsageDescriptions(appPath);
 
-  console.log(`[mac-sign] ad-hoc signing ${appPath}`);
+  if (process.env.ECHODESK_ADHOC_SIGN !== "1") {
+    console.log(
+      "[mac-sign] ad-hoc signing disabled; leaving signing to electron-builder",
+    );
+    return;
+  }
+
+  console.log(`[mac-sign] development-only ad-hoc signing ${appPath}`);
   execFileSync("codesign", ["--force", "--deep", "--sign", "-", appPath], {
     stdio: "inherit",
   });
-  execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath], {
-    stdio: "inherit",
-  });
+  execFileSync(
+    "codesign",
+    ["--verify", "--deep", "--strict", "--verbose=2", appPath],
+    {
+      stdio: "inherit",
+    },
+  );
 };

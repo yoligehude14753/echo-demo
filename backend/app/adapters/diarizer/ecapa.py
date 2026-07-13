@@ -57,6 +57,7 @@ _MIN_BYTES_FOR_EMBED = 32_000
 
 # 没传 meeting_id 时的活跃 context key（所有非会议 ambient chunk 共享同一活跃池）
 _AMBIENT_CONTEXT = "_ambient"
+_ECAPA_MODEL_REVISION = "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
 
 # spk-3 把以下两个 magic number 改成 settings 可配（diarizer_min_voiced_seconds_for_new_profile /
 # diarizer_outlier_match_threshold），便于 spk-5 真实多人音频回归调参。
@@ -191,7 +192,10 @@ class ECAPADiarizer:
         if self._encoder is not None:
             return
         try:
-            from speechbrain.inference.speaker import SpeakerRecognition
+            from speechbrain.inference.speaker import (
+                SpeakerRecognition,
+            )
+            from speechbrain.utils.fetching import FetchConfig
         except ImportError as e:  # pragma: no cover
             raise DiarizerError(
                 "speechbrain not installed; pip install speechbrain torch torchaudio"
@@ -201,7 +205,8 @@ class ECAPADiarizer:
             return SpeakerRecognition.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb",
                 savedir=".cache/speechbrain/ecapa",
-                run_opts={"device": "cpu"},
+                run_opts={"device": "cpu", "jit": False, "compile": False},
+                fetch_config=FetchConfig(revision=_ECAPA_MODEL_REVISION),
             )
 
         self._encoder = await asyncio.to_thread(_load)

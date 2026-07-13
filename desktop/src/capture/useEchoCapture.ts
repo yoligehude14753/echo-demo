@@ -17,6 +17,7 @@ import type {
   CaptureStatus,
 } from "@/domain/session";
 import { useStore } from "@/store";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 const STATS_POLL_MS = 5_000;
 const CAPTURE_INIT_WATCHDOG_MS = 18_000;
@@ -26,7 +27,30 @@ const FALLBACK_TOAST_KEY = "chunk-upload-error";
 const MIC_INIT_TIMEOUT_MESSAGE =
   "系统录音初始化超时；问答、知识库、联网搜索和文档生成仍可继续使用，请稍后重新打开 EchoDesk 或检查 macOS 麦克风权限。";
 
-export function useEchoCapture(): CaptureStatus {
+function captureErrorNotice(error: string): string {
+  if (/not supported|notsupportederror/i.test(error)) {
+    return "当前环境不支持音频采集，请使用 EchoDesk 桌面应用。";
+  }
+  if (/permission denied|notallowederror|denied/i.test(error)) {
+    return "麦克风权限未开启，请在系统设置中允许 EchoDesk 使用麦克风。";
+  }
+  if (/device not found|notfounderror/i.test(error)) {
+    return "未找到可用麦克风，请检查系统输入设备。";
+  }
+  return "无法使用麦克风，请检查权限和输入设备。";
+}
+
+export interface EchoCaptureOptions {
+  enabled: boolean;
+}
+
+export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const meetingState = useStore((s) =>
     s.currentMeetingId ? s.meetings[s.currentMeetingId]?.state : undefined,
@@ -57,6 +81,7 @@ export function useEchoCapture(): CaptureStatus {
   }, [sttCircuitOpenUntil]);
 
   useEffect(() => {
+    if (!enabled) return;
     if (captureState !== "initializing") return;
     const timer = window.setTimeout(() => {
       setCaptureState((current) => {
@@ -71,16 +96,35 @@ export function useEchoCapture(): CaptureStatus {
       });
     }, CAPTURE_INIT_WATCHDOG_MS);
     return () => window.clearTimeout(timer);
-  }, [captureState]);
+  }, [captureState, enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      audioCapture.stop();
+      setCaptureState("initializing");
+      setErrorMessage(null);
+      return;
+    }
+    const originGeneration = captureGeneration();
+    const statsController = new AbortController();
+    const unregisterController = registerAbortController(statsController);
+    setStats(null);
+    setAmbientChunks(0);
+    setAmbientStored(0);
+    setMeetingChunks(0);
+    setChunksDroppedCircuit(0);
+    setSttCircuitOpenUntil(null);
     audioCapture.start();
 
     const offStatus = audioCapture.onStatus((state, err) => {
       setCaptureState(state);
       setErrorMessage(err ?? null);
       if (state === "error" && err) {
-        message.error(`麦克风不可用：${err}`);
+        message.error({
+          content: captureErrorNotice(err),
+          key: "mic-capture-error",
+          duration: 5,
+        });
       }
     });
 
@@ -112,15 +156,29 @@ export function useEchoCapture(): CaptureStatus {
         setSttCircuitOpenUntil(null);
         message.destroy(CIRCUIT_TOAST_KEY);
       },
-      onChunkDropped: () => setChunksDroppedCircuit((n) => n + 1),
+      onChunkDropped: (reason) => {
+        if (reason === "circuit_open") {
+          setChunksDroppedCircuit((n) => n + 1);
+          return;
+        }
+        message.warning({
+          content: "音频上传较慢，已丢弃过期片段以保持实时性",
+          key: "capture-backpressure",
+          duration: 4,
+        });
+      },
     });
 
     // 5s 轮询 7 道门统计。失败静默（不打扰用户；下次重试）。
     let cancelled = false;
     const fetchStats = async () => {
       try {
-        const next = await getCaptureStats();
-        if (!cancelled) {
+        const next = await getCaptureStats({ signal: statsController.signal });
+        if (
+          !cancelled &&
+          isCurrent(originGeneration) &&
+          !statsController.signal.aborted
+        ) {
           setStats(next);
           message.destroy(FALLBACK_TOAST_KEY);
         }
@@ -133,12 +191,19 @@ export function useEchoCapture(): CaptureStatus {
 
     return () => {
       cancelled = true;
+      unregisterController();
       window.clearInterval(statsTimer);
       offStatus();
       offRouter();
       audioCapture.stop();
     };
-  }, []);
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    enabled,
+    isCurrent,
+    registerAbortController,
+  ]);
 
   const meetingOverlayId =
     captureState === "capturing" &&

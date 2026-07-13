@@ -9,6 +9,8 @@
 import type { Page } from "@playwright/test";
 
 export interface EchoMockOptions {
+  /** 默认模拟 Electron preload；纯浏览器契约测试显式传 false。 */
+  isElectron?: boolean;
   /** 让指定路径返回非 2xx，触发前端 sad path 处理。
    *  键为 path 前缀（如 "/artifacts/generate"、"/rag/ask"），值为 HTTP 状态码。
    *  匹配规则：path.startsWith(key)。
@@ -28,6 +30,7 @@ export interface EchoMock {
   publish(event: Record<string, unknown>): Promise<void>;
   closeWs(code?: number, reason?: string): Promise<void>;
   reopenWs(): Promise<void>;
+  wsSent(): Promise<string[]>;
   fetchLog(): Promise<Array<{ url: string; method: string; bodyText?: string }>>;
 }
 
@@ -37,6 +40,7 @@ export async function installEchoMock(
 ): Promise<EchoMock> {
   const errorPaths = options.errorPaths ?? {};
   const skipPaths = options.skipPaths ?? [];
+  const isElectron = options.isElectron ?? true;
 
   // P3.1：onboarding 默认在 e2e 跳过，避免 Modal 遮挡所有交互；
   // 想专门测引导流程的 spec 用 `disableOnboardingSkip` opt-out（注：放在 addInitScript
@@ -52,7 +56,11 @@ export async function installEchoMock(
   }
 
   await page.addInitScript(
-    ({ errorPaths, skipPaths }: { errorPaths: Record<string, number>; skipPaths: string[] }) => {
+    ({ errorPaths, skipPaths, isElectron }: {
+      errorPaths: Record<string, number>;
+      skipPaths: string[];
+      isElectron: boolean;
+    }) => {
     type MockWs = {
       readyState: number;
       onopen?: (() => void) | null;
@@ -65,21 +73,46 @@ export async function installEchoMock(
 
     const ctrl: {
       ws: MockWs | null;
+      wsUrl?: string;
+      wsSent: string[];
+      wsCreated: number;
       wsClosed: boolean;
       fetchLog: Array<{ url: string; method: string; bodyText?: string }>;
       mockArtifactRunningId?: string;
       _seq: number;
     } = {
       ws: null,
+      wsSent: [],
+      wsCreated: 0,
       wsClosed: false,
       fetchLog: [],
       _seq: 0,
     };
     (window as unknown as { __echoMock__: typeof ctrl }).__echoMock__ = ctrl;
     const existingEcho = (window as unknown as { echo?: Record<string, unknown> }).echo ?? {};
+    const originBoundEcho = { ...existingEcho };
+    const identityOrigin = (): string => {
+      const configured = window.localStorage.getItem("echodesk.mobileBackendBase");
+      const bridgeHost =
+        typeof existingEcho.backendHost === "string" ? existingEcho.backendHost : null;
+      return new URL(configured || bridgeHost || window.location.origin).origin;
+    };
+    for (const method of ["ensurePublicSession", "renewPublicSession"] as const) {
+      const request = existingEcho[method];
+      if (typeof request !== "function") continue;
+      originBoundEcho[method] = async (...args: unknown[]) => {
+        const result = await request(...args);
+        if (!result || typeof result !== "object") return result;
+        const session = result as Record<string, unknown>;
+        return {
+          ...session,
+          backend_origin: session.backend_origin ?? identityOrigin(),
+        };
+      };
+    }
     (window as unknown as { echo: Record<string, unknown> }).echo = {
-      ...existingEcho,
-      isElectron: true,
+      ...originBoundEcho,
+      isElectron,
       getShareBackendHost: async () => "http://192.168.50.10:8769",
     };
 
@@ -92,6 +125,8 @@ export async function installEchoMock(
       onerror: (() => void) | null = null;
       private _outbox: string[] = [];
       constructor(_url: string) {
+        ctrl.wsCreated += 1;
+        ctrl.wsUrl = _url;
         ctrl.ws = this;
         setTimeout(() => {
           if (ctrl.wsClosed) return;
@@ -103,6 +138,7 @@ export async function installEchoMock(
       }
       send(data: string): void {
         this._outbox.push(data);
+        ctrl.wsSent.push(data);
       }
       close(code = 1000, reason = ""): void {
         if (this.readyState === 3) return;
@@ -184,8 +220,43 @@ export async function installEchoMock(
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (path.startsWith("/healthz")) {
+      if (path === "/healthz" || path === "/api/healthz") {
         return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path === "/bootstrap" || path === "/api/bootstrap") {
+        return new Response(
+          JSON.stringify({
+            schema_version: 1,
+            api_version: "0.3",
+            backend_version: "0.3.1-mock",
+            session_required: false,
+            capabilities: {
+              principal_sessions: true,
+              owner_isolation: true,
+              workflow_kernel: "dispatcher-v1",
+              ws_owner_filtering: true,
+              server_resync_rehydrate_required: true,
+              host_runtime_requires_admin: false,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if ((path === "/session" || path === "/api/session") && method === "POST") {
+        return new Response(
+          JSON.stringify({
+            token: "mock-session-token",
+            expires_at: "2099-01-01T00:00:00Z",
+            principal: {
+              tenant_id: "mock-tenant",
+              device_id: "mock-device",
+              owner_id: "mock-owner",
+              session_id: "mock-session",
+              mode: "public",
+            },
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        );
       }
       if (path === "/tts/diag" || path === "/api/tts/diag" || path === "/tts/diag?fresh=true" || path === "/api/tts/diag?fresh=true") {
         return new Response(
@@ -253,7 +324,7 @@ export async function installEchoMock(
                 sensitive: false,
                 source: "default",
               },
-              { key: "yunwu_open_key", value: "", sensitive: true, source: "default" },
+              { key: "llm_main_api_key", value: "", sensitive: true, source: "default" },
               {
                 key: "llm_fast_base_url",
                 value: "https://model.example.com/v1",
@@ -362,6 +433,24 @@ export async function installEchoMock(
           headers: { "Content-Type": "application/json" },
         });
       }
+      if ((path.startsWith("/artifacts?") || path.startsWith("/api/artifacts?")) && method === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if ((path.startsWith("/agents/tasks?") || path.startsWith("/api/agents/tasks?")) && method === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if ((path.startsWith("/workflows/runs?") || path.startsWith("/api/workflows/runs?")) && method === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       if (path.match(/^\/(api\/)?meetings\/[^/]+\/transcript$/) && method === "GET") {
         return new Response(JSON.stringify([]), {
           status: 200,
@@ -411,6 +500,16 @@ export async function installEchoMock(
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      if (path.match(/^\/(api\/)?meetings\/[^/]+\/share-ticket$/) && method === "POST") {
+        const meetingId = path.split("/").at(-2) ?? "mock-meeting";
+        return new Response(
+          JSON.stringify({
+            path: `/meetings/${meetingId}/share?share=mock-narrow-ticket`,
+            expires_in_s: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       // meetings 类操作
       if ((path.startsWith("/meetings/") || path.startsWith("/api/meetings/")) && method === "POST") {
         return new Response(JSON.stringify({ status: "started", meeting_id: "x" }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -418,7 +517,7 @@ export async function installEchoMock(
       // 其它走真实 fetch
       return realFetch(input, init);
     };
-  }, { errorPaths, skipPaths });
+  }, { errorPaths, skipPaths, isElectron });
 
   // 在 Node 上下文返回简单的 controller proxy
   const ctrl: EchoMock = {
@@ -441,6 +540,11 @@ export async function installEchoMock(
       await page.evaluate(() => {
         (window as unknown as { __echoMock__: { wsClosed: boolean } }).__echoMock__.wsClosed = false;
       });
+    },
+    async wsSent() {
+      return await page.evaluate(() =>
+        (window as unknown as { __echoMock__: { wsSent: string[] } }).__echoMock__.wsSent
+      );
     },
     async fetchLog() {
       return await page.evaluate(() =>

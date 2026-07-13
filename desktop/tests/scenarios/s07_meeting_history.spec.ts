@@ -25,8 +25,9 @@ const SUMMARY_A = {
   title: "Q3 销售复盘",
   state: "finalized",
   started_at: T0,
-  ended_at: "2026-05-28T01:30:00+00:00",
-  finalized_at: "2026-05-28T01:35:00+00:00",
+  // 已有纪要的短会议也必须保留；不能被“<10s 空会议”规则误删。
+  ended_at: "2026-05-28T01:00:05+00:00",
+  finalized_at: "2026-05-28T01:00:06+00:00",
   n_segments: 3,
   n_speakers: 2,
   has_minutes: true,
@@ -120,7 +121,14 @@ const ARTIFACT_B = {
   metadata: { kind: "markdown" },
 };
 
-test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async ({ page }) => {
+test("S07 · 左侧会议列表点击 A/B → 转写与纪要切换，outputs 保持全局", async ({ page }) => {
+  await page.route(/\/(api\/)?meetings\/current$/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ mode: "idle", meeting_id: null }),
+    }),
+  );
   // 1. /meetings 列表
   await page.route(/\/(api\/)?meetings(\?|$)/, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -128,6 +136,13 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
       status: 200,
       contentType: "application/json",
       body: JSON.stringify([SUMMARY_B, SUMMARY_A]),
+    });
+  });
+  await page.route(/\/(api\/)?workflows\/runs(\?|$)/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([]),
     });
   });
 
@@ -196,14 +211,17 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
   // 让上面的 page.route() 都生效（不被 _mock.ts 的 window.fetch 短路）
   const mock = await installScenarioMock(page, {
     skipPaths: [
-      "/meetings",
+      "/meetings?",
+      `/meetings/${MEETING_A_ID}`,
+      `/meetings/${MEETING_B_ID}`,
       "/capture/recent",
+      "/workflows/runs",
     ],
   });
 
   await test.step("打开主界面，等连接 OK + 列表渲染 3 项（待机时段 + A + B）", async () => {
     await page.goto("/");
-    await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
     // 待机时段始终在
     await expect(page.getByTestId("meeting-item-ambient")).toBeVisible();
     // 两条历史会议（按 started_at DESC，B 在前）
@@ -214,6 +232,20 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     await expect(
       page.locator(`[data-meeting-id="${MEETING_B_ID}"]`),
     ).toBeVisible();
+    // 首屏只请求 summary，尚未点击拉 transcript；计数必须直接来自
+    // GET /meetings 的 n_segments / n_speakers，不能先显示 0。
+    await expect(
+      page.locator(`[data-meeting-id="${MEETING_A_ID}"]`),
+    ).toContainText("3 段");
+    await expect(
+      page.locator(`[data-meeting-id="${MEETING_A_ID}"]`),
+    ).toContainText("2 人");
+    await expect(
+      page.locator(`[data-meeting-id="${MEETING_B_ID}"]`),
+    ).toContainText("2 段");
+    await expect(
+      page.locator(`[data-meeting-id="${MEETING_B_ID}"]`),
+    ).toContainText("1 人");
   });
 
   // 通过 WS 推 artifact.ready 给两个 meeting 各注入一个产物（contains meeting_id 字段）
@@ -221,21 +253,21 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
   await test.step("WS 注入 A、B 各 1 个 artifact（meeting_id 关联）", async () => {
     await mock.publish({
       type: "artifact.ready",
-      seq: 10,
+      seq: 1,
       ts: new Date().toISOString(),
       meeting_id: MEETING_A_ID,
       payload: ARTIFACT_A,
     });
     await mock.publish({
       type: "artifact.ready",
-      seq: 11,
+      seq: 2,
       ts: new Date().toISOString(),
       meeting_id: MEETING_B_ID,
       payload: ARTIFACT_B,
     });
   });
 
-  await test.step("点击会议 A → 中间转写流切到 A 的段；右上纪要显示 A；右下产物显示 A", async () => {
+  await test.step("点击会议 A → 转写与纪要切到 A，outputs 保持全局", async () => {
     await page.locator(`[data-meeting-id="${MEETING_A_ID}"]`).click();
     // 转写流切到 history 模式（meeting-history vs ambient）
     await expect(page.getByTestId("transcript-scroller")).toHaveAttribute(
@@ -256,20 +288,21 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     ).toBeVisible();
     await expect(page.getByText(/Q3 达成 95%/)).toBeVisible();
 
-    // outputs 切到 meeting scope；A 的产物可见，B 的不可见
+    // 检查器一次只显示一个上下文；切到工作产物后仍能看到全局产物。
+    await page.getByTestId("inspector-tab-artifacts").click();
     await expect(page.getByTestId("artifact-list")).toHaveAttribute(
       "data-scope",
-      "meeting",
+      "global",
     );
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_A.artifact_id}"]`),
     ).toBeVisible();
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_B.artifact_id}"]`),
-    ).toHaveCount(0);
+    ).toBeVisible();
   });
 
-  await test.step("点击会议 B → 转写流 / 纪要 / outputs 都切到 B", async () => {
+  await test.step("点击会议 B → 转写与纪要切到 B，outputs 保持全局", async () => {
     await page.locator(`[data-meeting-id="${MEETING_B_ID}"]`).click();
     await expect(page.getByTestId("transcript-scroller")).toHaveAttribute(
       "data-mode",
@@ -282,16 +315,17 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
 
     // B 已结束但还没拿到纪要 → 显示生成/可重试状态，不再退回空态
     await expect(page.getByTestId("minutes-generating")).toBeVisible();
-    // A 的纪要标题不应再出现
-    await expect(page.getByText(/Q3 达成 95%/)).toHaveCount(0);
+    // 当前纪要主体已切到 B；A 仍可保留在历史纪要索引中。
+    await expect(page.getByTestId("minutes-title")).toHaveCount(0);
 
-    // outputs 切到 B 的产物
+    // outputs 仍为全局，A/B 两条产物都保留。
+    await page.getByTestId("inspector-tab-artifacts").click();
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_B.artifact_id}"]`),
     ).toBeVisible();
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_A.artifact_id}"]`),
-    ).toHaveCount(0);
+    ).toBeVisible();
   });
 
   await test.step("再切回 A → 状态仍完整（验证无 stale 缓存）", async () => {
@@ -300,18 +334,20 @@ test("S07 · 左侧会议列表点击 A/B → 中右面板联动切换", async (
     await expect(
       page.getByRole("heading", { name: "Q3 销售复盘" }),
     ).toBeVisible();
+    await page.getByTestId("inspector-tab-artifacts").click();
     await expect(
       page.locator(`[data-artifact-id="${ARTIFACT_A.artifact_id}"]`),
     ).toBeVisible();
     await expect(page.getByText("B-第一段：版本对齐")).toHaveCount(0);
   });
 
-  await test.step("点击「待机时段」→ 转写流切回 ambient + 纪要/产物清空", async () => {
+  await test.step("点击「实时记录」→ 转写切回 ambient，检查器显示全局工作产物", async () => {
     await page.getByTestId("meeting-item-ambient").click();
-    // ambient lane（capture/recent 返回 []）→ 显示"等待环境音转写…"占位
-    await expect(page.getByText("等待环境音转写…")).toBeVisible();
-    // 纪要空态
-    await expect(page.getByText(/纪要尚未生成/)).toBeVisible();
+    await expect(page.getByText("从这里开始对话")).toBeVisible();
+    await expect(page.getByTestId("inspector-tab-artifacts")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     // outputs 切回 global，A、B 两条都应该可见（store.artifacts 是事件流积累的）
     await expect(page.getByTestId("artifact-list")).toHaveAttribute(
       "data-scope",

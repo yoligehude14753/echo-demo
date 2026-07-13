@@ -19,6 +19,7 @@
 #   2 = 参数 / 路径错误
 #   3 = pip install 失败
 #   4 = smoke test 失败
+#   5 = AgentOS 安装或启动失败
 #
 # 兼容：mac arm64 + intel；Python 3.11 / 3.12（3.13 未测）
 
@@ -68,6 +69,10 @@ if [ "${1:-}" = "--uninstall" ]; then
     if [ "$ans" != "yes" ]; then
         info "已取消"
         exit 0
+    fi
+    if [ -x "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install-agentos.sh" ]; then
+        ECHODESK_HOME="$ECHODESK_HOME" \
+            "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install-agentos.sh" --uninstall || true
     fi
     rm -rf "$ECHODESK_HOME"
     ok "已删除 $ECHODESK_HOME"
@@ -152,6 +157,7 @@ step4_sync_backend() {
     # 但留 .venv（不在 source 里）和 logs 等不在 backend 目录的东西
     rsync -a --delete \
         --exclude='.venv' \
+        --exclude='.env' \
         --exclude='__pycache__' \
         --exclude='*.pyc' \
         --exclude='.pytest_cache' \
@@ -190,6 +196,9 @@ step5_create_venv() {
 
 step6_install_deps() {
     info "step 6: pip install -r requirements.txt（首次约 3-10 min，含 torch）"
+    # 0.3.0 之前 AgentOS 曾误装进 backend venv；先清掉旧 editable 包，
+    # 避免它的 uvicorn 约束污染 backend 的锁定依赖。
+    "$VENV_PY" -m pip uninstall --quiet --yes agentos 2>/dev/null || true
     "$VENV_PY" -m pip install --upgrade pip --quiet
     if ! "$VENV_PY" -m pip install -r "$BACKEND_DIR/requirements.txt" --quiet 2>&1 | tail -20; then
         err "pip install 失败，看上面的输出"
@@ -247,8 +256,10 @@ DEFAULT_CONFIG=$(cat <<'JSON'
   "tts_provider": "qwen3_tts",
   "tts_qwen3_url": "http://100.76.3.59:8094",
   "llm_main_provider": "yunwu",
-  "llm_main_model": "MiniMax-M2.7",
+  "llm_main_model": "deepseek-v4-flash",
   "llm_main_base_url": "https://yunwu.ai/v1",
+  "agent_os_enabled": false,
+  "agent_os_url": "http://127.0.0.1:4128",
   "llm_fast_provider": "yunwu",
   "llm_fast_model": "MiniMax-M2.7",
   "llm_fast_base_url": "https://yunwu.ai/v1",
@@ -273,7 +284,7 @@ step7_write_config() {
     fi
     echo "$DEFAULT_CONFIG" > "$USER_CONFIG"
     ok "config.json 已写入默认值"
-    warn "未填 YUNWU_OPEN_KEY → @生成 / 纪要功能不可用；编辑 $USER_CONFIG 填入即可"
+    warn "未填主模型 API Key → @生成 / 纪要功能不可用；编辑 $USER_CONFIG 填入即可"
     warn "未填 TAVILY_API_KEY → @查 联网检索不可用"
 }
 
@@ -282,11 +293,18 @@ step7_write_config() {
 step8_smoke() {
     info "step 8: smoke test（验证 import + 1 次启停）"
     cd "$BACKEND_DIR"
-    # 把 ECHODESK_HOME（脚本接口名，更直观）映射给 backend 看到的
-    # ECHO_USER_DIR（config_io.py:user_config_dir 用这个），让 smoke step 启的
-    # backend 用临时目录而不是污染真实 ~/.echodesk/
-    export ECHO_USER_DIR="$ECHODESK_HOME"
+    # smoke 必须与真实用户数据完全隔离。此前这里误把 ECHO_USER_DIR 指回
+    # ~/.echodesk，导致部署测试可能 hydrate/修改真实会议 DB。
+    local smoke_home
+    smoke_home="$(mktemp -d "${TMPDIR:-/tmp}/echodesk-install-smoke.XXXXXX")"
+    export ECHO_USER_DIR="$smoke_home"
+    export DB_PATH="$smoke_home/echodesk.db"
+    export STORAGE_DIR="$smoke_home/storage"
+    export RAG_INDEX_DIR="$smoke_home/rag_index"
+    export WORKSPACE_STATE_FILE="$smoke_home/workspace_state.json"
+    export SKILL_EXECUTOR_BUILD_DIR="$smoke_home/skill_build"
     if ! "$VENV_PY" -c "from app.config import get_settings; from app.main import create_app; print('import ok')" 2>&1; then
+        rm -rf "$smoke_home"
         err "import 失败"
         exit 4
     fi
@@ -297,9 +315,10 @@ step8_smoke() {
     local port=8769
     if lsof -ti "tcp:$port" -sTCP:LISTEN >/dev/null 2>&1; then
         warn "端口 $port 已被占用，跳过 smoke（你的 EchoDesk 可能已在跑）"
+        rm -rf "$smoke_home"
         return
     fi
-    "$VENV_PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$port" --log-level warning > /tmp/echodesk-install-smoke.log 2>&1 &
+    "$VENV_PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$port" --ws-max-size 4096 --log-level warning > /tmp/echodesk-install-smoke.log 2>&1 &
     local spid=$!
     local i=0
     while [ $i -lt 30 ]; do
@@ -314,12 +333,46 @@ step8_smoke() {
         err "smoke 启动 15s 后 healthz 仍不通；最后 20 行日志："
         tail -20 /tmp/echodesk-install-smoke.log >&2
         kill "$spid" 2>/dev/null || true
+        rm -rf "$smoke_home"
         exit 4
     fi
     kill "$spid" 2>/dev/null || true
     # 等子进程退干净避免 stderr 噪音
     wait "$spid" 2>/dev/null || true
+    rm -rf "$smoke_home"
     ok "smoke 通过"
+}
+
+# ---------- Step 9: install the local AgentOS control plane ----------
+
+step9_install_agentos() {
+    info "step 9: 安装 AgentOS / Claude Code runner"
+    if [ "${ECHODESK_SKIP_AGENTOS_INSTALL:-0}" = "1" ]; then
+        warn "ECHODESK_SKIP_AGENTOS_INSTALL=1，跳过 AgentOS 安装"
+        return
+    fi
+
+    local installer="$REPO/scripts/install-agentos.sh"
+    local source="${ECHODESK_AGENTOS_SOURCE:-$(cd "$REPO/.." && pwd)/agentos}"
+    if [ ! -x "$installer" ]; then
+        err "AgentOS 安装器缺失: $installer"
+        exit 5
+    fi
+    if [ ! -f "$source/agentos/server/__main__.py" ]; then
+        warn "未找到 AgentOS 源码: $source"
+        warn "Agent Workflow 将保持禁用；设置 ECHODESK_AGENTOS_SOURCE 后重跑安装器"
+        if [ "${ECHODESK_AGENTOS_REQUIRED:-0}" = "1" ]; then
+            exit 5
+        fi
+        return
+    fi
+
+    if ! ECHODESK_HOME="$ECHODESK_HOME" ECHODESK_AGENTOS_SOURCE="$source" \
+        "$installer" "$REPO"; then
+        err "AgentOS 安装或启动失败"
+        exit 5
+    fi
+    ok "AgentOS / Claude Code runner 已安装"
 }
 
 # ---------- 主流程 ----------
@@ -349,6 +402,7 @@ step6_install_deps
 step6_5_install_ppt_deck_deps
 step7_write_config
 step8_smoke
+step9_install_agentos
 
 printf "\n${GREEN}╔══════════════════════════════════════════════════════════╗${NC}\n"
 printf "${GREEN}║                  安装完成                                  ║${NC}\n"
@@ -360,6 +414,7 @@ EchoDesk backend 就位：
   config:  $USER_CONFIG
   data:    $ECHODESK_HOME
   logs:    $LOG_DIR
+  agent:   http://127.0.0.1:4128（已配置主模型 API Key 时启用）
 
 下一步：
   1. 把 EchoDesk.app 拖到 /Applications/
@@ -367,7 +422,7 @@ EchoDesk backend 就位：
      （Electron BackendSupervisor 会自动 spawn backend）
 
 要填的密钥（可选，不填对应功能灰）：
-  - YUNWU_OPEN_KEY → @生成 / 会议纪要
+  - 主模型 API Key → @生成 / 会议纪要
   - TAVILY_API_KEY → @查 联网检索
   编辑 $USER_CONFIG 填入对应字段即可（重启 .app 生效）
 

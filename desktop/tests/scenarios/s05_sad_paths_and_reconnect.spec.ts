@@ -32,7 +32,7 @@ test("S05a · @生成 后端 500 → 错误 toast，textarea 不锁死（P2.2）
 
   await test.step("打开主界面，等连接 OK", async () => {
     await page.goto("/");
-    await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("pill-backend")).toBeVisible({ timeout: 5_000 });
   });
 
   await test.step("输入 @生成 HTML 并提交，后端返 500", async () => {
@@ -60,16 +60,22 @@ test("S05b · WebSocket 断线 → 顶栏掉线提示 → 自动重连", async (
 
   await test.step("打开主界面，初始已连接", async () => {
     await page.goto("/");
-    await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".app-connection-status")).toContainText("已连接", {
+      timeout: 5_000,
+    });
   });
 
   await test.step("主动断 WS → 顶栏显示「断线」", async () => {
     await mock.closeWs(1006, "test-disconnect");
-    await expect(page.locator("text=断线")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".app-connection-status")).toContainText("断线", {
+      timeout: 5_000,
+    });
   });
 
   await test.step("打开 reopenable，等待自动重连恢复「已连接」", async () => {
     await mock.reopenWs();
-    await expect(page.locator("text=已连接")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".app-connection-status")).toContainText("已连接", {
+      timeout: 10_000,
+    });
   });
 });

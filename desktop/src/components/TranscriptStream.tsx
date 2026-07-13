@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { listRecentAmbient, type AmbientSegment } from "@/api";
+import { Bot, UserRound } from "lucide-react";
+import {
+  artifactDownloadUrl,
+  artifactIdFromDownloadHref,
+  listRecentAmbient,
+  type AmbientSegment,
+} from "@/api";
+import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { TranscriptSegment } from "@/types";
@@ -9,6 +16,7 @@ import {
   buildSpeakerDisplayMap,
   colorForDisplayIdx,
 } from "@/lib/speakerDisplay";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 function fmtClockShort(iso: string): string {
   const d = new Date(iso);
@@ -18,23 +26,18 @@ function fmtClockShort(iso: string): string {
 }
 
 /**
- * 转写流主面板（v2 气泡布局，参考 Marvis 简化）。
+ * 统一对话流：逐字稿、用户问题与 AI 回复按时间顺序呈现，来源通过头像、
+ * 标签和颜色区分，不再要求用户在两个页面之间来回切换。
  *
  * 数据源切换（P4 M_meeting_history，2026-05-28）：
- * - currentMeetingId === null（"待机时段"）→ 显示全局 ambient feed（3s 轮询）
+ * - currentMeetingId === null（"实时记录"）→ 显示全局 ambient feed（3s 轮询）
  * - currentMeetingId 已选 + 会议 ended/finalized → 显示 meeting.segments（DB 历史）
  * - currentMeetingId 已选 + 会议 in_meeting → 显示 ambient + 时间窗高亮（兼容当前
  *   ambient pipeline：会议中 chunk 既写 ambient_segments 也走 meeting overlay；
  *   两边内容一致但 ambient 更新更快，所以现场仍用 ambient）
  *
- * 视觉规则（来自用户 2026-05-27 反馈）：
- * - 所有"非用户手动输入"的文本（ambient 转写）→ 左侧气泡 + 头像在左
- * - 用户手动输入（未来：CommandBar 标注 self 的回话）→ 右侧气泡 + 头像在右
- *   当前 ambient 没有 is_self 字段 → 全部走左侧 lane，预留右侧给未来
- * - 头像 = 32×32 圆形彩色 + 居中数字（数字就是 remap 后的"说话人 N"序号）
- * - 时间默认隐藏，hover 整条 → 显示 HH:MM（精度到分够用）
- * - 同一说话人连续多条：合并头像（只在第一条显示），间距更紧（4px）；
- *   切换说话人时拉开间距（16px），更易扫读
+ * 新增的 echodesk-stream* 语义 class 让逐字稿可采用扁平记录样式，同时保留
+ * 现有 testid 与基础 utility class，便于分阶段迁移视觉层。
  */
 
 interface DisplaySegment {
@@ -131,6 +134,12 @@ function dedupeDisplaySegments(segments: DisplaySegment[]): DisplaySegment[] {
 }
 
 export default function TranscriptStream(): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const [ambient, setAmbient] = useState<AmbientSegment[]>([]);
   const events = useStore((s) => s.events);
   const localAmbient = useStore((s) => s.ambientSegments);
@@ -141,6 +150,10 @@ export default function TranscriptStream(): JSX.Element {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickyToBottomRef = useRef(true);
   const localOnlyAmbient = shouldHideSharedPublicHistory();
+
+  useEffect(() => {
+    setAmbient([]);
+  }, [backendOriginRevision]);
 
   // 是否走"会议历史"分支：会议已选 + 已结束（ended/finalized 等）+ 有 segments
   // 进行中会议仍走 ambient 分支保持实时性（ambient 是 chunk 写入的最近 100 条）
@@ -165,6 +178,14 @@ export default function TranscriptStream(): JSX.Element {
   const dialogSegs: DisplaySegment[] = useMemo(() => {
     const out: DisplaySegment[] = [];
     for (const ev of events.slice(-80)) {
+      const eventMeetingId = ev.meeting_id ?? null;
+      if (
+        currentMeetingId !== null
+          ? eventMeetingId !== currentMeetingId
+          : eventMeetingId !== null
+      ) {
+        continue;
+      }
       const payload = (ev.payload ?? {}) as {
         question?: unknown;
         answer?: unknown;
@@ -195,17 +216,15 @@ export default function TranscriptStream(): JSX.Element {
       }
     }
     return out.slice(-20);
-  }, [events]);
+  }, [currentMeetingId, events]);
 
-  const segs: DisplaySegment[] = useMemo(
-    () =>
-      dedupeDisplaySegments(
-        [...baseSegs, ...dialogSegs].sort((a, b) =>
-          a.captured_at.localeCompare(b.captured_at),
-        ),
+  const segs: DisplaySegment[] = useMemo(() => {
+    return dedupeDisplaySegments(
+      [...baseSegs, ...dialogSegs].sort((a, b) =>
+        a.captured_at.localeCompare(b.captured_at),
       ),
-    [baseSegs, dialogSegs],
-  );
+    );
+  }, [baseSegs, dialogSegs]);
 
   const speakerDisplayMap = useMemo(
     () => buildSpeakerDisplayMap(segs),
@@ -230,10 +249,21 @@ export default function TranscriptStream(): JSX.Element {
       return undefined;
     }
     let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
     const tick = async (): Promise<void> => {
       try {
-        const recent = await listRecentAmbient(100);
-        if (alive) setAmbient(recent);
+        const recent = await listRecentAmbient(100, {
+          signal: controller.signal,
+        });
+        if (
+          alive &&
+          isCurrent(originGeneration) &&
+          !controller.signal.aborted
+        ) {
+          setAmbient(recent);
+        }
       } catch {
         /* 静默 */
       }
@@ -242,25 +272,52 @@ export default function TranscriptStream(): JSX.Element {
     const t = setInterval(tick, 3_000);
     return () => {
       alive = false;
+      unregisterController();
       clearInterval(t);
     };
-  }, [showMeetingHistory, localOnlyAmbient]);
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    localOnlyAmbient,
+    registerAbortController,
+    showMeetingHistory,
+  ]);
 
   useEffect(() => {
     if (localOnlyAmbient) return;
     if (showMeetingHistory) return;
     if (!events.length) return;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
     const last = events[events.length - 1];
     if (
       last.type === "meeting.segment" ||
       last.type === "meeting.auto_detected" ||
       last.type === "meeting.state_changed"
     ) {
-      void listRecentAmbient(100)
-        .then((r) => setAmbient(r))
+      void listRecentAmbient(100, { signal: controller.signal })
+        .then((r) => {
+          if (
+            isCurrent(originGeneration) &&
+            !controller.signal.aborted
+          ) {
+            setAmbient(r);
+          }
+        })
         .catch(() => undefined);
     }
-  }, [events, showMeetingHistory, localOnlyAmbient]);
+    return unregisterController;
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    events,
+    isCurrent,
+    localOnlyAmbient,
+    registerAbortController,
+    showMeetingHistory,
+  ]);
 
   // 提取布尔到变量：eslint react-hooks/exhaustive-deps 不支持复合表达式作为 dep
   const hasNoSegments = segs.length === 0;
@@ -289,18 +346,18 @@ export default function TranscriptStream(): JSX.Element {
         <div className="echodesk-transcript-empty flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
           <div>该会议未保存逐字稿</div>
           <div className="text-[10px] text-ink-300">
-            可能 STT 服务在该会议期间不可用
+            会议期间可能没有检测到可识别的语音
           </div>
         </div>
       );
     }
     return (
       <div className="echodesk-transcript-empty flex-1 min-h-0 flex items-center justify-center text-ink-400 text-[12px] flex-col gap-2">
-        <div>等待环境音转写…</div>
+        <div>从这里开始对话</div>
         <div className="text-[10px] text-ink-300">
           {localOnlyAmbient
-            ? "公共演示模式只显示本机本次采集，不读取共享历史"
-            : "开口说话即可触发；环境静音/底噪会被自动过滤"}
+            ? "语音转录和 AI 回复会按时间显示在同一条对话里"
+            : "直接开口或在下方输入问题，转录和 AI 回复会出现在同一条对话里"}
         </div>
       </div>
     );
@@ -309,7 +366,7 @@ export default function TranscriptStream(): JSX.Element {
   return (
     <div
       ref={scrollerRef}
-      className="flex-1 min-h-0 overflow-y-auto px-6 py-4"
+      className="echodesk-stream echodesk-stream--conversation flex-1 min-h-0 overflow-y-auto px-6 py-4"
       data-testid="transcript-scroller"
       data-mode={
         showMeetingHistory
@@ -319,12 +376,12 @@ export default function TranscriptStream(): JSX.Element {
           : "ambient"
       }
     >
-      <div className="max-w-3xl mx-auto">
+      <div className="echodesk-stream-list max-w-3xl mx-auto">
         {segs.map((s, idx) => {
           const displayIdx = s.speaker_label
             ? (speakerDisplayMap.get(s.speaker_label) ?? 0)
             : 0;
-          const c = colorForDisplayIdx(displayIdx);
+          const speakerColor = colorForDisplayIdx(displayIdx);
           const t = new Date(s.captured_at).getTime();
           const inWindow =
             winStart !== null &&
@@ -333,6 +390,11 @@ export default function TranscriptStream(): JSX.Element {
 
           const isAssistant = s.role === "assistant";
           const isSelf = s.role === "user";
+          const c = isAssistant
+            ? { fg: "#047857", bg: "#ecfdf5", ring: "#a7f3d0" }
+            : isSelf
+              ? { fg: "#1d4ed8", bg: "#eff6ff", ring: "#bfdbfe" }
+              : speakerColor;
 
           // 连续同说话人合并：只在第一条显示头像，气泡间距收紧
           const prev = idx > 0 ? segs[idx - 1] : null;
@@ -344,7 +406,9 @@ export default function TranscriptStream(): JSX.Element {
           const containerSpacing = sameSpeakerAsPrev ? "mt-1" : "mt-4";
           const displayLabel =
             isAssistant
-                ? "Echo"
+              ? "Echo AI"
+              : isSelf
+                ? "你"
                 : displayIdx > 0
                   ? `说话人 ${displayIdx}`
                   : "未识别";
@@ -352,7 +416,7 @@ export default function TranscriptStream(): JSX.Element {
           // 头像：32px 圆形，背景柔色 + 同色边框，居中数字
           const avatar = (
             <div
-              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none"
+              className="echodesk-stream-avatar shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none"
               style={{
                 color: c.fg,
                 background: c.bg,
@@ -362,12 +426,20 @@ export default function TranscriptStream(): JSX.Element {
                 isAssistant
                   ? displayLabel
                   : s.speaker_label
-                  ? `${displayLabel}（全局编号 ${s.speaker_label}）`
-                  : "未识别说话人"
+                    ? displayLabel
+                    : "未识别说话人"
               }
               data-testid="speaker-avatar"
             >
-              {isSelf ? "用户" : isAssistant ? "E" : displayIdx > 0 ? displayIdx : "?"}
+              {isAssistant ? (
+                <Bot className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : isSelf ? (
+                <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : displayIdx > 0 ? (
+                displayIdx
+              ) : (
+                <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
             </div>
           );
           const avatarSpacer = (
@@ -377,22 +449,22 @@ export default function TranscriptStream(): JSX.Element {
           return (
             <div
               key={`${s.captured_at}-${idx}`}
-              className={`group flex gap-2 items-end ${containerSpacing} ${
+              className={`echodesk-stream-row echodesk-stream-row--${
+                isAssistant ? "assistant" : isSelf ? "user" : "speaker"
+              } group flex gap-2 items-end ${containerSpacing} ${
                 isSelf ? "flex-row-reverse" : "flex-row"
               }`}
               data-testid="transcript-row"
             >
-              {isSelf ? null : sameSpeakerAsPrev ? avatarSpacer : avatar}
+              {sameSpeakerAsPrev ? avatarSpacer : avatar}
               <div
                 className={`flex flex-col min-w-0 max-w-[78%] ${
                   isSelf ? "items-end" : "items-start"
                 }`}
               >
-                {!isSelf && !sameSpeakerAsPrev && (
+                {!sameSpeakerAsPrev && (
                   <div
-                    className={`text-[11px] mb-0.5 px-1 ${
-                      isSelf ? "text-right" : "text-left"
-                    }`}
+                    className={`echodesk-stream-speaker text-[11px] mb-0.5 px-1 ${isSelf ? "text-right" : "text-left"}`}
                     style={{ color: c.fg }}
                     data-testid="speaker-tag"
                   >
@@ -400,7 +472,9 @@ export default function TranscriptStream(): JSX.Element {
                   </div>
                 )}
                 <div
-                  className={`relative text-[14px] leading-6 px-3.5 py-2 rounded-2xl shadow-sm border break-words ${
+                  className={`echodesk-stream-message echodesk-stream-message--${
+                    isAssistant ? "assistant" : isSelf ? "user" : "speaker"
+                  } relative text-[14px] leading-6 px-3.5 py-2 rounded-2xl shadow-sm border break-words ${
                     inWindow
                       ? "border-amber-300/70 ring-1 ring-amber-200/60"
                       : "border-paper-300"
@@ -409,7 +483,7 @@ export default function TranscriptStream(): JSX.Element {
                       ? "bg-blue-500 text-white border-blue-500"
                       : isAssistant
                         ? "bg-emerald-50 text-ink-900 border-emerald-200"
-                      : "bg-white text-ink-800"
+                        : "bg-white text-ink-800"
                   }`}
                   data-testid={
                     isAssistant
@@ -449,16 +523,26 @@ export default function TranscriptStream(): JSX.Element {
                         strong: ({ children }) => (
                           <strong className="font-semibold text-ink-950">{children}</strong>
                         ),
-                        a: ({ children, href }) => (
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-blue-600 underline underline-offset-2"
-                          >
-                            {children}
-                          </a>
-                        ),
+                        a: ({ children, href }) => {
+                          const artifactId = artifactIdFromDownloadHref(href);
+                          return artifactId ? (
+                            <AuthenticatedDownloadLink
+                              url={artifactDownloadUrl(artifactId)}
+                              className="text-blue-600 underline underline-offset-2"
+                            >
+                              {children}
+                            </AuthenticatedDownloadLink>
+                          ) : (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 underline underline-offset-2"
+                            >
+                              {children}
+                            </a>
+                          );
+                        },
                         code: ({ children }) => (
                           <code className="rounded bg-white/80 px-1 py-0.5 text-[13px] font-mono text-ink-800">
                             {children}
@@ -476,16 +560,15 @@ export default function TranscriptStream(): JSX.Element {
                   ) : (
                     s.text
                   )}
-                  {/* hover 时显示时间（仅 HH:MM） */}
-                  <span
-                    className={`absolute top-1/2 -translate-y-1/2 text-[10px] text-ink-400 font-mono opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap select-none ${
-                      isSelf ? "right-full mr-2" : "left-full ml-2"
-                    }`}
-                    data-testid="transcript-time"
-                  >
-                    {fmtClockShort(s.captured_at)}
-                  </span>
                 </div>
+                <span
+                  className={`echodesk-stream-time mt-1 px-1 text-[10px] text-ink-400 tabular-nums whitespace-nowrap select-none ${
+                    isSelf ? "self-end text-right" : "self-start text-left"
+                  }`}
+                  data-testid="transcript-time"
+                >
+                  {fmtClockShort(s.captured_at)}
+                </span>
               </div>
             </div>
           );

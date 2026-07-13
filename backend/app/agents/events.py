@@ -9,12 +9,19 @@ from pydantic import BaseModel, Field
 
 Visibility = Literal["user", "debug", "hidden"]
 
-TERMINAL_STATES = {"succeeded", "failed", "cancelled", "timeout"}
-TERMINAL_EVENTS = {"task.completed", "task.failed", "task.cancelled", "task.timeout"}
+TERMINAL_STATES = {"succeeded", "failed", "cancelled", "cancel_failed", "timeout"}
+TERMINAL_EVENTS = {
+    "task.completed",
+    "task.failed",
+    "task.cancelled",
+    "task.cancel_failed",
+    "task.timeout",
+}
 FAILURE_PROGRESS_TEXT = {
     "task.failed": "任务失败",
     "task.timeout": "任务超时",
     "task.cancelled": "任务已取消",
+    "task.cancel_failed": "取消失败",
 }
 
 
@@ -88,7 +95,9 @@ def _finish_step(snapshot: dict[str, Any], step: dict[str, Any]) -> None:
 
 def _complete_snapshot(snapshot: dict[str, Any], event: EchoTaskEvent) -> None:
     snapshot["status"] = "succeeded"
-    snapshot["final_text"] = event.message or snapshot.get("final_text") or snapshot.get("text_buffer")
+    snapshot["final_text"] = (
+        event.message or snapshot.get("final_text") or snapshot.get("text_buffer")
+    )
     snapshot["progress_text"] = "任务完成"
     snapshot["actions"] = []
     snapshot["permission"] = None

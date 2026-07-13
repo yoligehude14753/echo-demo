@@ -85,6 +85,46 @@ async def test_ambient_stt_fail_still_saves_audio(
     ambient_pipeline._rag.ingest_ambient_segment.assert_not_awaited()  # type: ignore[attr-defined]
 
 
+@pytest.mark.asyncio
+async def test_ambient_stored_uses_repository_even_when_rag_projection_fails(
+    ambient_pipeline: AmbientCapturePipeline,
+) -> None:
+    repository = AsyncMock()
+    repository.append_ambient_segment = AsyncMock(return_value=1)
+    ambient_pipeline._repo = repository  # type: ignore[assignment]
+    ambient_pipeline._rag.ingest_ambient_segment = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("rag down")
+    )
+
+    result = await ambient_pipeline.ingest_chunk(b"\x01" * 1000)
+
+    assert result.ambient_stored is True
+    assert ambient_pipeline.get_stats().stored == 1
+    assert ambient_pipeline.get_stats().segment_store_failed == 0
+    repository.set_ambient_rag_projection.assert_awaited_once_with(
+        1,
+        state="index_failed",
+        error="rag down",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ambient_stored_does_not_report_rag_only_success_when_repository_fails(
+    ambient_pipeline: AmbientCapturePipeline,
+) -> None:
+    repository = AsyncMock()
+    repository.append_ambient_segment = AsyncMock(side_effect=RuntimeError("db down"))
+    ambient_pipeline._repo = repository  # type: ignore[assignment]
+
+    result = await ambient_pipeline.ingest_chunk(b"\x01" * 1000)
+
+    assert result.ambient_stored is False
+    assert ambient_pipeline.get_stats().stored == 0
+    assert ambient_pipeline.get_stats().segment_store_failed == 1
+    ambient_pipeline._rag.ingest_ambient_segment.assert_not_awaited()  # type: ignore[attr-defined]
+    repository.set_ambient_rag_projection.assert_not_awaited()
+
+
 # ── text-clarity PR：LLM punctuator 集成 ───────────────────────────
 
 
@@ -126,7 +166,7 @@ def ambient_pipeline_with_punctuator(tmp_path: Path) -> AmbientCapturePipeline:
     )
     punctuator = LLMPunctuator(llm, settings)
     repo = AsyncMock()
-    repo.append_ambient_segment = AsyncMock()
+    repo.append_ambient_segment = AsyncMock(return_value=1)
     return AmbientCapturePipeline(
         settings=settings,
         stt=stt,

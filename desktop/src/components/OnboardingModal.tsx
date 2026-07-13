@@ -10,10 +10,12 @@
  * 用户后续想重看，在 SettingsPanel 触发 resetForDebug() 即可。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, Modal, Steps } from "antd";
 import { CheckCircle2, FolderOpen, Mic, Sparkles } from "lucide-react";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { apiUrl } from "@/runtime";
+import { apiTransport } from "@/session";
 
 type StepKey = "welcome" | "mic" | "done";
 
@@ -25,8 +27,16 @@ interface Props {
 }
 
 export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const [stepIdx, setStepIdx] = useState(0);
   const stepKey: StepKey = STEPS[stepIdx] ?? "welcome";
+  const wasOpenRef = useRef(open);
+  const handledOriginRevision = useRef(backendOriginRevision);
 
   const [dataDirPath, setDataDirPath] = useState<string | null>(null);
   const [micState, setMicState] = useState<"unknown" | "granted" | "denied" | "prompt">(
@@ -34,57 +44,94 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
   );
   const [requesting, setRequesting] = useState(false);
 
+  useEffect(() => {
+    if (handledOriginRevision.current === backendOriginRevision) return;
+    handledOriginRevision.current = backendOriginRevision;
+    setStepIdx(0);
+    setDataDirPath(null);
+    setMicState("unknown");
+    setRequesting(false);
+    onClose();
+  }, [backendOriginRevision, onClose]);
+
+  // OnboardingModal 本身始终挂载；AntD 只会销毁 Modal 内部节点，因此步骤 state
+  // 不会随着弹窗关闭自动清空。只在“已关闭 → 再次打开”的边沿回到欢迎页，
+  // 避免首次打开或用户切换步骤时被 effect 意外重置。
+  useLayoutEffect(() => {
+    const isReopening = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+    if (isReopening) setStepIdx(0);
+  }, [open]);
+
   // 拉数据目录路径（让用户知道数据存在哪）
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
+    let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive && isCurrent(originGeneration) && !controller.signal.aborted;
     (async () => {
       try {
         const u = await apiUrl("/admin/data-dir");
-        const r = await fetch(u);
+        const r = await apiTransport(
+          u,
+          { signal: controller.signal },
+          { timeoutMs: 8_000, throwHttpErrors: false },
+        );
         if (!r.ok) return;
         const d = (await r.json()) as { path?: string };
-        if (!cancelled && d.path) setDataDirPath(d.path);
+        if (canCommit() && d.path) setDataDirPath(d.path);
       } catch {
         /* 让用户看到 path 是 nice-to-have，失败就显示 ~/.echodesk/ */
       }
     })();
     return () => {
-      cancelled = true;
+      alive = false;
+      unregisterController();
     };
-  }, [open]);
+  }, [captureGeneration, isCurrent, open, registerAbortController]);
 
   // 拉麦克风权限初值（mic 步骤进入时再查一次以拿最新值）
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
+    let alive = true;
+    const originGeneration = captureGeneration();
     (async () => {
-      const s = await probeMicState();
-      if (!cancelled) setMicState(s);
+      try {
+        const s = await probeMicState();
+        if (alive && isCurrent(originGeneration)) setMicState(s);
+      } catch {
+        if (alive && isCurrent(originGeneration)) setMicState("unknown");
+      }
     })();
     return () => {
-      cancelled = true;
+      alive = false;
     };
-  }, [open, stepIdx]);
+  }, [captureGeneration, isCurrent, open, stepIdx]);
 
   const onRequestMic = async () => {
+    const originGeneration = captureGeneration();
     setRequesting(true);
     try {
       // Electron: askForMediaAccess 触发系统弹窗（macOS）；其它环境走 getUserMedia
       if (window.echo?.requestMic) {
         const ok = await window.echo.requestMic();
-        setMicState(ok ? "granted" : "denied");
+        if (isCurrent(originGeneration)) {
+          setMicState(ok ? "granted" : "denied");
+        }
       } else {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          stream.getTracks().forEach((t) => t.stop());
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+        if (isCurrent(originGeneration)) {
           setMicState("granted");
-        } catch {
-          setMicState("denied");
         }
       }
+    } catch {
+      if (isCurrent(originGeneration)) setMicState("denied");
     } finally {
-      setRequesting(false);
+      if (isCurrent(originGeneration)) setRequesting(false);
     }
   };
 
@@ -111,7 +158,7 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
       footer={null}
       width={520}
       title={null}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="py-2">
         <Steps
@@ -190,7 +237,7 @@ function WelcomeStep({ dataDirPath }: { dataDirPath: string | null }): JSX.Eleme
         </div>
         <div className="text-ink-400 mt-1.5">
           会议数据库、录音、知识库索引、日志全部都在这里。可在「设置 → 数据」
-          里查看占用 / 一键导出 / 卸载。
+          里查看占用、导出诊断信息或卸载。
         </div>
       </div>
     </div>
@@ -293,13 +340,13 @@ function DoneStep(): JSX.Element {
       <div className="text-ink-600">三个关键交互点：</div>
       <ul className="list-disc pl-5 space-y-1.5 text-[12px] text-ink-600">
         <li>
-          底部 CommandBar 输入 <b>@生成 PPT / @报告 / @查 …</b> 触发 LLM 流程
+          在底部输入问题，或直接描述要生成的文档、表格和演示文稿
         </li>
         <li>
-          左上「开始会议」启动录音；侧边录音状态条会显示当前会议
+          点击「开始会议」保存本次记录；不开始会议时也会持续显示实时转写
         </li>
         <li>
-          右上「设置 ⚙」可查数据占用、导出诊断包、重置说话人
+          右上「设置」可管理知识库、数据占用、诊断包和说话人
         </li>
       </ul>
       <div className="text-ink-400 text-[11px]">

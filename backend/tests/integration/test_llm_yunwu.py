@@ -12,7 +12,7 @@ from app.adapters.llm import OpenAICompatibleLLM
 from app.config import Settings
 from app.schemas.llm import ChatMessage
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.live]
 
 
 def _has_yunwu_key() -> bool:

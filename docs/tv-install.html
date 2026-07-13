@@ -152,7 +152,8 @@
       <p class="lead">
         适配 Android TV、Google TV 和常见国产 Android/AOSP 智能电视。电视上点
         APK 会进入系统安装器；电脑端可以下载一键安装包，通过 ADB 推送到电视。
-        当前源码版本：v0.2.50；TV 资产发布后会出现在 Release 最新页。
+        当前源码版本：v0.3.1；最新稳定版仍为 v0.2.50，当前尚无公开 TV 资产。
+        下方入口会打开 Releases 列表，只有标记为 Android/TV 且签名验证通过的资产才可安装。
       </p>
 
       <section class="grid" aria-label="安装方式">
@@ -165,9 +166,9 @@
           <a
             class="button"
             data-testid="tv-apk-link"
-            href="https://github.com/yoligehude14753/echo-demo/releases/latest"
+            href="https://github.com/yoligehude14753/echo-demo/releases"
           >
-            下载电视 APK
+            查看已签名电视资产
           </a>
         </article>
 
@@ -179,9 +180,9 @@
           <a
             class="button secondary"
             data-testid="tv-bundle-link"
-            href="https://github.com/yoligehude14753/echo-demo/releases/latest"
+            href="https://github.com/yoligehude14753/echo-demo/releases"
           >
-            下载一键安装包
+            查看已签名一键安装包
           </a>
           <ol class="steps">
             <li>电视和电脑连接同一个网络。</li>
@@ -202,8 +203,9 @@
         </button>
         <div class="status" data-testid="copy-status" aria-live="polite"></div>
         <p style="margin-top: 18px">
-          一键安装默认是干净安装，避免会议室电视继承旧缓存。升级保留数据时，在命令前加
-          <code>ECHODESK_TV_KEEP_DATA=1</code>。
+          一键安装保留 WebView、app data、设备身份与现有权限状态，也不会允许版本降级。
+          安装器不提供清空当前应用数据的开关；确认不再需要旧包时才使用
+          <code>ECHODESK_TV_REMOVE_LEGACY=1</code>。
         </p>
       </section>
     </main>

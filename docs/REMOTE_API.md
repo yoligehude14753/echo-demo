@@ -2,6 +2,7 @@
 
 > Current (2026-06-27): EchoDesk demo 的 STT / TTS 在 eight (`100.76.3.59`)；
 > Fast LLM public 默认跟随 Yunwu 主通道，避免 eight fast LLM 未启动时影响可用性。
+> 2026-07-10：MAIN 固定为 Yunwu `deepseek-v4-flash`，FAST 仍是可独立覆盖的通道。
 
 ## 当前默认
 
@@ -9,6 +10,7 @@
 |---|---|---|
 | STT | `http://100.76.3.59:8090` | FireRedASR2-AED |
 | TTS | `http://100.76.3.59:8094` | faster-qwen3-tts CustomVoice |
+| Main LLM | `https://yunwu.ai/v1` | `deepseek-v4-flash` |
 | Fast LLM | `https://yunwu.ai/v1` | `MiniMax-M2.7`（跟随主通道兜底） |
 
 这些默认值已写入：
@@ -46,6 +48,9 @@ env > ~/.echodesk/config.json > .env > code default
 ```json
 {
   "stt_firered_url": "http://100.76.3.59:8090",
+  "llm_main_provider": "yunwu",
+  "llm_main_base_url": "https://yunwu.ai/v1",
+  "llm_main_model": "deepseek-v4-flash",
   "llm_fast_base_url": "https://yunwu.ai/v1",
   "llm_fast_model": "MiniMax-M2.7",
   "tts_qwen3_url": "http://100.76.3.59:8094"

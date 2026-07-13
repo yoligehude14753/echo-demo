@@ -37,7 +37,9 @@ test("S04 · @生成 HTML 命令 → 产物卡片出现", async ({ page }) => {
 
   await test.step("打开主界面，等连接 OK", async () => {
     await page.goto("/");
-    await expect(page.locator("text=已连接")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("button", { name: /服务端/ })).toBeVisible({
+      timeout: 5_000,
+    });
   });
 
   await test.step("在 CommandBar 输入 @生成 HTML 测试报告", async () => {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -95,20 +96,53 @@ async def test_update_meeting_state_progression(repo: SQLiteRepository) -> None:
 @pytest.mark.asyncio
 async def test_list_meetings_filters_state(repo: SQLiteRepository) -> None:
     base = datetime.now(UTC)
-    await repo.create_meeting("a", started_at=base)
+    await repo.create_meeting("a", started_at=base - timedelta(minutes=2))
+    await repo.update_meeting_state("a", state="finalized", finalized_at=base)
     await repo.create_meeting("b", started_at=base - timedelta(minutes=1))
-    await repo.create_meeting("c", started_at=base - timedelta(minutes=2))
     await repo.update_meeting_state("b", state="finalized", finalized_at=base)
+    await repo.create_meeting("c", started_at=base)
 
     in_meeting = await repo.list_meetings(state="in_meeting")
-    assert {m.id for m in in_meeting} == {"a", "c"}
+    assert [m.id for m in in_meeting] == ["c"]
     final = await repo.list_meetings(state="finalized")
-    assert [m.id for m in final] == ["b"]
+    assert [m.id for m in final] == ["b", "a"]
 
     all_meetings = await repo.list_meetings()
     assert {m.id for m in all_meetings} == {"a", "b", "c"}
     # ORDER BY started_at DESC
-    assert all_meetings[0].id == "a"
+    assert all_meetings[0].id == "c"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_concurrent_repositories_return_one_authoritative_active_meeting(
+    tmp_path: Path,
+) -> None:
+    """Two connections racing from idle must converge on the same DB row."""
+
+    db_path = tmp_path / "concurrent-start.db"
+    repo_a = SQLiteRepository(db_path)
+    repo_b = SQLiteRepository(db_path)
+    await repo_a.init()
+    await repo_b.init()
+    release = asyncio.Event()
+
+    async def create(repo: SQLiteRepository, meeting_id: str):  # type: ignore[no-untyped-def]
+        await release.wait()
+        return await repo.create_meeting(meeting_id, started_at=datetime.now(UTC))
+
+    try:
+        task_a = asyncio.create_task(create(repo_a, "meeting-a"))
+        task_b = asyncio.create_task(create(repo_b, "meeting-b"))
+        release.set()
+        active_a, active_b = await asyncio.gather(task_a, task_b)
+
+        assert active_a.id == active_b.id
+        assert active_a.id in {"meeting-a", "meeting-b"}
+        persisted = await repo_a.list_meetings(state="in_meeting", limit=10)
+        assert [meeting.id for meeting in persisted] == [active_a.id]
+    finally:
+        await asyncio.gather(repo_a.aclose(), repo_b.aclose())
 
 
 @pytest.mark.unit
@@ -175,6 +209,178 @@ async def test_ambient_segment_persist_and_query(repo: SQLiteRepository) -> None
 
     count = await repo.count_ambient_segments()
     assert count == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_rag_projection_backoff_prevents_old_failures_from_starving_pending_work(
+    repo: SQLiteRepository,
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(days=1)
+    for index in range(100):
+        meeting_id = f"poison-{index:03d}"
+        await repo.create_meeting(meeting_id, started_at=started_at + timedelta(seconds=index))
+        await repo.update_meeting_state(
+            meeting_id,
+            state="ended",
+            rag_projection_state="index_pending",
+        )
+        await repo.set_meeting_rag_projection(
+            meeting_id,
+            state="index_failed",
+            error="permanent malformed minutes",
+            retry_backoff=True,
+        )
+
+    pending_id = "pending-after-poison"
+    await repo.create_meeting(pending_id, started_at=datetime.now(UTC))
+    await repo.update_meeting_state(
+        pending_id,
+        state="ended",
+        rag_projection_state="index_pending",
+    )
+
+    due = await repo.list_meetings_needing_rag_projection(limit=100)
+
+    assert [meeting.id for meeting in due] == [pending_id]
+    poison = await repo.get_meeting("poison-000")
+    assert poison is not None
+    assert poison.rag_projection_attempts == 1
+    assert poison.rag_projection_next_retry_at is not None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_meeting_rag_projection_state_uses_generation_compare_and_swap(
+    repo: SQLiteRepository,
+) -> None:
+    meeting_id = "projection-cas"
+    await repo.create_meeting(meeting_id, started_at=datetime.now(UTC))
+    await repo.update_meeting_state(
+        meeting_id,
+        state="ended",
+        rag_projection_state="index_pending",
+    )
+    first = await repo.get_meeting(meeting_id)
+    assert first is not None
+
+    await repo.clear_meeting_outputs(meeting_id)
+    second = await repo.get_meeting(meeting_id)
+    assert second is not None
+    assert second.rag_projection_generation == first.rag_projection_generation + 1
+    assert second.rag_projection_state == "delete_pending"
+
+    assert not await repo.set_meeting_rag_projection(
+        meeting_id,
+        state="indexed",
+        expected_generation=first.rag_projection_generation,
+    )
+    unchanged = await repo.get_meeting(meeting_id)
+    assert unchanged is not None
+    assert unchanged.rag_projection_state == "delete_pending"
+    assert unchanged.rag_projection_attempts == 0
+
+    assert await repo.set_meeting_rag_projection(
+        meeting_id,
+        state="deleted",
+        projected_at=datetime.now(UTC),
+        expected_generation=second.rag_projection_generation,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pending_state", "success_state", "failure_state"),
+    [
+        ("index_pending", "indexed", "index_failed"),
+        ("delete_pending", "deleted", "delete_failed"),
+    ],
+)
+async def test_meeting_rag_success_rejects_late_failure_from_another_repository(
+    tmp_path: Path,
+    pending_state: str,
+    success_state: str,
+    failure_state: str,
+) -> None:
+    db_path = tmp_path / f"meeting-{success_state}-monotonic.db"
+    repo_a = SQLiteRepository(db_path)
+    repo_b = SQLiteRepository(db_path)
+    await repo_a.init()
+    await repo_b.init()
+    try:
+        meeting_id = f"meeting-{success_state}-monotonic"
+        await repo_a.create_meeting(meeting_id, started_at=datetime.now(UTC))
+        generation = await repo_a.update_meeting_state(
+            meeting_id,
+            state="ended",
+            rag_projection_state=pending_state,  # type: ignore[arg-type]
+        )
+        assert generation is not None
+
+        success_applied = await repo_a.set_meeting_rag_projection(
+            meeting_id,
+            state=success_state,  # type: ignore[arg-type]
+            projected_at=datetime.now(UTC),
+            expected_generation=generation,
+        )
+        late_failure_applied = await repo_b.set_meeting_rag_projection(
+            meeting_id,
+            state=failure_state,  # type: ignore[arg-type]
+            error="late worker failure",
+            retry_backoff=True,
+            expected_generation=generation,
+        )
+        persisted = await repo_b.get_meeting(meeting_id)
+        assert persisted is not None
+        assert (
+            success_applied,
+            late_failure_applied,
+            persisted.rag_projection_state,
+            persisted.rag_projection_attempts,
+            persisted.rag_projection_error,
+        ) == (True, False, success_state, 0, None)
+    finally:
+        await asyncio.gather(repo_a.aclose(), repo_b.aclose())
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_ambient_rag_success_rejects_late_failure_from_another_repository(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "ambient-indexed-monotonic.db"
+    repo_a = SQLiteRepository(db_path)
+    repo_b = SQLiteRepository(db_path)
+    await repo_a.init()
+    await repo_b.init()
+    try:
+        segment_id = await repo_a.append_ambient_segment(
+            audio_ref="/tmp/ambient-monotonic.wav",
+            text="先成功后迟到失败",
+            captured_at=datetime.now(UTC),
+        )
+        success_applied = await repo_a.set_ambient_rag_projection(
+            segment_id,
+            state="indexed",
+            projected_at=datetime.now(UTC),
+        )
+        late_failure_applied = await repo_b.set_ambient_rag_projection(
+            segment_id,
+            state="index_failed",
+            error="late worker failure",
+            retry_backoff=True,
+        )
+        persisted = (await repo_b.list_ambient_segments(limit=10))[0]
+        assert (
+            success_applied,
+            late_failure_applied,
+            persisted.rag_projection_state,
+            persisted.rag_projection_attempts,
+            persisted.rag_projection_error,
+        ) == (True, False, "indexed", 0, None)
+    finally:
+        await asyncio.gather(repo_a.aclose(), repo_b.aclose())
 
 
 @pytest.mark.unit

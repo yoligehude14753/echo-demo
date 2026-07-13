@@ -51,14 +51,27 @@ class _FakeRag:
     async def ingest_pdf(self, file_path: str, doc_title: str | None = None) -> str:
         return "pdf"
 
-    async def ingest_meeting(self, meeting_id: str, transcript: str, title: str) -> str:
+    async def ingest_meeting(
+        self,
+        meeting_id: str,
+        transcript: str,
+        title: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> str:
+        _ = projection_generation
         return f"doc-{meeting_id}"
 
     async def query(self, query: str, *, top_k: int = 5) -> list[RagChunk]:
         return []
 
-    async def delete(self, doc_id: str) -> None:
-        return None
+    async def delete(
+        self,
+        doc_id: str,
+        *,
+        projection_generation: int | None = None,
+    ) -> None:
+        _ = doc_id, projection_generation
 
 
 class _FakeLLM:
@@ -292,7 +305,7 @@ async def test_finalize_persists_display_title_and_todos_to_sqlite(tmp_path: Pat
     assert minutes_data["todos"][0]["id"].startswith("t-")
 
     # 4) minutes.ready 事件已发
-    assert any(e.type == "minutes.ready" for e in bus._history)
+    assert any(e.type == "minutes.ready" for e in bus.recent_events_for_current_scope())
 
     await repo.aclose()
 
@@ -349,7 +362,9 @@ async def test_attach_artifact_to_todo_marks_done_and_publishes_event(tmp_path: 
     assert data["todos"][0]["artifact_id"] == "art-123"
     assert data["todos"][0]["done_at"]  # 任何 iso 字符串
 
-    todo_events = [e for e in bus._history if e.type == "meeting.todo.completed"]
+    todo_events = [
+        e for e in bus.recent_events_for_current_scope() if e.type == "meeting.todo.completed"
+    ]
     assert len(todo_events) == 1
     assert todo_events[0].payload["todo_id"] == todo_id
     assert todo_events[0].payload["artifact_id"] == "art-123"

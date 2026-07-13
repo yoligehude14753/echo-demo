@@ -77,6 +77,11 @@ def _status_event(status: str) -> tuple[str, str, str]:
     return _STATUS_EVENTS.get(value, ("task.runner_status", value or "running", "任务状态更新"))
 
 
+def _is_timeout_message(message: str) -> bool:
+    value = " ".join((message or "").strip().lower().split())
+    return value.startswith(("timeout", "timed out", "deadline exceeded")) or " timed out" in value
+
+
 class ClaudeCodeRunnerAdapter:
     """把 AgentOS EventEnvelope 翻译成 EchoDesk 自己的任务事件。"""
 
@@ -125,7 +130,8 @@ class ClaudeCodeRunnerAdapter:
         _raw_ref: str | None,
         _context: RunnerEventContext,
     ) -> EchoTaskEvent:
-        inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        nested_payload = payload.get("payload")
+        inner: dict[str, Any] = nested_payload if isinstance(nested_payload, dict) else {}
         subtype = str(inner.get("subtype") or inner.get("type") or "")
         if subtype == "init":
             return EchoTaskEvent(
@@ -231,12 +237,16 @@ class ClaudeCodeRunnerAdapter:
     ) -> EchoTaskEvent:
         is_error = bool(payload.get("is_error"))
         result_text = str(payload.get("result_text") or "")
+        is_timeout = is_error and _is_timeout_message(result_text)
         return EchoTaskEvent(
             **base,
-            event="task.failed" if is_error else "task.completed",
-            state="failed" if is_error else "succeeded",
+            event="task.timeout"
+            if is_timeout
+            else ("task.failed" if is_error else "task.completed"),
+            state="timeout" if is_timeout else ("failed" if is_error else "succeeded"),
             visibility="user",
-            message=result_text or ("任务失败" if is_error else "任务完成"),
+            message=result_text
+            or ("任务超时" if is_timeout else ("任务失败" if is_error else "任务完成")),
             snapshot={
                 "duration_ms": payload.get("duration_ms"),
                 "num_turns": payload.get("num_turns"),
@@ -251,8 +261,11 @@ class ClaudeCodeRunnerAdapter:
         _context: RunnerEventContext,
     ) -> EchoTaskEvent:
         event, state, message = _status_event(str(payload.get("status") or "running"))
-        if event == "task.failed" and payload.get("error"):
-            message = str(payload.get("error"))
+        error = str(payload.get("error") or "")
+        if event == "task.failed" and _is_timeout_message(error):
+            event, state, message = _STATUS_EVENTS["timeout"]
+        elif event == "task.failed" and error:
+            message = error
         return EchoTaskEvent(
             **base,
             event=event,

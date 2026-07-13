@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,7 +11,7 @@ import pytest
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.config import Settings
 from app.schemas.meeting import TranscriptSegment
-from app.use_cases.meeting_pipeline import MeetingPipeline
+from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 
 # 复用 test_meeting_pipeline 里的 fakes
 from tests.unit.test_meeting_pipeline import (  # type: ignore[attr-defined]
@@ -229,3 +230,90 @@ async def test_hydrate_ignores_finalized_meetings(tmp_path: Path) -> None:
         assert n == 0
     finally:
         await repo2.aclose()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_finalize_refreshes_cross_instance_segments_with_stable_fence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A segment committed while B refreshes is included once; later appends fail."""
+
+    db_path = tmp_path / "cross-instance-finalize.db"
+    repo_a = SQLiteRepository(db_path)
+    repo_b = SQLiteRepository(db_path)
+    await repo_a.init()
+    await repo_b.init()
+    llm = FakeLLM(
+        json.dumps(
+            {
+                "summary": "完整",
+                "sections": [{"heading": "内容", "bullets": ["A", "B"]}],
+            },
+            ensure_ascii=False,
+        )
+    )
+    pipe_a = _build_pipeline(tmp_path, repo_a)
+    pipe_b = MeetingPipeline(
+        settings=_settings(tmp_path),
+        stt=FakeSTT([]),
+        diarizer=FakeDiarizer([]),
+        rag=FakeRag(),
+        llm=llm,
+        repository=repo_b,
+    )
+    snapshot_entered = asyncio.Event()
+    release_snapshot = asyncio.Event()
+    original_snapshot = repo_b.snapshot_meeting_segments_for_finalize
+
+    async def latched_snapshot(
+        meeting_id: str,
+        *,
+        ended_at: datetime,
+    ) -> list[TranscriptSegment]:
+        snapshot_entered.set()
+        await release_snapshot.wait()
+        return await original_snapshot(meeting_id, ended_at=ended_at)
+
+    monkeypatch.setattr(repo_b, "snapshot_meeting_segments_for_finalize", latched_snapshot)
+    try:
+        await pipe_a.start_meeting("shared", title="并发会议")
+        assert await pipe_b.hydrate_from_repo() == 1
+        await pipe_b.append_segment(
+            "shared",
+            TranscriptSegment(text="B 本地段", start_ms=0, end_ms=500, speaker_id="b"),
+        )
+
+        finalize_task = asyncio.create_task(
+            pipe_b.finalize_meeting("shared", title="并发会议", commit=False)
+        )
+        await snapshot_entered.wait()
+        await pipe_a.append_segment(
+            "shared",
+            TranscriptSegment(text="A 并发段", start_ms=600, end_ms=1000, speaker_id="a"),
+        )
+        release_snapshot.set()
+        await finalize_task
+
+        assert len(llm.calls) == 1
+        prompt = "\n".join(str(message.content) for message in llm.calls[0]["messages"])
+        assert prompt.count("B 本地段") == 1
+        assert prompt.count("A 并发段") == 1
+        assert [segment.text for segment in pipe_b.get_segments("shared")] == [
+            "B 本地段",
+            "A 并发段",
+        ]
+
+        with pytest.raises(MeetingPipelineError, match="not active"):
+            await pipe_a.append_segment(
+                "shared",
+                TranscriptSegment(text="fence 后", start_ms=1100, end_ms=1200),
+            )
+        assert [segment.text for segment in await repo_a.list_meeting_segments("shared")] == [
+            "B 本地段",
+            "A 并发段",
+        ]
+    finally:
+        release_snapshot.set()
+        await asyncio.gather(repo_a.aclose(), repo_b.aclose())

@@ -1,0 +1,49 @@
+event_id: "E-20260711T1758-001"
+event_type: "supersede"
+timestamp: "2026-07-11T17:58:41+08:00"
+author: "agent/codex-echodesk-0-3-1"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-017"
+      claim: "EchoDesk 0.3.1 unifies public identity, Workflow execution, committed outbox delivery, and desktop transport; deterministic gates pass while live generation is provider-blocked."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-11T17:58:41+08:00"
+      observed_by: "agent/codex-echodesk-0-3-1"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "backend/app/security/access.py"
+        - "backend/app/workflows/kernel.py"
+        - "backend/app/workflows/service.py"
+        - "backend/app/adapters/repo/migrations/017_meeting_minutes_tombstone.sql"
+        - "desktop/src/session.ts"
+        - "desktop/electron/main.cjs"
+        - "desktop/tests/e2e-real/packaged-local-smoke.spec.ts"
+        - "desktop/tests/e2e-real/installed-local-workflow.spec.ts"
+        - "runtime:backend deterministic gate => 612 passed, 0 skipped, 16 live deselected"
+        - "runtime:desktop mock E2E => 58 passed; scenarios => 29 passed"
+        - "runtime:read-only mounted EchoDesk 0.3.1 DMG smoke => 1 passed"
+      evidence: "Backend Ruff/format/mypy passed and deterministic pytest completed 612 passed with zero skipped. Desktop version/lint/typecheck/build passed, mock E2E completed 58/58, scenarios 29/29, production npm audit had zero high/critical issues, and the read-only mounted 0.3.1 DMG passed a real Electron/local-backend/version/custom-port/persistence/click smoke. The live installed workflow restored and retried its durable run correctly, then the configured deepseek-v4-flash provider timed out after 180 seconds before AgentOS execution."
+      supersedes:
+        - "F-ECHO-016"
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "workflow"
+        - "principal-isolation"
+        - "outbox"
+        - "desktop-transport"
+        - "gates"
+        - "live-blocker"
+  - action: "supersede"
+    old_fact: "F-ECHO-016"
+    new_fact: "F-ECHO-017"
+    reason: "The 0.3.1 source and install artifacts now include the unified access policy, cross-instance outbox, minutes-clear tombstone, desktop transport, endpoint-port sync, and expanded counterexample gates; the external provider timeout remains current."
+git_commit: null

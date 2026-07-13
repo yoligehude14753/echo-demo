@@ -15,6 +15,7 @@ from app.adapters.skill.python_executor import _is_safe_python
 from app.config import Settings
 from app.schemas.artifact import SUPPORTED_KINDS, GeneratedArtifact, normalize_kind
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
+from app.security.scope import scoped_directory
 
 
 class FakeLLM:
@@ -35,6 +36,18 @@ class FakeLLM:
     async def chat_stream(self, _messages: list[ChatMessage], **_: Any):  # type: ignore[no-untyped-def]
         raise NotImplementedError
         yield  # pragma: no cover
+
+
+class SequenceFakeLLM(FakeLLM):
+    def __init__(self, contents: list[str]) -> None:
+        super().__init__(contents[0])
+        self.contents = contents
+        self.calls: list[list[ChatMessage]] = []
+
+    async def chat(self, messages: list[ChatMessage], **kwargs: Any) -> LLMResponse:
+        self.calls.append(list(messages))
+        self.content = self.contents[min(len(self.calls) - 1, len(self.contents) - 1)]
+        return await super().chat(messages, **kwargs)
 
 
 def _settings(tmp_path: Path, *, use_legacy_html_pptx: bool = True) -> Settings:
@@ -496,11 +509,48 @@ async def test_txt_generation_minimal(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_executor_atomically_publishes_requested_artifact_id(tmp_path: Path) -> None:
+    skill = SkillExecutor(_settings(tmp_path))
+    body = "Crash-safe workflow artifact\n\n" + "durable content " * 50
+    artifact_id = "txt-run-01234567890123456789"
+
+    artifact = await skill.generate(
+        llm=FakeLLM(body),
+        artifact_type="txt",
+        brief="deterministic publish",
+        artifact_id=artifact_id,
+    )
+
+    assert artifact.artifact_id == artifact_id
+    scoped_build = scoped_directory(tmp_path / "skill_build")
+    assert Path(artifact.file_path).parent == scoped_build / artifact_id
+    assert Path(artifact.file_path).read_text(encoding="utf-8") == body.strip()
+    building = scoped_build / ".workflow-building"
+    assert list(building.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_txt_too_short_raises(tmp_path: Path) -> None:
     skill = SkillExecutor(_settings(tmp_path))
     llm = FakeLLM("太短")
     with pytest.raises(SkillError, match="too short"):
         await skill.generate(llm=llm, artifact_type="txt", brief="x")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_txt_short_output_is_repaired_once(tmp_path: Path) -> None:
+    repaired = "ECHODESK_TODO_E2E_OK\n\n" + "完整验收正文。" * 80
+    llm = SequenceFakeLLM(["太短", repaired])
+    skill = SkillExecutor(_settings(tmp_path))
+
+    artifact = await skill.generate(llm=llm, artifact_type="txt", brief="生成验收报告")
+
+    assert len(llm.calls) == 2
+    assert "too short" in llm.calls[1][1].content
+    assert artifact.metadata["retry_count"] == "1"
+    assert Path(artifact.file_path).read_text(encoding="utf-8") == repaired
 
 
 @pytest.mark.asyncio

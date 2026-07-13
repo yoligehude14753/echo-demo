@@ -1,0 +1,11 @@
+event_id: "E-20260711T1802-001"
+event_type: "confirm"
+timestamp: "2026-07-11T18:02:20+08:00"
+author: "agent/codex-echodesk-0-3-1"
+session_id: null
+changes:
+  - action: "confirm"
+    fact_id: "F-ECHO-017"
+    new_confidence: 0.99
+    new_evidence: "The separate live contract gate completed with 4 passed, 11 skipped and 1 failed. The failure was qwen3-vl-8b-local stream timeout after 60 seconds; skips were explicit current reachability failures for Yunwu and eight STT/TTS. This independently confirms the remaining blocker is external provider availability, matching the installed deepseek-v4-flash 180-second timeout."
+git_commit: null

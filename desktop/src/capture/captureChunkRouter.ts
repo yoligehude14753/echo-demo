@@ -20,7 +20,10 @@ import { uploadCaptureChunk } from "@/api";
 import { audioCapture } from "@/capture/audioCapture";
 import { CAPTURE_SAMPLE_RATE } from "@/capture/pcm";
 import { shouldAttachMeetingOverlay } from "@/domain/session";
-import { shouldHideSharedPublicHistory } from "@/runtime";
+import {
+  BACKEND_ORIGIN_EVENT,
+  shouldHideSharedPublicHistory,
+} from "@/runtime";
 import { useStore } from "@/store";
 
 export interface CaptureRouterHandlers {
@@ -38,11 +41,12 @@ export interface CaptureRouterHandlers {
   /** M_diag_brake：熔断退出（探测 chunk 拿到非 circuit_open 响应）。 */
   onSttCircuitClosed?: () => void;
   /** M_diag_brake：因为熔断或暂停态直接丢弃 chunk，让 UI 计数。 */
-  onChunkDropped?: (reason: "circuit_open") => void;
+  onChunkDropped?: (reason: "circuit_open" | "backpressure") => void;
 }
 
 const FAIL_STREAK_THRESHOLD = 2; // 连续 2 次才报错，避免一次抖动也弹 toast
 const CIRCUIT_STREAK_THRESHOLD = 3; // 连续 3 次 circuit_open 才认为 STT 真的不可用
+const MAX_PENDING_CHUNKS = 4;
 
 /**
  * 指数退避梯子（毫秒）。每次拿到稳定 circuit_open 升一级，最长 30s。
@@ -71,9 +75,18 @@ export function attachCaptureChunkRouter(
   let circuitStreak = 0;
   let requestSeq = 0;
   let lastHealthySeq = 0;
+  let backendOriginGeneration = 0;
   const ladder = backoffLadder();
+  const pending: Blob[] = [];
+  let drainingGeneration: number | null = null;
+  let disposed = false;
+  let activeAbort: AbortController | null = null;
 
-  return audioCapture.onChunk(async (wav) => {
+  const processChunk = async (
+    wav: Blob,
+    generation: number,
+  ): Promise<void> => {
+    if (disposed || generation !== backendOriginGeneration) return;
     const now = Date.now();
     // ─ 熔断态：直接丢弃 chunk（不上传也不缓冲）─
     // 注意：录音继续，只是不发后端；audioCapture 的 wav buffer 会被 GC
@@ -96,8 +109,19 @@ export function attachCaptureChunkRouter(
       : undefined;
 
     const seq = ++requestSeq;
+    const controller = new AbortController();
+    activeAbort = controller;
     try {
-      const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId);
+      const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId, {
+        signal: controller.signal,
+      });
+      if (
+        disposed ||
+        controller.signal.aborted ||
+        generation !== backendOriginGeneration
+      ) {
+        return;
+      }
 
       // M_diag_brake：熔断检测优先于成功路径
       if (result.stt_status === "circuit_open") {
@@ -162,11 +186,80 @@ export function attachCaptureChunkRouter(
       }
       if (result.meeting_segments.length > 0) handlers?.onMeetingUploaded?.();
     } catch (e) {
+      if (
+        disposed ||
+        controller.signal.aborted ||
+        generation !== backendOriginGeneration
+      ) {
+        return;
+      }
       failStreak += 1;
       if (failStreak >= FAIL_STREAK_THRESHOLD && !lostNotified) {
         lostNotified = true;
         handlers?.onConnectionLost?.(e);
       }
+    } finally {
+      if (activeAbort === controller) activeAbort = null;
     }
+  };
+
+  const drain = (): void => {
+    const generation = backendOriginGeneration;
+    if (drainingGeneration === generation || disposed) return;
+    drainingGeneration = generation;
+    void (async () => {
+      try {
+        while (
+          !disposed &&
+          generation === backendOriginGeneration &&
+          pending.length > 0
+        ) {
+          const next = pending.shift();
+          if (next) await processChunk(next, generation);
+        }
+      } finally {
+        if (drainingGeneration === generation) drainingGeneration = null;
+        if (!disposed && pending.length > 0) drain();
+      }
+    })();
+  };
+
+  const handleBackendOriginChange = (): void => {
+    backendOriginGeneration += 1;
+    pending.length = 0;
+    activeAbort?.abort();
+    activeAbort = null;
+
+    const hadOpenCircuit = backoffLevel >= 0;
+    failStreak = 0;
+    lostNotified = false;
+    circuitOpenUntil = 0;
+    backoffLevel = -1;
+    circuitStreak = 0;
+    requestSeq = 0;
+    lastHealthySeq = 0;
+    if (hadOpenCircuit) handlers?.onSttCircuitClosed?.();
+  };
+
+  window.addEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
+
+  const offChunk = audioCapture.onChunk((wav) => {
+    if (disposed) return;
+    if (pending.length >= MAX_PENDING_CHUNKS) {
+      handlers?.onChunkDropped?.("backpressure");
+      return;
+    }
+    pending.push(wav);
+    drain();
   });
+
+  return () => {
+    disposed = true;
+    backendOriginGeneration += 1;
+    pending.length = 0;
+    activeAbort?.abort();
+    activeAbort = null;
+    window.removeEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
+    offChunk();
+  };
 }

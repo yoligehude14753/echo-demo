@@ -8,6 +8,80 @@ EchoDesk 桌面端的用户可见变更（User-Facing Changes）。
 
 ---
 
+## [0.3.1] – 2026-07-12
+
+EchoDesk 0.3.1 将运行时实现收敛到统一 Workflow Kernel、统一身份策略和统一桌面 API transport；这是源码与本地构建版本。截至 2026-07-13，公共 latest 仍为 `v0.2.50`，0.3.1 尚未发布到公共 Release [F-ECHO-029]。
+
+### 新增与修复
+
+- public backend 使用服务端签发的 tenant/device/owner principal 隔离会议、RAG、产物、Workflow、Agent 与 WebSocket；宿主机执行能力只向本机或 host-admin 开放。
+- 同步业务统一走 Workflow Dispatcher 的成功/失败边界，SQLite domain write、run/event 与 transactional outbox 保持同事务。
+- 多 backend 实例独立消费共享 outbox；慢消费者明确断开重连，客户端 `server_resync` 执行 REST 全量 rehydrate。
+- 显式清除会议纪要写 durable tombstone，重启恢复不会把已删除纪要重新生成。
+- Desktop backend 请求统一使用 session-aware、可取消、带超时和结构化错误的 transport；Capture、Chat SSE、TTS 和会议详情失败路径均有反例测试。
+- public backend 强制最低客户端 `0.3.1`：HTTP 以 426、WebSocket 以 4426 明确要求升级；客户端熔断后续身份、业务与 WS 重连，并提供直接更新入口。
+- Electron session 现在携带并校验 `backend_origin`；切换后端会关闭旧 WS、清除旧 scope UI 投影，拒绝任何跨 origin bearer。
+- Linux AppImage/deb、Windows NSIS/ZIP 与 Android/TV 一键包补齐各自最终包 smoke contract；Gradle distribution、依赖锁和 verification metadata 固定，Android/TV 生成独立 CycloneDX SBOM。本机开发签名、unsigned 或 ad-hoc smoke 不等同于正式 signed artifact。
+- Desktop、Backend、Android 与安装态测试版本统一为 `0.3.1`；xlsx 预览迁移到 ExcelJS，移除原 xlsx high-risk 依赖。
+
+## [0.3.0] – 2026-07-10
+
+EchoDesk 0.3 源码包含 Workflow Kernel、历史恢复和本机安装链路；确定性门禁已通过，当前 live installed workflow 仍因主模型 provider 超时未完成复验。[F-ECHO-016]
+
+### 新增与修复
+
+- 统一 Artifact、Todo、Agent Runner 的 workflow run/event 状态源，支持失败恢复、重试、取消、超时和产物归档。
+- 启动时自动扫描旧 `skill_build` 产物，把 `output.*`、`meta.json.meeting_id` 和 `minutes_json.todos[*].artifact_id` 补录进 `artifacts` / `artifact_links`，恢复历史 outputs。
+- 历史会议列表首屏直接显示持久化段数与人数；短时崩溃可续接，超过 24 小时的陈旧手动会议自动结束。
+- backend 测试和安装 smoke 使用隔离目录与 SQLite，不读取或修改真实 `~/.echodesk` 用户数据。
+- Desktop Pro 主模型默认使用 `deepseek-v4-flash`；界面展示模型名，不主动展示供应商文案。
+- backend 安装器可一并安装本地 AgentOS / Claude Code runner，并根据主模型配置启用本机服务。
+- backend、desktop、Android / TV 及安装资产版本统一为 `0.3.0`。
+
+## [0.3.0-alpha.2] – 2026-07-10
+
+0.3 首轮真实历史数据验收热修：修复首屏统计为零、跨天会议持续计时，以及测试可能读取用户数据的问题。
+
+### 修复
+
+- 历史会议列表首屏直接显示后端 summary 的段数和人数，不再要求逐条点击后才加载数值。
+- 手动会议跨重启最多保留 24 小时续接窗口；超过上限的陈旧 `in_meeting` 状态自动结束，避免顶栏累计数千分钟。
+- backend 非集成测试自动隔离用户目录、SQLite、存储目录和本机 `.env`；安装 smoke 改用真正的临时 DB，不再 hydrate 或修改 `~/.echodesk`。
+- 修复本机残留部署会议的数据状态，同时保留原转写和补生成纪要。
+- 版本号推进到 `0.3.0-alpha.2`；Android / TV `versionCode=300`、`versionName=0.3.0-alpha.2`。
+
+## [0.3.0-alpha.1] – 2026-07-10
+
+0.3 Workflow Core 首个可交付 alpha：把 Artifact、Todo 和 Claude Code Agent 纳入统一 workflow/run/event 事实源。
+
+### 新增
+
+- 新增 `workflow_runs`、`workflow_events`、`artifacts`、`artifact_links` 数据表与 `/workflows/runs*` REST API。
+- 产物生成会创建 workflow run，成功/失败都会写事件；`/artifacts` 和 `/meetings/{id}/artifacts` 改为从 DB 返回。
+- Todo 执行状态由 `workflow.snapshot` / `meeting.todo.updated` 投影，支持 running、failed、waiting_permission 和 done。
+- Agent task 保留 Claude Code / AgentOS full access 主路径，同时映射到 workflow run；Agent 事件写入 `workflow_events`，Agent 产物会导入统一 artifacts。
+- outputs 失败卡片接真实重试，不再停留在 console/TODO；重试会创建新的 artifact workflow，并保留父 run 关联。
+- 新增 REST route、WS event、Electron IPC、script matrix 和 workflow HTTP scenario 门禁测试。
+
+### 变更
+
+- Desktop Pro 桌面包改为 local-first 默认模式：双击后使用本机 backend/SQLite；public demo 改为显式 `ECHO_PUBLIC_DEMO=1`，旧 `ECHO_FORCE_LOCAL_BACKEND=1` 继续兼容。
+- 会议分享页和清理 outputs 以 `artifact_links` 为唯一事实源，不再依赖前端内存传入的 artifact id。
+- 旧 `/agents/tasks/{id}/artifacts/{path}` 代理继续保留兼容，归档成功后统一展示在 outputs artifacts 区。
+- 主 LLM 默认固定为 Yunwu `deepseek-v4-flash`；fast 通道仍可独立配置，不随主模型强制切换。
+- 版本号推进到 `0.3.0-alpha.1`；Android / TV `versionCode=300`、`versionName=0.3.0-alpha.1`。
+
+### 修复
+
+- 修复打包版 Electron 同时挂载 modern/legacy bundle，导致双 React、双 WebSocket 和双麦克风采集的问题。
+- 修复 GET 缓存与 backend 启动竞态导致会议、Todo、outputs 和 Agent task 重启后未恢复的问题。
+- AgentOS 明确返回 timeout 时投影为 Agent/workflow `timeout`，不再显示为普通失败。
+- 短会议只要纪要已完成就保留在历史列表；正常 WebSocket 断开不再打印异常栈。
+- fast LLM 连接本地模型网关时会回退使用共享 gateway token，不再固定发送无效的 `Bearer EMPTY`。
+- 旧 `~/.echodesk/config.json` 中的历史 `app_version` 不再覆盖当前安装版本。
+- Markdown/TXT 模型输出首次未通过长度或格式校验时会自动完整重写一次，二次失败仍保留明确错误。
+- AgentOS 在 `result` 后补发产物事件时继续消费并归档，不再出现任务已完成但统一 artifacts 缺失。
+
 ## [0.2.50] – 2026-07-09
 
 桌面端工作区知识库热修：修复公网桌面包改连云端后，设置页误读远端工作区配置，导致本机知识库目录显示为 0 的问题。

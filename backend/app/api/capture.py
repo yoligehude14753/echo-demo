@@ -1,6 +1,7 @@
 """Ambient 主链路 API：POST /capture/chunk + GET /capture/stats。
 
-每个 chunk 必走 ambient（落盘 + STT + RAG）；可选 meeting_id 激活 meeting 叠加层。
+每个 chunk 必走 ambient 质量门；仅有效语音落盘并进入 STT/RAG，可选 meeting_id
+激活 meeting 叠加层。
 
 M_diag_brake 新增：GET /capture/stats 返回进程级 7 道门处理结果计数，
 供前端 CaptureStatus Popover 实时展示根因分布。
@@ -11,11 +12,10 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import OpenAICompatibleLLM
-from app.adapters.rag.bm25 import BM25Rag
 from app.adapters.stt import make_stt
 from app.adapters.stt.llm_punctuator import LLMPunctuator
 from app.api.deps import (
@@ -23,22 +23,29 @@ from app.api.deps import (
     get_event_bus,
     get_llm_singleton,
     get_meeting_state,
+    get_quota_governor,
     get_repository,
+    get_scope_runtime,
     get_speaker_registry,
+    reset_scope_runtime_component_for_test,
 )
 from app.api.meetings import get_meeting_pipeline
+from app.api.retrieval import get_rag
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
+from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
 from app.schemas.capture import CaptureChunkResult
+from app.security.context import current_principal
+from app.security.governor import PrincipalGovernor
+from app.security.public_projection import project_client_dict
+from app.upload import UploadTooLarge, read_limited_upload
 from app.use_cases.ambient_capture import AmbientCapturePipeline
 from app.use_cases.meeting_pipeline import MeetingPipeline
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
 
 router = APIRouter(prefix="/capture", tags=["capture"])
-
-_ambient: AmbientCapturePipeline | None = None
 
 
 def get_ambient_pipeline(
@@ -50,16 +57,19 @@ def get_ambient_pipeline(
     meeting_state: MeetingState = Depends(get_meeting_state),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
     llm: OpenAICompatibleLLM = Depends(get_llm_singleton),
+    rag: RagPort = Depends(get_rag),
+    governor: PrincipalGovernor = Depends(get_quota_governor),
 ) -> AmbientCapturePipeline:
-    global _ambient  # noqa: PLW0603
-    if _ambient is None:
+    runtime = get_scope_runtime(settings)
+
+    def make_pipeline() -> AmbientCapturePipeline:
         # text-clarity PR：把 LLM_FAST 包成 punctuator 注入。
         # 关闭开关只需要 AMBIENT_LLM_PUNCTUATE=false（settings）。
         punctuator = LLMPunctuator(llm, settings) if settings.ambient_llm_punctuate else None
-        _ambient = AmbientCapturePipeline(
+        return AmbientCapturePipeline(
             settings=settings,
             stt=make_stt(settings),
-            rag=BM25Rag(settings),
+            rag=rag,
             meeting=meeting,
             repository=repository,
             diarizer=diarizer,
@@ -67,30 +77,50 @@ def get_ambient_pipeline(
             meeting_state=meeting_state,
             event_bus=event_bus,
             punctuator=punctuator,
+            governor=governor,
+            principal=current_principal(),
         )
-    return _ambient
+
+    return runtime.get_or_create("ambient_pipeline", make_pipeline)
 
 
 def reset_ambient_pipeline() -> None:
-    global _ambient  # noqa: PLW0603
-    _ambient = None
+    reset_scope_runtime_component_for_test("ambient_pipeline")
 
 
 @router.post("/chunk", response_model=CaptureChunkResult)
 async def capture_chunk(
+    request: Request,
     pipeline: Annotated[AmbientCapturePipeline, Depends(get_ambient_pipeline)],
     audio: UploadFile = File(...),
     sample_rate: int = Form(16_000),
     meeting_id: str | None = Form(None),
+    settings: Settings = Depends(get_settings),
+    governor: PrincipalGovernor = Depends(get_quota_governor),
 ) -> CaptureChunkResult:
-    audio_bytes = await audio.read()
+    try:
+        upload = await read_limited_upload(
+            audio,
+            max_bytes=int(settings.upload_max_file_mb * 1024 * 1024),
+            chunk_bytes=settings.upload_read_chunk_bytes,
+            governor=governor,
+            principal=current_principal(),
+            persistent=False,
+            upload_reservation=getattr(request.state, "upload_quota_reservation", None),
+        )
+    except UploadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="audio upload too large") from exc
+    audio_bytes = upload.data
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="empty audio")
     mid = meeting_id.strip() if meeting_id else None
-    return await pipeline.ingest_chunk(
+    result = await pipeline.ingest_chunk(
         audio_bytes,
         sample_rate=sample_rate,
         meeting_id=mid or None,
+    )
+    return CaptureChunkResult.model_validate(
+        project_client_dict(result.model_dump(mode="json"), current_principal())
     )
 
 

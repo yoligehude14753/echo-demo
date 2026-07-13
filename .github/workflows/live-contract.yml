@@ -1,0 +1,160 @@
+name: Live provider contracts
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_public_model:
+        description: "Run the public product-model contract (requires YUNWU_OPEN_KEY)"
+        required: true
+        default: false
+        type: boolean
+      run_private_speech:
+        description: "Run STT/TTS/fast-model contracts on the private-network runner"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-contracts
+  cancel-in-progress: false
+
+jobs:
+  public-product-model:
+    name: public network / configured product model
+    if: ${{ github.repository == 'yoligehude14753/echo-demo' && github.ref == 'refs/heads/main' && inputs.run_public_model == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: live-contract
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+      - name: install public model contract dependencies
+        run: |
+          pip install --require-hashes -r backend/requirements-dev.lock
+          npm ci --prefix backend/app/adapters/skill/assets/ppt_ib_deck
+      - name: require public model credential and public route
+        working-directory: backend
+        env:
+          YUNWU_OPEN_KEY: ${{ secrets.YUNWU_OPEN_KEY }}
+        run: |
+          test -n "$YUNWU_OPEN_KEY" || { echo "YUNWU_OPEN_KEY is required" >&2; exit 1; }
+          python - <<'PY'
+          from ipaddress import ip_address
+          from urllib.parse import urlparse
+          from app.config import Settings
+
+          parsed = urlparse(Settings().llm_main_base_url)
+          if parsed.scheme != "https" or not parsed.hostname:
+              raise SystemExit("public product model must use an HTTPS endpoint")
+          try:
+              address = ip_address(parsed.hostname)
+          except ValueError:
+              pass
+          else:
+              if address.is_private or address.is_loopback or address.is_link_local:
+                  raise SystemExit(
+                      "public product model route rejected: PRIVATE_ADDRESS"
+                  )
+          PY
+      - name: run public product-model contract and reject skips
+        working-directory: backend
+        env:
+          YUNWU_OPEN_KEY: ${{ secrets.YUNWU_OPEN_KEY }}
+          ECHO_RUN_NODE_INSTALL: "1"
+        run: |
+          export ECHODESK_NODE_RUNTIME="$(command -v node)"
+          export ECHODESK_NODE_RUNTIME_IS_ELECTRON=true
+          pytest tests/integration/test_product_model_live.py \
+            --junitxml=pytest-live-public.xml \
+            --timeout=180 --timeout-method=thread --durations=20
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("pytest-live-public.xml").getroot()
+          skipped = sum(int(node.attrib.get("skipped", "0")) for node in root.iter("testsuite"))
+          if skipped:
+              raise SystemExit(f"public product contract skipped {skipped} test(s)")
+          PY
+
+  private-speech-models:
+    name: private network / STT + TTS + fast model
+    if: ${{ github.repository == 'yoligehude14753/echo-demo' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.run_private_speech == true }}
+    # Node 24 actions require Actions Runner >= 2.327.1. The versioned label is
+    # an operator attestation; do not retag a runner until its binary is verified.
+    runs-on: [self-hosted, linux, x64, echodesk-private-models, actions-runner-2-327-1]
+    timeout-minutes: 45
+    environment: live-contract
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+      - name: install private model contract dependencies
+        run: pip install --require-hashes -r backend/requirements-dev.lock
+      - name: require credentials and private routes before tests
+        working-directory: backend
+        env:
+          YUNWU_OPEN_KEY: ${{ secrets.YUNWU_OPEN_KEY }}
+          HEYI_GATEWAY_TOKEN: ${{ secrets.HEYI_GATEWAY_TOKEN }}
+        run: |
+          test -n "$YUNWU_OPEN_KEY" || { echo "YUNWU_OPEN_KEY is required" >&2; exit 1; }
+          python - <<'PY'
+          import socket
+          from urllib.parse import urlparse
+          from app.config import Settings
+
+          settings = Settings()
+          endpoints = {
+              "fast model": settings.llm_fast_base_url,
+              "STT": settings.stt_firered_url,
+              "TTS": settings.tts_qwen3_url,
+          }
+          for name, raw in endpoints.items():
+              parsed = urlparse(raw)
+              host = parsed.hostname
+              port = parsed.port or (443 if parsed.scheme == "https" else 80)
+              if not host:
+                  raise SystemExit(f"{name} route invalid: MISSING_HOST")
+              try:
+                  with socket.create_connection((host, port), timeout=5):
+                      pass
+              except OSError:
+                  raise SystemExit(
+                      f"{name} private route unavailable: CONNECTIVITY_CHECK_FAILED"
+                  )
+          PY
+      - name: run private speech/model contracts and reject skips
+        working-directory: backend
+        env:
+          YUNWU_OPEN_KEY: ${{ secrets.YUNWU_OPEN_KEY }}
+          HEYI_GATEWAY_TOKEN: ${{ secrets.HEYI_GATEWAY_TOKEN }}
+        run: |
+          pytest \
+            tests/integration/test_stt_tts_heyi.py \
+            tests/integration/test_real_audio_meeting.py \
+            tests/integration/test_intent_router_e2e.py::test_intent_llm_fallback_classifies \
+            -m live --junitxml=pytest-live-private.xml \
+            --timeout=180 --timeout-method=thread --durations=20
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("pytest-live-private.xml").getroot()
+          skipped = sum(int(node.attrib.get("skipped", "0")) for node in root.iter("testsuite"))
+          if skipped:
+              raise SystemExit(f"private speech/model contract skipped {skipped} test(s)")
+          PY

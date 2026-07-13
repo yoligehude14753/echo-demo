@@ -4,44 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EchoDesk</title>
-    <link rel="preconnect" href="https://rsms.me/" />
-    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
   </head>
   <body class="bg-paper-50 text-ink-900 antialiased">
     <div id="root">
       <div
         id="echodesk-boot-fallback"
-        style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; color: #222; line-height: 1.6;"
+        style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; padding: 32px; color: #222; line-height: 1.6;"
       >
         <div style="font-size: 24px; font-weight: 700; margin-bottom: 8px;">EchoDesk 正在启动…</div>
         <div style="font-size: 16px; color: #666;">如果长时间停留在这里，请更新电视 WebView 或安装兼容版 APK。</div>
       </div>
     </div>
-    <script>
-      (function () {
-        var bootError = "";
-        function rememberError(message) {
-          bootError = String(message || "未知脚本错误");
-        }
-        window.addEventListener("error", function (event) {
-          rememberError(event && event.message);
-        });
-        window.addEventListener("unhandledrejection", function (event) {
-          var reason = event && event.reason;
-          rememberError(reason && reason.message ? reason.message : reason);
-        });
-        window.setTimeout(function () {
-          if (window.__ECHODESK_REACT_MOUNTED__) return;
-          var el = document.getElementById("echodesk-boot-fallback");
-          if (!el) return;
-          el.innerHTML =
-            '<div style="font-size:24px;font-weight:700;margin-bottom:8px;color:#b91c1c;">EchoDesk 启动失败</div>' +
-            '<div style="font-size:16px;color:#444;">' +
-            (bootError || "应用在 12 秒内没有完成启动") +
-            "</div>";
-        }, 12000);
-      })();
-    </script>
+    <script vite-ignore src="./boot-fallback.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

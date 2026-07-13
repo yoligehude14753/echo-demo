@@ -14,20 +14,24 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-from openai import APIError, APITimeoutError, AsyncOpenAI
+from openai import APIError, APITimeoutError, AsyncOpenAI, BadRequestError
 
 from app.config import Settings
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
+from app.security.context import current_principal
+from app.security.governor import PrincipalGovernor, QuotaReservation
 
 _REASONING_HINTS = ("Qwen3", "qwen3", "GLM-5", "glm-5", "DeepSeek-R1", "M2.7", "MiniMax")
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"^.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+_log = logging.getLogger("echodesk.llm")
 
 
 def _is_reasoning(model: str) -> bool:
@@ -100,16 +104,22 @@ class OpenAICompatibleLLM:
     无 model 时按对应通道默认模型。
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        governor: PrincipalGovernor | None = None,
+    ) -> None:
         self._settings = settings
+        self._governor = governor
         self._http = httpx.AsyncClient(trust_env=False, timeout=600.0)
         self._main = AsyncOpenAI(
-            api_key=settings.yunwu_open_key or "EMPTY",
+            api_key=settings.resolved_llm_main_api_key,
             base_url=settings.llm_main_base_url,
             http_client=self._http,
         )
         self._fast = AsyncOpenAI(
-            api_key=settings.llm_local_api_key or "EMPTY",
+            api_key=settings.llm_fast_api_key,
             base_url=settings.llm_fast_base_url,
             http_client=self._http,
         )
@@ -134,6 +144,42 @@ class OpenAICompatibleLLM:
         return self._main, model, s.llm_main_max_tokens
 
     @staticmethod
+    def _estimate_prompt_tokens(messages: list[ChatMessage]) -> int:
+        chars = sum(len(message.content) for message in messages)
+        return max(1, (chars + 3) // 4)
+
+    async def _reserve_tokens(
+        self,
+        messages: list[ChatMessage],
+        max_tokens: int,
+    ) -> tuple[QuotaReservation | None, int]:
+        prompt_tokens = self._estimate_prompt_tokens(messages)
+        if self._governor is None:
+            return None, prompt_tokens
+        reservation = await self._governor.reserve_llm_tokens(
+            current_principal(),
+            prompt_tokens + max_tokens,
+        )
+        return reservation, prompt_tokens
+
+    @staticmethod
+    async def _release_reservation(reservation: QuotaReservation | None) -> None:
+        if reservation is not None:
+            await reservation.release()
+
+    @staticmethod
+    async def _settle_stream_reservation(
+        reservation: QuotaReservation | None,
+        *,
+        prompt_estimate: int,
+        output_chars: int,
+    ) -> None:
+        if reservation is None:
+            return
+        output_tokens = max(1, (output_chars + 3) // 4)
+        await reservation.settle(prompt_estimate + output_tokens)
+
+    @staticmethod
     def _build_kwargs(
         model: str,
         messages: list[ChatMessage],
@@ -152,6 +198,31 @@ class OpenAICompatibleLLM:
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         return kwargs
 
+    @staticmethod
+    async def _create_completion(
+        client: AsyncOpenAI,
+        kwargs: dict[str, Any],
+        *,
+        timeout_s: float,
+    ) -> Any:
+        """Retry once without optional Qwen template args when a proxy rejects them."""
+
+        try:
+            return await asyncio.wait_for(
+                client.chat.completions.create(**kwargs), timeout=timeout_s
+            )
+        except BadRequestError:
+            if "extra_body" not in kwargs:
+                raise
+            compatible_kwargs = dict(kwargs)
+            compatible_kwargs.pop("extra_body", None)
+            _log.warning(
+                "LLM proxy rejected optional chat_template_kwargs; retrying standard request"
+            )
+            return await asyncio.wait_for(
+                client.chat.completions.create(**compatible_kwargs), timeout=timeout_s
+            )
+
     async def chat(
         self,
         messages: list[ChatMessage],
@@ -164,16 +235,23 @@ class OpenAICompatibleLLM:
         client, use_model, default_max = self._pick(model)
         effective_max = max_tokens if max_tokens is not None else default_max
         kwargs = self._build_kwargs(use_model, messages, effective_max, temperature, stream=False)
+        reservation, prompt_estimate = await self._reserve_tokens(messages, effective_max)
 
         t0 = time.monotonic()
         try:
-            resp = await asyncio.wait_for(
-                client.chat.completions.create(**kwargs), timeout=timeout_s
-            )
+            resp = await self._create_completion(client, kwargs, timeout_s=timeout_s)
         except (TimeoutError, APITimeoutError) as e:
+            if reservation is not None:
+                await reservation.release()
             raise LLMError(f"{use_model} timeout after {timeout_s}s") from e
         except APIError as e:
+            if reservation is not None:
+                await reservation.release()
             raise LLMError(f"{use_model} api error: {e}") from e
+        except Exception:
+            if reservation is not None:
+                await reservation.release()
+            raise
 
         latency_ms = (time.monotonic() - t0) * 1000
         choice = resp.choices[0]
@@ -183,6 +261,11 @@ class OpenAICompatibleLLM:
             completion_tokens=getattr(resp.usage, "completion_tokens", 0) if resp.usage else 0,
             total_tokens=getattr(resp.usage, "total_tokens", 0) if resp.usage else 0,
         )
+        if reservation is not None:
+            actual_tokens = usage.total_tokens or (
+                prompt_estimate + max(1, (len(content) + 3) // 4)
+            )
+            await reservation.settle(actual_tokens)
         return LLMResponse(
             content=content,
             model=use_model,
@@ -203,17 +286,22 @@ class OpenAICompatibleLLM:
         client, use_model, default_max = self._pick(model)
         effective_max = max_tokens if max_tokens is not None else default_max
         kwargs = self._build_kwargs(use_model, messages, effective_max, temperature, stream=True)
+        reservation, prompt_estimate = await self._reserve_tokens(messages, effective_max)
 
         try:
-            stream = await asyncio.wait_for(
-                client.chat.completions.create(**kwargs), timeout=timeout_s
-            )
+            stream = await self._create_completion(client, kwargs, timeout_s=timeout_s)
         except (TimeoutError, APITimeoutError) as e:
+            await self._release_reservation(reservation)
             raise LLMError(f"{use_model} stream timeout after {timeout_s}s") from e
         except APIError as e:
+            await self._release_reservation(reservation)
             raise LLMError(f"{use_model} stream api error: {e}") from e
+        except Exception:
+            await self._release_reservation(reservation)
+            raise
 
         filt = _ThinkStripper()
+        output_chars = 0
         try:
             async for event in stream:
                 if not event.choices:
@@ -222,9 +310,16 @@ class OpenAICompatibleLLM:
                 if delta and delta.content:
                     out = filt.feed(delta.content)
                     if out:
+                        output_chars += len(out)
                         yield out
             tail = filt.flush()
             if tail:
+                output_chars += len(tail)
                 yield tail
         finally:
             await stream.close()
+            await self._settle_stream_reservation(
+                reservation,
+                prompt_estimate=prompt_estimate,
+                output_chars=output_chars,
+            )

@@ -1,0 +1,36 @@
+event_id: "E-20260709T2334-002"
+event_type: "add"
+timestamp: "2026-07-09T23:34:03+08:00"
+author: "agent/codex-0-3-prep"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-003"
+      claim: "EchoDesk 0.3 pre-development documentation exists under docs/0.3 and includes architecture, workflows, data contracts, tests, development plan, and checklist."
+      category: "observation"
+      volatility: "low"
+      evidence_strength: "doc"
+      status: "confirmed"
+      confidence: 0.95
+      observed_at: "2026-07-09T23:34:03+08:00"
+      observed_by: "agent/codex-0-3-prep"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "docs/0.3/README.md"
+        - "docs/0.3/ARCHITECTURE.md"
+        - "docs/0.3/WORKFLOWS.md"
+        - "docs/0.3/DATA_MODEL_AND_CONTRACTS.md"
+        - "docs/0.3/TEST_PLAN.md"
+        - "docs/0.3/DEV_PLAN.md"
+        - "docs/0.3/PRE_DEV_CHECKLIST.md"
+      evidence: "The 0.3 documentation package was created before implementation work."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3"
+        - "documentation"
+        - "pre-development"
+git_commit: null

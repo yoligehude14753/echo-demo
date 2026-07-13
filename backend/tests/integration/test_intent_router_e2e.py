@@ -34,7 +34,6 @@ def _heyi_reachable() -> bool:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _heyi_reachable(), reason="fast LLM endpoint unreachable")
 async def test_intent_keyword_hits_skip_llm() -> None:
     """关键字命中应当不调 LLM 即返回（带 0.85 置信度）。"""
     s = Settings()
@@ -57,6 +56,7 @@ async def test_intent_keyword_hits_skip_llm() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 @pytest.mark.skipif(not _heyi_reachable(), reason="eight fast LLM unreachable")
 async def test_intent_llm_fallback_classifies() -> None:
     """无关键字 + @前缀 → 走 LLM 分类，返回合法 kind。"""

@@ -1,0 +1,17 @@
+{
+  "darwin": [
+    "-arm64\\.dmg$",
+    "-arm64-mac\\.zip$",
+    "\\.dmg$"
+  ],
+  "win32": [
+    "EchoDesk\\.Setup\\.[0-9.]+\\.exe$",
+    "\\.exe$"
+  ],
+  "linux": [
+    "-linux-x86_64\\.AppImage$",
+    "-linux-amd64\\.deb$",
+    "\\.AppImage$",
+    "\\.deb$"
+  ]
+}

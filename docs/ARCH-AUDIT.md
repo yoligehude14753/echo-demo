@@ -1,9 +1,6 @@
 # EchoDesk 架构事实基线（ARCH-AUDIT）
 
-> 这是给 AI 助手 / 新人 / 自己未来的"真相单"——所有后续修复必须以本文为基线，
-> 不能基于变量名 / 旧注释 / 摘要里的二手转述。
->
-> 更新规则：发现任何架构事实不一致就立刻改这里，commit 一起进。
+> 冻结历史：本文记录 0.2.25–0.2.50 阶段的审计与调优过程，不再是当前“真相单”，也不参与冲突仲裁。0.3.1 当前实现以根目录 `ARCHITECTURE.md`、`PRD.md` 和 `docs/0.3/` 为准。
 
 ## 0. 项目身份
 
@@ -119,7 +116,7 @@ ambient_segments 表：337 条
 | 10 | STT 语言乱跳（日英混入） | 已验证 language=zh 实际传了 | echo 也传 `language=zh`，但 echo 默认用 deepgram（中文路径不同） | 切 STT 模型解决（FireRed） | **本 PR** |
 | 11 | **SenseVoice 在 6s 含静音/底噪 chunk 上 73% < 30 字 + 日英混入** | 高 | echo 实测 FireRed RTF=0.18，**中英混合 FRA2 保留英文**（不音译）；无 SenseVoice vs FireRed 数字 A/B | 切 STT 到 FireRed（当前 eight :8090） | **本 PR** |
 
-## 5. 链路图（当前真实，截至 2026-05-27）
+## 5. 链路图（历史快照，截至 2026-05-27）
 
 ```
 [mic 6s chunk]

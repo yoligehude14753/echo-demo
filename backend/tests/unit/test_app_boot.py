@@ -31,6 +31,20 @@ def test_bootstrap_payload(client: TestClient) -> None:
     assert body["http_url"].startswith(("http://", "https://"))
     assert "app_version" in body
     assert body["stt_enabled"] is True
+    assert body["schema_version"] == 1
+    assert body["api_version"] == "0.3"
+    assert body["session_required"] is False
+    assert "minimum_client_version" not in body
+    assert body["capabilities"] == {
+        "principal_sessions": True,
+        "owner_isolation": True,
+        "workflow_kernel": "dispatcher-v1",
+        "ws_owner_filtering": True,
+        "ws_stream_epoch": True,
+        "ws_hello_bearer": False,
+        "server_resync_rehydrate_required": True,
+        "host_runtime_requires_admin": False,
+    }
 
 
 @pytest.mark.unit

@@ -9,11 +9,44 @@ import json
 from pathlib import Path
 
 import pytest
+from app.config import Settings
 from app.config_io import (
     load_user_config_json,
     user_config_path,
     write_user_config_json,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.mark.unit
+def test_env_example_tracks_current_defaults_and_keeps_admin_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    values = {
+        key: value
+        for line in (REPO_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+        for key, value in [line.split("=", maxsplit=1)]
+    }
+    fields = Settings.model_fields
+
+    assert values["DIARIZER_MATCH_THRESHOLD"] == str(fields["diarizer_match_threshold"].default)
+    assert "DIARIZER_MIN_AUDIO_BYTES" not in values
+    assert values["LLM_FAST_PROVIDER"] == fields["llm_fast_provider"].default
+    assert values["LLM_FAST_MODEL"] == fields["llm_fast_model"].default
+    assert values["LLM_FAST_BASE_URL"] == fields["llm_fast_base_url"].default
+    assert values["WORKSPACE_MAX_FILE_MB"] == str(int(fields["workspace_max_file_mb"].default))
+    assert values["ALLOWED_ORIGINS"] == fields["allowed_origins"].default
+    assert "WEB_ARBITRATION_MODEL" not in values
+    assert "web_arbitration_model" not in fields
+    assert values["DEBUG_TOKEN"] == ""
+
+    monkeypatch.delenv("DEBUG_TOKEN", raising=False)
+    monkeypatch.setenv("ECHO_USER_DIR", str(tmp_path))
+    loaded = Settings(_env_file=REPO_ROOT / ".env.example")  # type: ignore[call-arg]
+    assert loaded.debug_token == ""
 
 
 @pytest.fixture
@@ -96,6 +129,16 @@ class TestJsonConfigSource:
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.port == 9999
 
+    def test_stale_user_app_version_cannot_override_code_version(
+        self, isolated_user_dir: Path
+    ) -> None:
+        write_user_config_json({"app_version": "0.2.43"})
+        from app import __version__
+        from app.config import Settings
+
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.app_version == __version__
+
     def test_env_beats_user_json(
         self, isolated_user_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -121,6 +164,15 @@ class TestJsonConfigSource:
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.heyi_gateway_token == "gw-token"
 
+    def test_generic_main_key_loads_without_legacy_yunwu_key(self, isolated_user_dir: Path) -> None:
+        write_user_config_json({"llm_main_api_key": "generic-token"})
+        from app.config import Settings
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.llm_main_api_key == "generic-token"
+        assert settings.yunwu_open_key == ""
+        assert settings.resolved_llm_main_api_key == "generic-token"
+
     def test_service_api_key_aliases_resolved_in_source(self, isolated_user_dir: Path) -> None:
         write_user_config_json(
             {
@@ -135,6 +187,24 @@ class TestJsonConfigSource:
         assert s.stt_firered_api_key == "stt-token"
         assert s.tts_qwen3_api_key == "tts-token"
         assert s.tts_qwen3_timeout_s == 45
+
+    def test_secret_values_are_excluded_from_settings_repr(self, isolated_user_dir: Path) -> None:
+        from app.config import Settings
+
+        secret_values = {
+            "llm_main_api_key": "main-secret-value",
+            "yunwu_open_key": "legacy-secret-value",
+            "llm_local_api_key": "local-secret-value",
+            "heyi_gateway_token": "gateway-secret-value",
+            "stt_firered_api_key": "stt-secret-value",
+            "tts_qwen3_api_key": "tts-secret-value",
+            "tavily_api_key": "search-secret-value",
+            "debug_token": "admin-secret-value",
+        }
+        settings = Settings(**secret_values, _env_file=None)  # type: ignore[call-arg]
+        rendered = repr(settings)
+
+        assert all(value not in rendered for value in secret_values.values())
 
     def test_unknown_field_ignored_with_warning(
         self, isolated_user_dir: Path, caplog: pytest.LogCaptureFixture
@@ -151,6 +221,39 @@ class TestJsonConfigSource:
 
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.port == 8769  # P1.1 canonical default
+
+    def test_official_electron_origin_survives_deployment_override(
+        self, isolated_user_dir: Path
+    ) -> None:
+        from app.config import OFFICIAL_ELECTRON_ORIGIN, Settings
+
+        settings = Settings(
+            allowed_origins="https://browser.example.test",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.allowed_origins_list == [
+            "https://browser.example.test",
+            OFFICIAL_ELECTRON_ORIGIN,
+        ]
+
+    def test_workspace_state_defaults_to_isolated_user_dir(
+        self,
+        isolated_user_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from app.config import Settings
+
+        monkeypatch.delenv("WORKSPACE_STATE_FILE", raising=False)
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.workspace_state_file == isolated_user_dir / "workspace_state.json"
+
+    def test_default_main_model_uses_yunwu_deepseek_v4_flash(self, isolated_user_dir: Path) -> None:
+        from app.config import Settings
+
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.llm_main_provider == "yunwu"
+        assert s.llm_main_model == "deepseek-v4-flash"
+        assert s.llm_main_base_url == "https://yunwu.ai/v1"
 
     def test_echo_lan_full_api_env_alias(
         self, isolated_user_dir: Path, monkeypatch: pytest.MonkeyPatch

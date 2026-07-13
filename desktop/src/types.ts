@@ -6,11 +6,14 @@ export type BusinessEventType =
   | "meeting.segment"
   | "meeting.ended"
   | "meeting.todo.completed"
+  | "meeting.todo.updated"
   | "minutes.ready"
   | "minutes.failed"
   | "artifact.generating"
   | "artifact.ready"
   | "artifact.failed"
+  | "workflow.event"
+  | "workflow.snapshot"
   | "rag.query"
   | "rag.answer.delta"
   | "rag.answer.done"
@@ -24,6 +27,7 @@ export type ProtocolEventType =
   | "server_hello"
   | "server_ping"
   | "server_resync"
+  | "server_sync"
   | "client_hello"
   | "client_ping";
 
@@ -32,6 +36,7 @@ export type EventType = BusinessEventType | ProtocolEventType;
 export interface EchoEvent<T = Record<string, unknown>> {
   type: EventType;
   seq: number;
+  stream_epoch?: string | null;
   ts: string;
   meeting_id?: string | null;
   payload: T;
@@ -56,7 +61,13 @@ export interface MinutesSection {
 
 // M_minutes_refactor：会议待办（替代以前的 action_items 纯字符串列表）
 export type TodoKind = "actionable" | "info";
-export type TodoStatus = "pending" | "done" | "cancelled";
+export type TodoStatus =
+  | "pending"
+  | "running"
+  | "failed"
+  | "waiting_permission"
+  | "done"
+  | "cancelled";
 
 export interface TodoItem {
   id: string;
@@ -66,6 +77,7 @@ export interface TodoItem {
   status: TodoStatus;
   done_at?: string | null;
   artifact_id?: string | null;
+  workflow_run_id?: string | null;
   suggested_command?: string | null;
 }
 
@@ -99,12 +111,55 @@ export interface GeneratedArtifact {
   artifact_id: string;
   artifact_type: ArtifactType | string;
   title: string;
-  file_path: string;
+  file_path?: string | null;
   mime_type: string;
   size_bytes: number;
   generation_latency_ms: number;
   model: string;
   metadata: Record<string, string>;
+  run_id?: string | null;
+  links?: Array<Record<string, unknown>>;
+}
+
+export type WorkflowState =
+  | "pending"
+  | "running"
+  | "cancel_requested"
+  | "succeeded"
+  | "failed"
+  | "timeout"
+  | "cancelled"
+  | "cancel_failed";
+
+export interface WorkflowRunDTO {
+  run_id: string;
+  kind: string;
+  source: string;
+  state: WorkflowState;
+  title?: string | null;
+  intent_text: string;
+  meeting_id?: string | null;
+  todo_id?: string | null;
+  agent_task_id?: string | null;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  error?: string | null;
+  timeout_s?: number | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at: string;
+}
+
+export interface WorkflowEventDTO {
+  run_id: string;
+  seq: number;
+  event_type: string;
+  state: WorkflowState;
+  visibility: "user" | "debug" | "hidden";
+  message?: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
 }
 
 export type IntentKind =
@@ -169,6 +224,9 @@ export interface MeetingCard {
   state: MeetingState;
   segments: TranscriptSegment[];
   speakers: Set<string>;
+  /** GET /meetings 返回的持久化汇总；详情尚未加载时供列表首屏展示。 */
+  summary_segment_count: number;
+  summary_speaker_count: number;
   minutes?: MeetingMinutes;
   /**
    * 纪要生成状态（仅 state="ended" / "in_meeting" 时有意义；
@@ -220,6 +278,7 @@ export interface AgentTaskCard {
   error?: string | null;
   artifacts: Array<Record<string, unknown>>;
   snapshot: Record<string, unknown>;
+  workflow_run_id?: string | null;
   last_seq: number;
   submitted_at: string;
   finished_at?: string | null;

@@ -6,10 +6,10 @@
  * - 操作：手动触发扫描 / 清空 workspace 索引
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Button, Modal, Tag, Tooltip, message } from "antd";
-import { FileText, FolderOpen, RefreshCw, Settings, Trash2 } from "lucide-react";
+import { FileText, Library, RefreshCw, Settings, Trash2 } from "lucide-react";
 
 import {
   type RagDocSummary,
@@ -18,43 +18,95 @@ import {
   deleteRagDoc,
   listRagDocs,
   workspaceClear,
+  workspaceCapability,
   workspaceScan,
   workspaceStatus,
 } from "@/api";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 interface Props {
   onOpenSettings?: () => void;
 }
 
 export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
   const [docs, setDocs] = useState<RagDocsResponse | null>(null);
   const [scanning, setScanning] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const openSettingsAfterCloseRef = useRef(false);
+  const workspaceDirectoryAvailable = workspaceCapability() !== "unavailable";
+
+  const requestSettingsFromModal = useCallback(() => {
+    if (!onOpenSettings) return;
+    openSettingsAfterCloseRef.current = true;
+    setModalOpen(false);
+  }, [onOpenSettings]);
+
+  const handleModalOpenChange = useCallback(
+    (open: boolean) => {
+      if (open || !openSettingsAfterCloseRef.current) return;
+      openSettingsAfterCloseRef.current = false;
+      onOpenSettings?.();
+    },
+    [onOpenSettings],
+  );
 
   const refresh = useCallback(async () => {
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
     try {
-      const [s, d] = await Promise.all([workspaceStatus(), listRagDocs()]);
+      const statusRequest = workspaceDirectoryAvailable
+        ? workspaceStatus({ signal: controller.signal })
+        : Promise.resolve(null);
+      const [s, d] = await Promise.all([
+        statusRequest,
+        listRagDocs({ signal: controller.signal }),
+      ]);
+      if (!isCurrent(originGeneration) || controller.signal.aborted) return;
       setStatus(s);
       setDocs(d);
     } catch (e) {
       // 后端不可达时静默；状态栏只是辅助信息
       void e;
+    } finally {
+      unregisterController();
     }
-  }, []);
+  }, [
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+    workspaceDirectoryAvailable,
+  ]);
 
   useEffect(() => {
+    setStatus(null);
+    setDocs(null);
+    setScanning(false);
+    setDeletingDocId(null);
+    setModalOpen(false);
+    openSettingsAfterCloseRef.current = false;
+    Modal.destroyAll();
     void refresh();
     const t = setInterval(refresh, 30_000); // 30s 轮询，足够低频
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [backendOriginRevision, refresh]);
 
   const onScan = useCallback(async () => {
+    if (!workspaceDirectoryAvailable) return;
+    const originGeneration = captureGeneration();
     setScanning(true);
     try {
       const r = await workspaceScan();
-      const text = `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped} · 删除 ${r.n_removed} · 失败 ${r.n_failed} · 耗时 ${r.duration_s}s`;
+      if (!isCurrent(originGeneration)) return;
+      const text = `更新完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 未变更 ${r.n_skipped} · 移除 ${r.n_removed} · 失败 ${r.n_failed}`;
       if (r.n_failed > 0) {
         message.warning(text);
       } else {
@@ -62,14 +114,22 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
       }
       await refresh();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      message.error(`扫描失败：${msg}`);
+      if (!isCurrent(originGeneration)) return;
+      console.error("[workspace] scan failed", e);
+      message.error("扫描失败，请检查目录权限后重试");
     } finally {
-      setScanning(false);
+      if (isCurrent(originGeneration)) setScanning(false);
     }
-  }, [refresh]);
+  }, [
+    captureGeneration,
+    isCurrent,
+    refresh,
+    workspaceDirectoryAvailable,
+  ]);
 
   const onClear = useCallback(async () => {
+    if (!workspaceDirectoryAvailable) return;
+    const originGeneration = captureGeneration();
     Modal.confirm({
       title: "清空工作区索引？",
       content: "仅清除来自工作区扫描的文档；上传 / 会议来源的索引保留。",
@@ -77,19 +137,28 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
       okButtonProps: { danger: true },
       cancelText: "取消",
       onOk: async () => {
+        if (!isCurrent(originGeneration)) return;
         try {
           const r = await workspaceClear();
+          if (!isCurrent(originGeneration)) return;
           message.success(`已清除 ${r.n_removed} 个工作区文档`);
           await refresh();
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          message.error(`清空失败：${msg}`);
+          if (!isCurrent(originGeneration)) return;
+          console.error("[workspace] clear index failed", e);
+          message.error("知识库清空失败，请重试");
         }
       },
     });
-  }, [refresh]);
+  }, [
+    captureGeneration,
+    isCurrent,
+    refresh,
+    workspaceDirectoryAvailable,
+  ]);
 
   const onDeleteDoc = useCallback((doc: RagDocSummary) => {
+    const originGeneration = captureGeneration();
     Modal.confirm({
       title: "删除这条知识库文档？",
       content: (
@@ -104,21 +173,24 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
       okButtonProps: { danger: true },
       cancelText: "取消",
       onOk: async () => {
+        if (!isCurrent(originGeneration)) return;
         setDeletingDocId(doc.doc_id);
         try {
           await deleteRagDoc(doc.doc_id);
+          if (!isCurrent(originGeneration)) return;
           message.success("已从知识库移除");
           await refresh();
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          message.error(`删除失败：${msg}`);
+          if (!isCurrent(originGeneration)) return;
+          console.error("[workspace] delete document failed", e);
+          message.error("文档移除失败，请重试");
           throw e;
         } finally {
-          setDeletingDocId(null);
+          if (isCurrent(originGeneration)) setDeletingDocId(null);
         }
       },
     });
-  }, [refresh]);
+  }, [captureGeneration, isCurrent, refresh]);
 
   const openKnowledgeModalFromKeyboard = useCallback(
     (e: KeyboardEvent<HTMLSpanElement>) => {
@@ -143,111 +215,99 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
         className="flex items-center gap-2 px-4 h-8 text-[11px] text-ink-600 border-b border-paper-300 bg-paper-100"
         data-testid="workspace-bar"
       >
-        <FolderOpen className="workspace-icon w-3 h-3" />
-        <span className="workspace-title font-medium">工作区</span>
+        <Library className="workspace-icon w-3 h-3" />
+        <span className="workspace-title font-medium">知识库</span>
+
+        {workspaceDirectoryAvailable && (
+          <>
+            <Tooltip
+              title={
+                status?.authorized_dirs.length
+                  ? status.authorized_dirs.join("\n")
+                  : "还没有知识库目录；添加后 EchoDesk 会自动收录其中的文件"
+              }
+            >
+              <Tag
+                color={nDirs > 0 ? "blue" : "default"}
+                className="!m-0 cursor-pointer"
+                onClick={() => setModalOpen(true)}
+                onKeyDown={openKnowledgeModalFromKeyboard}
+                role="button"
+                tabIndex={0}
+                data-testid="workspace-dirs-tag"
+                aria-label="打开知识库和工作区文件"
+              >
+                {nDirs} 目录
+              </Tag>
+            </Tooltip>
+
+            {configuredNotAuthorized > 0 && (
+              <Tooltip title="部分配置目录不存在或不可读">
+                <Tag color="warning" className="!m-0">
+                  {configuredNotAuthorized} 失效
+                </Tag>
+              </Tooltip>
+            )}
+          </>
+        )}
 
         <Tooltip
           title={
-            status?.authorized_dirs.length
-              ? status.authorized_dirs.join("\n")
-              : "未配置；点击「配置工作区」添加目录，EchoDesk 会自动扫描入库"
+            workspaceDirectoryAvailable
+              ? "已建立索引的工作区文档数"
+              : "当前公共客户端仅展示上传和会议资料"
           }
         >
           <Tag
-            color={nDirs > 0 ? "blue" : "default"}
-            className="!m-0 cursor-pointer"
-            onClick={() => setModalOpen(true)}
-            onKeyDown={openKnowledgeModalFromKeyboard}
-            role="button"
-            tabIndex={0}
-            data-testid="workspace-dirs-tag"
-            aria-label="打开知识库和工作区文件"
+            color={(workspaceDirectoryAvailable ? nIndexed : nDocsTotal) > 0 ? "geekblue" : "default"}
+            className="!m-0"
+            data-testid={
+              workspaceDirectoryAvailable ? "workspace-indexed-tag" : "knowledge-docs-tag"
+            }
           >
-            {nDirs} 目录
+            {workspaceDirectoryAvailable ? nIndexed : nDocsTotal} 文档
           </Tag>
         </Tooltip>
 
-        {configuredNotAuthorized > 0 && (
-          <Tooltip title="部分配置目录不存在或不可读">
-            <Tag color="warning" className="!m-0">
-              {configuredNotAuthorized} 失效
-            </Tag>
-          </Tooltip>
-        )}
-
-        <Tooltip title="工作区扫描入库的文档数">
-          <Tag color={nIndexed > 0 ? "geekblue" : "default"} className="!m-0">
-            {nIndexed} 工作区文档
-          </Tag>
-        </Tooltip>
-
-        <span className="text-ink-400">·</span>
-
-        <Tooltip title="用户上传 / 会议生成的文档（聊天框拖入即可）">
-          <span data-testid="workspace-upload-count">
-            上传 {nUploadDocs} · 会议 {nMeetingDocs} · 总计 {nDocsTotal}
-          </span>
-        </Tooltip>
+        <span className="sr-only" data-testid="workspace-upload-count">
+          上传 {nUploadDocs} · 会议 {nMeetingDocs} · 总计 {nDocsTotal}
+        </span>
 
         <div className="workspace-actions ml-auto flex items-center gap-1">
           <Button
             size="small"
             type="default"
-            icon={<Settings className="w-3 h-3" />}
-            onClick={() => {
-              if (onOpenSettings) {
-                onOpenSettings();
-              } else {
-                setModalOpen(true);
-              }
-            }}
+            icon={<Library className="w-3 h-3" />}
+            onClick={() => setModalOpen(true)}
             data-testid="workspace-config-btn"
+            aria-label="管理知识库"
           >
-            配置工作区
-          </Button>
-          <Button
-            size="small"
-            type="text"
-            icon={
-              <RefreshCw
-                className={`w-3 h-3 ${scanning ? "animate-spin" : ""}`}
-              />
-            }
-            onClick={() => void onScan()}
-            disabled={scanning || nDirs === 0}
-            data-testid="workspace-scan-btn"
-          >
-            {scanning ? "扫描中" : "扫描"}
-          </Button>
-          <Button
-            size="small"
-            type="text"
-            danger
-            icon={<Trash2 className="w-3 h-3" />}
-            onClick={() => void onClear()}
-            disabled={nIndexed === 0}
-            data-testid="workspace-clear-btn"
-          >
-            清空
+            <span>管理</span>
           </Button>
         </div>
       </div>
 
       <Modal
-        title="知识库 / 工作区文件"
+        title="管理知识库"
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
+        afterOpenChange={handleModalOpenChange}
         footer={null}
         width={760}
+        destroyOnHidden
       >
         <div className="text-[13px] space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Tag color={nDirs > 0 ? "blue" : "default"} className="!m-0">
-              {nDirs} 目录
-            </Tag>
-            <Tag color={nIndexed > 0 ? "geekblue" : "default"} className="!m-0">
-              {nIndexed} 工作区文档
-            </Tag>
+            {workspaceDirectoryAvailable && (
+              <>
+                <Tag color={nDirs > 0 ? "blue" : "default"} className="!m-0">
+                  {nDirs} 目录
+                </Tag>
+                <Tag color={nIndexed > 0 ? "geekblue" : "default"} className="!m-0">
+                  {nIndexed} 工作区文档
+                </Tag>
+              </>
+            )}
             <Tag color={nDocsTotal > 0 ? "purple" : "default"} className="!m-0">
               总计 {nDocsTotal}
             </Tag>
@@ -260,98 +320,123 @@ export default function WorkspaceBar({ onOpenSettings }: Props): JSX.Element {
             >
               刷新
             </Button>
-            {onOpenSettings && (
-              <Button
-                size="small"
-                type="text"
-                icon={<Settings className="w-3 h-3" />}
-                onClick={() => {
-                  setModalOpen(false);
-                  onOpenSettings();
-                }}
-                data-testid="workspace-open-settings"
-              >
-                配置目录
-              </Button>
-            )}
-          </div>
-
-          <div>
-            <div className="font-medium mb-1">目录配置</div>
-            <div className="rounded-md border border-paper-300 bg-paper-100 p-3 text-[12px] text-ink-600 leading-relaxed">
-              <div>
-                推荐直接在设置里添加目录，支持系统目录选择器，添加后可立即重扫。
-              </div>
-              {onOpenSettings && (
+            {workspaceDirectoryAvailable && (
+              <>
                 <Button
-                  className="!mt-2"
                   size="small"
-                  type="primary"
-                  icon={<Settings className="w-3 h-3" />}
-                  onClick={() => {
-                    setModalOpen(false);
-                    onOpenSettings();
-                  }}
-                  data-testid="workspace-modal-add-dir"
+                  type="text"
+                  icon={
+                    <RefreshCw
+                      className={`w-3 h-3 ${scanning ? "animate-spin" : ""}`}
+                    />
+                  }
+                  onClick={() => void onScan()}
+                  disabled={scanning || nDirs === 0}
+                  data-testid="workspace-scan-btn"
                 >
-                  去添加工作区目录
+                  {scanning ? "更新中" : "更新索引"}
                 </Button>
-              )}
-            </div>
-            <div className="text-[11px] text-ink-500 mt-1.5">
-              开发者/私有部署也可以用环境变量
-              <span className="font-mono ml-1">WORKSPACE_DIRS</span> 批量配置。
-            </div>
-          </div>
-
-          <div>
-            <div className="font-medium mb-1">可扫描目录（{nDirs}）</div>
-            {status?.authorized_dirs.length ? (
-              <ul className="list-disc pl-5 text-[12px] space-y-1">
-                {status.authorized_dirs.map((d) => (
-                  <li key={d} className="font-mono break-all">
-                    {d}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="text-[12px] text-ink-500">
-                当前未配置或配置的目录均不存在。
-              </div>
+                {onOpenSettings && (
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<Settings className="w-3 h-3" />}
+                    onClick={requestSettingsFromModal}
+                    data-testid="workspace-open-settings"
+                  >
+                    配置目录
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<Trash2 className="w-3 h-3" />}
+                  onClick={() => void onClear()}
+                  disabled={nIndexed === 0}
+                  data-testid="workspace-clear-btn"
+                >
+                  清除工作区索引
+                </Button>
+              </>
             )}
           </div>
 
-          {status?.configured_dirs.length !== status?.authorized_dirs.length && (
-            <div>
-              <div className="font-medium mb-1 text-warn-700">
-                配置但不可用的目录
-              </div>
-              <ul className="list-disc pl-5 text-[12px] space-y-1">
-                {(status?.configured_dirs ?? [])
-                  .filter((d) => !status?.authorized_dirs.includes(d))
-                  .map((d) => (
-                    <li
-                      key={d}
-                      className="font-mono break-all text-ink-500 line-through"
+          {workspaceDirectoryAvailable && (
+            <>
+              <div>
+                <div className="font-medium mb-1">目录配置</div>
+                <div className="rounded-md border border-paper-300 bg-paper-100 p-3 text-[12px] text-ink-600 leading-relaxed">
+                  <div>
+                    推荐直接在设置里添加目录，支持系统目录选择器，添加后可立即重扫。
+                  </div>
+                  {onOpenSettings && (
+                    <Button
+                      className="!mt-2"
+                      size="small"
+                      type="primary"
+                      icon={<Settings className="w-3 h-3" />}
+                      onClick={requestSettingsFromModal}
+                      data-testid="workspace-modal-add-dir"
                     >
-                      {d}
-                    </li>
-                  ))}
-              </ul>
-            </div>
+                      去添加工作区目录
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <div className="font-medium mb-1">已授权目录（{nDirs}）</div>
+                {status?.authorized_dirs.length ? (
+                  <ul className="list-disc pl-5 text-[12px] space-y-1">
+                    {status.authorized_dirs.map((d) => (
+                      <li key={d} className="font-mono break-all">
+                        {d}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-[12px] text-ink-500">
+                    当前未配置或配置的目录均不存在。
+                  </div>
+                )}
+              </div>
+
+              {status?.configured_dirs.length !== status?.authorized_dirs.length && (
+                <div>
+                  <div className="font-medium mb-1 text-warn-700">
+                    配置但不可用的目录
+                  </div>
+                  <ul className="list-disc pl-5 text-[12px] space-y-1">
+                    {(status?.configured_dirs ?? [])
+                      .filter((d) => !status?.authorized_dirs.includes(d))
+                      .map((d) => (
+                        <li
+                          key={d}
+                          className="font-mono break-all text-ink-500 line-through"
+                        >
+                          {d}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              )}
+            </>
           )}
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <div className="font-medium">已入库文档（{nDocsTotal}）</div>
+              <div className="font-medium">已收录文档（{nDocsTotal}）</div>
               <div className="text-[11px] text-ink-500">
-                上传 {nUploadDocs} · 会议 {nMeetingDocs} · 工作区 {nIndexed}
+                上传 {nUploadDocs} · 会议 {nMeetingDocs}
+                {workspaceDirectoryAvailable && <> · 工作区 {nIndexed}</>}
               </div>
             </div>
             <KnowledgeDocList
               docs={docs?.docs ?? []}
               deletingDocId={deletingDocId}
               onDelete={onDeleteDoc}
+              workspaceDirectoryAvailable={workspaceDirectoryAvailable}
             />
           </div>
 
@@ -373,15 +458,19 @@ function KnowledgeDocList({
   docs,
   deletingDocId,
   onDelete,
+  workspaceDirectoryAvailable,
 }: {
   docs: RagDocSummary[];
   deletingDocId: string | null;
   onDelete: (doc: RagDocSummary) => void;
+  workspaceDirectoryAvailable: boolean;
 }): JSX.Element {
   if (docs.length === 0) {
     return (
       <div className="border border-dashed border-paper-300 rounded-md p-4 text-center text-[12px] text-ink-500">
-        暂无已入库文档。拖文件到输入框，或在设置里添加工作区目录后扫描。
+        {workspaceDirectoryAvailable
+          ? "还没有收录文档。可将文件拖到输入框，或添加一个文件夹。"
+          : "还没有收录文档。可将文件直接拖到输入框。"}
       </div>
     );
   }
@@ -401,18 +490,21 @@ function KnowledgeDocList({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-[12px] font-medium text-ink-800 truncate">
-                {doc.title || doc.doc_id}
+                {doc.title?.trim() || "未命名文档"}
               </span>
               <Tag color={sourceColor(doc.source)} className="!m-0 !text-[10px]">
                 {sourceLabel(doc.source)}
               </Tag>
-              <Tag className="!m-0 !text-[10px]">{doc.kind}</Tag>
+              <Tag className="!m-0 !text-[10px]">{documentKindLabel(doc.kind)}</Tag>
             </div>
-            <div className="mt-0.5 text-[11px] text-ink-500 truncate" title={doc.source_path ?? doc.doc_id}>
-              {doc.source_path ?? doc.doc_id}
+            <div
+              className="mt-0.5 text-[11px] text-ink-500 truncate"
+              title={doc.source_path ?? sourceLabel(doc.source)}
+            >
+              {doc.source_path ?? sourceLabel(doc.source)}
             </div>
             <div className="mt-0.5 text-[10px] text-ink-400">
-              {doc.n_chunks} chunks · {doc.doc_id}
+              已提取 {doc.n_chunks} 个内容片段
             </div>
           </div>
           <Button
@@ -422,7 +514,7 @@ function KnowledgeDocList({
             icon={<Trash2 className="w-3 h-3" />}
             loading={deletingDocId === doc.doc_id}
             onClick={() => onDelete(doc)}
-            aria-label={`删除知识库文档 ${doc.title || doc.doc_id}`}
+            aria-label={`删除知识库文档 ${doc.title?.trim() || "未命名文档"}`}
             data-testid={`knowledge-doc-delete-${doc.doc_id}`}
           />
         </div>
@@ -442,8 +534,29 @@ function sourceLabel(source: string): string {
     case "ambient":
       return "环境记忆";
     default:
-      return source || "未知";
+      return "其他";
   }
+}
+
+function documentKindLabel(kind: string): string {
+  const normalized = kind.toLocaleLowerCase();
+  const labels: Record<string, string> = {
+    meeting: "会议记录",
+    markdown: "Markdown",
+    md: "Markdown",
+    txt: "文本",
+    text: "文本",
+    doc: "Word",
+    docx: "Word",
+    xls: "Excel",
+    xlsx: "Excel",
+    ppt: "PPT",
+    pptx: "PPT",
+    pdf: "PDF",
+    html: "网页",
+    csv: "CSV",
+  };
+  return labels[normalized] ?? "文档";
 }
 
 function sourceColor(source: string): string {

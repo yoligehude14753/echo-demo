@@ -25,6 +25,15 @@ MeetingState = Literal["in_meeting", "ended", "finalized"]
 # - "ok"：已成功生成（与 state="finalized" 同步）
 # - "generation_failed"：LLM 失败 / JSON 校验失败，用户可重试
 MinutesStatus = Literal["generating", "ok", "generation_failed"]
+RagProjectionState = Literal[
+    "reconcile_pending",
+    "index_pending",
+    "indexed",
+    "index_failed",
+    "delete_pending",
+    "deleted",
+    "delete_failed",
+]
 
 
 class MeetingRecord(BaseModel):
@@ -44,6 +53,17 @@ class MeetingRecord(BaseModel):
     # M_minutes_refactor (migration 004)：LLM finalize 时生成的语义化标题
     # （≤ 18 字，中文），独立列方便 GET /meetings 不解析 minutes_json blob。
     display_title: str | None = None
+    # Durable user intent: automatic startup recovery must not regenerate minutes
+    # that were explicitly cleared. A later explicit finalize clears this marker.
+    minutes_cleared_at: datetime | None = None
+    rag_projection_state: RagProjectionState | None = None
+    rag_projection_error: str | None = None
+    rag_projected_at: datetime | None = None
+    rag_projection_attempts: int = 0
+    rag_projection_next_retry_at: datetime | None = None
+    rag_projection_generation: int = 0
+    minutes_generation_run_id: str | None = None
+    minutes_generation_cancelled_at: datetime | None = None
 
 
 class AmbientSegmentRecord(BaseModel):
@@ -56,6 +76,20 @@ class AmbientSegmentRecord(BaseModel):
     speaker_label: str | None = None
     duration_ms: int = 0
     captured_at: datetime
+    rag_projection_state: RagProjectionState | None = None
+    rag_projection_error: str | None = None
+    rag_projected_at: datetime | None = None
+    rag_projection_attempts: int = 0
+    rag_projection_next_retry_at: datetime | None = None
+
+
+class AmbientAudioFileRecord(BaseModel):
+    """Owner-scoped ambient WAV inventory row (migration 027)."""
+
+    audio_ref: str
+    size_bytes: int
+    captured_at: datetime
+    quota_charged: bool = False
 
 
 class SpeakerProfileRecord(BaseModel):
@@ -89,7 +123,9 @@ class RepositoryPort(Protocol):
         started_at: datetime,
         title: str | None = None,
         auto_started: bool = False,
-    ) -> None: ...
+    ) -> MeetingRecord:
+        """Create or return the principal's authoritative active meeting."""
+        ...
 
     async def update_meeting_state(
         self,
@@ -104,7 +140,12 @@ class RepositoryPort(Protocol):
         minutes_status: MinutesStatus | None = None,
         minutes_error: str | None = None,
         display_title: str | None = None,
-    ) -> None: ...
+        rag_projection_state: RagProjectionState | None = None,
+        rag_projection_error: str | None = None,
+        rag_projected_at: datetime | None = None,
+    ) -> int | None:
+        """Update a meeting and return its committed RAG projection generation."""
+        ...
 
     async def get_meeting(self, meeting_id: str) -> MeetingRecord | None: ...
 
@@ -122,6 +163,27 @@ class RepositoryPort(Protocol):
         clear_minutes: bool = True,
     ) -> None: ...
 
+    async def set_meeting_rag_projection(
+        self,
+        meeting_id: str,
+        *,
+        state: RagProjectionState,
+        error: str | None = None,
+        projected_at: datetime | None = None,
+        retry_backoff: bool = False,
+        expected_generation: int | None = None,
+    ) -> bool: ...
+
+    async def list_meetings_needing_rag_projection(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[MeetingRecord]: ...
+
+    async def list_meeting_rag_projection_scopes(self) -> list[tuple[str, str, str]]: ...
+
+    async def list_rag_projection_scopes(self) -> list[tuple[str, str, str]]: ...
+
     # ── Meeting segments ────────────────────────────────────────
     async def append_meeting_segment(
         self,
@@ -129,7 +191,18 @@ class RepositoryPort(Protocol):
         seg: TranscriptSegment,
         *,
         captured_at: datetime,
-    ) -> None: ...
+    ) -> bool:
+        """Append only while the meeting is active; return whether it was accepted."""
+        ...
+
+    async def snapshot_meeting_segments_for_finalize(
+        self,
+        meeting_id: str,
+        *,
+        ended_at: datetime,
+    ) -> list[TranscriptSegment]:
+        """Fence future appends and return one complete, stable segment snapshot."""
+        ...
 
     async def list_meeting_segments(
         self,
@@ -173,7 +246,42 @@ class RepositoryPort(Protocol):
         limit: int = 100,
     ) -> list[AmbientSegmentRecord]: ...
 
+    async def set_ambient_rag_projection(
+        self,
+        segment_id: int,
+        *,
+        state: RagProjectionState,
+        error: str | None = None,
+        projected_at: datetime | None = None,
+        retry_backoff: bool = False,
+    ) -> bool: ...
+
+    async def list_ambient_segments_needing_rag_projection(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[AmbientSegmentRecord]: ...
+
     async def count_ambient_segments(self) -> int: ...
+
+    async def register_ambient_audio_file(
+        self,
+        *,
+        audio_ref: str,
+        size_bytes: int,
+        captured_at: datetime,
+        quota_charged: bool,
+    ) -> None: ...
+
+    async def list_ambient_audio_files(self) -> list[AmbientAudioFileRecord]: ...
+
+    async def delete_ambient_audio_file(
+        self,
+        audio_ref: str,
+    ) -> AmbientAudioFileRecord | None:
+        """Remove inventory row and clear matching ambient segment references."""
+
+        ...
 
     # ── Global speakers registry ────────────────────────────────
     async def upsert_speaker(

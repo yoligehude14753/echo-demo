@@ -1,0 +1,41 @@
+event_id: "E-20260712T0400-001"
+event_type: "add"
+timestamp: "2026-07-12T04:00:06+08:00"
+author: "agent/codex-agent-recovery"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-019"
+      claim: "EchoDesk Agent artifacts now import through bounded atomic streaming, and Agent bridges automatically recover expired or heartbeat-lost leases with exponential backoff."
+      category: "conclusion"
+      volatility: "medium"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-12T04:00:06+08:00"
+      observed_by: "agent/codex-agent-recovery"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "backend/app/agents/artifact_transfer.py"
+        - "backend/app/agents/service.py"
+        - "backend/tests/unit/test_agent_artifact_transfer.py"
+        - "backend/tests/unit/test_agent_bridge_recovery.py"
+        - "backend/tests/unit/test_agent_task_service.py"
+        - "runtime:focused Agent pytest => 33 passed"
+        - "runtime:Ruff => clean"
+        - "runtime:strict mypy source gate => clean"
+      evidence: "Focused Agent tests passed 33/33, including normal, declared-oversize, chunked-oversize and cancellation cleanup, isolated failure projection, transient heartbeat retry, and automatic two-instance lease failover without restart; Ruff and strict mypy also passed."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "agent"
+        - "artifact"
+        - "streaming"
+        - "lease"
+        - "failover"
+        - "recovery"
+git_commit: null

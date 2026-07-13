@@ -5,7 +5,7 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * 用法：
  *   1. 启动 backend (Yunwu key 已配，可选 WORKSPACE_DIRS=...)
- *      cd backend && uvicorn app.main:app --port 8769
+ *      cd backend && uvicorn app.main:app --port 8769 --ws-max-size 4096
  *   2. 启动 dev server
  *      VITE_API_TARGET=http://localhost:8769 npm run dev -- --port 5173
  *   3. npm run demo:record

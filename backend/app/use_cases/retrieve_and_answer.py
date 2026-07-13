@@ -6,7 +6,7 @@
      - "web"：需联网（最新资讯/时事/价格）
      - "either"：两边都试
   2) 按分类执行 RAG / Web / 都跑
-  3) 把检索结果拼到 prompt，用 MAIN 通道生成最终答复，并以 SSE 一帧返回
+  3) 把检索结果拼到 prompt，用 MAIN 通道生成最终答复；调用方可选择一次性或真增量流
 
 约束：
 - 仅依赖 ports.LLMPort / ports.RagPort / ports.WebSearchPort
@@ -122,8 +122,14 @@ async def retrieve_and_answer(
     question: str,
     rag_top_k: int = 5,
     web_top_n: int = 5,
+    stream: bool = False,
 ) -> AnswerStream:
-    """先分类→检索→拼 prompt→生成答复。"""
+    """先分类→检索→拼 prompt→生成答复。
+
+    ``stream=False`` 保持原有一次性 ``chat()`` 行为；HTTP SSE 路径显式传
+    ``stream=True``，直接转发 provider 的 async deltas。关闭或取消返回的
+    ``chunks`` iterator 会在 ``finally`` 中关闭上游 stream。
+    """
     cls = await _classify(fast_llm, fast_model, question)
 
     rag_chunks: list[RagChunk] = []
@@ -139,9 +145,14 @@ async def retrieve_and_answer(
     except Exception:
         web_hits = []
 
-    chosen = (
-        "rag" if rag_chunks and not web_hits else "web" if web_hits and not rag_chunks else "both"
-    )
+    if rag_chunks and web_hits:
+        chosen = "both"
+    elif rag_chunks:
+        chosen = "rag"
+    elif web_hits:
+        chosen = "web"
+    else:
+        chosen = "none"
     retrieval = RetrievalResult(
         query=question,
         rag_chunks=rag_chunks,
@@ -158,16 +169,38 @@ async def retrieve_and_answer(
 
     async def _gen() -> AsyncIterator[str]:
         try:
-            resp = await main_llm.chat(
-                [ChatMessage(role="user", content=prompt)],
+            messages = [ChatMessage(role="user", content=prompt)]
+            if not stream:
+                resp = await main_llm.chat(
+                    messages,
+                    max_tokens=768,
+                    temperature=0.2,
+                    timeout_s=60.0,
+                )
+                yield resp.content or "在已有的资料里没找到相关内容"
+                return
+
+            upstream = main_llm.chat_stream(
+                messages,
                 max_tokens=768,
                 temperature=0.2,
                 timeout_s=60.0,
             )
-        except Exception as e:
-            logging.getLogger("echodesk.retrieve").warning("answer generation failed: %s", e)
-            yield "生成回答失败，请稍后重试。"
-            return
-        yield resp.content or "在已有的资料里没找到相关内容"
+            emitted = False
+            try:
+                async for chunk in upstream:
+                    if not chunk:
+                        continue
+                    emitted = True
+                    yield chunk
+            finally:
+                close = getattr(upstream, "aclose", None)
+                if callable(close):
+                    await close()
+            if not emitted:
+                yield "在已有的资料里没找到相关内容"
+        except Exception:
+            logging.getLogger("echodesk.retrieve").warning("answer generation failed")
+            raise
 
     return AnswerStream(retrieval=retrieval, chunks=_gen())

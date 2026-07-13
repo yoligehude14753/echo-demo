@@ -30,23 +30,33 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   workspaceAddDir,
+  workspacePickDirectory,
   workspaceRemoveDir,
   workspaceScan,
   workspaceStatus,
+  workspaceCapability,
 } from "@/api";
 import {
   DEFAULT_ANDROID_BACKEND_BASE,
   type AppUpdateStatus,
   apiUrl,
+  canInstallAppUpdate,
   checkAppUpdate,
   compareVersions,
   configuredBackendBase,
   installAppUpdate,
+  isNewerAppUpdate,
+  isPackagedElectronRenderer,
+  isPublicRuntime,
+  normalizeBackendBase,
   openUpdateTarget,
   setStoredBackendBase,
 } from "@/runtime";
+import { apiTransport } from "@/session";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 interface DataDirBreakdown {
   db: number;
@@ -87,9 +97,24 @@ interface RemoteFieldMeta {
   placeholder?: string;
 }
 
-const MAIN_LLM_API_KEY = [121, 117, 110, 119, 117, 95, 111, 112, 101, 110, 95, 107, 101, 121]
+function reportSettingsError(
+  context: string,
+  error: unknown,
+  userMessage: string,
+): void {
+  console.error(`[settings] ${context}`, error);
+  message.error(userMessage);
+}
+
+const LEGACY_YUNWU_API_KEY = [121, 117, 110, 119, 117, 95, 111, 112, 101, 110, 95, 107, 101, 121]
   .map((code) => String.fromCharCode(code))
   .join("");
+
+const MAIN_LLM_API_KEY_META: RemoteFieldMeta = {
+  label: "主 LLM API Key",
+  hint: "模型服务 key；脱敏显示，留空不修改",
+  placeholder: "sk-...",
+};
 
 // 字段顺序 + 文案，跟服务配置字段 对齐
 const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
@@ -98,10 +123,13 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
     hint: "默认使用内置模型服务；私有部署时可填 OpenAI 兼容端点",
     placeholder: "使用内置服务配置",
   },
-  [MAIN_LLM_API_KEY]: {
-    label: "主 LLM API Key",
-    hint: "模型服务 key；脱敏显示，留空不修改",
-    placeholder: "sk-...",
+  llm_main_api_key: MAIN_LLM_API_KEY_META,
+  // 兼容仍返回 0.2 配置字段的旧版本机服务。
+  [LEGACY_YUNWU_API_KEY]: MAIN_LLM_API_KEY_META,
+  llm_fast_base_url: {
+    label: "快速 LLM Base URL",
+    hint: "用于轻量任务的 OpenAI 兼容端点；默认跟随主模型服务",
+    placeholder: "跟随主模型服务",
   },
   stt_firered_url: {
     label: "STT URL",
@@ -127,9 +155,12 @@ const REMOTE_FIELD_META: Record<string, RemoteFieldMeta> = {
 
 function shouldMaskRemoteValue(field: RemoteField): boolean {
   if (field.sensitive) return true;
+  const providerMarker = [121, 117, 110, 119, 117]
+    .map((code) => String.fromCharCode(code))
+    .join("");
+  if (field.value.toLowerCase().includes(providerMarker)) return true;
   if (field.source !== "default") return false;
   const internalMarkers = [
-    [121, 117, 110, 119, 117],
     [49, 48, 48, 46, 55, 54, 46, 51, 46, 53, 57],
     [101, 105, 103, 104, 116],
     [104, 101, 121, 105],
@@ -175,7 +206,12 @@ const BREAKDOWN_LABELS: Array<{
 function updateStatusLabel(status: AppUpdateStatus | null): string {
   if (!status) return "尚未检查";
   if (status.status === "checking") return "检查中";
-  if (status.status === "available") return "发现新版本";
+  if (status.status === "available" || (status.status === "checked" && status.updateAvailable)) {
+    return "发现新版本";
+  }
+  if (status.status === "checked" && isNewerAppUpdate(status) && !status.updateAvailable) {
+    return "暂无适用安装包";
+  }
   if (status.status === "current") return "已是最新";
   if (status.status === "downloading") return `下载中 ${status.percent ?? 0}%`;
   if (status.status === "downloaded") return "已下载，准备安装";
@@ -185,10 +221,32 @@ function updateStatusLabel(status: AppUpdateStatus | null): string {
 }
 
 function updateInstallButtonLabel(status: AppUpdateStatus | null): string {
+  if (status?.latestVersion && !isNewerAppUpdate(status)) {
+    return "无需更新";
+  }
   if (status?.status === "downloaded" && status.canAutoInstall) return "安装并重启";
   if (status?.status === "downloading") return "下载中";
-  if (status?.canAutoInstall) return "下载并安装";
-  return "下载最新版本";
+  if (status?.status === "installing") return "正在安装";
+  if (status?.status === "current") return "无需更新";
+  if (
+    (status?.status === "available" || status?.status === "checked") &&
+    status.updateAvailable &&
+    status.canAutoInstall
+  ) {
+    return "下载并安装";
+  }
+  if (
+    (status?.status === "available" || status?.status === "checked") &&
+    status.updateAvailable
+  ) {
+    return "下载更新";
+  }
+  if (status?.status === "checking") return "检查中";
+  if (status?.status === "error") return "暂不可更新";
+  if (status?.status === "checked" && isNewerAppUpdate(status) && !status.updateAvailable) {
+    return "暂无适用安装包";
+  }
+  return "检查后可更新";
 }
 
 export default function SettingsPanel({
@@ -197,6 +255,12 @@ export default function SettingsPanel({
   initialSection = null,
   onReplayOnboarding,
 }: Props): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+  } = useBackendOriginFence();
+  const renderedOriginGeneration = captureGeneration();
   const [dataDir, setDataDir] = useState<DataDirResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [diagBusy, setDiagBusy] = useState(false);
@@ -204,9 +268,14 @@ export default function SettingsPanel({
   const [remote, setRemote] = useState<RemoteSettingsResponse | null>(null);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
+  const [restartBusy, setRestartBusy] = useState(false);
   const [adminUnavailable, setAdminUnavailable] = useState(false);
   const [form] = Form.useForm<Record<string, string>>();
   const [backendBaseDraft, setBackendBaseDraft] = useState("");
+  const backendBaseDraftRef = useRef("");
+  const [pendingPrivateBackendBase, setPendingPrivateBackendBase] = useState<
+    string | null
+  >(null);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
@@ -215,41 +284,131 @@ export default function SettingsPanel({
   const [ws, setWs] = useState<WorkspaceStatusDTO | null>(null);
   const [wsBusy, setWsBusy] = useState(false);
   const [wsScanBusy, setWsScanBusy] = useState(false);
+  const [drawerOpenSettled, setDrawerOpenSettled] = useState(false);
+  const privateBackendDialogRef = useRef<HTMLDivElement | null>(null);
+  const privateBackendConfirmRef = useRef<HTMLButtonElement | null>(null);
   const workspaceInitialFocusDoneRef = useRef(false);
+  const workspaceAddDirRef = useRef<HTMLAnchorElement | HTMLButtonElement | null>(null);
+  const dataDirGenerationRef = useRef<number | null>(null);
+  const remoteGenerationRef = useRef<number | null>(null);
+  const workspaceGenerationRef = useRef<number | null>(null);
+  const backendBaseDraftGenerationRef = useRef<number | null>(null);
+  const pendingPrivateBackendGenerationRef = useRef<number | null>(null);
+  const settingsConfirmDestroyersRef = useRef<Set<() => void>>(new Set());
+  const renderedDataDirGeneration = dataDirGenerationRef.current;
+  const renderedRemoteGeneration = remoteGenerationRef.current;
+  const renderedWorkspaceGeneration = workspaceGenerationRef.current;
+  const renderedBackendBaseDraftGeneration =
+    backendBaseDraftGenerationRef.current;
+  const renderedPendingPrivateBackendGeneration =
+    pendingPrivateBackendGenerationRef.current;
+  const hostAdminAvailable = !isPublicRuntime();
+  const workspaceDirectoryAvailable = workspaceCapability() !== "unavailable";
+  const backendOriginEditable = !isPackagedElectronRenderer();
+
+  useEffect(() => {
+    for (const destroy of settingsConfirmDestroyersRef.current) destroy();
+    settingsConfirmDestroyersRef.current.clear();
+    dataDirGenerationRef.current = null;
+    remoteGenerationRef.current = null;
+    workspaceGenerationRef.current = null;
+    pendingPrivateBackendGenerationRef.current = null;
+    backendBaseDraftGenerationRef.current = renderedOriginGeneration;
+    backendBaseDraftRef.current =
+      configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE;
+    setDataDir(null);
+    setLoading(false);
+    setDiagBusy(false);
+    setResetBusy(false);
+    setRemote(null);
+    setRemoteBusy(false);
+    setNeedsRestart(false);
+    setRestartBusy(false);
+    setAdminUnavailable(false);
+    setBackendBaseDraft(backendBaseDraftRef.current);
+    setPendingPrivateBackendBase(null);
+    setUpdateBusy(false);
+    setUpdateInstallBusy(false);
+    setBackendVersion(null);
+    setWs(null);
+    setWsBusy(false);
+    setWsScanBusy(false);
+    workspaceInitialFocusDoneRef.current = false;
+    form.resetFields();
+  }, [backendOriginRevision, form, renderedOriginGeneration]);
 
   const refreshDataDir = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    if (!hostAdminAvailable) {
+      setLoading(false);
+      setDataDir(null);
+      dataDirGenerationRef.current = null;
+      return;
+    }
     setLoading(true);
     try {
+      if (!isCurrent(generation)) return;
       const url = await apiUrl("/admin/data-dir");
-      const res = await fetch(url);
+      if (!isCurrent(generation)) return;
+      const res = await apiTransport(url, {}, {
+        timeoutMs: 12_000,
+        throwHttpErrors: false,
+      });
+      if (!isCurrent(generation)) return;
       if (res.status === 403) {
         setAdminUnavailable(true);
         setDataDir(null);
+        dataDirGenerationRef.current = null;
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!isCurrent(generation)) return;
       const json = (await res.json()) as DataDirResponse;
+      if (!isCurrent(generation)) return;
+      dataDirGenerationRef.current = generation;
       setAdminUnavailable(false);
       setDataDir(json);
     } catch (e) {
-      message.error(`读取数据目录失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("load data directory", e, "暂时无法读取数据信息");
+      dataDirGenerationRef.current = null;
       setDataDir(null);
     } finally {
-      setLoading(false);
+      if (isCurrent(generation)) setLoading(false);
     }
-  }, []);
+  }, [hostAdminAvailable, isCurrent, renderedOriginGeneration]);
 
   const refreshRemote = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    if (!hostAdminAvailable) {
+      remoteGenerationRef.current = null;
+      setRemote(null);
+      form.resetFields();
+      return;
+    }
     try {
+      if (!isCurrent(generation)) return;
       const url = await apiUrl("/admin/settings/remote");
-      const res = await fetch(url);
+      if (!isCurrent(generation)) return;
+      const res = await apiTransport(url, {}, {
+        timeoutMs: 12_000,
+        throwHttpErrors: false,
+      });
+      if (!isCurrent(generation)) return;
       if (res.status === 403) {
         setAdminUnavailable(true);
+        remoteGenerationRef.current = null;
         setRemote(null);
+        form.resetFields();
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!isCurrent(generation)) return;
       const json = (await res.json()) as RemoteSettingsResponse;
+      if (!isCurrent(generation)) return;
+      remoteGenerationRef.current = generation;
       setAdminUnavailable(false);
       setRemote(json);
       // 重置表单：sensitive 字段不显示原值（脱敏值仅作 placeholder），
@@ -260,52 +419,115 @@ export default function SettingsPanel({
       }
       form.setFieldsValue(initial);
     } catch (e) {
-      message.error(`读取模型配置失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("load service settings", e, "暂时无法读取服务配置");
+      remoteGenerationRef.current = null;
       setRemote(null);
+      form.resetFields();
     }
-  }, [form]);
+  }, [form, hostAdminAvailable, isCurrent, renderedOriginGeneration]);
 
   const refreshWorkspace = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    if (!workspaceDirectoryAvailable) {
+      workspaceGenerationRef.current = null;
+      setWs(null);
+      return;
+    }
     try {
+      if (!isCurrent(generation)) return;
       const json = await workspaceStatus();
+      if (!isCurrent(generation)) return;
+      workspaceGenerationRef.current = generation;
       setWs(json);
     } catch (e) {
-      message.error(`读取工作区状态失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("load workspace", e, "暂时无法读取工作区状态");
+      workspaceGenerationRef.current = null;
       setWs(null);
     }
-  }, []);
+  }, [isCurrent, renderedOriginGeneration, workspaceDirectoryAvailable]);
 
   const refreshBackendVersion = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    if (!hostAdminAvailable) {
+      setBackendVersion(null);
+      return;
+    }
     try {
-      const res = await fetch(await apiUrl("/healthz/full"));
+      if (!isCurrent(generation)) return;
+      const url = await apiUrl("/healthz/full");
+      if (!isCurrent(generation)) return;
+      const res = await apiTransport(url, {}, {
+        timeoutMs: 12_000,
+        throwHttpErrors: false,
+      });
+      if (!isCurrent(generation)) return;
       if (!res.ok) {
         setBackendVersion(null);
         return;
       }
+      if (!isCurrent(generation)) return;
       const json = (await res.json()) as { backend?: { version?: string } };
+      if (!isCurrent(generation)) return;
       setBackendVersion(json.backend?.version ?? null);
     } catch {
-      setBackendVersion(null);
+      if (isCurrent(generation)) setBackendVersion(null);
     }
-  }, []);
+  }, [hostAdminAvailable, isCurrent, renderedOriginGeneration]);
 
   useEffect(() => {
-    if (open) {
-      void refreshDataDir();
-      void refreshRemote();
-      void refreshWorkspace();
-      void refreshBackendVersion();
-      setBackendBaseDraft(configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE);
+    const generation = renderedOriginGeneration;
+    if (open && isCurrent(generation)) {
+      if (hostAdminAvailable) {
+        void refreshDataDir();
+        void refreshRemote();
+        void refreshBackendVersion();
+      } else {
+        setAdminUnavailable(false);
+        setDataDir(null);
+        setRemote(null);
+        setBackendVersion(null);
+      }
+      if (workspaceDirectoryAvailable) void refreshWorkspace();
+      const nextBackendBase =
+        configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE;
+      backendBaseDraftGenerationRef.current = generation;
+      backendBaseDraftRef.current = nextBackendBase;
+      setBackendBaseDraft(nextBackendBase);
     }
-  }, [open, refreshDataDir, refreshRemote, refreshWorkspace, refreshBackendVersion]);
+  }, [
+    backendOriginRevision,
+    open,
+    hostAdminAvailable,
+    isCurrent,
+    renderedOriginGeneration,
+    refreshDataDir,
+    refreshRemote,
+    refreshWorkspace,
+    refreshBackendVersion,
+    workspaceDirectoryAvailable,
+  ]);
 
   useEffect(() => {
     if (!open) return undefined;
+    const generation = renderedOriginGeneration;
     let alive = true;
     if (window.echo?.getUpdateStatus) {
-      void window.echo.getUpdateStatus().then((status) => {
-        if (alive) setUpdateInfo(status);
-      });
+      void (async () => {
+        try {
+          if (!alive || !isCurrent(generation)) return;
+          const status = await window.echo!.getUpdateStatus!();
+          if (!alive || !isCurrent(generation)) return;
+          setUpdateInfo(status);
+        } catch (e) {
+          if (alive && isCurrent(generation)) {
+            console.warn("[settings] unable to read update status", e);
+          }
+        }
+      })();
     }
     if (!window.echo?.onUpdateStatus) {
       return () => {
@@ -313,57 +535,64 @@ export default function SettingsPanel({
       };
     }
     const unsubscribe = window.echo.onUpdateStatus((status) => {
-      setUpdateInfo(status);
+      if (alive && isCurrent(generation)) setUpdateInfo(status);
     });
     return () => {
       alive = false;
       unsubscribe();
     };
-  }, [open]);
+  }, [backendOriginRevision, isCurrent, open, renderedOriginGeneration]);
 
   useEffect(() => {
     if (!open) {
+      setDrawerOpenSettled(false);
       workspaceInitialFocusDoneRef.current = false;
       return undefined;
     }
-    if (initialSection !== "workspace" || !ws || workspaceInitialFocusDoneRef.current) {
+    if (
+      initialSection !== "workspace" ||
+      !drawerOpenSettled ||
+      !ws ||
+      workspaceInitialFocusDoneRef.current
+    ) {
       return undefined;
     }
 
     let cancelled = false;
-    let timer: number | undefined;
-    let attempts = 0;
     const focusWorkspaceAddDir = () => {
       if (cancelled) return;
       const section = document.querySelector<HTMLElement>(
         "[data-testid='workspace-settings-section']",
       );
-      section?.scrollIntoView({ block: "start" });
-      const addDir = document.querySelector<HTMLElement>("[data-testid='workspace-add-dir']");
-      addDir?.focus();
-      if (document.activeElement === addDir || attempts >= 10) {
+      section?.scrollIntoView({ block: "start", behavior: "auto" });
+      const addDir = workspaceAddDirRef.current;
+      addDir?.focus({ preventScroll: true });
+      if (document.activeElement === addDir) {
         workspaceInitialFocusDoneRef.current = true;
-        return;
       }
-      attempts += 1;
-      timer = window.setTimeout(focusWorkspaceAddDir, 80);
     };
 
-    timer = window.setTimeout(focusWorkspaceAddDir, 120);
+    // Ant Drawer 在打开动画结束时会执行自己的焦点管理。等 afterOpenChange
+    // 确认动画完成，再在下一帧滚动并聚焦，避免 headed/低性能环境下被抢回焦点。
+    const frame = window.requestAnimationFrame(focusWorkspaceAddDir);
     return () => {
       cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
+      window.cancelAnimationFrame(frame);
     };
-  }, [open, initialSection, ws]);
+  }, [open, initialSection, drawerOpenSettled, ws]);
 
   const onAddWorkspaceDir = useCallback(async () => {
+    const generation = renderedWorkspaceGeneration;
+    if (generation === null || !isCurrent(generation)) return;
     // 优先用 Electron dialog；浏览器/纯 dev 模式回退到 prompt() 让用户手填路径
     let picked: string | null | undefined;
     try {
       if (window.echo?.pickDirectory) {
-        picked = await window.echo.pickDirectory({
+        if (!isCurrent(generation)) return;
+        picked = await workspacePickDirectory({
           defaultPath: ws?.configured_dirs?.[0],
         });
+        if (!isCurrent(generation)) return;
       } else {
         const v = window.prompt(
           "输入要加入工作区的目录绝对路径（如 /Users/you/Documents）：",
@@ -372,29 +601,39 @@ export default function SettingsPanel({
         picked = v && v.trim() ? v.trim() : null;
       }
     } catch (e) {
-      message.error(`选择目录失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("pick workspace directory", e, "选择目录失败，请重试");
       return;
     }
+    if (!isCurrent(generation)) return;
     if (!picked) return; // 用户取消
     setWsBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const r = await workspaceAddDir(picked);
+      if (!isCurrent(generation)) return;
       if (r.added) {
         message.success(`已加入：${r.path}（后台扫描索引中…）`);
       } else {
         message.info("该目录已在工作区，无需重复添加");
       }
+      if (!isCurrent(generation)) return;
       await refreshWorkspace();
+      if (!isCurrent(generation)) return;
     } catch (e) {
-      message.error(`添加失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("add workspace directory", e, "添加目录失败，请确认访问权限");
     } finally {
-      setWsBusy(false);
+      if (isCurrent(generation)) setWsBusy(false);
     }
-  }, [ws, refreshWorkspace]);
+  }, [isCurrent, refreshWorkspace, renderedWorkspaceGeneration, ws]);
 
   const onRemoveWorkspaceDir = useCallback(
     async (dir: string) => {
-      Modal.confirm({
+      const generation = renderedWorkspaceGeneration;
+      if (generation === null || !isCurrent(generation)) return;
+      let destroyer: (() => void) | null = null;
+      const modal = Modal.confirm({
         title: "移除工作区目录？",
         icon: <AlertTriangle className="w-4 h-4 text-amber-500" />,
         content: (
@@ -406,57 +645,82 @@ export default function SettingsPanel({
         okText: "移除",
         okButtonProps: { danger: true },
         cancelText: "取消",
+        afterClose: () => {
+          if (destroyer) settingsConfirmDestroyersRef.current.delete(destroyer);
+        },
         onOk: async () => {
+          if (!isCurrent(generation)) return;
           setWsBusy(true);
           try {
+            if (!isCurrent(generation)) return;
             const r = await workspaceRemoveDir(dir);
+            if (!isCurrent(generation)) return;
             if (r.removed) {
               message.success(`已移除：${dir}`);
             }
+            if (!isCurrent(generation)) return;
             await refreshWorkspace();
+            if (!isCurrent(generation)) return;
           } catch (e) {
-            message.error(`移除失败：${(e as Error).message}`);
+            if (!isCurrent(generation)) return;
+            reportSettingsError("remove workspace directory", e, "移除目录失败，请重试");
           } finally {
-            setWsBusy(false);
+            if (isCurrent(generation)) setWsBusy(false);
           }
         },
       });
+      destroyer = modal.destroy;
+      settingsConfirmDestroyersRef.current.add(destroyer);
     },
-    [refreshWorkspace],
+    [isCurrent, refreshWorkspace, renderedWorkspaceGeneration],
   );
 
   const onRescanWorkspace = useCallback(async () => {
+    const generation = renderedWorkspaceGeneration;
+    if (generation === null || !isCurrent(generation)) return;
     setWsScanBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const r = await workspaceScan();
+      if (!isCurrent(generation)) return;
       const text = `扫描完成：新增 ${r.n_added} · 更新 ${r.n_updated} · 跳过 ${r.n_skipped} · 失败 ${r.n_failed}`;
       if (r.n_failed > 0) {
         message.warning(text);
       } else {
         message.success(text);
       }
+      if (!isCurrent(generation)) return;
       await refreshWorkspace();
+      if (!isCurrent(generation)) return;
     } catch (e) {
-      message.error(`扫描失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("scan workspace", e, "扫描失败，请检查目录权限后重试");
     } finally {
-      setWsScanBusy(false);
+      if (isCurrent(generation)) setWsScanBusy(false);
     }
-  }, [refreshWorkspace]);
+  }, [isCurrent, refreshWorkspace, renderedWorkspaceGeneration]);
 
   const onOpenDataDir = async () => {
-    if (!dataDir?.path) return;
+    const generation = renderedDataDirGeneration;
+    if (generation === null || !isCurrent(generation) || !dataDir?.path) return;
     try {
+      if (!isCurrent(generation)) return;
       await navigator.clipboard.writeText(dataDir.path);
+      if (!isCurrent(generation)) return;
       message.success(`已复制路径到剪贴板：${dataDir.path}`);
     } catch {
-      message.info(`数据目录：${dataDir.path}`);
+      if (isCurrent(generation)) message.info(`数据目录：${dataDir.path}`);
     }
   };
 
   const onDownloadDiagnostics = async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation) || !hostAdminAvailable) return;
     setDiagBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const url = await apiUrl("/admin/diagnostics/export");
+      if (!isCurrent(generation)) return;
       const a = document.createElement("a");
       a.href = url;
       a.download = `echodesk-diag-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.zip`;
@@ -465,14 +729,16 @@ export default function SettingsPanel({
       document.body.removeChild(a);
       message.success("诊断包下载中…");
     } catch (e) {
-      message.error(`导出失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("export diagnostics", e, "诊断包导出失败，请重试");
     } finally {
-      setDiagBusy(false);
+      if (isCurrent(generation)) setDiagBusy(false);
     }
   };
 
   const onSaveRemote = async (values: Record<string, string>) => {
-    if (!remote) return;
+    const generation = renderedRemoteGeneration;
+    if (generation === null || !isCurrent(generation) || !remote) return;
     // 只 PATCH 有真实输入的字段：sensitive 字段空字符串表示"不改"；
     // 非 sensitive 字段如果跟当前明文一致也跳过（避免空写）
     const original = new Map(remote.fields.map((f) => [f.key, f]));
@@ -493,89 +759,252 @@ export default function SettingsPanel({
     }
     setRemoteBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const url = await apiUrl("/admin/settings/remote");
-      const res = await fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates }),
-      });
+      if (!isCurrent(generation)) return;
+      const res = await apiTransport(
+        url,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates }),
+        },
+        { throwHttpErrors: false },
+      );
+      if (!isCurrent(generation)) return;
       if (!res.ok) {
+        if (!isCurrent(generation)) return;
         const detail = await res.text();
+        if (!isCurrent(generation)) return;
         throw new Error(`HTTP ${res.status}: ${detail.slice(0, 200)}`);
       }
+      if (!isCurrent(generation)) return;
       const json = (await res.json()) as {
         written_keys: string[];
         restart_required: boolean;
       };
+      if (!isCurrent(generation)) return;
       message.success(
         `已写入 ${json.written_keys.length} 项${json.restart_required ? "，需重启服务生效" : ""}`,
       );
       setNeedsRestart(json.restart_required);
-      void refreshRemote();
+      if (!isCurrent(generation)) return;
+      await refreshRemote();
+      if (!isCurrent(generation)) return;
     } catch (e) {
-      message.error(`保存失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("save service settings", e, "配置保存失败，请检查输入后重试");
     } finally {
-      setRemoteBusy(false);
+      if (isCurrent(generation)) setRemoteBusy(false);
     }
   };
 
   const onRestartBackend = async () => {
+    const generation = renderedRemoteGeneration;
+    if (generation === null || !isCurrent(generation)) return;
+    if (restartBusy) return;
     if (!window.echo?.manualRestartBackend) {
       message.warning("仅桌面模式可一键重启；开发模式请手动重启服务");
       return;
     }
+    setRestartBusy(true);
     try {
-      await window.echo.manualRestartBackend();
-      message.success("已发送重启请求");
-      setNeedsRestart(false);
+      if (!isCurrent(generation)) return;
+      const result = await window.echo.manualRestartBackend();
+      if (!isCurrent(generation)) return;
+      if (result.ok) {
+        message.success("服务重启已开始");
+        setNeedsRestart(false);
+      } else {
+        message.warning("应用正在退出，未启动新的服务进程");
+      }
     } catch (e) {
-      message.error(`重启失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("restart backend", e, "服务重启失败，请稍后重试");
+    } finally {
+      if (isCurrent(generation)) setRestartBusy(false);
     }
   };
 
   const onSaveBackendBase = () => {
-    const saved = setStoredBackendBase(backendBaseDraft);
-    setBackendBaseDraft(saved ?? DEFAULT_ANDROID_BACKEND_BASE);
-    message.success(saved ? `服务地址已保存：${saved}` : "已恢复默认服务地址");
+    if (!backendOriginEditable) return;
+    const generation = renderedBackendBaseDraftGeneration;
+    if (generation === null || !isCurrent(generation)) return;
+    let normalized: string | null;
+    try {
+      normalized = normalizeBackendBase(backendBaseDraftRef.current);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "服务地址无效");
+      return;
+    }
+
+    const persist = (value: string | null): void => {
+      if (!isCurrent(generation)) return;
+      const saved = setStoredBackendBase(value ?? "");
+      if (!isCurrent(generation)) {
+        message.success(saved ? `服务地址已保存：${saved}` : "已恢复默认服务地址");
+        return;
+      }
+      backendBaseDraftGenerationRef.current = generation;
+      backendBaseDraftRef.current = saved ?? DEFAULT_ANDROID_BACKEND_BASE;
+      setBackendBaseDraft(saved ?? DEFAULT_ANDROID_BACKEND_BASE);
+      message.success(saved ? `服务地址已保存：${saved}` : "已恢复默认服务地址");
+    };
+
+    if (normalized?.startsWith("http://")) {
+      pendingPrivateBackendGenerationRef.current = generation;
+      setPendingPrivateBackendBase(normalized);
+      return;
+    }
+    persist(normalized);
+  };
+
+  const onResetBackendBase = () => {
+    if (!backendOriginEditable) return;
+    const generation = renderedBackendBaseDraftGeneration;
+    if (generation === null || !isCurrent(generation)) return;
+    const saved = setStoredBackendBase("");
+    if (isCurrent(generation)) {
+      backendBaseDraftGenerationRef.current = generation;
+      backendBaseDraftRef.current = saved ?? DEFAULT_ANDROID_BACKEND_BASE;
+      setBackendBaseDraft(backendBaseDraftRef.current);
+    }
+    message.success("已恢复默认服务地址");
+  };
+
+  useEffect(() => {
+    if (!open) {
+      pendingPrivateBackendGenerationRef.current = null;
+      setPendingPrivateBackendBase(null);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    backendBaseDraftRef.current = backendBaseDraft;
+  }, [backendBaseDraft]);
+
+  const cancelPrivateBackendBase = useCallback(() => {
+    const generation = renderedPendingPrivateBackendGeneration;
+    if (generation !== null && !isCurrent(generation)) return;
+    pendingPrivateBackendGenerationRef.current = null;
+    setPendingPrivateBackendBase(null);
+  }, [isCurrent, renderedPendingPrivateBackendGeneration]);
+
+  useEffect(() => {
+    if (!pendingPrivateBackendBase) return;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusFrame = window.requestAnimationFrame(() => {
+      privateBackendConfirmRef.current?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelPrivateBackendBase();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        privateBackendDialogRef.current?.querySelectorAll<HTMLButtonElement>(
+          "button:not([disabled])",
+        ) ?? [],
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [cancelPrivateBackendBase, pendingPrivateBackendBase]);
+
+  const confirmPrivateBackendBase = () => {
+    const generation = renderedPendingPrivateBackendGeneration;
+    const pending = pendingPrivateBackendBase;
+    if (generation === null || !pending || !isCurrent(generation)) return;
+    pendingPrivateBackendGenerationRef.current = null;
+    setPendingPrivateBackendBase(null);
+    const saved = setStoredBackendBase(pending);
+    message.success(`服务地址已保存：${saved ?? pending}`);
   };
 
   const onCheckUpdate = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
     setUpdateBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       const info = await checkAppUpdate();
+      if (!isCurrent(generation)) return;
       await refreshBackendVersion();
+      if (!isCurrent(generation)) return;
       setUpdateInfo(info);
       if (info.status === "error") {
-        message.warning(`检查更新失败：${info.error ?? "未知错误"}`);
-      } else if (info.updateAvailable) {
+        console.error("[settings] update check failed", info.error);
+        message.warning("暂时无法检查更新，请稍后重试");
+      } else if (canInstallAppUpdate(info)) {
         message.success(`发现新版本 v${info.latestVersion}`);
+      } else if (isNewerAppUpdate(info)) {
+        message.info("新版本暂未提供当前平台安装包");
       } else {
         message.success("当前已是最新版本");
       }
+    } catch (e) {
+      if (!isCurrent(generation)) return;
+      reportSettingsError("check update", e, "暂时无法检查更新，请稍后重试");
     } finally {
-      setUpdateBusy(false);
+      if (isCurrent(generation)) setUpdateBusy(false);
     }
-  }, [refreshBackendVersion]);
+  }, [isCurrent, refreshBackendVersion, renderedOriginGeneration]);
 
   const onInstallUpdate = useCallback(async () => {
-    const info = updateInfo ?? (await checkAppUpdate());
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    let info = updateInfo;
+    if (!info) {
+      if (!isCurrent(generation)) return;
+      info = await checkAppUpdate();
+      if (!isCurrent(generation)) return;
+    }
     setUpdateInfo(info);
+    if (!canInstallAppUpdate(info)) {
+      if (info.status === "current") {
+        message.info("本机版本无需更新");
+      }
+      return;
+    }
     setUpdateInstallBusy(true);
     try {
+      if (!isCurrent(generation)) return;
       await installAppUpdate(info);
+      if (!isCurrent(generation)) return;
       if (!info.canAutoInstall) {
         message.info("已打开下载页面");
       }
     } catch (e) {
-      message.error(`更新失败：${(e as Error).message}`);
+      if (!isCurrent(generation)) return;
+      reportSettingsError("install update", e, "更新失败，已保留当前版本");
     } finally {
-      setUpdateInstallBusy(false);
+      if (isCurrent(generation)) setUpdateInstallBusy(false);
     }
-  }, [updateInfo]);
+  }, [isCurrent, renderedOriginGeneration, updateInfo]);
 
   const onOpenRelease = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
     await openUpdateTarget(updateInfo ?? undefined);
-  }, [updateInfo]);
+    if (!isCurrent(generation)) return;
+  }, [isCurrent, renderedOriginGeneration, updateInfo]);
 
   const remoteFieldOrder = useMemo(
     () => (remote?.fields ?? []).map((f) => f.key),
@@ -583,54 +1012,88 @@ export default function SettingsPanel({
   );
   const backendVersionBehind =
     backendVersion !== null && compareVersions(backendVersion, __APP_VERSION__) < 0;
-  const releaseVersionBehind =
-    updateInfo?.latestVersion &&
-    compareVersions(updateInfo.latestVersion, updateInfo?.currentVersion ?? __APP_VERSION__) < 0;
+  const effectiveCurrentVersion =
+    updateInfo?.currentVersion &&
+    compareVersions(updateInfo.currentVersion, __APP_VERSION__) > 0
+      ? updateInfo.currentVersion
+      : __APP_VERSION__;
+  const releaseVersionComparison = updateInfo?.latestVersion
+    ? compareVersions(updateInfo.latestVersion, effectiveCurrentVersion)
+    : null;
+  const releaseVersionBehind = releaseVersionComparison !== null && releaseVersionComparison < 0;
+  const releaseVersionCurrent = releaseVersionComparison === 0;
   const latestVersionDisplay = updateInfo?.latestVersion
     ? releaseVersionBehind
-      ? `本机 v${updateInfo?.currentVersion ?? __APP_VERSION__}（公开发布 v${updateInfo.latestVersion}）`
+      ? `本机 v${effectiveCurrentVersion}（公开发布 v${updateInfo.latestVersion}）`
       : `v${updateInfo.latestVersion}`
     : "-";
 
   const onResetSpeakers = () => {
-    Modal.confirm({
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation) || !hostAdminAvailable) return;
+    let destroyer: (() => void) | null = null;
+    const modal = Modal.confirm({
       title: "重置说话人？",
       icon: <AlertTriangle className="w-4 h-4 text-amber-500" />,
       content: (
         <div className="text-[12px] leading-relaxed">
-          将清空 <b>所有说话人识别数据</b>（speakers / centroid），但
-          <b>保留所有转写文字</b>。下次录音时 diarizer 将从头学习。
+          将清空 <b>所有说话人识别数据</b>，但
+          <b>保留所有转写文字</b>。下次录音时会重新学习声音特征。
           <br />
           <br />
-          适用场景：speaker registry 被噪音污染（"说话人 86" 实际只 3 人）。
+          适用场景：界面显示的说话人数量明显多于实际人数。
         </div>
       ),
       okText: "确认重置",
       okButtonProps: { danger: true },
       cancelText: "取消",
+      afterClose: () => {
+        if (destroyer) settingsConfirmDestroyersRef.current.delete(destroyer);
+      },
       onOk: async () => {
+        if (!isCurrent(generation)) return;
         setResetBusy(true);
         try {
+          if (!isCurrent(generation)) return;
           const url = await apiUrl("/admin/speakers/reset");
-          const res = await fetch(url, { method: "POST" });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const json = (await res.json()) as SpeakerResetResponse;
-          message.success(
-            `已重置：清空 ${json.speakers_deleted} 个说话人 · 清理 ${json.segments_cleared} 段引用 · diarizer ${json.diarizer_reset ? "已重置" : "未重置"}`,
+          if (!isCurrent(generation)) return;
+          const res = await apiTransport(
+            url,
+            { method: "POST" },
+            { throwHttpErrors: false },
           );
-          void refreshDataDir();
+          if (!isCurrent(generation)) return;
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (!isCurrent(generation)) return;
+          const json = (await res.json()) as SpeakerResetResponse;
+          if (!isCurrent(generation)) return;
+          message.success(
+            `已重置：清空 ${json.speakers_deleted} 个说话人，更新 ${json.segments_cleared} 段记录`,
+          );
+          if (!isCurrent(generation)) return;
+          await refreshDataDir();
+          if (!isCurrent(generation)) return;
         } catch (e) {
-          message.error(`重置失败：${(e as Error).message}`);
+          if (!isCurrent(generation)) return;
+          reportSettingsError("reset speakers", e, "说话人数据重置失败，请重试");
         } finally {
-          setResetBusy(false);
+          if (isCurrent(generation)) setResetBusy(false);
         }
       },
     });
+    destroyer = modal.destroy;
+    settingsConfirmDestroyersRef.current.add(destroyer);
   };
 
   return (
-    <Drawer
-      title={<span className="text-[14px] font-semibold">设置</span>}
+    <>
+      <Drawer
+      title={
+        <span id="echodesk-settings-dialog-title" className="text-[14px] font-semibold">
+          设置
+        </span>
+      }
+      aria-labelledby="echodesk-settings-dialog-title"
       rootClassName="echodesk-settings-drawer"
       data-testid="settings-drawer"
       extra={
@@ -642,12 +1105,15 @@ export default function SettingsPanel({
       width={420}
       open={open}
       onClose={onClose}
+      afterOpenChange={setDrawerOpenSettled}
       keyboard
       maskClosable
-      destroyOnClose
+      destroyOnHidden
+      forceRender
     >
       <div className="space-y-5 text-[13px]">
-        <section>
+        {hostAdminAvailable && (
+        <section data-testid="settings-host-data">
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Database className="w-4 h-4" />
             <span>数据</span>
@@ -665,8 +1131,7 @@ export default function SettingsPanel({
           <div className="bg-paper-150 rounded-md p-3 space-y-2">
             {adminUnavailable ? (
               <div className="text-[12px] text-ink-500 leading-relaxed">
-                公共演示服务不开放本机数据目录、日志和诊断导出。Mac / Windows
-                桌面端本机服务可继续使用这些管理功能。
+                当前服务不提供本机数据目录管理。请确认桌面端本机服务已启动。
               </div>
             ) : loading && !dataDir ? (
               <Spin size="small" />
@@ -710,28 +1175,25 @@ export default function SettingsPanel({
             )}
           </div>
         </section>
+        )}
 
-        {!adminUnavailable && (
-          <section>
+        {hostAdminAvailable && !adminUnavailable && (
+          <section data-testid="settings-host-model">
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Server className="w-4 h-4" />
             <span>模型服务配置</span>
-            {remote && (
-              <span className="ml-auto text-[10px] text-ink-400 truncate max-w-[180px]">
-                {remote.config_path}
-              </span>
-            )}
           </div>
-          {!remote ? (
-            <Spin size="small" />
-          ) : (
-            <Form
-              form={form}
-              layout="vertical"
-              onFinish={onSaveRemote}
-              autoComplete="off"
-              data-testid="remote-settings-form"
-            >
+          <Form
+            form={form}
+            layout="vertical"
+            onFinish={onSaveRemote}
+            autoComplete="off"
+            data-testid="remote-settings-form"
+          >
+            {!remote ? (
+              <Spin size="small" />
+            ) : (
+              <>
               {remoteFieldOrder.map((key) => {
                 const meta = REMOTE_FIELD_META[key];
                 const fieldDto = remote.fields.find((f) => f.key === key);
@@ -771,7 +1233,7 @@ export default function SettingsPanel({
                   </Form.Item>
                 );
               })}
-              <div className="flex gap-2">
+                <div className="flex gap-2">
                 <Button
                   type="primary"
                   htmlType="submit"
@@ -789,17 +1251,21 @@ export default function SettingsPanel({
                     size="small"
                     type="dashed"
                     onClick={() => void onRestartBackend()}
+                    loading={restartBusy}
+                    disabled={restartBusy}
                     data-testid="restart-backend-after-config"
                   >
-                    重启服务生效
+                    {restartBusy ? "正在重启服务" : "重启服务生效"}
                   </Button>
                 )}
-              </div>
-            </Form>
-          )}
+                </div>
+              </>
+            )}
+          </Form>
           </section>
         )}
 
+        {backendOriginEditable && (
         <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Server className="w-4 h-4" />
@@ -809,7 +1275,13 @@ export default function SettingsPanel({
             <Input
               size="small"
               value={backendBaseDraft}
-              onChange={(e) => setBackendBaseDraft(e.target.value)}
+              onChange={(e) => {
+                const generation = renderedBackendBaseDraftGeneration;
+                if (generation === null || !isCurrent(generation)) return;
+                backendBaseDraftGenerationRef.current = generation;
+                backendBaseDraftRef.current = e.target.value;
+                setBackendBaseDraft(e.target.value);
+              }}
               placeholder={DEFAULT_ANDROID_BACKEND_BASE}
               data-testid="mobile-backend-base"
             />
@@ -824,11 +1296,8 @@ export default function SettingsPanel({
               </Button>
               <Button
                 size="small"
-                onClick={() => {
-                  setBackendBaseDraft("");
-                  setStoredBackendBase("");
-                  message.success("已恢复默认服务地址");
-                }}
+                onClick={onResetBackendBase}
+                data-testid="reset-mobile-backend-base"
               >
                 恢复默认
               </Button>
@@ -838,20 +1307,26 @@ export default function SettingsPanel({
               <span className="font-mono ml-1">{DEFAULT_ANDROID_BACKEND_BASE}</span>。
               内网演示或开发调试时，可临时改成电脑局域网地址，例如
               <span className="font-mono ml-1">http://10.10.12.32:8769</span>。
+              局域网 HTTP 仅用于临时匿名/开发连接；设备身份与凭证始终要求 HTTPS。
             </div>
           </div>
         </section>
+        )}
 
         <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <ArrowUpCircle className="w-4 h-4" />
             <span>更新</span>
             <Tag
-              color={updateInfo?.updateAvailable ? "blue" : "default"}
+              color={canInstallAppUpdate(updateInfo) ? "blue" : "default"}
               className="!m-0 ml-auto"
               data-testid="update-status-tag"
             >
-              {updateStatusLabel(updateInfo)}
+              {releaseVersionBehind
+                ? "本机版本较新"
+                : releaseVersionCurrent
+                  ? "已是最新"
+                  : updateStatusLabel(updateInfo)}
             </Tag>
           </div>
           <div
@@ -866,7 +1341,9 @@ export default function SettingsPanel({
                 </div>
               </div>
               <div className="rounded bg-white border border-paper-300 px-2 py-1.5">
-                <div className="text-ink-400">最新版本</div>
+                <div className="text-ink-400">
+                  {releaseVersionBehind ? "版本对比" : "最新版本"}
+                </div>
                 <div className="font-mono text-ink-800">
                   {latestVersionDisplay}
                 </div>
@@ -883,10 +1360,10 @@ export default function SettingsPanel({
               >
                 当前服务端：v{backendVersion}
                 {backendVersionBehind &&
-                  `，落后于客户端 v${__APP_VERSION__}。请更新服务端，否则新版 STT/TTS/扫码保存修复不会完全生效。`}
+                  `，落后于客户端 v${__APP_VERSION__}。请更新服务端，否则语音识别、语音播报和扫码保存可能不完整。`}
               </div>
             )}
-            {updateInfo?.assetName && (
+            {updateInfo?.assetName && !releaseVersionBehind && (
               <div
                 className="font-mono text-[11px] text-ink-500 truncate"
                 title={updateInfo.assetName}
@@ -897,7 +1374,15 @@ export default function SettingsPanel({
             )}
             {updateInfo?.error && (
               <div className="text-[11px] text-red-500" data-testid="update-error">
-                {updateInfo.error}
+                暂时无法获取更新信息，请稍后重试
+              </div>
+            )}
+            {releaseVersionBehind && (
+              <div
+                className="rounded border border-paper-300 bg-white px-2 py-1.5 text-[11px] leading-relaxed text-ink-600"
+                data-testid="update-version-note"
+              >
+                本机版本高于当前公开发布版本。为避免降级，下载与安装已停用。
               </div>
             )}
             <div className="flex gap-2">
@@ -915,13 +1400,10 @@ export default function SettingsPanel({
                 size="small"
                 icon={<Download className="w-3.5 h-3.5" />}
                 loading={updateInstallBusy}
-                disabled={
-                  !updateInfo ||
-                  updateInfo.status === "downloading" ||
-                  updateInfo.status === "installing"
-                }
+                disabled={!canInstallAppUpdate(updateInfo)}
                 onClick={() => void onInstallUpdate()}
                 data-testid="install-update"
+                aria-label={updateInstallButtonLabel(updateInfo)}
               >
                 {updateInstallButtonLabel(updateInfo)}
               </Button>
@@ -938,11 +1420,12 @@ export default function SettingsPanel({
             <div className="text-[11px] text-ink-500 leading-relaxed">
               桌面端会在后台定时检查更新；可自动安装时会先下载，下载完成后请确认安装并重启。
               本机数据目录会保留。若当前平台不能一键安装，会打开 Release 下载页。Android /
-              TV 侧载更新默认保留 app 数据，只有 TV 一键安装脚本的首次安装模式会清理旧缓存。
+              TV 侧载更新与一键安装器都会保留 app 数据、设备身份和现有权限状态。
             </div>
           </div>
         </section>
 
+        {workspaceDirectoryAvailable && (
         <section data-testid="workspace-settings-section" tabIndex={-1}>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Folder className="w-4 h-4" />
@@ -967,7 +1450,7 @@ export default function SettingsPanel({
                   EchoDesk 会扫描这些目录下的可索引文件（PDF / Word / Excel / PPT /
                   Markdown / TXT 等），自动加入知识库，让"@查 / 提问"能覆盖整个文件夹。
                   <br />
-                  当前已索引 <span className="font-mono text-accent">{ws.n_indexed}</span> 个文件；
+                  当前已收录 <span className="tabular-nums text-accent">{ws.n_indexed}</span> 个文件；
                   为避免超大文件拖慢索引，超过 {ws.max_file_mb} MB 的单文件会跳过。
                 </div>
                 {ws.configured_dirs.length === 0 ? (
@@ -1015,6 +1498,7 @@ export default function SettingsPanel({
                 )}
                 <div className="flex gap-1.5 pt-1.5">
                   <Button
+                    ref={workspaceAddDirRef}
                     size="small"
                     type="primary"
                     icon={<FolderPlus className="w-3.5 h-3.5" />}
@@ -1039,8 +1523,9 @@ export default function SettingsPanel({
             )}
           </div>
         </section>
+        )}
 
-        {!adminUnavailable && (
+        {hostAdminAvailable && !adminUnavailable && (
           <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Download className="w-4 h-4" />
@@ -1062,7 +1547,7 @@ export default function SettingsPanel({
           </section>
         )}
 
-        {!adminUnavailable && (
+        {hostAdminAvailable && !adminUnavailable && (
           <section>
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Users className="w-4 h-4" />
@@ -1107,6 +1592,7 @@ export default function SettingsPanel({
           </section>
         )}
 
+        {hostAdminAvailable && (
         <section className="pt-3 border-t border-paper-300">
           <div className="text-[11px] text-ink-500 leading-relaxed">
             <div>EchoDesk · 独立桌面 AI 会议助手</div>
@@ -1122,7 +1608,73 @@ export default function SettingsPanel({
             </div>
           </div>
         </section>
+        )}
       </div>
-    </Drawer>
+      </Drawer>
+      {pendingPrivateBackendBase !== null &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[1400] flex items-center justify-center bg-black/35 px-5 py-8"
+            onMouseDown={(event) => {
+              if (event.currentTarget === event.target) {
+                cancelPrivateBackendBase();
+              }
+            }}
+          >
+            <div
+              ref={privateBackendDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="private-backend-confirm-title"
+              aria-describedby="private-backend-confirm-description"
+              className="w-full max-w-md rounded-xl border border-paper-300 bg-white p-5 text-ink-800 shadow-2xl"
+            >
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-50 text-err">
+                  <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <h2
+                    id="private-backend-confirm-title"
+                    className="m-0 text-[15px] font-semibold text-ink-900"
+                  >
+                    确认使用局域网明文连接？
+                  </h2>
+                  <div
+                    id="private-backend-confirm-description"
+                    className="mt-2 space-y-2 text-[13px] leading-relaxed text-ink-600"
+                  >
+                    <p>
+                      HTTP 只适合临时连接你信任的局域网设备，流量可能被同一网络中的其他人读取或篡改。
+                    </p>
+                    <p className="font-medium text-err">
+                      需要设备身份的服务会拒绝通过 HTTP 发送凭证；正式部署请使用 HTTPS。
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-paper-300 bg-white px-3 py-1.5 text-[13px] font-medium text-ink-700 transition hover:bg-paper-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                  onClick={cancelPrivateBackendBase}
+                >
+                  取消
+                </button>
+                <button
+                  ref={privateBackendConfirmRef}
+                  type="button"
+                  className="rounded-md bg-err px-3 py-1.5 text-[13px] font-medium text-white transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-err/30"
+                  onClick={confirmPrivateBackendBase}
+                >
+                  确认仅用于可信局域网
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }

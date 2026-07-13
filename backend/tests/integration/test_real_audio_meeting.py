@@ -43,6 +43,7 @@ def _yunwu_alive() -> bool:
 
 pytestmark = [
     pytest.mark.integration,
+    pytest.mark.live,
     pytest.mark.skipif(
         not _can_connect("100.76.3.59", 8090),
         reason="eight :8090 STT (FireRed) 不可达",

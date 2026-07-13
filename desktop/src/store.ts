@@ -8,6 +8,7 @@ import type {
   MeetingMinutes,
   TodoItem,
   TranscriptSegment,
+  WorkflowRunDTO,
 } from "@/types";
 import type { MeetingSummary } from "@/api";
 import {
@@ -38,11 +39,19 @@ export interface LocalAmbientSegment {
 export interface CommandBarPrefillMeta {
   meeting_id?: string;
   todo_id?: string;
+  retry_of_run_id?: string;
 }
 export type CommandBarPrefillHandler = (
   text: string,
   meta?: CommandBarPrefillMeta,
 ) => void;
+
+export type MeetingListLoadPhase =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "error"
+  | "degraded";
 
 interface Store {
   meetings: Record<string, MeetingCard>;
@@ -53,6 +62,15 @@ interface Store {
    * 自然会通过 applyEvent 增量更新，无需重置该 flag。
    */
   meetingDetailLoaded: Record<string, boolean>;
+  meetingDetailErrors: Record<string, string>;
+  meetingDetailRetryRevision: Record<string, number>;
+  meetingListLoadPhase: MeetingListLoadPhase;
+  meetingListError: string | null;
+  meetingListLastSuccessAt: string | null;
+  meetingListRetryRevision: number;
+  rehydrateRevision: number;
+  rehydrateFenceSeq: number;
+  meetingEventSeq: Record<string, number>;
   artifacts: GeneratedArtifact[];
   ambientSegments: LocalAmbientSegment[];
   failedArtifacts: FailedArtifact[];
@@ -77,8 +95,16 @@ interface Store {
   upsertMeeting(id: string, patch: Partial<MeetingCard>): void;
   /** 用 GET /meetings 返回的列表把 store.meetings 与每条 summary 合并（保留事件已注入的 segments/minutes/artifacts）。 */
   hydrateMeetings(summaries: MeetingSummary[]): void;
+  rehydrateMeetings(summaries: MeetingSummary[], fenceSeq: number): void;
+  requestRehydrate(fenceSeq?: number): void;
   /** 标记某 meeting detail 已加载完毕，避免重复 fetch。 */
   markMeetingDetailLoaded(id: string): void;
+  markMeetingDetailError(id: string, message: string): void;
+  retryMeetingDetail(id: string): void;
+  startMeetingListLoad(): void;
+  completeMeetingListLoad(): void;
+  failMeetingListLoad(message: string): void;
+  retryMeetingListLoad(): void;
   addArtifact(a: GeneratedArtifact): void;
   addAmbientSegment(seg: LocalAmbientSegment): void;
   markMeetingActive(
@@ -154,7 +180,58 @@ function emptyMeeting(id: string, title?: string): MeetingCard {
     state: "idle",
     segments: [],
     speakers: new Set<string>(),
+    summary_segment_count: 0,
+    summary_speaker_count: 0,
     artifacts: [],
+  };
+}
+
+export function projectTodoStatus(raw: unknown): TodoItem["status"] | null {
+  if (raw === "succeeded" || raw === "done") return "done";
+  if (raw === "running" || raw === "pending" || raw === "cancel_requested") {
+    return "running";
+  }
+  if (raw === "failed" || raw === "timeout" || raw === "cancel_failed") {
+    return "failed";
+  }
+  if (raw === "waiting_permission") return "waiting_permission";
+  if (raw === "cancelled") return "cancelled";
+  return null;
+}
+
+export function projectMinutesWithWorkflowRuns(
+  minutes: MeetingMinutes | null | undefined,
+  workflowRuns: WorkflowRunDTO[],
+): MeetingMinutes | null | undefined {
+  if (!minutes || workflowRuns.length === 0) return minutes;
+  const latestByTodo = new Map<string, WorkflowRunDTO>();
+  workflowRuns
+    .slice()
+    .sort((a, b) => a.updated_at.localeCompare(b.updated_at))
+    .forEach((run) => {
+      if (run.todo_id) latestByTodo.set(run.todo_id, run);
+    });
+  return {
+    ...minutes,
+    todos: minutes.todos.map((todo) => {
+      const run = latestByTodo.get(todo.id);
+      const status = projectTodoStatus(run?.state);
+      if (!run || !status) return todo;
+      const artifactId =
+        typeof run.output?.artifact_id === "string"
+          ? run.output.artifact_id
+          : undefined;
+      return {
+        ...todo,
+        status,
+        workflow_run_id: run.run_id,
+        artifact_id: artifactId ?? todo.artifact_id ?? null,
+        done_at:
+          status === "done"
+            ? (todo.done_at ?? run.finished_at ?? new Date().toISOString())
+            : todo.done_at,
+      };
+    }),
   };
 }
 
@@ -283,6 +360,15 @@ export const useStore = create<Store>((set, get) => ({
   meetings: {},
   currentMeetingId: null,
   meetingDetailLoaded: {},
+  meetingDetailErrors: {},
+  meetingDetailRetryRevision: {},
+  meetingListLoadPhase: "idle",
+  meetingListError: null,
+  meetingListLastSuccessAt: null,
+  meetingListRetryRevision: 0,
+  rehydrateRevision: 0,
+  rehydrateFenceSeq: 0,
+  meetingEventSeq: {},
   artifacts: [],
   ambientSegments: [],
   failedArtifacts: [],
@@ -315,6 +401,15 @@ export const useStore = create<Store>((set, get) => ({
       meetings: {},
       currentMeetingId: null,
       meetingDetailLoaded: {},
+      meetingDetailErrors: {},
+      meetingDetailRetryRevision: {},
+      meetingListLoadPhase: "idle",
+      meetingListError: null,
+      meetingListLastSuccessAt: null,
+      meetingListRetryRevision: 0,
+      rehydrateRevision: 0,
+      rehydrateFenceSeq: 0,
+      meetingEventSeq: {},
       artifacts: [],
       ambientSegments: [],
       failedArtifacts: [],
@@ -342,7 +437,25 @@ export const useStore = create<Store>((set, get) => ({
           state: uiState,
           started_at: cur.started_at ?? sum.started_at,
           ended_at: cur.ended_at ?? sum.ended_at ?? undefined,
+          minutes_status:
+            cur.minutes_status ?? (sum.has_minutes ? "ok" : undefined),
+          summary_segment_count: Math.max(
+            cur.summary_segment_count ?? 0,
+            sum.n_segments,
+          ),
+          summary_speaker_count: Math.max(
+            cur.summary_speaker_count ?? 0,
+            sum.n_speakers,
+          ),
         };
+      }
+      // The startup snapshot may have been requested before a local/manual start
+      // completed. Never let that older empty snapshot erase an in-progress card;
+      // the next server event or resync will reconcile it by sequence.
+      for (const [id, meeting] of Object.entries(s.meetings)) {
+        if (!next[id] && meeting.state === "in_meeting") {
+          next[id] = meeting;
+        }
       }
       return {
         meetings: next,
@@ -353,9 +466,110 @@ export const useStore = create<Store>((set, get) => ({
       };
     }),
 
-  markMeetingDetailLoaded: (id) =>
+  rehydrateMeetings: (summaries, fenceSeq) =>
+    set((s) => {
+      const next: Record<string, MeetingCard> = {};
+      for (const sum of summaries) {
+        const cur = s.meetings[sum.meeting_id] ?? emptyMeeting(sum.meeting_id);
+        if ((s.meetingEventSeq[sum.meeting_id] ?? 0) > fenceSeq) {
+          next[sum.meeting_id] = cur;
+          continue;
+        }
+        next[sum.meeting_id] = {
+          ...cur,
+          title: sum.display_title ?? sum.title ?? cur.title,
+          display_title: sum.display_title ?? cur.display_title ?? null,
+          state: sum.state === "in_meeting" ? "in_meeting" : "ended",
+          started_at: sum.started_at,
+          ended_at: sum.ended_at ?? undefined,
+          summary_segment_count: sum.n_segments,
+          summary_speaker_count: sum.n_speakers,
+          minutes_status: sum.has_minutes ? "ok" : cur.minutes_status,
+        };
+      }
+      for (const [id, meeting] of Object.entries(s.meetings)) {
+        if (
+          !next[id] &&
+          (meeting.state === "in_meeting" ||
+            (s.meetingEventSeq[id] ?? 0) > fenceSeq)
+        ) {
+          next[id] = meeting;
+        }
+      }
+      return {
+        meetings: next,
+        meetingDetailLoaded: {},
+        meetingDetailErrors: {},
+        currentMeetingId:
+          s.currentMeetingId && next[s.currentMeetingId]
+            ? s.currentMeetingId
+            : null,
+      };
+    }),
+
+  requestRehydrate: (fenceSeq) =>
     set((s) => ({
-      meetingDetailLoaded: { ...s.meetingDetailLoaded, [id]: true },
+      rehydrateRevision: s.rehydrateRevision + 1,
+      rehydrateFenceSeq:
+        fenceSeq ??
+        s.events.reduce((max, event) => Math.max(max, event.seq ?? 0), 0),
+      meetingDetailLoaded: {},
+      meetingDetailErrors: {},
+    })),
+
+  markMeetingDetailLoaded: (id) =>
+    set((s) => {
+      const meetingDetailErrors = { ...s.meetingDetailErrors };
+      delete meetingDetailErrors[id];
+      return {
+        meetingDetailLoaded: { ...s.meetingDetailLoaded, [id]: true },
+        meetingDetailErrors,
+      };
+    }),
+
+  markMeetingDetailError: (id, message) =>
+    set((s) => ({
+      meetingDetailErrors: { ...s.meetingDetailErrors, [id]: message },
+    })),
+
+  retryMeetingDetail: (id) =>
+    set((s) => {
+      const meetingDetailErrors = { ...s.meetingDetailErrors };
+      delete meetingDetailErrors[id];
+      return {
+        meetingDetailErrors,
+        meetingDetailRetryRevision: {
+          ...s.meetingDetailRetryRevision,
+          [id]: (s.meetingDetailRetryRevision[id] ?? 0) + 1,
+        },
+      };
+    }),
+
+  startMeetingListLoad: () =>
+    set({
+      meetingListLoadPhase: "loading",
+      meetingListError: null,
+    }),
+
+  completeMeetingListLoad: () =>
+    set({
+      meetingListLoadPhase: "ready",
+      meetingListError: null,
+      meetingListLastSuccessAt: new Date().toISOString(),
+    }),
+
+  failMeetingListLoad: (message) =>
+    set((s) => ({
+      meetingListLoadPhase:
+        Object.keys(s.meetings).length > 0 ? "degraded" : "error",
+      meetingListError: message,
+    })),
+
+  retryMeetingListLoad: () =>
+    set((s) => ({
+      meetingListLoadPhase: "loading",
+      meetingListError: null,
+      meetingListRetryRevision: s.meetingListRetryRevision + 1,
     })),
 
   dismissFailedArtifact: (id) =>
@@ -405,7 +619,7 @@ export const useStore = create<Store>((set, get) => ({
         last_seq: event.seq,
         submitted_at: prev?.submitted_at ?? event.ts,
         finished_at:
-          ["succeeded", "failed", "cancelled", "timeout"].includes(event.state)
+          ["succeeded", "failed", "cancelled", "cancel_failed", "timeout"].includes(event.state)
             ? event.ts
             : (prev?.finished_at ?? null),
         timeout_s: prev?.timeout_s ?? 1800,
@@ -487,6 +701,14 @@ export const useStore = create<Store>((set, get) => ({
               cur.started_at ?? opts?.startedAt ?? new Date().toISOString(),
             segments: mergedSegments,
             speakers,
+            summary_segment_count: Math.max(
+              cur.summary_segment_count ?? 0,
+              mergedSegments.length,
+            ),
+            summary_speaker_count: Math.max(
+              cur.summary_speaker_count ?? 0,
+              speakers.size,
+            ),
           },
         },
       };
@@ -510,7 +732,18 @@ export const useStore = create<Store>((set, get) => ({
     }),
 
   applyEvent: (e) => {
-    set((s) => ({ events: [...s.events.slice(-200), e] }));
+    set((s) => ({
+      events: [...s.events.slice(-200), e],
+      meetingEventSeq: e.meeting_id
+        ? {
+            ...s.meetingEventSeq,
+            [e.meeting_id]: Math.max(
+              s.meetingEventSeq[e.meeting_id] ?? 0,
+              e.seq ?? 0,
+            ),
+          }
+        : s.meetingEventSeq,
+    }));
 
     const mid = e.meeting_id ?? undefined;
     if (mid && !get().meetings[mid]) {
@@ -537,6 +770,14 @@ export const useStore = create<Store>((set, get) => ({
         get().upsertMeeting(mid, {
           segments: mergedSegments,
           speakers,
+          summary_segment_count: Math.max(
+            cur.summary_segment_count ?? 0,
+            mergedSegments.length,
+          ),
+          summary_speaker_count: Math.max(
+            cur.summary_speaker_count ?? 0,
+            speakers.size,
+          ),
           state: "in_meeting",
         });
         break;
@@ -596,6 +837,39 @@ export const useStore = create<Store>((set, get) => ({
         });
         break;
       }
+      case "meeting.todo.updated": {
+        if (!mid) break;
+        const p = (e.payload ?? {}) as {
+          todo_id?: string;
+          status?: TodoItem["status"];
+          state?: string;
+          run_id?: string;
+          artifact_id?: string;
+          done_at?: string;
+        };
+        const cur = get().meetings[mid];
+        if (!cur?.minutes || !p.todo_id) break;
+        const projected = projectTodoStatus(p.status ?? p.state);
+        if (!projected) break;
+        const next: TodoItem[] = cur.minutes.todos.map((t) =>
+          t.id === p.todo_id
+            ? {
+                ...t,
+                status: projected,
+                workflow_run_id: p.run_id ?? t.workflow_run_id ?? null,
+                done_at:
+                  projected === "done"
+                    ? (p.done_at ?? t.done_at ?? new Date().toISOString())
+                    : t.done_at,
+                artifact_id: p.artifact_id ?? t.artifact_id ?? null,
+              }
+            : t,
+        );
+        get().upsertMeeting(mid, {
+          minutes: { ...cur.minutes, todos: next },
+        });
+        break;
+      }
       case "minutes.failed": {
         if (!mid) break;
         const p = (e.payload ?? {}) as { error?: string };
@@ -609,12 +883,13 @@ export const useStore = create<Store>((set, get) => ({
       case "artifact.generating": {
         // 暂存 brief，方便 artifact.failed 回填用户原始命令；
         // 失败/成功后会被清除（见 artifact.failed / artifact.ready）。
-        const p = (e.payload ?? {}) as { artifact_type?: string; brief?: string };
+        const p = (e.payload ?? {}) as { artifact_type?: string; brief?: string; run_id?: string };
         if (p.artifact_type && typeof p.brief === "string" && p.brief) {
           set((s) => ({
             pendingArtifactBriefs: {
               ...s.pendingArtifactBriefs,
               [p.artifact_type as string]: p.brief as string,
+              ...(p.run_id ? { [p.run_id]: p.brief as string } : {}),
             },
           }));
         }
@@ -633,25 +908,30 @@ export const useStore = create<Store>((set, get) => ({
           }
         }
         // 配对的 brief 已经无用，清掉避免污染下一次失败回填。
-        if (a?.artifact_type) {
+        if (a?.artifact_type || a?.run_id) {
           set((s) => {
-            if (!(a.artifact_type in s.pendingArtifactBriefs)) return s;
             const next = { ...s.pendingArtifactBriefs };
-            delete next[a.artifact_type];
+            if (a.artifact_type) delete next[a.artifact_type];
+            if (a.run_id) delete next[a.run_id];
             return { pendingArtifactBriefs: next };
           });
         }
         break;
       }
       case "artifact.failed": {
-        const p = (e.payload ?? {}) as { artifact_type?: string };
+        const p = (e.payload ?? {}) as { artifact_type?: string; run_id?: string };
         const briefs = get().pendingArtifactBriefs;
-        const intentText = p.artifact_type ? briefs[p.artifact_type] : undefined;
+        const intentText =
+          (p.run_id ? briefs[p.run_id] : undefined) ??
+          (p.artifact_type ? briefs[p.artifact_type] : undefined);
         const failed = buildFailedArtifact(e, intentText);
         set((s) => {
           const nextBriefs = { ...s.pendingArtifactBriefs };
           if (p.artifact_type && p.artifact_type in nextBriefs) {
             delete nextBriefs[p.artifact_type];
+          }
+          if (p.run_id && p.run_id in nextBriefs) {
+            delete nextBriefs[p.run_id];
           }
           return {
             failedArtifacts: [failed, ...s.failedArtifacts].slice(
@@ -660,6 +940,36 @@ export const useStore = create<Store>((set, get) => ({
             ),
             pendingArtifactBriefs: nextBriefs,
           };
+        });
+        break;
+      }
+      case "workflow.snapshot": {
+        const run = e.payload as unknown as WorkflowRunDTO;
+        if (!run.meeting_id || !run.todo_id) break;
+        const cur = get().meetings[run.meeting_id];
+        if (!cur?.minutes) break;
+        const projected = projectTodoStatus(run.state);
+        if (!projected) break;
+        const artifactId =
+          typeof run.output?.artifact_id === "string"
+            ? run.output.artifact_id
+            : undefined;
+        const next: TodoItem[] = cur.minutes.todos.map((t) =>
+          t.id === run.todo_id
+            ? {
+                ...t,
+                status: projected,
+                workflow_run_id: run.run_id,
+                artifact_id: artifactId ?? t.artifact_id ?? null,
+                done_at:
+                  projected === "done"
+                    ? (t.done_at ?? run.finished_at ?? new Date().toISOString())
+                    : t.done_at,
+              }
+            : t,
+        );
+        get().upsertMeeting(run.meeting_id, {
+          minutes: { ...cur.minutes, todos: next },
         });
         break;
       }
@@ -741,6 +1051,10 @@ function hydrateLocalCaptureSnapshot(): void {
           : persisted.ended_at,
       segments,
       speakers: new Set(persisted.speakers ?? []),
+      summary_segment_count:
+        persisted.summary_segment_count ?? segments.length,
+      summary_speaker_count:
+        persisted.summary_speaker_count ?? new Set(persisted.speakers ?? []).size,
       artifacts: persisted.artifacts ?? [],
     };
   }
@@ -798,6 +1112,10 @@ function snapshotToMeetings(
           : persisted.ended_at,
       segments,
       speakers: new Set(persisted.speakers ?? []),
+      summary_segment_count:
+        persisted.summary_segment_count ?? segments.length,
+      summary_speaker_count:
+        persisted.summary_speaker_count ?? new Set(persisted.speakers ?? []).size,
       artifacts: persisted.artifacts ?? [],
     };
   }

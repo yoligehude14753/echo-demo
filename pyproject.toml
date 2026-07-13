@@ -1,6 +1,6 @@
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.1.0"
+version = "0.3.1"
 tag_format = "v$version"
 update_changelog_on_bump = true
 
@@ -44,13 +44,27 @@ strict = true
 ignore_missing_imports = true
 exclude = ["backend/.skill_build", "backend/.skill_artifacts", "backend/tests/skill_runs"]
 
+[[tool.mypy.overrides]]
+module = [
+    "app.adapters.diarizer.ecapa",
+    "app.adapters.rag.bm25",
+    "app.adapters.rag.parsers",
+]
+# These adapters deliberately lazy-import optional third-party runtimes that do
+# not publish PEP 561 metadata.  Keep strict checking for our adapter code while
+# suppressing only the dependency-boundary diagnostic, independent of whether
+# those optional packages are installed in the current gate environment.
+disable_error_code = ["import-untyped"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["backend/tests"]
 addopts = "-ra --strict-markers --strict-config"
 markers = [
     "unit: 单元测试，毫秒级",
-    "integration: 接外部服务（heyi-bj / Yunwu / Tavily）",
+    "integration: 多组件集成测试（默认必须本地确定性）",
+    "live: 真实外部服务契约；只在独立 live gate 运行，skip 视为失败",
     "e2e: 端到端，含真实音频/PDF/产物",
     "arch: 架构 Fitness Function",
     "slow: > 30s，CI 默认跳过",

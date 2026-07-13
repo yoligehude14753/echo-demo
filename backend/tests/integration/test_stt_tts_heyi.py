@@ -14,7 +14,7 @@ import socket
 import numpy as np
 import pytest
 from app.adapters.stt import FireRedSTT
-from app.adapters.tts import Qwen3TTS
+from app.adapters.tts import SILENCE_RMS_FLOOR, Qwen3TTS
 from app.config import Settings
 
 pytestmark = pytest.mark.integration
@@ -41,6 +41,7 @@ def settings() -> Settings:
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 @pytest.mark.skipif(not _can_connect("100.76.3.59", 8090), reason="eight 8090 (firered) 不可达")
 async def test_real_stt_handshake(settings: Settings) -> None:
     """STT 接口可达且能接受合法 WAV（不强求识别质量，只验证 HTTP 协议握手）。"""
@@ -52,20 +53,24 @@ async def test_real_stt_handshake(settings: Settings) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 @pytest.mark.skipif(not _can_connect("100.76.3.59", 8094), reason="eight 8094 (qwen3_tts) 不可达")
 async def test_real_tts_synthesize(settings: Settings) -> None:
     """TTS 真实合成 → 返回非空 PCM 字节（≥ 0.1s 音频）。"""
     tts = Qwen3TTS(settings, timeout_s=30.0)
-    pcm = await tts.synthesize("你好,我是 Echo")
-    # 容忍服务返回 wav 或裸 audio bytes；只要不是 0 字节就算 OK
-    assert isinstance(pcm, bytes)
-    # 不强求长度 — 服务侧 voice / sr 可能与本地预期不一致；接口握手通过即算 OK
-    # 如果是空字节，说明服务侧 200 但返回空，仍然反映出 adapter 协议正确
+    result = await tts.synthesize_detailed("你好,我是 Echo")
+    # Adapter contract is raw 16 kHz int16 mono PCM.  A 200 response containing
+    # empty or silent bytes is a provider failure, not a successful handshake.
+    assert len(result.pcm) >= 3_200, "TTS returned less than 100 ms of PCM"
+    assert len(result.pcm) % 2 == 0, "PCM16 response must contain complete samples"
+    assert result.rms >= SILENCE_RMS_FLOOR, "TTS returned silent PCM"
+    assert result.max_abs > 0
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 async def test_real_fast_llm_fallback() -> None:
-    """Fast 通道默认跟随 Yunwu M2.7，可完整流式。"""
+    """Fast 通道使用当前配置模型，可完整流式。"""
     from app.adapters.llm import OpenAICompatibleLLM
     from app.schemas.llm import ChatMessage
 
@@ -75,7 +80,7 @@ async def test_real_fast_llm_fallback() -> None:
         chunks: list[str] = []
         async for c in llm.chat_stream(
             [ChatMessage(role="user", content="一句话回答:1+1=?")],
-            model="MiniMax-M2.7",
+            model=s.llm_fast_model,
             max_tokens=200,
             timeout_s=60.0,
         ):

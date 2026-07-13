@@ -3,11 +3,10 @@ import { Button, Empty, Tag, Tooltip, message } from "antd";
 import {
   AlertCircle,
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
   Circle,
   Download,
   FileText,
+  History,
   Loader2,
   Play,
   QrCode,
@@ -17,11 +16,16 @@ import {
   artifactDownloadUrl,
   generateArtifact,
   getMeetingMinutes,
+  listWorkflowRuns,
   retryMinutesGeneration,
   type ArtifactKind,
 } from "@/api";
 import { buildSpeakerDisplayMap } from "@/lib/speakerDisplay";
+import { meetingDisplayTitle } from "@/lib/meetingDisplay";
 import MeetingShareModal from "@/components/MeetingShareModal";
+import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
+import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
+import { backendBaseSnapshot } from "@/runtime";
 
 // 把 LLM 返回的 assignee（"说话人 18" / "说话人18" / 已被用户改名的 "李雷"）
 // remap 成 transcript 视图里同一个 displayIdx，避免 minutes 写"说话人 21"但
@@ -48,11 +52,33 @@ function remapAssignee(
   }
   return raw; // displayMap 里没这人，原样
 }
-import { useStore } from "@/store";
-import type { MeetingMinutes, TodoItem } from "@/types";
+import { projectMinutesWithWorkflowRuns, useStore } from "@/store";
+import type { MeetingCard, MeetingMinutes, TodoItem } from "@/types";
 
 function isFinalizedLike(state: string | undefined): boolean {
   return state === "ended" || state === "finalized";
+}
+
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  const remainingSeconds = total % 60;
+  return remainingSeconds > 0
+    ? `${minutes} 分 ${remainingSeconds} 秒`
+    : `${minutes} 分钟`;
+}
+
+function formatMinutesDate(iso: string | undefined): string {
+  if (!iso) return "时间未知";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function friendlyMinutesError(raw: string | null | undefined): {
@@ -71,23 +97,26 @@ function friendlyMinutesError(raw: string | null | undefined): {
   }
   if (/timeout|timed out/i.test(s)) {
     return {
-      headline: "LLM 调用超时",
-      hint: "模型服务当前响应较慢，稍后点击重新生成即可",
+      headline: "生成时间过长",
+      hint: "服务当前响应较慢，稍后点击重新生成即可",
     };
   }
   if (/connect refused|connection refused|read timed out/i.test(s)) {
     return {
-      headline: "连不上模型服务",
-      hint: "检查 Tailscale / 网络后点击重新生成",
+      headline: "暂时无法连接生成服务",
+      hint: "检查网络连接后点击重新生成",
     };
   }
   if (/rate limit|429/i.test(s)) {
     return {
-      headline: "触发了模型限流",
+      headline: "当前请求较多",
       hint: "稍等片刻后点击重新生成",
     };
   }
-  return { headline: "纪要生成失败", hint: "点击下方按钮重新生成；如反复失败请展开详情排查" };
+  return {
+    headline: "纪要生成失败",
+    hint: "点击下方按钮重新生成；如反复失败，请检查网络或服务设置",
+  };
 }
 
 /**
@@ -106,10 +135,18 @@ function friendlyMinutesError(raw: string | null | undefined): {
  * 显示「纪要尚未生成 / 结束会议后由智能引擎自动产出」，用户没有任何重试入口。
  */
 export default function MinutesView(): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const currentId = useStore((s) => s.currentMeetingId);
   const meeting = useStore((s) =>
     currentId ? s.meetings[currentId] : undefined,
   );
+  const meetings = useStore((s) => s.meetings);
+  const selectMeeting = useStore((s) => s.selectMeeting);
   const upsertMeeting = useStore((s) => s.upsertMeeting);
   const removeArtifact = useStore((s) => s.removeArtifact);
   const [retrying, setRetrying] = useState(false);
@@ -121,39 +158,84 @@ export default function MinutesView(): JSX.Element {
   // 切回老会议时 store 没拿到 minutes，永远卡在「正在生成…」假象。
   const fetchedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
+    fetchedRef.current.clear();
+    setRetrying(false);
+    setShareOpen(false);
+  }, [backendOriginRevision]);
+
+  useEffect(() => {
     if (!currentId) return;
     if (meeting?.minutes) return;
     if (meeting?.minutes_status === "generation_failed") return;
     if (!isFinalizedLike(meeting?.state)) return;
     if (fetchedRef.current.has(currentId)) return;
     fetchedRef.current.add(currentId);
-    getMeetingMinutes(currentId)
-      .then((m) => {
+    let alive = true;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      alive && isCurrent(originGeneration) && !controller.signal.aborted;
+    Promise.all([
+      getMeetingMinutes(currentId, { signal: controller.signal }),
+      listWorkflowRuns(
+        { meeting_id: currentId, limit: 100 },
+        { signal: controller.signal },
+      ).catch(() => []),
+    ])
+      .then(([m, workflowRuns]) => {
+        if (!canCommit()) return;
         if (!m) return; // 真的 404 → 让 generating 状态自然展示
+        const restoredMinutes = projectMinutesWithWorkflowRuns(m, workflowRuns);
+        if (!restoredMinutes) return;
         upsertMeeting(currentId, {
-          minutes: m,
-          title: m.title,
+          minutes: restoredMinutes,
+          title: restoredMinutes.title,
           state: "ended",
           minutes_status: "ok",
           minutes_error: null,
         });
       })
       .catch(() => {
-        // 网络错也不强转失败态，等 ws 事件再说
+        if (!canCommit()) return;
+        // 网络错不能永久占用 fetchedRef；后续重新选择或状态变化必须可重试。
+        fetchedRef.current.delete(currentId);
       });
-  }, [currentId, meeting?.minutes, meeting?.minutes_status, meeting?.state, upsertMeeting]);
+    return () => {
+      alive = false;
+      unregisterController();
+    };
+  }, [
+    backendOriginRevision,
+    captureGeneration,
+    currentId,
+    isCurrent,
+    meeting?.minutes,
+    meeting?.minutes_status,
+    meeting?.state,
+    registerAbortController,
+    upsertMeeting,
+  ]);
 
   const onRetry = async (): Promise<void> => {
     if (!currentId || !meeting) return;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
     setRetrying(true);
     try {
-      await retryMinutesGeneration(currentId, meeting.title || currentId);
+      await retryMinutesGeneration(currentId, meeting.title || currentId, {
+        signal: controller.signal,
+      });
+      if (!isCurrent(originGeneration) || controller.signal.aborted) return;
       message.success("已重新提交，等待 LLM 返回…");
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      message.error(`重试失败：${msg}`);
+      if (!isCurrent(originGeneration) || controller.signal.aborted) return;
+      console.error("[minutes] retry failed", e);
+      message.error("重试失败，请稍后再试");
     } finally {
-      setRetrying(false);
+      unregisterController();
+      if (isCurrent(originGeneration)) setRetrying(false);
     }
   };
 
@@ -192,70 +274,134 @@ export default function MinutesView(): JSX.Element {
     />
   );
 
-  // 1) 已生成：渲染纪要主体
+  const historyMeetings = useMemo(
+    () =>
+      Object.values(meetings)
+        .filter((item) => item.minutes_status === "ok" || item.minutes !== undefined)
+        .sort((a, b) =>
+          (b.minutes?.created_at ?? b.ended_at ?? b.started_at ?? "").localeCompare(
+            a.minutes?.created_at ?? a.ended_at ?? a.started_at ?? "",
+          ),
+        ),
+    [meetings],
+  );
+
+  let activeMinutes: JSX.Element;
   if (meeting?.minutes) {
-    return (
-      <>
-        <MinutesBody m={meeting.minutes} shareAction={shareAction} />
-        {shareModal}
-      </>
-    );
-  }
-
-  // 2) 失败：给重试按钮 + 错误消息
-  if (meeting?.minutes_status === "generation_failed") {
-    return (
-      <>
-        <MinutesErrorCard
-          rawError={meeting.minutes_error}
-          retrying={retrying}
-          onRetry={onRetry}
-          shareAction={shareAction}
-        />
-        {shareModal}
-      </>
-    );
-  }
-
-  // 3) 生成中 / 已 finalized 但 minutes 还没拿到：大转圈 + elapsed
-  if (isFinalizedLike(meeting?.state)) {
-    return (
-      <>
-        <MinutesGeneratingCard endedAt={meeting?.ended_at} shareAction={shareAction} />
-        {shareModal}
-      </>
-    );
-  }
-
-  // 4) 会议中（in_meeting）或没有任何 meeting
-  const inMeeting = meeting?.state === "in_meeting";
-  return (
-    <div className="px-6 py-6 border-b border-paper-300">
-      <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
-        <FileText className="w-3.5 h-3.5 text-ink-500" />
-        <span>会议纪要</span>
-      </div>
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description={
-          <span className="text-ink-400 text-[11px]">
-            {inMeeting ? (
-              <>
-                会议进行中…
-                <br />
-                结束会议后由智能引擎自动产出
-              </>
-            ) : (
-              <>
-                纪要尚未生成
-                <br />
-                结束会议后由智能引擎自动产出
-              </>
-            )}
-          </span>
-        }
+    activeMinutes = <MinutesBody m={meeting.minutes} shareAction={shareAction} />;
+  } else if (meeting?.minutes_status === "generation_failed") {
+    activeMinutes = (
+      <MinutesErrorCard
+        rawError={meeting.minutes_error}
+        retrying={retrying}
+        onRetry={onRetry}
+        shareAction={shareAction}
       />
+    );
+  } else if (isFinalizedLike(meeting?.state)) {
+    activeMinutes = (
+      <MinutesGeneratingCard endedAt={meeting?.ended_at} shareAction={shareAction} />
+    );
+  } else {
+    const inMeeting = meeting?.state === "in_meeting";
+    activeMinutes = (
+      <div className="minutes-current-empty px-6 py-6">
+        <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
+          <FileText className="w-3.5 h-3.5 text-ink-500" />
+          <span>会议纪要</span>
+        </div>
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={
+            <span className="text-ink-400 text-[11px]">
+              {inMeeting ? (
+                <>
+                  会议进行中…
+                  <br />
+                  结束会议后会自动生成
+                </>
+              ) : meeting ? (
+                <>
+                  纪要尚未生成
+                  <br />
+                  结束会议后会自动出现在这里
+                </>
+              ) : (
+                <>选择下方历史纪要，或开始一场新会议</>
+              )}
+            </span>
+          }
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="minutes-view-shell">
+      {activeMinutes}
+      <MinutesHistory
+        meetings={historyMeetings}
+        currentId={currentId}
+        onSelect={selectMeeting}
+      />
+      {shareModal}
     </div>
+  );
+}
+
+function MinutesHistory({
+  meetings,
+  currentId,
+  onSelect,
+}: {
+  meetings: MeetingCard[];
+  currentId: string | null;
+  onSelect: (meetingId: string | null) => void;
+}): JSX.Element {
+  return (
+    <section className="minutes-history px-4 pb-5" data-testid="minutes-history">
+      <div className="minutes-history-heading flex items-center gap-2 px-2 pb-2 pt-4">
+        <History className="h-3.5 w-3.5" aria-hidden="true" />
+        <h3>历史纪要</h3>
+        <span className="ml-auto tabular-nums">{meetings.length}</span>
+      </div>
+      {meetings.length === 0 ? (
+        <div className="px-2 py-4 text-[11px] text-ink-400" data-testid="minutes-history-empty">
+          生成过的会议纪要会集中显示在这里
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {meetings.map((item) => {
+            const active = item.meeting_id === currentId;
+            const preview = active
+              ? "正在查看此纪要"
+              : item.minutes?.summary?.trim()
+                || `${Math.max(item.summary_segment_count, item.segments.length)} 段转录 · 点击查看完整纪要`;
+            return (
+              <button
+                key={item.meeting_id}
+                type="button"
+                className={`minutes-history-item w-full rounded-md px-2.5 py-2.5 text-left ${active ? "is-active" : ""}`}
+                onClick={() => onSelect(item.meeting_id)}
+                aria-current={active ? "page" : undefined}
+                data-testid="minutes-history-item"
+                data-history-meeting-id={item.meeting_id}
+              >
+                <span className="block truncate text-[12.5px] font-medium text-ink-800">
+                  {meetingDisplayTitle(item, "未命名会议")}
+                </span>
+                <span className="mt-1 line-clamp-2 block text-[11px] leading-[17px] text-ink-500">
+                  {preview}
+                </span>
+                <span className="mt-1.5 block text-[10px] tabular-nums text-ink-400">
+                  {formatMinutesDate(item.minutes?.created_at ?? item.ended_at ?? item.started_at)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -282,8 +428,8 @@ function MinutesGeneratingCard({
   let stage = "正在准备转写素材…";
   if (elapsed > 5) stage = "正在抽取会议要点…";
   if (elapsed > 30) stage = "正在整理决议与待办…";
-  if (elapsed > 60) stage = "模型还在思考，长会议通常需要 60–120 秒…";
-  if (elapsed > 150) stage = "比预期久了一点，若超过 3 分钟可点重试…";
+  if (elapsed > 60) stage = "仍在整理，长会议通常需要 1–2 分钟…";
+  if (elapsed > 150) stage = "比预期久一些，会继续在后台处理…";
 
   return (
     <div className="px-6 py-8 border-b border-paper-300">
@@ -299,7 +445,7 @@ function MinutesGeneratingCard({
         aria-live="polite"
       >
         <Loader2
-          className="w-14 h-14 text-rose-500/80 animate-spin mb-4"
+          className="w-14 h-14 text-accent/80 animate-spin mb-4"
           strokeWidth={1.5}
         />
         <div className="text-[13.5px] font-medium text-ink-800 mb-1.5">
@@ -327,9 +473,7 @@ function MinutesErrorCard({
   onRetry: () => void;
   shareAction?: ReactNode;
 }): JSX.Element {
-  const [showDetail, setShowDetail] = useState(false);
   const { headline, hint } = friendlyMinutesError(rawError);
-  const hasDetail = Boolean((rawError ?? "").trim());
   return (
     <div className="px-6 py-6 border-b border-paper-300">
       <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
@@ -364,31 +508,7 @@ function MinutesErrorCard({
           >
             重新生成纪要
           </Button>
-          {hasDetail && (
-            <Button
-              type="text"
-              size="small"
-              className="!text-rose-600 hover:!bg-rose-100/60 !px-2 inline-flex items-center"
-              onClick={() => setShowDetail((v) => !v)}
-              data-testid="minutes-error-toggle"
-            >
-              {showDetail ? (
-                <ChevronDown className="w-3 h-3 mr-0.5" />
-              ) : (
-                <ChevronRight className="w-3 h-3 mr-0.5" />
-              )}
-              {showDetail ? "收起详情" : "查看详情"}
-            </Button>
-          )}
         </div>
-        {showDetail && hasDetail && (
-          <pre
-            className="mt-2 max-h-32 overflow-auto rounded bg-rose-100/70 border border-rose-200 px-2 py-1.5 text-[11px] text-rose-900/80 leading-4 whitespace-pre-wrap break-words font-mono"
-            data-testid="minutes-error-detail"
-          >
-            {rawError}
-          </pre>
-        )}
       </div>
     </div>
   );
@@ -422,7 +542,7 @@ function MinutesBody({
         suggested_command: null,
       }));
   return (
-    <div className="px-6 py-5 border-b border-paper-300 max-h-[55vh] overflow-y-auto">
+    <div className="px-6 py-5 border-b border-paper-300">
       <div className="flex items-center gap-2 mb-3 text-[13px] text-ink-700 font-medium">
         <FileText className="w-3.5 h-3.5 text-ink-500" />
         <span>会议纪要</span>
@@ -435,10 +555,10 @@ function MinutesBody({
         {m.title}
       </h2>
       <div className="text-[11px] text-ink-400 mb-4 flex items-center gap-1.5">
-        <span>时长 {Math.round(m.duration_sec)}s</span>
+        <span>时长 {formatDuration(m.duration_sec)}</span>
       </div>
 
-      <p className="text-[13.5px] text-ink-800 leading-7 mb-5">{m.summary}</p>
+      <p className="text-[13.5px] text-ink-800 leading-7 mb-5 break-words [overflow-wrap:anywhere]">{m.summary}</p>
 
       {m.sections.map((sec, i) => (
         <section key={i} className="mb-4">
@@ -449,7 +569,7 @@ function MinutesBody({
             {sec.bullets.map((b, j) => (
               <li key={j} className="flex gap-2 leading-6">
                 <span className="text-ink-400 shrink-0">·</span>
-                <span>{b}</span>
+                <span className="min-w-0 break-words [overflow-wrap:anywhere]">{b}</span>
               </li>
             ))}
           </ul>
@@ -465,7 +585,7 @@ function MinutesBody({
             {m.decisions.map((d, i) => (
               <span
                 key={i}
-                className="text-[12px] px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200"
+                className="max-w-full break-words [overflow-wrap:anywhere] text-[12px] px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200"
               >
                 {d}
               </span>
@@ -534,7 +654,11 @@ function inferAutoExecutableTodo(
 }
 
 function autoExecStorageKey(meetingId: string, todoId: string): string {
-  return `echodesk:auto-exec:v1:${meetingId}:${todoId}`;
+  const backendScope =
+    typeof window === "undefined"
+      ? "server"
+      : backendBaseSnapshot() || window.location.origin;
+  return `echodesk:auto-exec:v1:${encodeURIComponent(backendScope)}:${meetingId}:${todoId}`;
 }
 
 function wasAutoExecAttempted(meetingId: string, todoId: string): boolean {
@@ -570,11 +694,37 @@ function MinutesTodoList({
   minutes: MeetingMinutes;
   todos: TodoItem[];
 }): JSX.Element {
+  const {
+    revision: backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    registerAbortController,
+  } = useBackendOriginFence();
   const prefillCommandBar = useStore((s) => s.prefillCommandBar);
   const addArtifact = useStore((s) => s.addArtifact);
   const speakerMap = useMeetingSpeakerMap(meetingId);
   const inFlightRef = useRef<Set<string>>(new Set());
   const [autoRunning, setAutoRunning] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    inFlightRef.current.clear();
+    setAutoRunning({});
+  }, [backendOriginRevision]);
+
+  useEffect(() => {
+    setAutoRunning((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const todoId of Object.keys(next)) {
+        const todo = todos.find((item) => item.id === todoId);
+        if (!todo || !["pending", "running"].includes(todo.status)) {
+          delete next[todoId];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [todos]);
 
   useEffect(() => {
     const candidates = todos
@@ -589,43 +739,70 @@ function MinutesTodoList({
     if (candidates.length === 0) return;
 
     let cancelled = false;
+    const originGeneration = captureGeneration();
+    const controller = new AbortController();
+    const unregisterController = registerAbortController(controller);
+    const canCommit = (): boolean =>
+      !cancelled &&
+      isCurrent(originGeneration) &&
+      !controller.signal.aborted;
     void (async () => {
-      for (const { todo, job } of candidates) {
-        if (cancelled) return;
-        inFlightRef.current.add(todo.id);
-        markAutoExecAttempted(meetingId, todo.id);
-        setAutoRunning((prev) => ({ ...prev, [todo.id]: true }));
-        try {
-          const artifact = await generateArtifact({
-            artifact_type: job.artifact_type,
-            brief: job.brief,
-            extra_instructions: job.extra_instructions,
-            meeting_id: meetingId,
-            todo_id: todo.id,
-          });
-          if (cancelled) return;
-          addArtifact(artifact);
-          message.success(`已自动执行会议待办：${artifact.title || artifact.artifact_id}`);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (!cancelled) message.error(`自动执行会议待办失败：${msg}`);
-        } finally {
-          inFlightRef.current.delete(todo.id);
-          if (!cancelled) {
-            setAutoRunning((prev) => {
-              const next = { ...prev };
-              delete next[todo.id];
-              return next;
-            });
+      try {
+        for (const { todo, job } of candidates) {
+          if (!canCommit()) return;
+          inFlightRef.current.add(todo.id);
+          markAutoExecAttempted(meetingId, todo.id);
+          setAutoRunning((prev) => ({ ...prev, [todo.id]: true }));
+          try {
+            const artifact = await generateArtifact(
+              {
+                artifact_type: job.artifact_type,
+                brief: job.brief,
+                extra_instructions: job.extra_instructions,
+                meeting_id: meetingId,
+                todo_id: todo.id,
+              },
+              { signal: controller.signal },
+            );
+            if (!canCommit()) return;
+            addArtifact(artifact);
+            message.success(
+              `已完成会议待办：${artifact.title?.trim() || "未命名工作产物"}`,
+            );
+          } catch (e) {
+            if (!canCommit()) return;
+            console.error("[minutes] automatic todo failed", e);
+            message.error("会议待办执行失败，可在纪要中重试");
+          } finally {
+            inFlightRef.current.delete(todo.id);
+            if (canCommit()) {
+              setAutoRunning((prev) => {
+                const next = { ...prev };
+                delete next[todo.id];
+                return next;
+              });
+            }
           }
         }
+      } finally {
+        unregisterController();
       }
     })();
 
     return () => {
       cancelled = true;
+      unregisterController();
     };
-  }, [addArtifact, meetingId, minutes, todos]);
+  }, [
+    addArtifact,
+    backendOriginRevision,
+    captureGeneration,
+    isCurrent,
+    meetingId,
+    minutes,
+    registerAbortController,
+    todos,
+  ]);
 
   if (todos.length === 0) {
     return (
@@ -650,10 +827,11 @@ function MinutesTodoList({
             todo={t}
             displayAssignee={remapAssignee(t.assignee, speakerMap)}
             autoRunning={autoRunning[t.id] === true}
-            onExecute={(text) =>
+            onExecute={(text, retryOfRunId) =>
               prefillCommandBar(text, {
                 meeting_id: meetingId,
                 todo_id: t.id,
+                retry_of_run_id: retryOfRunId,
               })
             }
           />
@@ -672,12 +850,15 @@ function TodoRow({
   todo: TodoItem;
   displayAssignee: string | null;
   autoRunning: boolean;
-  onExecute: (text: string) => void;
+  onExecute: (text: string, retryOfRunId?: string) => void;
 }): JSX.Element {
   const done = todo.status === "done";
   const cancelled = todo.status === "cancelled";
+  const failed = todo.status === "failed";
+  const waitingPermission = todo.status === "waiting_permission";
+  const running = autoRunning || todo.status === "running";
   const canExecute =
-    todo.status === "pending" &&
+    (todo.status === "pending" || failed) &&
     todo.kind === "actionable" &&
     typeof todo.suggested_command === "string" &&
     todo.suggested_command.length > 0;
@@ -686,6 +867,7 @@ function TodoRow({
       data-testid="minutes-todo-row"
       data-todo-id={todo.id}
       data-todo-status={todo.status}
+      data-workflow-run-id={todo.workflow_run_id ?? ""}
       className={`flex items-start gap-2 px-2 py-1.5 rounded-md border border-paper-200 bg-paper-50 ${
         done ? "opacity-70" : ""
       }`}
@@ -696,16 +878,20 @@ function TodoRow({
             className="w-4 h-4 text-emerald-600"
             aria-label="已完成"
           />
+        ) : failed ? (
+          <AlertCircle className="w-4 h-4 text-err" aria-label="执行失败" />
+        ) : running ? (
+          <Loader2 className="w-4 h-4 text-accent animate-spin" aria-label="执行中" />
         ) : (
           <Circle
             className={`w-4 h-4 ${cancelled ? "text-ink-300" : "text-ink-400"}`}
-            aria-label={cancelled ? "已取消" : "待办"}
+            aria-label={cancelled ? "已取消" : waitingPermission ? "等待授权" : "待办"}
           />
         )}
       </div>
       <div className="flex-1 min-w-0">
         <div
-          className={`text-[13px] leading-5 text-ink-800 ${
+          className={`text-[13px] leading-5 text-ink-800 break-words [overflow-wrap:anywhere] ${
             done || cancelled ? "line-through text-ink-500" : ""
           }`}
         >
@@ -721,37 +907,54 @@ function TodoRow({
             </Tag>
           )}
           {todo.kind === "actionable" && !done && (
-            <span className="text-[10.5px] text-accent">
-              {autoRunning ? "自动执行中" : "可执行"}
+            <span
+              className={`text-[10.5px] ${
+                failed
+                  ? "text-err"
+                  : waitingPermission
+                    ? "text-amber-700"
+                    : "text-accent"
+              }`}
+            >
+              {failed
+                ? "失败，可重试"
+                : waitingPermission
+                  ? "等待授权"
+                  : running
+                    ? "执行中"
+                    : "可执行"}
             </span>
           )}
           {done && todo.artifact_id && (
-            <a
-              href={artifactDownloadUrl(todo.artifact_id)}
-              target="_blank"
-              rel="noreferrer"
-              data-testid="minutes-todo-artifact-link"
+            <AuthenticatedDownloadLink
+              url={artifactDownloadUrl(todo.artifact_id)}
+              testId="minutes-todo-artifact-link"
               className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-800 underline-offset-2 hover:underline"
             >
               <Download className="w-3 h-3" />
               已生成 · 下载
-            </a>
+            </AuthenticatedDownloadLink>
           )}
         </div>
       </div>
       {canExecute && (
-        <Tooltip title={`预填到指令栏：${todo.suggested_command}`}>
+        <Tooltip title="放入下方输入框，可在发送前修改">
           <Button
             type="default"
             size="small"
             icon={<Play className="w-3 h-3" />}
             data-testid="minutes-todo-execute-btn"
-            loading={autoRunning}
-            disabled={autoRunning}
-            onClick={() => onExecute(todo.suggested_command as string)}
+            loading={running}
+            disabled={running || waitingPermission}
+            onClick={() =>
+              onExecute(
+                todo.suggested_command as string,
+                failed ? (todo.workflow_run_id ?? undefined) : undefined,
+              )
+            }
             className="!shrink-0 !text-accent"
           >
-            {autoRunning ? "执行中" : "执行"}
+            {running ? "执行中" : failed ? "重试" : "执行"}
           </Button>
         </Tooltip>
       )}
