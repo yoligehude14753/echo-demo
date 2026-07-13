@@ -1872,7 +1872,7 @@ async def test_expired_global_lease_fence_prevents_slow_old_owner_from_mutating(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(workflow_service_module, "_OUTBOX_GLOBAL_RECOVERY_LEASE_S", 0.05)
+    monkeypatch.setattr(workflow_service_module, "_OUTBOX_GLOBAL_RECOVERY_LEASE_S", 60.0)
     seed, _bus = await _service(
         tmp_path,
         workflow_outbox_replay_window_rows=0,
@@ -1910,7 +1910,13 @@ async def test_expired_global_lease_fence_prevents_slow_old_owner_from_mutating(
     assert await healthy.flush_outbox(limit=0) == 0
     slow_flush = asyncio.create_task(slow.flush_outbox(limit=10))
     await publish_started.wait()
-    await asyncio.sleep(0.08)
+    async with aiosqlite.connect(str(seed.settings.db_path)) as conn:
+        await conn.execute(
+            """UPDATE workflow_outbox_global_recovery_state
+               SET lease_expires_at = 0
+               WHERE singleton = 1 AND lease_owner IS NOT NULL"""
+        )
+        await conn.commit()
 
     assert await healthy.flush_outbox(limit=10) == 1
     release_publish.set()
