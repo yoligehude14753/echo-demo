@@ -1,0 +1,37 @@
+event_id: "E-20260713T1313-001"
+event_type: "add"
+timestamp: "2026-07-13T13:13:27+08:00"
+author: "agent/codex-android-release-fix"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-032"
+      claim: "The signed Android release workflow prepares KVM with the same direct /dev/kvm character-device and read/write checks as main CI, without treating an optional udev trigger as a release gate."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-13T13:13:27+08:00"
+      observed_by: "agent/codex-android-release-fix"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - ".github/workflows/build-android-tv-release.yml"
+        - ".github/workflows/ci.yml"
+        - "https://github.com/yoligehude14753/echo-demo/actions/runs/29225420859"
+        - "runtime:main exact-SHA Android identity instrumentation => passed"
+      evidence: "Two signed-release attempts built and verified the APK candidates, downloaded the pinned historical APKs, and then exited in the udev-based KVM preparation block. The exact same main SHA passed the CI Android emulator gate, whose KVM preparation directly verifies /dev/kvm and grants read/write permission only when needed. The release workflow now uses that proven fail-closed contract and still exits when the character device or required access is unavailable."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.1"
+        - "android"
+        - "release"
+        - "github-actions"
+        - "kvm"
+        - "emulator"
+        - "bugfix"
+git_commit: null
