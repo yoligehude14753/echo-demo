@@ -93,7 +93,7 @@ async def exec_python_to_artifact(
     # 重写 save()/output() 路径为绝对路径
     code_norm = re.sub(
         r"(doc|wb|workbook|pres|pdf)\.(save|output)\(\s*['\"][^'\"]+['\"]\s*\)",
-        f"\\1.\\2(r'{output_path.resolve()}')",
+        lambda match: f"{match.group(1)}.{match.group(2)}({str(output_path.resolve())!r})",
         code,
     )
 

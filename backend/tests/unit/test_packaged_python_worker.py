@@ -152,6 +152,25 @@ async def test_frozen_executor_uses_hidden_worker_and_preserves_contract(
     assert captured["env"]["ECHODESK_WORKER_TEST"] == "1"
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_executor_escapes_windows_style_output_path(tmp_path: Path) -> None:
+    build_dir = tmp_path / r"C:\echodesk"
+    result = await exec_python_to_artifact(
+        "from pathlib import Path\n"
+        "class Doc:\n"
+        "    def save(self, path): Path(path).write_text('ok' * 64, encoding='utf-8')\n"
+        "doc = Doc()\n"
+        "doc.save('ignored.docx')\n",
+        build_dir,
+        expected_ext="docx",
+    )
+
+    assert result.success, result.stderr
+    assert result.output_path == build_dir / "output.docx"
+    assert result.output_path.read_text(encoding="utf-8") == "ok" * 64
+
+
 @pytest.mark.unit
 def test_artifact_runtime_smoke_generates_openable_office_pdf_and_pptx(
     tmp_path: Path,
