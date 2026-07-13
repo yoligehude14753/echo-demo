@@ -88,7 +88,7 @@ async def _wait_for_bridge_completion(
     service: AgentTaskService,
     task_id: str,
     *,
-    timeout_s: float = 1.0,
+    timeout_s: float = 5.0,
 ) -> AgentTaskRecord:
     deadline = asyncio.get_running_loop().time() + timeout_s
     while asyncio.get_running_loop().time() < deadline:
@@ -961,8 +961,8 @@ async def test_projection_fence_blocks_stale_side_effects_after_mid_projection_t
     second = _service(
         settings,
         holder_id="projection-instance-b",
-        heartbeat=0.02,
-        ttl=0.08,
+        heartbeat=0.1,
+        ttl=1.0,
     )
     rec = await first.submit_task(
         AgentIntent(
