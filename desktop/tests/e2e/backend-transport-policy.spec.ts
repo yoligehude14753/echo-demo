@@ -940,7 +940,7 @@ test("Request signal and headers survive transport while caller authorization is
     business: "preserved",
     fromInit: "preserved-too",
     contentType: "text/plain",
-    clientVersion: "0.3.1",
+    clientVersion: "0.3.2",
     redirect: "error",
     method: "POST",
   });

@@ -223,7 +223,7 @@ jobs:
         timeout-minutes: 20
         working-directory: backend
         run: |
-          set -o pipefail
+          set -euo pipefail
           # Reuse the lockfile-installed deck runtime for the real pptxgenjs
           # contract.  Without these flags the test deliberately skips under
           # CI, which contradicts this job's zero-skip invariant.
@@ -236,25 +236,143 @@ jobs:
           export RAG_INDEX_DIR="$ECHO_USER_DIR/rag_index"
           export WORKSPACE_STATE_FILE="$ECHO_USER_DIR/workspace_state.json"
           export SKILL_EXECUTOR_BUILD_DIR="$ECHO_USER_DIR/skill_build"
-          mkdir -p "$RUNNER_TEMP/echodesk-backend-test-evidence"
-          pytest_status=0
-          pytest tests -m "not live" \
+          evidence="$RUNNER_TEMP/echodesk-backend-test-evidence"
+          junit="pytest-deterministic.xml"
+          log="$evidence/pytest.log"
+          mkdir -p "$evidence"
+
+          completion_is_green() {
+            python - "$junit" "$log" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+
+          junit_path = pathlib.Path(sys.argv[1])
+          log_path = pathlib.Path(sys.argv[2])
+
+          try:
+              root = ET.parse(junit_path).getroot()
+              suites = [
+                  node
+                  for node in root.iter("testsuite")
+                  if not any(child.tag == "testsuite" for child in node)
+              ]
+              if not suites:
+                  raise ValueError("JUnit contains no completed test suite")
+
+              totals = {
+                  key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
+                  for key in ("tests", "failures", "errors", "skipped")
+              }
+              testcase_count = sum(1 for _ in root.iter("testcase"))
+              if totals["tests"] <= 0 or testcase_count != totals["tests"]:
+                  raise ValueError(
+                      "JUnit is incomplete: "
+                      f"declared={totals['tests']} cases={testcase_count}"
+                  )
+              if totals["failures"] or totals["errors"] or totals["skipped"]:
+                  raise ValueError(f"JUnit is not green: {totals}")
+
+              log_text = log_path.read_text(encoding="utf-8", errors="replace")
+              summaries = re.findall(r"(?m)^=+\s+(.*?)\s+=+\s*$", log_text)
+              summary = next(
+                  (
+                      item
+                      for item in reversed(summaries)
+                      if re.search(r"\b\d+ passed\b", item)
+                      and re.search(r"\bin \d", item)
+                  ),
+                  None,
+              )
+              if summary is None:
+                  raise ValueError("pytest final summary is missing")
+              passed_match = re.search(r"\b(\d+) passed\b", summary)
+              if passed_match is None or int(passed_match.group(1)) != totals["tests"]:
+                  raise ValueError(
+                      "pytest/JUnit count mismatch: "
+                      f"summary={summary!r} junit={totals['tests']}"
+                  )
+              if re.search(r"\b\d+ (?:failed|errors?|skipped|xfailed|xpassed)\b", summary):
+                  raise ValueError(f"pytest summary is not deterministic-green: {summary}")
+          except Exception as exc:
+              print(f"deterministic completion evidence invalid: {exc}", file=sys.stderr)
+              raise SystemExit(1) from exc
+
+          print(
+              "deterministic completion evidence is green: "
+              f"{totals['tests']} passed, zero failures/errors/skips"
+          )
+          PY
+          }
+
+          terminate_pytest_group() {
+            local pgid="$1"
+            kill -TERM -- "-$pgid" 2>/dev/null || true
+            for _ in {1..10}; do
+              if ! kill -0 -- "-$pgid" 2>/dev/null; then
+                return
+              fi
+              sleep 1
+            done
+            kill -KILL -- "-$pgid" 2>/dev/null || true
+          }
+
+          # Start pytest as its own process group. A green JUnit file and the
+          # final summary prove that the suite completed; only then may the
+          # supervisor reap a leaked shutdown thread/child that keeps Python
+          # alive after pytest_sessionfinish.
+          setsid pytest tests -m "not live" \
             --junitxml=pytest-deterministic.xml \
             --cov=app --cov-report=term-missing \
             --timeout=60 --timeout-method=thread --durations=20 \
-            > "$RUNNER_TEMP/echodesk-backend-test-evidence/pytest.log" 2>&1 \
-            || pytest_status=$?
-          cat "$RUNNER_TEMP/echodesk-backend-test-evidence/pytest.log"
+            > "$log" 2>&1 &
+          pytest_pid=$!
+          pytest_status=""
+          completion_seen_at=0
+          supervisor_deadline=$((SECONDS + 15 * 60))
+
+          while kill -0 "$pytest_pid" 2>/dev/null; do
+            if completion_is_green >/dev/null 2>&1; then
+              if (( completion_seen_at == 0 )); then
+                completion_seen_at=$SECONDS
+              elif (( SECONDS - completion_seen_at >= 20 )); then
+                echo "::warning::pytest completed successfully but did not exit; reaping its isolated process group"
+                terminate_pytest_group "$pytest_pid"
+                set +e
+                wait "$pytest_pid"
+                set -e
+                pytest_status=0
+                break
+              fi
+            else
+              completion_seen_at=0
+            fi
+
+            if (( SECONDS >= supervisor_deadline )); then
+              echo "::error::pytest did not produce complete green evidence within 15 minutes"
+              terminate_pytest_group "$pytest_pid"
+              set +e
+              wait "$pytest_pid"
+              set -e
+              pytest_status=124
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ -z "$pytest_status" ]]; then
+            set +e
+            wait "$pytest_pid"
+            pytest_status=$?
+            set -e
+          fi
+
+          cat "$log"
           if (( pytest_status != 0 )); then
             exit "$pytest_status"
           fi
-          python - <<'PY'
-          import xml.etree.ElementTree as ET
-          root = ET.parse("pytest-deterministic.xml").getroot()
-          skipped = sum(int(node.attrib.get("skipped", "0")) for node in root.iter("testsuite"))
-          if skipped:
-              raise SystemExit(f"deterministic gate must have zero skips; got {skipped}")
-          PY
+          completion_is_green
       - name: collect backend test failure diagnostics
         if: ${{ failure() || cancelled() }}
         shell: bash

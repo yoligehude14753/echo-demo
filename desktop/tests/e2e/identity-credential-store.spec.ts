@@ -183,6 +183,7 @@ test("Electron identity recovery errors are visible without exposing internals",
     window.echo = {
       ...(window.echo ?? {}),
       isElectron: true,
+      isPublicDemo: true,
       ensurePublicSession: async () => {
         throw new Error("safeStorage unavailable internal-detail");
       },
@@ -221,6 +222,7 @@ test("transient device identity errors expose a working retry action", async ({ 
     window.echo = {
       ...(window.echo ?? {}),
       isElectron: true,
+      isPublicDemo: true,
       ensurePublicSession: async () => {
         throw new Error("temporary secure store failure");
       },
