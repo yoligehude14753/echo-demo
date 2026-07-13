@@ -426,6 +426,7 @@ test("A artifacts/tasks restore 延迟返回时不能污染 B store 或 DOM", as
   await waitForPending(page, "tasks");
 
   await switchBackend(page, ORIGIN_B);
+  await page.getByTestId("inspector-tab-artifacts").click();
   await expect.poll(() => storeSnapshot(page)).toContain(B_ARTIFACT_TITLE);
   await expect.poll(() => storeSnapshot(page)).toContain(B_TASK_TITLE);
   await expect(

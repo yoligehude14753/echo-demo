@@ -129,7 +129,6 @@ export default function CommandBar(): JSX.Element {
   const currentMeeting = useStore((s) =>
     s.currentMeetingId ? s.meetings[s.currentMeetingId] : undefined,
   );
-  const addArtifact = useStore((s) => s.addArtifact);
   const applyEvent = useStore((s) => s.applyEvent);
   const upsertAgentTask = useStore((s) => s.upsertAgentTask);
   const registerCommandBarPrefill = useStore((s) => s.registerCommandBarPrefill);
@@ -391,6 +390,7 @@ export default function CommandBar(): JSX.Element {
     originGeneration: number,
   ): Promise<void> {
     if (!isCurrent(originGeneration)) return;
+    const interactionMeetingId = meta?.meeting_id ?? currentMeetingId ?? undefined;
     switch (r.kind) {
       case "generate_html":
       case "generate_pptx":
@@ -410,12 +410,14 @@ export default function CommandBar(): JSX.Element {
           type: "rag.query",
           seq: 0,
           ts: now,
+          meeting_id: interactionMeetingId,
           payload: { question: originalText },
         });
         applyEvent({
           type: "chat.done",
           seq: 0,
           ts: new Date(Date.now() + 1).toISOString(),
+          meeting_id: interactionMeetingId,
           payload: {
             question: originalText,
             answer: `已开始${kindLabel[r.kind]}：${brief}\n\n我会先检索本地知识库和联网资料，再基于证据生成。完成后可在右侧“工作产物”中查看。`,
@@ -447,16 +449,24 @@ export default function CommandBar(): JSX.Element {
         })
           .then((art) => {
             if (!isCurrent(originGeneration)) return;
-            addArtifact(art);
             const title = art.title?.trim() || `未命名${kindLabel[r.kind].replace("生成 ", "")}`;
+            const completedAt = Date.now();
             applyEvent({
               type: "chat.done",
               seq: 0,
-              ts: new Date().toISOString(),
+              ts: new Date(completedAt).toISOString(),
+              meeting_id: interactionMeetingId,
               payload: {
                 question: originalText,
                 answer: `已生成 ${art.artifact_type.toUpperCase()}：${title}\n\n[下载/打开产物](${artifactDownloadUrl(art.artifact_id)})`,
               },
+            });
+            applyEvent({
+              type: "artifact.ready",
+              seq: 0,
+              ts: new Date(completedAt + 1).toISOString(),
+              meeting_id: interactionMeetingId,
+              payload: art as unknown as Record<string, unknown>,
             });
             message.success(`已生成 ${art.artifact_type}`);
           })
@@ -467,6 +477,7 @@ export default function CommandBar(): JSX.Element {
               type: "chat.done",
               seq: 0,
               ts: new Date().toISOString(),
+              meeting_id: interactionMeetingId,
               payload: {
                 question: originalText,
                 answer: `${kindLabel[r.kind]}失败。请检查要求后重试；已有文件不会受影响。`,
@@ -524,6 +535,7 @@ export default function CommandBar(): JSX.Element {
           type: "rag.query",
           seq: 0,
           ts: new Date().toISOString(),
+          meeting_id: interactionMeetingId,
           payload: { question },
         });
         message.info("正在回复…");
@@ -534,6 +546,7 @@ export default function CommandBar(): JSX.Element {
               type: "chat.done",
               seq: 0,
               ts: new Date().toISOString(),
+              meeting_id: interactionMeetingId,
               payload: {
                 question,
                 answer,
@@ -576,6 +589,7 @@ export default function CommandBar(): JSX.Element {
           type: "rag.query",
           seq: 0,
           ts: new Date().toISOString(),
+          meeting_id: interactionMeetingId,
           payload: { question },
         });
         message.info("正在检索相关资料…");
@@ -592,6 +606,7 @@ export default function CommandBar(): JSX.Element {
               type: "rag.answer.done",
               seq: 0,
               ts: new Date().toISOString(),
+              meeting_id: interactionMeetingId,
               payload: {
                 question,
                 answer: ans.answer,

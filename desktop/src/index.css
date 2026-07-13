@@ -727,9 +727,37 @@ label:has([data-testid="meeting-search-input"]) svg {
   background: var(--ed-surface);
 }
 
-.workspace-view-tabs,
 .inspector-tabs {
   height: 100%;
+}
+
+.conversation-mode {
+  height: 100%;
+  color: var(--ed-ink-secondary);
+  font-size: 12px;
+}
+
+.conversation-mode-title {
+  color: var(--ed-ink);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.conversation-source-legend {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--ed-ink-tertiary);
+  white-space: nowrap;
+}
+
+.conversation-source-legend svg {
+  color: #64748b;
+}
+
+.conversation-source-legend--ai svg {
+  color: #059669;
 }
 
 .view-tab,
@@ -827,7 +855,7 @@ label:has([data-testid="meeting-search-input"]) svg {
   z-index: 5;
   margin: -1px 0 12px;
   padding: 11px 0 9px;
-  border-bottom: 1px solid var(--ed-border);
+  border-bottom: 0;
   background: rgba(255, 255, 255, 0.94);
   color: var(--ed-ink-tertiary);
   font-size: 12px;
@@ -837,21 +865,16 @@ label:has([data-testid="meeting-search-input"]) svg {
 [data-testid="transcript-row"] {
   position: relative;
   align-items: flex-start !important;
-  gap: 11px !important;
-  margin-top: 0 !important;
-  padding: 13px 0 14px;
-  border-bottom: 1px solid var(--ed-border);
-}
-
-[data-testid="transcript-row"]:last-child {
-  border-bottom: 0;
+  gap: 10px !important;
+  padding: 0;
+  border: 0;
 }
 
 [data-testid="speaker-avatar"] {
-  width: 28px !important;
-  height: 28px !important;
+  width: 30px !important;
+  height: 30px !important;
   margin-top: 1px;
-  border-radius: 8px !important;
+  border-radius: 9px !important;
   font-size: 11px !important;
   font-weight: 650 !important;
   box-shadow: none !important;
@@ -868,7 +891,7 @@ label:has([data-testid="meeting-search-input"]) svg {
   min-height: 20px;
   margin: 0 0 2px !important;
   padding: 0 !important;
-  color: var(--ed-ink-secondary) !important;
+  color: var(--ed-ink-secondary);
   font-size: 12px !important;
   font-weight: 600;
 }
@@ -889,7 +912,7 @@ label:has([data-testid="meeting-search-input"]) svg {
 [data-testid="transcript-time"] {
   position: static !important;
   display: inline-block;
-  margin-left: 8px;
+  margin: 3px 0 0;
   transform: none !important;
   opacity: 1 !important;
   color: var(--ed-ink-tertiary) !important;
@@ -898,25 +921,20 @@ label:has([data-testid="meeting-search-input"]) svg {
   font-variant-numeric: tabular-nums;
 }
 
-.echodesk-stream--assistant [data-testid="transcript-row"] {
-  border-bottom: 0;
-  padding-block: 9px;
-}
-
-.echodesk-stream--assistant [data-testid="user-message"] {
+.echodesk-stream--conversation [data-testid="user-message"] {
   max-width: 640px;
   border: 0 !important;
   border-radius: 12px 12px 4px 12px !important;
   padding: 9px 12px !important;
-  background: var(--ed-surface-active) !important;
+  background: #eff6ff !important;
   box-shadow: none !important;
-  color: var(--ed-ink) !important;
+  color: #1e3a5f !important;
   font-size: 14px !important;
   line-height: 1.55 !important;
   overflow-wrap: anywhere;
 }
 
-.echodesk-stream--assistant [data-testid="assistant-message"] {
+.echodesk-stream--conversation [data-testid="assistant-message"] {
   width: 100%;
   max-width: 760px;
   border: 0 !important;
@@ -936,7 +954,7 @@ label:has([data-testid="meeting-search-input"]) svg {
   color: var(--ed-ink);
   font-family: var(--ed-font-sans);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 [data-testid="assistant-message"] code {
@@ -1144,7 +1162,44 @@ label:has([data-testid="meeting-search-input"]) svg {
   font-family: var(--ed-font-sans) !important;
   font-size: 17px !important;
   font-weight: 620 !important;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
+}
+
+.minutes-view-shell {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--ed-surface-subtle);
+}
+
+.minutes-view-shell > .border-b,
+.minutes-current-empty {
+  border-bottom: 0 !important;
+}
+
+.minutes-history-heading {
+  color: var(--ed-ink-tertiary);
+  font-size: 11px;
+}
+
+.minutes-history-heading h3 {
+  margin: 0;
+  color: inherit !important;
+  font-size: 11px !important;
+  font-weight: 620 !important;
+}
+
+.minutes-history-item {
+  border: 0;
+  background: transparent;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.minutes-history-item:hover {
+  background: var(--ed-surface-hover);
+}
+
+.minutes-history-item.is-active {
+  background: var(--ed-surface-active);
 }
 
 .minutes-panel p,

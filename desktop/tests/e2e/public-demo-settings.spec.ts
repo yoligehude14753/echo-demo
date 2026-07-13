@@ -108,6 +108,7 @@ test("公共 Electron 的远端 PPTX 不走本机路径 IPC，改用身份绑定
     });
   });
 
+  await page.getByTestId("inspector-tab-artifacts").click();
   const downloadPromise = page.waitForEvent("download");
   await page.locator('[data-artifact-id="public-pptx"]').click();
   const download = await downloadPromise;
@@ -221,6 +222,7 @@ test("公共 PPTX 下载失败会取消响应流并释放 transport lease", asyn
     });
   });
 
+  await page.getByTestId("inspector-tab-artifacts").click();
   await page.locator('[data-artifact-id="public-pptx-error"]').click();
   await expect
     .poll(() =>
@@ -332,6 +334,7 @@ test("公共 HTML 预览与下载只使用 authenticated bounded blob URL", asyn
     });
   });
 
+  await page.getByTestId("inspector-tab-artifacts").click();
   await page.locator('[data-artifact-id="public-html"]').click();
   const frame = page.getByTestId("preview-iframe-html");
   await expect(frame).toBeVisible();

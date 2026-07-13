@@ -84,17 +84,17 @@ test("packaged public app uses the official Origin with anonymous health and ses
       const transcriptHeader = document.querySelector<HTMLElement>(
         ".echodesk-transcript-header",
       );
-      const transcriptTab = document.querySelector<HTMLElement>(
-        "[data-testid='workspace-view-transcript']",
+      const conversationTitle = document.querySelector<HTMLElement>(
+        "[data-testid='conversation-mode-title']",
       );
       const transcriptA11y = document.querySelector<HTMLElement>(
         "[data-testid='transcript-title']",
       );
-      if (!transcriptHeader || !transcriptTab || !transcriptA11y) {
+      if (!transcriptHeader || !conversationTitle || !transcriptA11y) {
         throw new Error("transcript layout contract unavailable");
       }
       const headerStyle = window.getComputedStyle(transcriptHeader);
-      const tabStyle = window.getComputedStyle(transcriptTab);
+      const conversationStyle = window.getComputedStyle(conversationTitle);
       const a11yStyle = window.getComputedStyle(transcriptA11y);
       const a11yRect = transcriptA11y.getBoundingClientRect();
       const [healthResponse, bootstrapResponse] = await Promise.all([
@@ -164,8 +164,8 @@ test("packaged public app uses the official Origin with anonymous health and ses
             .getPropertyValue("--ed-surface")
             .trim(),
           headerHeight: headerStyle.height,
-          tabHeight: tabStyle.height,
-          tabFontSize: tabStyle.fontSize,
+          conversationHeight: conversationStyle.height,
+          conversationFontSize: conversationStyle.fontSize,
           a11yText: transcriptA11y.textContent?.trim() ?? "",
           a11yWidth: a11yRect.width,
           a11yHeight: a11yRect.height,
@@ -193,10 +193,10 @@ test("packaged public app uses the official Origin with anonymous health and ses
     expect(result.assets.bodyFontFamily).toContain("-apple-system");
     expect(result.assets.surfaceVariable).not.toBe("");
     expect(result.assets.headerHeight).toBe("48px");
-    expect(result.assets.tabHeight).toBe("32px");
-    expect(Number.parseFloat(result.assets.tabFontSize)).toBeGreaterThanOrEqual(12);
+    expect(Number.parseFloat(result.assets.conversationHeight)).toBeGreaterThanOrEqual(18);
+    expect(Number.parseFloat(result.assets.conversationFontSize)).toBeGreaterThanOrEqual(12);
     expect(result.assets).toMatchObject({
-      a11yText: "转写流",
+      a11yText: "对话流",
       a11yWidth: 1,
       a11yHeight: 1,
       a11yPosition: "absolute",

@@ -311,7 +311,7 @@ test.describe("EchoDesk 打包 App", () => {
             "[data-testid='transcript-scroller']",
             ".echodesk-transcript-empty",
           ]),
-          transcriptTab: pick("[data-testid='workspace-view-transcript']"),
+          conversationTitle: pick("[data-testid='conversation-mode-title']"),
           transcriptA11y: (() => {
             const el = document.querySelector<HTMLElement>(
               "[data-testid='transcript-title']",
@@ -337,7 +337,7 @@ test.describe("EchoDesk 打包 App", () => {
       expect(layout.body.scrollWidth).toBeLessThanOrEqual(layout.viewport.width + 2);
       const workspace = requireRect(layout.workspace, "workspace bar");
       const transcript = requireRect(layout.transcript, "transcript scroller");
-      const transcriptTab = requireRect(layout.transcriptTab, "transcript tab");
+      const conversationTitle = requireRect(layout.conversationTitle, "conversation title");
       const command = requireRect(layout.command, "command textarea");
       const captureStatus = requireRect(layout.capture, "capture status");
       const settingsButton = requireRect(layout.settingsButton, "settings button");
@@ -346,7 +346,7 @@ test.describe("EchoDesk 打包 App", () => {
       for (const [name, rect] of Object.entries({
         workspace,
         transcript,
-        transcriptTab,
+        conversationTitle,
         command,
         captureStatus,
         settingsButton,
@@ -364,13 +364,13 @@ test.describe("EchoDesk 打包 App", () => {
       }
 
       expect(transcript.height).toBeGreaterThan(200);
-      expect(transcriptTab.height).toBeGreaterThan(10);
-      expect(transcriptTab.height).toBeLessThanOrEqual(36);
-      expect(transcriptTab.x).toBeGreaterThanOrEqual(-1);
-      expect(transcriptTab.right).toBeLessThanOrEqual(layout.viewport.width + 2);
-      expect(Number.parseFloat(transcriptTab.fontSize)).toBeGreaterThanOrEqual(12);
+      expect(conversationTitle.height).toBeGreaterThan(10);
+      expect(conversationTitle.height).toBeLessThanOrEqual(36);
+      expect(conversationTitle.x).toBeGreaterThanOrEqual(-1);
+      expect(conversationTitle.right).toBeLessThanOrEqual(layout.viewport.width + 2);
+      expect(Number.parseFloat(conversationTitle.fontSize)).toBeGreaterThanOrEqual(12);
       expect(layout.transcriptA11y).toEqual({
-        text: "转写流",
+        text: "对话流",
         width: 1,
         height: 1,
         position: "absolute",

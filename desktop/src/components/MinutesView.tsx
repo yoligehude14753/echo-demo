@@ -6,6 +6,7 @@ import {
   Circle,
   Download,
   FileText,
+  History,
   Loader2,
   Play,
   QrCode,
@@ -20,6 +21,7 @@ import {
   type ArtifactKind,
 } from "@/api";
 import { buildSpeakerDisplayMap } from "@/lib/speakerDisplay";
+import { meetingDisplayTitle } from "@/lib/meetingDisplay";
 import MeetingShareModal from "@/components/MeetingShareModal";
 import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
@@ -51,7 +53,7 @@ function remapAssignee(
   return raw; // displayMap 里没这人，原样
 }
 import { projectMinutesWithWorkflowRuns, useStore } from "@/store";
-import type { MeetingMinutes, TodoItem } from "@/types";
+import type { MeetingCard, MeetingMinutes, TodoItem } from "@/types";
 
 function isFinalizedLike(state: string | undefined): boolean {
   return state === "ended" || state === "finalized";
@@ -65,6 +67,18 @@ function formatDuration(seconds: number): string {
   return remainingSeconds > 0
     ? `${minutes} 分 ${remainingSeconds} 秒`
     : `${minutes} 分钟`;
+}
+
+function formatMinutesDate(iso: string | undefined): string {
+  if (!iso) return "时间未知";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function friendlyMinutesError(raw: string | null | undefined): {
@@ -131,6 +145,8 @@ export default function MinutesView(): JSX.Element {
   const meeting = useStore((s) =>
     currentId ? s.meetings[currentId] : undefined,
   );
+  const meetings = useStore((s) => s.meetings);
+  const selectMeeting = useStore((s) => s.selectMeeting);
   const upsertMeeting = useStore((s) => s.upsertMeeting);
   const removeArtifact = useStore((s) => s.removeArtifact);
   const [retrying, setRetrying] = useState(false);
@@ -258,70 +274,134 @@ export default function MinutesView(): JSX.Element {
     />
   );
 
-  // 1) 已生成：渲染纪要主体
+  const historyMeetings = useMemo(
+    () =>
+      Object.values(meetings)
+        .filter((item) => item.minutes_status === "ok" || item.minutes !== undefined)
+        .sort((a, b) =>
+          (b.minutes?.created_at ?? b.ended_at ?? b.started_at ?? "").localeCompare(
+            a.minutes?.created_at ?? a.ended_at ?? a.started_at ?? "",
+          ),
+        ),
+    [meetings],
+  );
+
+  let activeMinutes: JSX.Element;
   if (meeting?.minutes) {
-    return (
-      <>
-        <MinutesBody m={meeting.minutes} shareAction={shareAction} />
-        {shareModal}
-      </>
-    );
-  }
-
-  // 2) 失败：给重试按钮 + 错误消息
-  if (meeting?.minutes_status === "generation_failed") {
-    return (
-      <>
-        <MinutesErrorCard
-          rawError={meeting.minutes_error}
-          retrying={retrying}
-          onRetry={onRetry}
-          shareAction={shareAction}
-        />
-        {shareModal}
-      </>
-    );
-  }
-
-  // 3) 生成中 / 已 finalized 但 minutes 还没拿到：大转圈 + elapsed
-  if (isFinalizedLike(meeting?.state)) {
-    return (
-      <>
-        <MinutesGeneratingCard endedAt={meeting?.ended_at} shareAction={shareAction} />
-        {shareModal}
-      </>
-    );
-  }
-
-  // 4) 会议中（in_meeting）或没有任何 meeting
-  const inMeeting = meeting?.state === "in_meeting";
-  return (
-    <div className="px-6 py-6 border-b border-paper-300">
-      <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
-        <FileText className="w-3.5 h-3.5 text-ink-500" />
-        <span>会议纪要</span>
-      </div>
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description={
-          <span className="text-ink-400 text-[11px]">
-            {inMeeting ? (
-              <>
-                会议进行中…
-                <br />
-                结束会议后会自动生成
-              </>
-            ) : (
-              <>
-                纪要尚未生成
-                <br />
-                开始并结束会议后，纪要会自动出现在这里
-              </>
-            )}
-          </span>
-        }
+    activeMinutes = <MinutesBody m={meeting.minutes} shareAction={shareAction} />;
+  } else if (meeting?.minutes_status === "generation_failed") {
+    activeMinutes = (
+      <MinutesErrorCard
+        rawError={meeting.minutes_error}
+        retrying={retrying}
+        onRetry={onRetry}
+        shareAction={shareAction}
       />
+    );
+  } else if (isFinalizedLike(meeting?.state)) {
+    activeMinutes = (
+      <MinutesGeneratingCard endedAt={meeting?.ended_at} shareAction={shareAction} />
+    );
+  } else {
+    const inMeeting = meeting?.state === "in_meeting";
+    activeMinutes = (
+      <div className="minutes-current-empty px-6 py-6">
+        <div className="flex items-center gap-2 mb-4 text-[13px] text-ink-700 font-medium">
+          <FileText className="w-3.5 h-3.5 text-ink-500" />
+          <span>会议纪要</span>
+        </div>
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={
+            <span className="text-ink-400 text-[11px]">
+              {inMeeting ? (
+                <>
+                  会议进行中…
+                  <br />
+                  结束会议后会自动生成
+                </>
+              ) : meeting ? (
+                <>
+                  纪要尚未生成
+                  <br />
+                  结束会议后会自动出现在这里
+                </>
+              ) : (
+                <>选择下方历史纪要，或开始一场新会议</>
+              )}
+            </span>
+          }
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="minutes-view-shell">
+      {activeMinutes}
+      <MinutesHistory
+        meetings={historyMeetings}
+        currentId={currentId}
+        onSelect={selectMeeting}
+      />
+      {shareModal}
     </div>
+  );
+}
+
+function MinutesHistory({
+  meetings,
+  currentId,
+  onSelect,
+}: {
+  meetings: MeetingCard[];
+  currentId: string | null;
+  onSelect: (meetingId: string | null) => void;
+}): JSX.Element {
+  return (
+    <section className="minutes-history px-4 pb-5" data-testid="minutes-history">
+      <div className="minutes-history-heading flex items-center gap-2 px-2 pb-2 pt-4">
+        <History className="h-3.5 w-3.5" aria-hidden="true" />
+        <h3>历史纪要</h3>
+        <span className="ml-auto tabular-nums">{meetings.length}</span>
+      </div>
+      {meetings.length === 0 ? (
+        <div className="px-2 py-4 text-[11px] text-ink-400" data-testid="minutes-history-empty">
+          生成过的会议纪要会集中显示在这里
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {meetings.map((item) => {
+            const active = item.meeting_id === currentId;
+            const preview = active
+              ? "正在查看此纪要"
+              : item.minutes?.summary?.trim()
+                || `${Math.max(item.summary_segment_count, item.segments.length)} 段转录 · 点击查看完整纪要`;
+            return (
+              <button
+                key={item.meeting_id}
+                type="button"
+                className={`minutes-history-item w-full rounded-md px-2.5 py-2.5 text-left ${active ? "is-active" : ""}`}
+                onClick={() => onSelect(item.meeting_id)}
+                aria-current={active ? "page" : undefined}
+                data-testid="minutes-history-item"
+                data-history-meeting-id={item.meeting_id}
+              >
+                <span className="block truncate text-[12.5px] font-medium text-ink-800">
+                  {meetingDisplayTitle(item, "未命名会议")}
+                </span>
+                <span className="mt-1 line-clamp-2 block text-[11px] leading-[17px] text-ink-500">
+                  {preview}
+                </span>
+                <span className="mt-1.5 block text-[10px] tabular-nums text-ink-400">
+                  {formatMinutesDate(item.minutes?.created_at ?? item.ended_at ?? item.started_at)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -462,7 +542,7 @@ function MinutesBody({
         suggested_command: null,
       }));
   return (
-    <div className="px-6 py-5 border-b border-paper-300 max-h-[55vh] overflow-y-auto">
+    <div className="px-6 py-5 border-b border-paper-300">
       <div className="flex items-center gap-2 mb-3 text-[13px] text-ink-700 font-medium">
         <FileText className="w-3.5 h-3.5 text-ink-500" />
         <span>会议纪要</span>

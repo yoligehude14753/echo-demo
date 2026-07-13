@@ -42,7 +42,6 @@ import {
 
 const { Header, Sider, Content } = Layout;
 
-type WorkspaceView = "transcript" | "assistant";
 type InspectorView = "minutes" | "artifacts";
 
 export default function App(): JSX.Element {
@@ -61,10 +60,7 @@ export default function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<"workspace" | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("transcript");
-  const [inspectorView, setInspectorView] = useState<InspectorView>(() =>
-    currentMeetingId ? "minutes" : "artifacts",
-  );
+  const [inspectorView, setInspectorView] = useState<InspectorView>("minutes");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
@@ -72,14 +68,6 @@ export default function App(): JSX.Element {
   useEffect(() => {
     const eventType = events[events.length - 1]?.type;
     if (!eventType) return;
-
-    if (
-      eventType === "rag.query" ||
-      eventType === "rag.answer.done" ||
-      eventType === "chat.done"
-    ) {
-      setWorkspaceView("assistant");
-    }
 
     if (eventType.startsWith("minutes.")) {
       setInspectorView("minutes");
@@ -97,7 +85,7 @@ export default function App(): JSX.Element {
   }, [events]);
 
   useEffect(() => {
-    setInspectorView(currentMeetingId ? "minutes" : "artifacts");
+    if (currentMeetingId) setInspectorView("minutes");
   }, [currentMeetingId]);
 
   const openSettings = (section: "workspace" | null = null) => {
@@ -234,41 +222,27 @@ export default function App(): JSX.Element {
                 </button>
               </Tooltip>
               <div
-                className="workspace-view-tabs flex items-center gap-1"
-                role="tablist"
-                aria-label="工作区视图"
+                className="conversation-mode flex min-w-0 items-center gap-3"
+                data-testid="conversation-mode"
               >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={workspaceView === "transcript"}
-                  aria-controls="workspace-stream-view"
-                  onClick={() => setWorkspaceView("transcript")}
-                  className={`view-tab inline-flex items-center gap-1.5 ${
-                    workspaceView === "transcript" ? "is-active" : ""
-                  }`}
-                  data-testid="workspace-view-transcript"
+                <span
+                  className="conversation-mode-title inline-flex items-center gap-1.5"
+                  data-testid="conversation-mode-title"
                 >
-                  <Mic className="w-3.5 h-3.5" />
-                  <span>转写</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={workspaceView === "assistant"}
-                  aria-controls="workspace-stream-view"
-                  onClick={() => setWorkspaceView("assistant")}
-                  className={`view-tab inline-flex items-center gap-1.5 ${
-                    workspaceView === "assistant" ? "is-active" : ""
-                  }`}
-                  data-testid="workspace-view-assistant"
-                >
-                  <Bot className="w-3.5 h-3.5" />
-                  <span>助手</span>
-                </button>
+                  <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>对话</span>
+                </span>
+                <span className="conversation-source-legend" data-testid="conversation-source-transcript">
+                  <Mic className="h-3 w-3" aria-hidden="true" />
+                  转录
+                </span>
+                <span className="conversation-source-legend conversation-source-legend--ai" data-testid="conversation-source-ai">
+                  <Bot className="h-3 w-3" aria-hidden="true" />
+                  AI
+                </span>
               </div>
               <span className="sr-only" data-testid="transcript-title">
-                转写流
+                对话流
               </span>
               {currentMeeting && (
                 <span
@@ -301,9 +275,9 @@ export default function App(): JSX.Element {
             <div
               id="workspace-stream-view"
               className="flex-1 min-h-0 overflow-hidden flex flex-col"
-              data-view={workspaceView}
+              data-view="conversation"
             >
-              <TranscriptStream view={workspaceView} />
+              <TranscriptStream />
             </div>
             <div className="shrink-0">
               <CommandBar />

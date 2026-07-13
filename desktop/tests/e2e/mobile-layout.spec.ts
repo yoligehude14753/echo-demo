@@ -7,7 +7,7 @@ test("移动视口：主工作区不被 AntD Sider 布局压成 0 宽", async ({
 
   await page.goto("/");
 
-  await expect(page.getByText("转写流")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("对话流")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("inspector-tab-minutes")).toBeVisible();
   await expect(page.getByTestId("command-bar")).toBeVisible();
 

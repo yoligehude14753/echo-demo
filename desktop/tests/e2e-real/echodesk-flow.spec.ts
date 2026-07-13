@@ -116,7 +116,7 @@ test.describe("EchoDesk 核心流程", () => {
     await gotoApp(page);
 
     // 待机态下应能看到 "ambient 持续转写" 或 "等待环境音转写"
-    const main = page.locator("text=/转写流/").locator("xpath=ancestor::div[1]/..");
+    const main = page.locator("text=/对话流/").locator("xpath=ancestor::div[1]/..");
     // 应**不会**显示老文案 "从左侧选择会议查看转写流"
     await expect(page.locator("text=从左侧选择会议查看转写流")).toHaveCount(0);
     // 必须有其中之一
