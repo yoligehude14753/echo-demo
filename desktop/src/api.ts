@@ -4,6 +4,8 @@ import type {
   AgentTaskEvent,
   IntentResult,
   MeetingMinutes,
+  MemoryFramePayload,
+  MemorySourceCard,
   MeetingStateSnapshot,
   TranscriptSegment,
   WorkflowRunDTO,
@@ -150,6 +152,7 @@ export interface CaptureStats {
   stt_failed: number;
   stt_empty: number;
   hallu_dropped: number;
+  repeat_dropped: number;
   diarize_failed: number;
   /**
    * phase4-diar-deep：diarizer 正常跑了但说不出（短段无匹配 / 切不出 voiced）。
@@ -752,14 +755,27 @@ export async function ragAsk(question: string): Promise<{
  *  - ragAsk: POST /rag/ask，先检索 RAG/Web 再生成，返回 {answer, citations, ...}
  *  - chatAsk: POST /chat，直接走 LLM，返回纯字符串答案
  */
-export async function chatAsk(question: string): Promise<string> {
+export interface ChatAskOptions {
+  conversationId?: string;
+  messageId?: string;
+  onMemoryFrame?: (frame: MemoryFramePayload) => void;
+}
+
+export async function chatAsk(
+  question: string,
+  options: ChatAskOptions = {},
+): Promise<string> {
   const u = await apiUrl("/chat");
   const r = await apiTransport(
     u,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({
+        question,
+        conversation_id: options.conversationId ?? "default",
+        message_id: options.messageId,
+      }),
     },
     {
       maxResponseBytes: SSE_MAX_RESPONSE_BYTES,
@@ -809,7 +825,7 @@ export async function chatAsk(question: string): Promise<string> {
           completed = true;
           continue;
         }
-        let obj: { delta?: string; error?: string };
+        let obj: { delta?: string; error?: string; type?: string } & Partial<MemoryFramePayload>;
         try {
           obj = JSON.parse(payload) as { delta?: string; error?: string };
         } catch {
@@ -817,6 +833,13 @@ export async function chatAsk(question: string): Promise<string> {
         }
         if (eventType === "error" || typeof obj.error === "string") {
           throw new Error("暂时无法回复，请稍后重试");
+        }
+        if (
+          (eventType === "memory.status" || eventType === "memory.sources") &&
+          (obj.type === "memory.status" || obj.type === "memory.sources")
+        ) {
+          options.onMemoryFrame?.(obj as MemoryFramePayload);
+          continue;
         }
         if (typeof obj.delta === "string") {
           answer += obj.delta;
@@ -833,6 +856,71 @@ export async function chatAsk(question: string): Promise<string> {
   }
 
   return answer;
+}
+
+interface MemoryRecallWireResult {
+  latency_ms: number;
+  matches: Array<{
+    relevance: number;
+    score: number;
+    relation: string;
+    candidate: {
+      candidate_id: string;
+      memory_id?: string | null;
+      level: "L0" | "L1" | "L2" | "L3";
+      kind: string;
+      content: string;
+      source_ref: string;
+      occurred_at: string;
+      confidence: number;
+      metadata?: Record<string, unknown>;
+    };
+  }>;
+}
+
+export async function memoryRecall(
+  text: string,
+  conversationId: string,
+  messageId?: string,
+): Promise<MemoryFramePayload> {
+  const u = await apiUrl("/memory/recall");
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, conversation_id: conversationId }),
+  });
+  const result = await asJson<MemoryRecallWireResult>(r);
+  const sources: MemorySourceCard[] = result.matches.map((match, offset) => {
+    const item = match.candidate;
+    const metadata = item.metadata ?? {};
+    const titleValue = metadata.title ?? metadata.meeting_title ?? metadata.artifact_name;
+    return {
+      index: offset + 1,
+      candidate_id: item.candidate_id,
+      memory_id: item.memory_id,
+      level: item.level,
+      kind: item.kind,
+      title: typeof titleValue === "string" ? titleValue : item.level === "L1" ? "历史会议与产物" : item.level === "L2" ? "长期记忆" : item.level === "L3" ? "个人配置" : "当前上下文",
+      excerpt: item.content,
+      source_ref: item.source_ref,
+      occurred_at: item.occurred_at,
+      confidence: item.confidence,
+      relevance: match.relevance,
+      score: match.score,
+      relation: match.relation,
+      manageable: item.level === "L2" || item.level === "L3",
+    };
+  });
+  return {
+    type: "memory.sources",
+    state: sources.length > 0 ? "found" : "empty",
+    label: sources.length > 0 ? `找到 ${sources.length} 条相关历史信息` : "未找到相关历史信息",
+    conversation_id: conversationId,
+    message_id: messageId,
+    model_display_name: "qwen3 8b",
+    latency_ms: result.latency_ms,
+    sources,
+  };
 }
 
 // 用于预热缓存（main.tsx 调）

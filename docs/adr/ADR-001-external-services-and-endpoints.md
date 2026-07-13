@@ -7,6 +7,8 @@
 > eight-local fast LLM 作为私有部署可选项保留。
 > 更新：2026-07-10，MAIN 模型按用户决策切换为 Yunwu `deepseek-v4-flash`；FAST 继续独立配置。
 > 更新：2026-07-12，ECAPA 默认阈值与有效音频下限对齐当前运行时真源：`0.55`、`1.0s`。
+> 更新：2026-07-13，FAST 实际 provider model 固定为 Yunwu `gpt-5.4-nano`；界面兼容
+> 名称为 `qwen3 8b`，不得把展示名发给 provider。
 
 ## 决策
 
@@ -17,7 +19,7 @@
 | **MAIN（主，复杂任务）** | **Yunwu** | `deepseek-v4-flash` | `https://yunwu.ai/v1` | `YUNWU_OPEN_KEY=<填入本机密钥>` |
 | 备用 1（限速时切） | Yunwu | `GLM-4.6` | 同上 | 同 key |
 | 备用 2（限速时切） | Yunwu | `Kimi-K2.6` | 同上 | 同 key |
-| **FAST（路由/extract/快速回复）** | Yunwu fallback | `MiniMax-M2.7` | `https://yunwu.ai/v1` | `YUNWU_OPEN_KEY=<填入本机密钥>` |
+| **FAST（路由/extract/快速回复）** | **Yunwu** | `gpt-5.4-nano`（UI: `qwen3 8b`） | `https://yunwu.ai/v1` | `YUNWU_OPEN_KEY=<填入本机密钥>` |
 | ~~self-host (roadmap)~~ | ~~heyi-91 self-host~~ | ~~MiniMax-M2.5~~ | ~~`http://100.73.254.81:10814/v1`~~ | host **OFFLINE**，demo 期不依赖 |
 
 ### 2. STT

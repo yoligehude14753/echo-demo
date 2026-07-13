@@ -206,6 +206,7 @@ test("late 4401 renewal from origin A cannot block origin B reconnect", async ({
     window.echo = {
       ...(window.echo ?? {}),
       isElectron: true,
+      isPublicDemo: true,
       ensurePublicSession: async () => {
         const origin = new URL(
           window.localStorage.getItem("echodesk.mobileBackendBase") ??
@@ -352,6 +353,7 @@ test("WS 4401 single-flights renewal and reconnects with the new token", async (
     window.echo = {
       ...(window.echo ?? {}),
       isElectron: true,
+      isPublicDemo: true,
       ensurePublicSession: async () => {
         state.ensureCalls += 1;
         return {
@@ -447,6 +449,7 @@ test("WS 4401 identity-lost stops reconnecting and shows an explicit state", asy
     window.echo = {
       ...(window.echo ?? {}),
       isElectron: true,
+      isPublicDemo: true,
       ensurePublicSession: async () => {
         state.ensureCalls += 1;
         return {
@@ -513,6 +516,7 @@ test("WS identity-lost explicitly reconnects the same owner with one new client 
     window.echo = {
       ...(window.echo ?? {}),
       isElectron: true,
+      isPublicDemo: true,
       ensurePublicSession: async () => {
         state.ensureCalls += 1;
         return {

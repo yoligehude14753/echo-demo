@@ -237,16 +237,11 @@ def test_hallucination_rejects_text_below_min_chars() -> None:
 # ── case 6: 12 字 6s cps=2 → hallucination gate 单独不拒（当前逻辑限制）──
 
 
-def test_hallucination_does_not_catch_long_repetition_via_cps_alone() -> None:
+def test_hallucination_rejects_long_single_character_repetition() -> None:
     """STT 输出 "嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯"（12 字），音频 6s → cps=2.0。
 
-    `is_likely_hallucination` 当前实现只用 cps 判长文本复读、用 min_chars 判短噪声幻觉，
-    对"长但单字重复"的幻觉无能为力。本测试钉死这个已知限制，避免后续误以为该层能
-    挡住它。
-
-    架构上的根因：要识别"嗯嗯嗯..."这种长重复幻觉应该走 token-distinct 判断
-    （参考 echo `app/dream/consolidator.py` 的 AMBIENT_MIN_ROW_CHARS + trivial 正则）。
-    spk-4 不动 audio_gate.py 算法，仅记录这个 follow-up。
+    v0.3.2 新增 token-distinct 重复检测；即使 cps 很低，也必须拦住这类
+    FireRed ASR 静音/底噪复读。
     """
     s = _new_thresholds()
     audio = _silence(6.0)  # 6s 整段，duration_s = 6.0
@@ -258,9 +253,8 @@ def test_hallucination_does_not_catch_long_repetition_via_cps_alone() -> None:
         max_cps=s.ambient_max_cps,
         min_chars=s.ambient_min_stt_chars,
     )
-    # 12 字 ≥ min_chars=5、cps=2.0 < max_cps=10 → 当前实现放行
-    assert is_hallu is False, f"当前 hallucination gate 不应拦截长重复，实际 reason={reason}"
-    assert reason == "ok"
+    assert is_hallu is True
+    assert reason == "repetitive_text(single_char)"
 
     # 注：实际生产链路里这种音频在 pre_stt_gate 阶段就被拒了
     # （全静音 → rms_too_low，根本不会到达 hallucination gate）。
@@ -287,13 +281,15 @@ def test_hallucination_rejects_long_text_with_cps_above_new_max() -> None:
         min_chars=s.ambient_min_stt_chars,
     )
     assert is_hallu_new is True
-    assert "cps_too_high" in reason_new
+    # 单字复读比 cps 更具体，允许它先命中。
+    assert reason_new == "repetitive_text(single_char)"
 
     # 对照：echo 基线 max_cps=12 时同样输入不会被 cps 拒
-    is_hallu_old, _ = is_likely_hallucination(
+    is_hallu_old, reason_old = is_likely_hallucination(
         text,
         audio,
         max_cps=12.0,
         min_chars=4,
     )
-    assert is_hallu_old is False, "在 echo 基线下 cps=11 应当过（对照）"
+    assert is_hallu_old is True
+    assert reason_old == "repetitive_text(single_char)"

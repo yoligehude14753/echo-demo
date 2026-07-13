@@ -8,7 +8,7 @@
 |---|---|---|---|
 | eight FireRedASR2-AED | `:8090` | 转写（ambient + meeting） | 录音 / TTS / @生成 / RAG |
 | eight qwen3-tts | `:8094` | TTS 播报 | 录音 / 转写 / @生成 / RAG |
-| Yunwu MiniMax-M2.7 fast fallback | api | intent 分类、RAG/web 仲裁 | 录音 / 转写 / TTS |
+| Yunwu gpt-5.4-nano fast（界面显示 qwen3 8b） | api | intent 分类、RAG/web 仲裁 | 录音 / 转写 / TTS |
 | Yunwu deepseek-v4-flash | api | @生成、纪要、@查 RAG 答 | 录音 / 转写 / FAST 分类 |
 | Tavily 搜索 | api | @查 web fallback | 全部其它 |
 
@@ -27,15 +27,15 @@
 
 ### retrieve_and_answer（RAG + web 仲裁）
 
-- **fast LLM 分类失败** → fallback 到 `"either"`（两条检索都跑，让 main LLM 综合）
+- **fast LLM 分类失败/非法输出** → 1～3 秒内熔断，立即用 MAIN 分类；MAIN 也失败才降级到 `"either"`
 - **RAG 检索失败** → swallow 成空结果
 - **web 搜索失败** → swallow 成空结果
 - **main LLM 流失败** → 进入 Chat SSE 的显式失败边界。
 
 ### intent_router（用户输入分类）
 
-- **LLM 失败** → fallback 到 `kind=chat`、`confidence=0.3`、`rationale=LLM 失败兜底`
-- **代码**：`backend/app/adapters/intent/llm_router.py:99-101`
+- **fast LLM 失败/非法输出** → 1～3 秒内熔断，立即用 MAIN 分类
+- **FAST 与 MAIN 均失败** → fallback 到 `kind=chat`、`confidence=0.3`
 
 ### meeting_pipeline.finalize_meeting（生成纪要）
 

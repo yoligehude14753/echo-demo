@@ -92,6 +92,11 @@ const { preferredReleaseAsset } = require("./release-assets.cjs");
 const {
   projectBackendStatusForRenderer,
 } = require("./backend-status-projection.cjs");
+const {
+  BackendContractError,
+  expectedBackendContract,
+  probeBackendContract,
+} = require("./backend-contract.cjs");
 
 // Electron 要求 privileged scheme 在 app ready 前完成声明。打包态只从该
 // secure/standard origin 加载静态资源，不再使用具有 opaque Origin 的 file://。
@@ -171,6 +176,10 @@ let restartAttempts = 0;
 let shuttingDown = false;
 let quittingForReal = false;
 let externalMode = false;
+let externalBackendReady = false;
+let expectedLocalBackendContractPromise = null;
+let backendHealthcheckPromise = null;
+let lastBackendContractFailure = null;
 let pythonResolved = null; // { python: string|null, searched: string[] }
 // renderer 启动慢于 backend：early status 缓存到 lastStatus，等 did-finish-load 后 replay
 let lastStatus = null;
@@ -2196,7 +2205,7 @@ function emitStatus(payload) {
 
 // ---------- 健康检查 ----------
 
-function healthcheckOnce() {
+function healthzOnce() {
   return new Promise((resolve) => {
     let settled = false;
     const done = (ok) => {
@@ -2224,6 +2233,51 @@ function healthcheckOnce() {
       done(false);
     });
   });
+}
+
+function expectedLocalBackendContract() {
+  if (PUBLIC_DEMO_MODE) return Promise.resolve(null);
+  if (expectedLocalBackendContractPromise) {
+    return expectedLocalBackendContractPromise;
+  }
+  const bundledBackend = bundledBackendExecutable();
+  const sourceCwd = bundledBackend ? null : resolveBackendCwd();
+  expectedLocalBackendContractPromise = expectedBackendContract({
+    productVersion: app.getVersion(),
+    bundledBackendPath: bundledBackend,
+    sourceAppPath: sourceCwd ? path.join(sourceCwd, "app") : null,
+  });
+  return expectedLocalBackendContractPromise;
+}
+
+async function performBackendHealthcheck() {
+  if (PUBLIC_DEMO_MODE) return healthzOnce();
+  try {
+    const expected = await expectedLocalBackendContract();
+    await probeBackendContract(BACKEND_HOST, expected);
+    lastBackendContractFailure = null;
+    return true;
+  } catch (error) {
+    const failure =
+      error instanceof BackendContractError
+        ? error.code
+        : safeFailureCode(error);
+    if (lastBackendContractFailure !== failure) {
+      log(`[backend] contract probe rejected [${failure}]`);
+    }
+    lastBackendContractFailure = failure;
+    return false;
+  }
+}
+
+function healthcheckOnce() {
+  if (backendHealthcheckPromise) return backendHealthcheckPromise;
+  const pending = performBackendHealthcheck();
+  backendHealthcheckPromise = pending;
+  void pending.finally(() => {
+    if (backendHealthcheckPromise === pending) backendHealthcheckPromise = null;
+  });
+  return pending;
 }
 
 function startHealthWatcher() {
@@ -2272,6 +2326,7 @@ function stopExternalHealthWatcher() {
     clearInterval(externalHealthTimer);
     externalHealthTimer = null;
   }
+  externalBackendReady = false;
 }
 
 // External 模式：我们没拥有该 process，不重启；只观察存活情况
@@ -2280,7 +2335,14 @@ function startExternalHealthWatcher() {
   externalHealthTimer = setInterval(async () => {
     if (shuttingDown) return;
     const ok = await healthcheckOnce();
-    if (ok) return;
+    if (ok) {
+      if (!externalBackendReady) {
+        externalBackendReady = true;
+        emitStatus({ state: "ready", port: BACKEND_PORT });
+      }
+      return;
+    }
+    externalBackendReady = false;
     if (PUBLIC_DEMO_MODE) {
       emitStatus({
         state: "degraded",
@@ -2302,15 +2364,38 @@ function startExternalHealthWatcher() {
     // 端口还占着但 healthz 失败 → 外部 backend 卡死了，标记 degraded 让 UI 提示
     emitStatus({
       state: "degraded",
-      reason: "external backend unhealthy",
+      reason: lastBackendContractFailure
+        ? "external backend contract mismatch"
+        : "external backend unhealthy",
       attempts: 0,
-      last_error: "healthz failed",
+      last_error: lastBackendContractFailure || "healthz failed",
     });
   }, HEALTH_INTERVAL_MS);
-  // 立即尝试一次 healthz，让 ready 尽早发出
-  setImmediate(async () => {
-    const ok = await healthcheckOnce();
-    if (ok) emitStatus({ state: "ready", port: BACKEND_PORT });
+}
+
+function attachExternalBackend({ mode = "external" } = {}) {
+  externalMode = true;
+  externalBackendReady = false;
+  if (PUBLIC_DEMO_MODE) {
+    emitStatus({ state: "external", mode: "public-demo" });
+    startExternalHealthWatcher();
+    return;
+  }
+  emitStatus({ state: "starting" });
+  void healthcheckOnce().then((ok) => {
+    if (shuttingDown || !externalMode) return;
+    externalBackendReady = ok;
+    if (ok) {
+      emitStatus({ state: "external", port: BACKEND_PORT, mode });
+    } else {
+      emitStatus({
+        state: "degraded",
+        reason: "external backend contract mismatch",
+        attempts: 0,
+        last_error: lastBackendContractFailure || "contract probe failed",
+      });
+    }
+    startExternalHealthWatcher();
   });
 }
 
@@ -2379,23 +2464,15 @@ function spawnBackendAndWatch() {
   }
 
   if (!SPAWN_BACKEND) {
-    externalMode = true;
     log("[backend] spawn request ignored because local backend spawn is disabled");
-    emitStatus({
-      state: "external",
-      port: PUBLIC_DEMO_MODE ? undefined : BACKEND_PORT,
-      mode: PUBLIC_DEMO_MODE ? "public-demo" : "external",
-    });
-    startExternalHealthWatcher();
+    attachExternalBackend();
     return;
   }
 
   // 端口已经被外部 backend 占着（dev 期 cursor 已经跑了 uvicorn）→ 不要 spawn 第二份
   if (isPortListening(BACKEND_PORT)) {
-    externalMode = true;
-    log(`[backend] port ${BACKEND_PORT} already in use, assuming external backend`);
-    emitStatus({ state: "external", port: BACKEND_PORT });
-    startExternalHealthWatcher();
+    log(`[backend] port ${BACKEND_PORT} already in use, validating external backend`);
+    attachExternalBackend();
     return;
   }
 
@@ -2526,13 +2603,7 @@ function startBackend() {
     log(
       `[backend] spawn disabled (${PUBLIC_DEMO_MODE ? "public demo" : "ECHO_SPAWN_BACKEND=0"}), using ${BACKEND_HOST}`,
     );
-    externalMode = true;
-    emitStatus({
-      state: "external",
-      port: PUBLIC_DEMO_MODE ? undefined : BACKEND_PORT,
-      mode: PUBLIC_DEMO_MODE ? "public-demo" : "external",
-    });
-    startExternalHealthWatcher();
+    attachExternalBackend();
     return;
   }
 
@@ -2669,6 +2740,10 @@ async function createWindow() {
 ipcMain.handle("echo:backend-host", (event) => {
   assertTrustedIpcOrigin(event);
   return BACKEND_HOST;
+});
+ipcMain.handle("echo:backend-contract", async (event) => {
+  assertTrustedIpcOrigin(event);
+  return expectedLocalBackendContract();
 });
 ipcMain.handle("echo:share-backend-host", (event) => {
   assertTrustedIpcOrigin(event);
@@ -3064,6 +3139,8 @@ const manualRestartBackend = createManualBackendRestart({
     backendLifecycleGeneration += 1;
     restartAttempts = 0;
     externalMode = false;
+    expectedLocalBackendContractPromise = null;
+    lastBackendContractFailure = null;
   },
   stopHealthWatcher,
   stopExternalHealthWatcher,

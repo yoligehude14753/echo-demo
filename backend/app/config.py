@@ -113,10 +113,43 @@ class Settings(BaseSettings):
     # 默认跟随 Yunwu 主通道，避免私有 fast LLM 未启动时影响源码安装；
     # 私有部署可在设置页改为自己的 vLLM / OpenAI-compatible 端点。
     llm_fast_provider: str = "yunwu"
-    llm_fast_model: str = "MiniMax-M2.7"
+    llm_fast_model: str = "gpt-5.4-nano"
     llm_fast_base_url: str = "https://yunwu.ai/v1"
+    # 展示名与真实 provider model 故意分离：UI/诊断如需展示快速模型，
+    # 只读这个字段；LLM adapter 绝不得用它发起调用。
+    llm_fast_display_name: str = "qwen3 8b"
+    # intent route / RAG arbitration 的 fast 通道只允许短时尝试；
+    # 超时立即改用 Yunwu MAIN，不再累加 15s + 30s 失败等待。
+    llm_fast_classification_timeout_s: float = Field(default=2.0, ge=1.0, le=3.0)
     llm_local_api_key: str = Field(default="EMPTY", repr=False)
     llm_fast_max_tokens: int = 512
+
+    # ── Memory（L0 工作 / L1 情景 / L2 语义 / L3 明确配置）────────
+    memory_enabled: bool = True
+    # 关联与抽取只允许快速模型短时参与；失败后使用确定性排序/静默跳过抽取，
+    # 绝不让 memory 阻塞 Echo AI 主回答。
+    memory_small_model_timeout_s: float = Field(default=2.0, ge=1.0, le=3.0)
+    memory_working_ttl_s: int = Field(default=30 * 60, ge=60, le=24 * 60 * 60)
+    memory_working_max_items: int = Field(default=24, ge=4, le=200)
+    memory_working_max_chars: int = Field(default=24_000, ge=1_000, le=200_000)
+    memory_current_meeting_window_s: int = Field(
+        default=30 * 60,
+        ge=60,
+        le=24 * 60 * 60,
+    )
+    memory_current_meeting_max_segments: int = Field(default=24, ge=1, le=200)
+    memory_episodic_candidates_per_kind: int = Field(default=60, ge=1, le=500)
+    memory_semantic_candidate_limit: int = Field(default=120, ge=1, le=1_000)
+    memory_recall_prefilter_limit: int = Field(default=36, ge=4, le=200)
+    memory_recall_limit: int = Field(default=6, ge=1, le=20)
+    memory_extraction_min_chars: int = Field(default=8, ge=1, le=500)
+    memory_extraction_existing_limit: int = Field(default=60, ge=1, le=500)
+    memory_extraction_max_items: int = Field(default=5, ge=1, le=20)
+    memory_min_confidence: float = Field(default=0.72, ge=0.0, le=1.0)
+    memory_recognized_text_enabled: bool = True
+    memory_proactive_cooldown_s: float = Field(default=30.0, ge=5.0, le=600.0)
+    memory_proactive_min_score: float = Field(default=0.62, ge=0.0, le=1.0)
+
     # STT/TTS/本地模型网关共享 token。历史 eight 裸服务不需要鉴权，adapter 会回退到
     # Bearer x；新部署走网关时用该字段或服务专用 api key 覆盖。
     heyi_gateway_token: str = Field(
@@ -322,12 +355,17 @@ class Settings(BaseSettings):
     # 0.05 → 0.15：6s chunk 至少 ~0.9s 真正活跃帧；闭合 ARCH-AUDIT §4 root #7
     ambient_min_speech_frame_ratio: float = 0.15
     # STT 后 cps 门控：字符速率 > 此值视为幻觉/复读丢弃
-    # 12 → 10：中文正常 4-8 cps，>10 大概率复读/幻觉（仅对 ≥3s 且 ≥12 chars 文本生效）
+    # 12 → 10：中文正常 4-8 cps，>10 大概率复读/幻觉；ambient 按 VAD 活跃
+    # 时长计算，而不是用整块静音稀释字符速率。
     ambient_max_cps: float = 10.0
     # STT 输出最短字符数（小于此值丢弃，防止单字幻觉污染 RAG/speaker registry）
     # 4 → 5：echo 路由层用 3（router）+ 下游 dream consolidator 用 8 双重过滤；
     # echo-demo 单点过滤，取中位数 5 → 拦截 "嗯。" / "Yeah" / "ですね" 等短幻觉
     ambient_min_stt_chars: int = 5
+    # 同一规范化文本在短窗口内反复出现时，第二次起不再作为会议活跃证据；
+    # 超过允许次数后直接丢弃新副本，避免固定环境音产生的 ASR 复读污染历史。
+    ambient_repeat_window_s: float = Field(default=60.0, gt=0, le=3600.0)
+    ambient_repeat_drop_after: int = Field(default=2, ge=1, le=20)
     # 通过音质门控的 ambient WAV 最长保留时间。GC 只扫描当前 owner 的物理
     # scope；文本/RAG 生命周期独立，音频删除后 repository 会清空对应 audio_ref。
     ambient_audio_retention_s: float = Field(default=7 * 24 * 60 * 60, gt=0)
@@ -340,6 +378,13 @@ class Settings(BaseSettings):
     automeet_window_s: float = 30.0
     automeet_min_distinct_speakers: int = 2
     automeet_min_active_seconds: float = 6.0
+    # speaker_id 不可用时默认禁止仅凭 ASR 文本自动开会；显式配置正数才启用
+    # fallback，避免噪声幻觉/声纹失败形成重复 auto-meeting。
+    automeet_unknown_speaker_min_active_seconds: float | None = Field(default=None, gt=0)
+    # 自动开始与会议续命使用比“允许转写入库”更严格的音频证据。这样低语仍可
+    # 保留为 ambient，但不能仅凭一段 ASR 文本把会议无限续命。
+    automeet_min_valid_speech_ratio: float = Field(default=0.25, ge=0.0, le=1.0)
+    automeet_min_valid_speech_ms: int = Field(default=800, ge=0, le=60_000)
     # 静默 X 秒 → 自动 end（含 finalize 纪要）
     automeet_silence_timeout_s: float = 30.0
     # 自动结束后多久内不再触发新会议（防抖）
@@ -348,6 +393,9 @@ class Settings(BaseSettings):
     # 防止持续环境音 / 单人独白让会议永不结束（2026-05 「会议中 9h+」bug 的结构性修复）。
     # hydrate 也会用这个值清理跨重启遗留的过期 auto-meeting。
     automeet_max_meeting_duration_s: float = 1800.0
+    # 手动会议仍以“无有效语音自动结束”为主，4h 仅作最终安全兜底。
+    manual_meeting_max_duration_s: float = Field(default=4 * 60 * 60, ge=60.0)
+    manual_meeting_inactivity_timeout_s: float = Field(default=15 * 60, ge=30.0)
     # 手动会议允许短时崩溃/重启后续接，但跨天仍 in_meeting 已无法判断用户意图，
     # 必须自动结束，避免顶栏永久累计成数千分钟。
     meeting_recovery_max_age_s: float = 24 * 60 * 60

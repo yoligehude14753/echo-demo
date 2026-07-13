@@ -24,6 +24,44 @@ jobs:
       actions: read
       contents: read
     steps:
+      - name: Require pre-existing protected Windows release environment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment_name="desktop-release-windows"
+          if ! environment_payload="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/environments/desktop-release-windows")"; then
+            echo "::error title=Blocked: Windows release environment missing::Create and protect ${environment_name} before dispatching a formal candidate; the workflow will not auto-create it."
+            exit 78
+          fi
+          jq -e \
+            --arg name "${environment_name}" '
+              .name == $name
+              and .can_admins_bypass == false
+              and .deployment_branch_policy.custom_branch_policies == true
+              and .deployment_branch_policy.protected_branches == false
+              and any(.protection_rules[]?; .type == "required_reviewers")
+              and any(.protection_rules[]?; .type == "branch_policy")
+            ' <<<"${environment_payload}" >/dev/null || {
+            echo "::error title=Blocked: Windows release environment is not protected::${environment_name} must require reviewers, forbid admin bypass, and use a custom main-only deployment branch policy."
+            exit 78
+          }
+          branch_policies="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/environments/desktop-release-windows/deployment-branch-policies?per_page=100")"
+          jq -e '
+            (.total_count == 1)
+            and any(.branch_policies[]?; .name == "main" and .type == "branch")
+          ' <<<"${branch_policies}" >/dev/null || {
+            echo "::error title=Blocked: Windows release branch policy invalid::${environment_name} must allow exactly the main branch."
+            exit 78
+          }
+
       - name: require exact main SHA and successful required check
         shell: bash
         env:
@@ -496,28 +534,28 @@ jobs:
       - name: Require protected Windows release credentials
         shell: bash
         env:
-          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_PFX_BASE64 }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_PASSWORD }}
-          WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
-          WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
+          ECHODESK_WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          ECHODESK_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_PASSWORD }}
+          ECHODESK_WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+          ECHODESK_WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
         run: |
           set -euo pipefail
           required=(
-            WINDOWS_CERTIFICATE_PFX_BASE64
-            WINDOWS_CERTIFICATE_PASSWORD
-            WINDOWS_CERTIFICATE_SHA1
-            WINDOWS_EXPECTED_PUBLISHER
+            ECHODESK_WINDOWS_CERTIFICATE_PFX_BASE64
+            ECHODESK_WINDOWS_CERTIFICATE_PASSWORD
+            ECHODESK_WINDOWS_CERTIFICATE_SHA1
+            ECHODESK_WINDOWS_EXPECTED_PUBLISHER
           )
           missing=()
           for name in "${required[@]}"; do
             if [ -z "${!name:-}" ]; then missing+=("${name}"); fi
           done
           if [ "${#missing[@]}" -ne 0 ]; then
-            printf '::error title=Blocked: Windows release credentials missing::%s\n' \
+            printf '::error title=Blocked: Windows release credentials missing::desktop-release-windows must be pre-created, protected, and contain: %s\n' \
               "$(IFS=,; echo "${missing[*]}")"
             exit 78
           fi
-          normalized="$(printf '%s' "${WINDOWS_CERTIFICATE_SHA1}" | tr -d ' :[:space:]')"
+          normalized="$(printf '%s' "${ECHODESK_WINDOWS_CERTIFICATE_SHA1}" | tr -d ' :[:space:]')"
           [[ "${normalized}" =~ ^[0-9A-Fa-f]{40}$ ]] || {
             echo "::error title=Blocked: Windows certificate thumbprint invalid::Expected 40 hexadecimal characters"
             exit 78

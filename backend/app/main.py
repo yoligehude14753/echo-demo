@@ -56,6 +56,7 @@ from app.api.health import start_prober, stop_prober
 from app.api.intent import router as intent_router
 from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
+from app.api.memory import router as memory_router
 from app.api.retrieval import get_rag
 from app.api.retrieval import router as retrieval_router
 from app.api.sessions import router as sessions_router
@@ -64,8 +65,10 @@ from app.api.tts import router as tts_router
 from app.api.workflows import router as workflows_router
 from app.api.workspace import router as workspace_router
 from app.api.ws import router as ws_router
+from app.build_contract import backend_build_contract
 from app.config import Settings, get_settings
 from app.config_io import user_config_dir
+from app.memory import aclose_memory_service
 from app.ports.repository import RepositoryPort
 from app.runtime import RuntimeCapacityExceeded, RuntimeLease, ScopeRuntime
 from app.security import (
@@ -609,6 +612,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
     await _stop_lifespan_tasks()
     await aclose_agents()
     await aclose_workflow_service()
+    await aclose_memory_service()
     await aclose_llm_singleton()
     await aclose_event_bus()
     await aclose_repository()
@@ -711,6 +715,7 @@ def _include_api_routers(app: FastAPI) -> None:
         sessions_router,
         capture_router,
         chat_router,
+        memory_router,
         retrieval_router,
         workspace_router,
         artifacts_router,
@@ -900,6 +905,7 @@ def _bootstrap_payload(settings: Settings) -> dict[str, object]:
         response.update(
             {
                 "backend_version": __version__,
+                "build_contract": backend_build_contract(),
                 "ws_url": settings.public_ws_url,
                 "http_url": settings.public_http_url,
                 "app_version": settings.app_version,

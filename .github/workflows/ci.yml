@@ -6,18 +6,33 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Build only one v0.3.2 branch candidate platform"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - backend
+          - macos
+          - linux
+          - windows
+          - android
 
 permissions:
   contents: read
 
-# 取消旧 run（同 PR push 多次时）
+# 保留每个 run 的平台诊断；新 push 不得取消仍在生成证据的旧 run。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   backend-lint:
     name: backend / lint
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'backend' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -34,6 +49,7 @@ jobs:
 
   backend-typecheck:
     name: backend / typecheck
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'backend' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -49,6 +65,7 @@ jobs:
 
   backend-dependency-audit:
     name: supply chain / dependency audit (${{ matrix.label }})
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'backend' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -181,6 +198,7 @@ jobs:
 
   backend-test:
     name: backend / deterministic full gate
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'backend' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -205,6 +223,7 @@ jobs:
         timeout-minutes: 20
         working-directory: backend
         run: |
+          set -euo pipefail
           # Reuse the lockfile-installed deck runtime for the real pptxgenjs
           # contract.  Without these flags the test deliberately skips under
           # CI, which contradicts this job's zero-skip invariant.
@@ -217,20 +236,167 @@ jobs:
           export RAG_INDEX_DIR="$ECHO_USER_DIR/rag_index"
           export WORKSPACE_STATE_FILE="$ECHO_USER_DIR/workspace_state.json"
           export SKILL_EXECUTOR_BUILD_DIR="$ECHO_USER_DIR/skill_build"
-          pytest tests -m "not live" \
+          evidence="$RUNNER_TEMP/echodesk-backend-test-evidence"
+          junit="pytest-deterministic.xml"
+          log="$evidence/pytest.log"
+          mkdir -p "$evidence"
+
+          completion_is_green() {
+            python - "$junit" "$log" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+
+          junit_path = pathlib.Path(sys.argv[1])
+          log_path = pathlib.Path(sys.argv[2])
+
+          try:
+              root = ET.parse(junit_path).getroot()
+              suites = [
+                  node
+                  for node in root.iter("testsuite")
+                  if not any(child.tag == "testsuite" for child in node)
+              ]
+              if not suites:
+                  raise ValueError("JUnit contains no completed test suite")
+
+              totals = {
+                  key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
+                  for key in ("tests", "failures", "errors", "skipped")
+              }
+              testcase_count = sum(1 for _ in root.iter("testcase"))
+              if totals["tests"] <= 0 or testcase_count != totals["tests"]:
+                  raise ValueError(
+                      "JUnit is incomplete: "
+                      f"declared={totals['tests']} cases={testcase_count}"
+                  )
+              if totals["failures"] or totals["errors"] or totals["skipped"]:
+                  raise ValueError(f"JUnit is not green: {totals}")
+
+              log_text = log_path.read_text(encoding="utf-8", errors="replace")
+              summaries = re.findall(r"(?m)^=+\s+(.*?)\s+=+\s*$", log_text)
+              summary = next(
+                  (
+                      item
+                      for item in reversed(summaries)
+                      if re.search(r"\b\d+ passed\b", item)
+                      and re.search(r"\bin \d", item)
+                  ),
+                  None,
+              )
+              if summary is None:
+                  raise ValueError("pytest final summary is missing")
+              passed_match = re.search(r"\b(\d+) passed\b", summary)
+              if passed_match is None or int(passed_match.group(1)) != totals["tests"]:
+                  raise ValueError(
+                      "pytest/JUnit count mismatch: "
+                      f"summary={summary!r} junit={totals['tests']}"
+                  )
+              if re.search(r"\b\d+ (?:failed|errors?|skipped|xfailed|xpassed)\b", summary):
+                  raise ValueError(f"pytest summary is not deterministic-green: {summary}")
+          except Exception as exc:
+              print(f"deterministic completion evidence invalid: {exc}", file=sys.stderr)
+              raise SystemExit(1) from exc
+
+          print(
+              "deterministic completion evidence is green: "
+              f"{totals['tests']} passed, zero failures/errors/skips"
+          )
+          PY
+          }
+
+          terminate_pytest_group() {
+            local pgid="$1"
+            kill -TERM -- "-$pgid" 2>/dev/null || true
+            for _ in {1..10}; do
+              if ! kill -0 -- "-$pgid" 2>/dev/null; then
+                return
+              fi
+              sleep 1
+            done
+            kill -KILL -- "-$pgid" 2>/dev/null || true
+          }
+
+          # Start pytest as its own process group. A green JUnit file and the
+          # final summary prove that the suite completed; only then may the
+          # supervisor reap a leaked shutdown thread/child that keeps Python
+          # alive after pytest_sessionfinish.
+          setsid pytest tests -m "not live" \
             --junitxml=pytest-deterministic.xml \
             --cov=app --cov-report=term-missing \
-            --timeout=60 --timeout-method=thread --durations=20
-          python - <<'PY'
-          import xml.etree.ElementTree as ET
-          root = ET.parse("pytest-deterministic.xml").getroot()
-          skipped = sum(int(node.attrib.get("skipped", "0")) for node in root.iter("testsuite"))
-          if skipped:
-              raise SystemExit(f"deterministic gate must have zero skips; got {skipped}")
-          PY
+            --timeout=60 --timeout-method=thread --durations=20 \
+            > "$log" 2>&1 &
+          pytest_pid=$!
+          pytest_status=""
+          completion_seen_at=0
+          supervisor_deadline=$((SECONDS + 15 * 60))
+
+          while kill -0 "$pytest_pid" 2>/dev/null; do
+            if completion_is_green >/dev/null 2>&1; then
+              if (( completion_seen_at == 0 )); then
+                completion_seen_at=$SECONDS
+              elif (( SECONDS - completion_seen_at >= 20 )); then
+                echo "::warning::pytest completed successfully but did not exit; reaping its isolated process group"
+                terminate_pytest_group "$pytest_pid"
+                set +e
+                wait "$pytest_pid"
+                set -e
+                pytest_status=0
+                break
+              fi
+            else
+              completion_seen_at=0
+            fi
+
+            if (( SECONDS >= supervisor_deadline )); then
+              echo "::error::pytest did not produce complete green evidence within 15 minutes"
+              terminate_pytest_group "$pytest_pid"
+              set +e
+              wait "$pytest_pid"
+              set -e
+              pytest_status=124
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ -z "$pytest_status" ]]; then
+            set +e
+            wait "$pytest_pid"
+            pytest_status=$?
+            set -e
+          fi
+
+          cat "$log"
+          if (( pytest_status != 0 )); then
+            exit "$pytest_status"
+          fi
+          completion_is_green
+      - name: collect backend test failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/echodesk-backend-test-evidence"
+          mkdir -p "$evidence"
+          printf 'job=%s\nrun_id=%s\nsha=%s\n' \
+            "$GITHUB_JOB" "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$evidence/job-context.txt"
+          if [ -f backend/pytest-deterministic.xml ]; then
+            cp backend/pytest-deterministic.xml "$evidence/"
+          fi
+      - name: upload backend test failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-backend-test-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/echodesk-backend-test-evidence
+          if-no-files-found: error
+          retention-days: 14
 
   desktop-e2e:
     name: desktop / static + build + e2e + scenarios
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'backend' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -267,16 +433,47 @@ jobs:
         env:
           CI: "1"
           NODE_ENV: test
-        run: npm run e2e
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/echodesk-desktop-e2e-evidence"
+          npm run e2e 2>&1 \
+            | tee "$RUNNER_TEMP/echodesk-desktop-e2e-evidence/playwright.log"
       - name: run scenario suite
         working-directory: desktop
         env:
           CI: "1"
           NODE_ENV: test
-        run: npm run scenarios
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/echodesk-desktop-e2e-evidence"
+          npm run scenarios 2>&1 \
+            | tee "$RUNNER_TEMP/echodesk-desktop-e2e-evidence/scenarios.log"
+      - name: collect desktop E2E failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/echodesk-desktop-e2e-evidence"
+          mkdir -p "$evidence"
+          printf 'job=%s\nrun_id=%s\nsha=%s\n' \
+            "$GITHUB_JOB" "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$evidence/job-context.txt"
+          for source in desktop/test-results desktop/playwright-report; do
+            if [ -e "$source" ]; then
+              cp -R "$source" "$evidence/"
+            fi
+          done
+      - name: upload desktop E2E failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-desktop-e2e-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/echodesk-desktop-e2e-evidence
+          if-no-files-found: error
+          retention-days: 14
 
   android-tv:
     name: Android + TV / development build + identity instrumentation
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'android' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -337,7 +534,12 @@ jobs:
           profile: pixel_2
           disable-animations: true
           disable-linux-hw-accel: false
-          script: cd desktop/android && ./gradlew :app:connectedDebugAndroidTest -PechoApplicationId=com.echodesk.app
+          script: >-
+            bash -lc 'set -o pipefail;
+            mkdir -p "$RUNNER_TEMP/echodesk-android-smoke-evidence";
+            cd desktop/android;
+            ./gradlew :app:connectedDebugAndroidTest -PechoApplicationId=com.echodesk.app 2>&1 |
+            tee "$RUNNER_TEMP/echodesk-android-smoke-evidence/instrumentation.log"'
       - name: verify development artifacts cannot masquerade as releases
         shell: bash
         run: |
@@ -366,9 +568,35 @@ jobs:
             desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-tv-development.apk
           if-no-files-found: error
           retention-days: 7
+      - name: collect Android smoke failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/echodesk-android-smoke-evidence"
+          mkdir -p "$evidence"
+          printf 'job=%s\nrun_id=%s\nsha=%s\n' \
+            "$GITHUB_JOB" "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$evidence/job-context.txt"
+          for source in \
+            desktop/android/app/build/reports \
+            desktop/android/app/build/test-results \
+            desktop/android/app/build/outputs/androidTest-results; do
+            if [ -e "$source" ]; then
+              cp -R "$source" "$evidence/"
+            fi
+          done
+      - name: upload Android smoke failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-android-tv-smoke-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/echodesk-android-smoke-evidence
+          if-no-files-found: error
+          retention-days: 14
 
   desktop-packaged-smoke:
     name: desktop / arm64 bundled-backend read-only DMG smoke
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos' }}
     runs-on: macos-latest
     permissions:
       contents: read
@@ -414,7 +642,11 @@ jobs:
           node desktop/scripts/verify-release-update-metadata.cjs mac
       - name: mounted read-only DMG + actual bundled backend smoke
         working-directory: desktop
-        run: npm run smoke:mac:dmg
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/echodesk-macos-smoke-evidence"
+          npm run smoke:mac:dmg 2>&1 \
+            | tee "$RUNNER_TEMP/echodesk-macos-smoke-evidence/dmg-smoke.log"
       - name: generate macOS checksums and CycloneDX SBOM
         run: |
           python scripts/generate-release-sbom.py desktop/release/EchoDesk-SBOM.cdx.json
@@ -447,9 +679,30 @@ jobs:
             desktop/release/EchoDesk-SBOM.cdx.json
           if-no-files-found: error
           retention-days: 14
+      - name: collect macOS smoke failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/echodesk-macos-smoke-evidence"
+          mkdir -p "$evidence"
+          printf 'job=%s\nrun_id=%s\nsha=%s\n' \
+            "$GITHUB_JOB" "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$evidence/job-context.txt"
+          if [ -d desktop/test-results ]; then
+            cp -R desktop/test-results "$evidence/"
+          fi
+      - name: upload macOS smoke failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-macos-smoke-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/echodesk-macos-smoke-evidence
+          if-no-files-found: error
+          retention-days: 14
 
   desktop-linux-packaged-smoke:
     name: desktop / Linux x64 self-contained AppImage + deb smoke
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 75
     permissions:
@@ -552,7 +805,11 @@ jobs:
           test -n "$extracted_backend"
       - name: unpacked Electron + bundled backend + artifact + persistence smoke
         working-directory: desktop
-        run: npm run smoke:linux
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/echodesk-linux-smoke-evidence"
+          npm run smoke:linux 2>&1 \
+            | tee "$RUNNER_TEMP/echodesk-linux-smoke-evidence/unpacked-smoke.log"
       - name: extracted AppImage + bundled backend + artifact + persistence smoke
         shell: bash
         run: |
@@ -571,7 +828,8 @@ jobs:
           ECHODESK_EXPECTED_BACKEND_BIN="$backend" \
           ECHODESK_SMOKE_PORT=18770 \
           ECHODESK_SMOKE_ROOT="$RUNNER_TEMP/echodesk-appimage-smoke" \
-            npm --prefix desktop run smoke:linux
+            npm --prefix desktop run smoke:linux 2>&1 \
+              | tee "$RUNNER_TEMP/echodesk-linux-smoke-evidence/appimage-smoke.log"
       - name: installed deb + bundled backend + artifact + persistence smoke
         shell: bash
         run: |
@@ -592,7 +850,8 @@ jobs:
           ECHODESK_EXPECTED_BACKEND_BIN="$backend" \
           ECHODESK_SMOKE_PORT=18771 \
           ECHODESK_SMOKE_ROOT="$RUNNER_TEMP/echodesk-deb-smoke" \
-            npm --prefix desktop run smoke:linux
+            npm --prefix desktop run smoke:linux 2>&1 \
+              | tee "$RUNNER_TEMP/echodesk-linux-smoke-evidence/deb-smoke.log"
       - name: guard Linux public build contents
         shell: bash
         run: |
@@ -655,6 +914,26 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+      - name: collect Linux smoke failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/echodesk-linux-smoke-evidence"
+          mkdir -p "$evidence"
+          printf 'job=%s\nrun_id=%s\nsha=%s\n' \
+            "$GITHUB_JOB" "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$evidence/job-context.txt"
+          if [ -d desktop/test-results ]; then
+            cp -R desktop/test-results "$evidence/"
+          fi
+      - name: upload Linux smoke failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-linux-smoke-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/echodesk-linux-smoke-evidence
+          if-no-files-found: error
+          retention-days: 14
 
   desktop-linux-provenance:
     name: desktop / Linux exact-main provenance
@@ -709,6 +988,7 @@ jobs:
 
   desktop-windows-packaged-smoke:
     name: desktop / Windows x64 installed NSIS smoke
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows' }}
     uses: ./.github/workflows/build-windows-installer.yml
     with:
       publish_release: false
@@ -717,21 +997,49 @@ jobs:
 
   check:
     # 唯一 Required Status Check：所有确定性门禁在每个 PR/push 上必须真正运行并通过。
-    name: check
+    name: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && 'manual platform check' || 'check' }}
     needs: [backend-lint, backend-typecheck, backend-dependency-audit, backend-test, desktop-e2e, android-tv, desktop-packaged-smoke, desktop-linux-packaged-smoke, desktop-windows-packaged-smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: gate
         run: |
-          set -e
-          [[ "${{ needs.backend-lint.result }}" == "success" ]] || { echo "lint did not pass"; exit 1; }
-          [[ "${{ needs.backend-typecheck.result }}" == "success" ]] || { echo "typecheck did not pass"; exit 1; }
-          [[ "${{ needs.backend-dependency-audit.result }}" == "success" ]] || { echo "dependency audit did not pass"; exit 1; }
-          [[ "${{ needs.backend-test.result }}" == "success" ]] || { echo "backend tests did not pass"; exit 1; }
-          [[ "${{ needs.desktop-e2e.result }}" == "success" ]] || { echo "desktop tests did not pass"; exit 1; }
-          [[ "${{ needs.android-tv.result }}" == "success" ]] || { echo "Android/TV gate did not pass"; exit 1; }
-          [[ "${{ needs.desktop-packaged-smoke.result }}" == "success" ]] || { echo "packaged smoke did not pass"; exit 1; }
-          [[ "${{ needs.desktop-linux-packaged-smoke.result }}" == "success" ]] || { echo "Linux packaged smoke did not pass"; exit 1; }
-          [[ "${{ needs.desktop-windows-packaged-smoke.result }}" == "success" ]] || { echo "Windows packaged smoke did not pass"; exit 1; }
-          echo "all checks ok"
+          set -euo pipefail
+          require_success() {
+            local label="$1"
+            local result="$2"
+            [[ "$result" == "success" ]] || {
+              echo "$label did not pass (result=$result)" >&2
+              exit 1
+            }
+          }
+
+          event_name="${{ github.event_name }}"
+          platform="${{ inputs.platform || 'all' }}"
+          if [[ "$event_name" != "workflow_dispatch" || "$platform" == "all" ]]; then
+            require_success "lint" "${{ needs.backend-lint.result }}"
+            require_success "typecheck" "${{ needs.backend-typecheck.result }}"
+            require_success "dependency audit" "${{ needs.backend-dependency-audit.result }}"
+            require_success "backend tests" "${{ needs.backend-test.result }}"
+            require_success "desktop tests" "${{ needs.desktop-e2e.result }}"
+            require_success "Android/TV gate" "${{ needs.android-tv.result }}"
+            require_success "macOS packaged smoke" "${{ needs.desktop-packaged-smoke.result }}"
+            require_success "Linux packaged smoke" "${{ needs.desktop-linux-packaged-smoke.result }}"
+            require_success "Windows packaged smoke" "${{ needs.desktop-windows-packaged-smoke.result }}"
+          else
+            case "$platform" in
+              backend)
+                require_success "lint" "${{ needs.backend-lint.result }}"
+                require_success "typecheck" "${{ needs.backend-typecheck.result }}"
+                require_success "dependency audit" "${{ needs.backend-dependency-audit.result }}"
+                require_success "backend tests" "${{ needs.backend-test.result }}"
+                require_success "desktop tests" "${{ needs.desktop-e2e.result }}"
+                ;;
+              android) require_success "Android/TV gate" "${{ needs.android-tv.result }}" ;;
+              macos) require_success "macOS packaged smoke" "${{ needs.desktop-packaged-smoke.result }}" ;;
+              linux) require_success "Linux packaged smoke" "${{ needs.desktop-linux-packaged-smoke.result }}" ;;
+              windows) require_success "Windows packaged smoke" "${{ needs.desktop-windows-packaged-smoke.result }}" ;;
+              *) echo "unsupported workflow_dispatch platform: $platform" >&2; exit 1 ;;
+            esac
+          fi
+          echo "required checks passed for platform=$platform"

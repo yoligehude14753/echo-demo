@@ -152,8 +152,6 @@ _KEYWORD_HINTS: dict[str, IntentKind] = {
     "表格": "generate_xlsx",
     "财务模型": "generate_xlsx",
     "word": "generate_word",
-    "文档": "generate_word",
-    "报告": "generate_html",
     "html": "generate_html",
     "网页": "generate_html",
     "总结会议": "summarize_meeting",
@@ -217,7 +215,7 @@ _STRONG_RAG_PHRASES: tuple[str, ...] = (
 #
 # 注意：单个 token "什么 / 怎么 / 为什么 / 介绍 / 说说 / 讲讲" 等独立出现就足够；
 # 不要求"问号 + 关键字 两个都要"，避免英文输入 / 中文标点缺失的句子被漏掉。
-_QUESTION_MARKS: tuple[str, ...] = ("?", "?")
+_QUESTION_MARKS: tuple[str, ...] = ("?", "？")
 _QUESTION_WORDS: tuple[str, ...] = (
     "什么",
     "为什么",
@@ -245,6 +243,153 @@ _QUESTION_WORDS: tuple[str, ...] = (
 # chat_no_rag 显式逃生短语（与 _KEYWORD_HINTS["@chat"] 配合）：
 # 当输入显式以 "@chat" / "chat:" / "闲聊:" 开头时，即便后面带问号也归 chat_no_rag。
 _CHAT_NO_RAG_MARKERS: tuple[str, ...] = ("@chat", "chat:", "闲聊:", "聊一下:")
+
+# 明确产出请求不应交给模型猜。这些名词只有与产出动作/请求语气
+# 组合时才触发，避免把“这份报告说了什么？”错路由为生成。
+_OUTPUT_NOUNS: tuple[str, ...] = (
+    "深度研究",
+    "调研报告",
+    "研究报告",
+    "分析报告",
+    "日报",
+    "周报",
+    "月报",
+    "年报",
+    "汇报材料",
+    "调研",
+    "报告",
+    "方案",
+    "提案",
+    "白皮书",
+    "简报",
+    "文档",
+)
+_OUTPUT_ACTIONS: tuple[str, ...] = (
+    "做",
+    "写",
+    "生成",
+    "制作",
+    "撰写",
+    "编写",
+    "整理成",
+    "总结成",
+    "输出",
+    "产出",
+    "形成",
+    "出一份",
+    "出一个",
+    "准备一份",
+)
+_OUTPUT_REQUEST_MARKERS: tuple[str, ...] = (
+    "请",
+    "帮我",
+    "给我",
+    "替我",
+    "麻烦",
+    "需要你",
+    "希望你",
+    "我要",
+    "我想要",
+    "能否",
+    "可以帮",
+)
+_QUESTION_ONLY_MARKERS: tuple[str, ...] = (
+    "什么是",
+    "为什么",
+    "怎么",
+    "如何",
+    "哪些",
+    "是否",
+    "介绍",
+    "解释",
+    "说说",
+    "讲讲",
+    "概括",
+    "分析",
+    "评价",
+    "阅读",
+    "告诉我",
+    "报告说了",
+    "报告讲了",
+)
+
+
+def _has_output_action_before_noun(text: str) -> bool:
+    """只接受位于产物名词之前的动作，避开“报告写得/做得很好”。"""
+
+    noun_positions = [text.find(noun) for noun in _OUTPUT_NOUNS if text.find(noun) >= 0]
+    for action in _OUTPUT_ACTIONS:
+        action_pos = text.find(action)
+        if action_pos < 0:
+            continue
+        suffix = text[action_pos + len(action) :]
+        if suffix.startswith(("得", "的", "过", "完", "好", "了")):
+            continue
+        if any(action_pos <= noun_pos <= action_pos + 96 for noun_pos in noun_positions):
+            return True
+    return False
+
+
+def _requested_artifact_kind(text: str) -> IntentKind | None:  # noqa: PLR0911, PLR0912
+    """对明确产出型请求做确定性路由。
+
+    调研/报告/方案默认产出 Markdown；用户明示指定 PPT/Word/PDF/HTML/
+    Excel/TXT 时保留指定格式。普通问句不因出现“报告/文档”而触发产出。
+    """
+
+    lower = text.strip().lower()
+    if not lower:
+        return None
+    has_noun = any(noun in lower for noun in _OUTPUT_NOUNS)
+    if not has_noun:
+        return None
+
+    request_positions = [
+        lower.find(marker) for marker in _OUTPUT_REQUEST_MARKERS if lower.find(marker) >= 0
+    ]
+    noun_positions = [lower.find(noun) for noun in _OUTPUT_NOUNS if lower.find(noun) >= 0]
+    request_targets_output = any(
+        request_pos <= noun_pos <= request_pos + 18
+        for request_pos in request_positions
+        for noun_pos in noun_positions
+    )
+    has_action = _has_output_action_before_noun(lower)
+    command_text = lower.lstrip("@ ")
+    for prefix in ("现在", "马上", "立即"):
+        if command_text.startswith(prefix):
+            command_text = command_text[len(prefix) :].lstrip("，, ")
+            break
+    action_is_command = has_action and (
+        bool(request_positions) or command_text.startswith(_OUTPUT_ACTIONS)
+    )
+    looks_like_question = any(mark in lower for mark in ("?", "？")) or any(
+        marker in lower for marker in _QUESTION_ONLY_MARKERS
+    )
+    if looks_like_question and not action_is_command:
+        return None
+
+    direct_research_command = lower.lstrip("@ ").startswith(("调研", "深度研究"))
+    exact_output_noun = lower.lstrip("@ ") in _OUTPUT_NOUNS
+    if not (
+        request_targets_output or action_is_command or direct_research_command or exact_output_noun
+    ):
+        return None
+
+    if any(token in lower for token in ("ppt", "幻灯")):
+        return "generate_pptx"
+    if any(token in lower for token in ("excel", "xlsx", "表格", "财务模型")):
+        return "generate_xlsx"
+    if any(token in lower for token in ("word", "docx")):
+        return "generate_word"
+    if "pdf" in lower:
+        return "generate_pdf"
+    if any(token in lower for token in ("html", "网页", "页面")):
+        return "generate_html"
+    if any(token in lower for token in ("txt", "纯文本", "文本文件")):
+        return "generate_txt"
+    if "文档" in lower and not any(token in lower for token in ("调研", "研究", "报告", "方案")):
+        return "generate_word"
+    return "generate_markdown"
 
 
 def _strong_rag_hit(text: str) -> bool:
@@ -274,25 +419,31 @@ def keyword_route(text: str) -> tuple[IntentKind, float] | None:
 
     优先级（从高到低）：
       1. ``@chat`` 显式逃生 → ``chat_no_rag``（用户明确不要 RAG）
-      2. 强 RAG 信号词组（"基于附件" / "产品手册里" / ...）→ ``search_rag``
-      3. 现有 _KEYWORD_HINTS 关键字（生成产物 / web 搜索 / 纪要 / 等）
-      4. 问句信号（含问号 / 含 "什么 / 介绍" 等）→ ``search_rag``（默认走 RAG）
+      2. 明确产出请求（调研/报告/方案）→ ``generate_*``
+      3. 强 RAG 信号词组（"基于附件" / "产品手册里" / ...）→ ``search_rag``
+      4. 现有 _KEYWORD_HINTS 关键字（生成产物 / web 搜索 / 纪要 / 等）
+      5. 问句信号（含问号 / 含 "什么 / 介绍" 等）→ ``search_rag``（默认走 RAG）
     """
     # 1. chat_no_rag 显式 escape
     if _chat_no_rag_explicit(text):
         return "chat_no_rag", 0.95
 
-    # 2. 强 RAG 信号 → 0.9 高置信度
+    # 2. 产出语义高于“基于附件”：用户要的是文件，不是内联问答。
+    output_kind = _requested_artifact_kind(text)
+    if output_kind is not None:
+        return output_kind, 0.98
+
+    # 3. 强 RAG 信号 → 0.9 高置信度
     if _strong_rag_hit(text):
         return "search_rag", 0.9
 
-    # 3. 现有 keyword token 匹配（小写）
+    # 4. 现有 keyword token 匹配（小写）
     lower = text.lower()
     for kw, kind in _KEYWORD_HINTS.items():
         if kw in lower:
             return kind, 0.85
 
-    # 4. 问句信号兜底（默认走 RAG）
+    # 5. 问句信号兜底（默认走 RAG）
     if _is_question(text):
         return "search_rag", 0.7
 

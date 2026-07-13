@@ -14,6 +14,8 @@ from app.schemas.rag import RagChunk
 from app.use_cases.retrieve_and_answer import retrieve_and_answer
 from starlette.requests import Request
 
+_SUPPORTED_LINE = "grounded evidence [doc:doc-1-chunk-1]"
+
 
 class _ConnectedRequest:
     async def is_disconnected(self) -> bool:
@@ -58,9 +60,9 @@ class _GatedStreamingLLM(_BaseStreamingLLM):
         **_kwargs: Any,
     ) -> AsyncIterator[str]:
         try:
-            yield "第一段"
+            yield f"{_SUPPORTED_LINE}\n"
             await self.release.wait()
-            yield "第二段"
+            yield _SUPPORTED_LINE
             self.completed = True
         finally:
             self.closed.set()
@@ -76,7 +78,7 @@ class _FailingStreamingLLM(_BaseStreamingLLM):
         **_kwargs: Any,
     ) -> AsyncIterator[str]:
         try:
-            yield "partial"
+            yield f"{_SUPPORTED_LINE}\n"
             raise RuntimeError(
                 "answer stream exploded at https://provider.invalid/private /tmp/secret-key"
             )
@@ -96,7 +98,7 @@ class _BlockingStreamingLLM(_BaseStreamingLLM):
         **_kwargs: Any,
     ) -> AsyncIterator[str]:
         try:
-            yield "first"
+            yield f"{_SUPPORTED_LINE}\n"
             self.waiting.set()
             await self.never.wait()
             yield "unreachable"
@@ -132,7 +134,7 @@ async def test_first_delta_arrives_before_full_answer_and_done_has_metadata() ->
     first_frame = await asyncio.wait_for(anext(body), timeout=0.5)
     event, payload = _decode_frame(first_frame)
     assert event == "delta"
-    assert payload == {"type": "delta", "delta": "第一段"}
+    assert payload == {"type": "delta", "delta": f"{_SUPPORTED_LINE}\n"}
     assert llm.completed is False
     assert llm.release.is_set() is False
 
@@ -141,7 +143,7 @@ async def test_first_delta_arrives_before_full_answer_and_done_has_metadata() ->
     assert [item[0] for item in remaining] == ["delta", "done"]
     done = remaining[-1][1]
     assert done["type"] == "done"
-    assert done["answer"] == "第一段第二段"
+    assert done["answer"] == f"{_SUPPORTED_LINE}\n{_SUPPORTED_LINE}"
     assert done["sources"][0]["doc_id"] == "doc-1"
     assert done["sources"][0]["page"] == "3"
     assert done["trace"]["chosen_source"] == "rag"
@@ -163,7 +165,10 @@ async def test_midstream_failure_emits_error_without_done_and_rethrows() -> None
     assert error[1]["type"] == "error"
     assert error[1]["code"] == "answer_generation_failed"
     assert error[1]["error"] == "暂时无法生成回答，请稍后重试"
-    assert error[1]["trace"] == {"phase": "generation", "partial_chars": 7}
+    assert error[1]["trace"] == {
+        "phase": "generation",
+        "partial_chars": len(_SUPPORTED_LINE) + 1,
+    }
     assert "provider.invalid" not in json.dumps(error[1], ensure_ascii=False)
     assert "/tmp/secret-key" not in json.dumps(error[1], ensure_ascii=False)
     with pytest.raises(RuntimeError, match="exploded"):

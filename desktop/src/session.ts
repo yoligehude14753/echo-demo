@@ -5,6 +5,7 @@ import {
   backendWsUrl,
   compareVersions,
   shouldHideSharedPublicHistory,
+  type ElectronBackendBuildContract,
 } from "@/runtime";
 import {
   IdentityCredentialStoreError,
@@ -20,6 +21,19 @@ const MAX_HTTP_ERROR_DETAIL_BYTES = 4 * 1024;
 const PUBLIC_CLIENT_VERSION_HEADER = "X-EchoDesk-Client-Version";
 const PUBLIC_MINIMUM_CLIENT_VERSION_HEADER =
   "X-EchoDesk-Minimum-Client-Version";
+const LOCAL_BACKEND_PRODUCT_ID = "com.echodesk.app.backend";
+const LOCAL_BACKEND_API_CONTRACT = "echodesk.desktop-backend/v1";
+const LOCAL_BUILD_CONTRACT_SCHEMA_VERSION = 1;
+const REQUIRED_LOCAL_CAPABILITIES = Object.freeze({
+  principal_sessions: true,
+  owner_isolation: true,
+  workflow_kernel: "dispatcher-v1",
+  ws_owner_filtering: true,
+  ws_stream_epoch: true,
+  ws_hello_bearer: false,
+  server_resync_rehydrate_required: true,
+  host_runtime_requires_admin: false,
+});
 export const SESSION_IDENTITY_EVENT = "echodesk:session-identity";
 
 export type SessionIdentityPhase =
@@ -40,6 +54,8 @@ export interface BackendBootstrap {
   schema_version: number;
   api_version: string;
   backend_version?: string;
+  app_version?: string;
+  build_contract?: ElectronBackendBuildContract;
   minimum_client_version?: string;
   session_required: boolean;
   capabilities: Record<string, unknown>;
@@ -48,6 +64,7 @@ export interface BackendBootstrap {
 export type BackendCompatibility =
   | "unknown"
   | "compatible"
+  | "incompatible"
   | "legacy"
   | "upgrade-required"
   | "unreachable";
@@ -60,6 +77,13 @@ export class ClientUpgradeRequiredError extends Error {
         : "当前 EchoDesk 版本过低，请升级后再连接公共服务",
     );
     this.name = "ClientUpgradeRequiredError";
+  }
+}
+
+export class BackendContractMismatchError extends Error {
+  constructor(public readonly reason: string) {
+    super("本机 backend 与当前 EchoDesk 构建不匹配，已拒绝连接");
+    this.name = "BackendContractMismatchError";
   }
 }
 
@@ -211,6 +235,7 @@ export function isIdentityLostError(
 
 function userVisibleIdentityError(error: unknown): string {
   if (error instanceof ClientUpgradeRequiredError) return error.message;
+  if (error instanceof BackendContractMismatchError) return error.message;
   if (
     error instanceof IdentityCredentialStoreError &&
     error.kind === "invalid-origin"
@@ -248,6 +273,8 @@ function publishCompatibility(next: BackendCompatibility): void {
   }
   if (next === "legacy") {
     console.warn("[backend] 旧后端不支持 EchoDesk 0.3 bootstrap/session 能力，已降级");
+  } else if (next === "incompatible") {
+    console.warn("[backend] 本机 backend 构建契约不匹配，已停止业务请求");
   } else if (next === "upgrade-required") {
     console.warn("[backend] 当前客户端低于服务端最低版本，已停止身份与业务请求");
   }
@@ -449,8 +476,102 @@ async function parseBoundedJsonResponse<T>(
   }
 }
 
-async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
+function requireLocalBuildContract(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.echo?.isElectron === true &&
+    window.echo?.isPublicDemo !== true
+  );
+}
+
+function rejectLocalBuildContract(reason: string): never {
+  throw new BackendContractMismatchError(reason);
+}
+
+function validateExpectedLocalBuildContract(
+  expected: ElectronBackendBuildContract | null,
+): ElectronBackendBuildContract {
+  if (!expected || typeof expected !== "object") {
+    return rejectLocalBuildContract("expected-contract-missing");
+  }
+  if (
+    expected.schema_version !== LOCAL_BUILD_CONTRACT_SCHEMA_VERSION ||
+    expected.product_id !== LOCAL_BACKEND_PRODUCT_ID ||
+    expected.product_version !== __APP_VERSION__ ||
+    expected.api_contract !== LOCAL_BACKEND_API_CONTRACT ||
+    !/^sha256:[0-9a-f]{64}$/.test(expected.build_id) ||
+    (expected.schema_catalog_max !== null &&
+      (!Number.isSafeInteger(expected.schema_catalog_max) ||
+        expected.schema_catalog_max < 1))
+  ) {
+    return rejectLocalBuildContract("expected-contract-invalid");
+  }
+  return expected;
+}
+
+async function expectedLocalBuildContract(): Promise<ElectronBackendBuildContract | null> {
+  if (!requireLocalBuildContract()) return null;
+  const loadExpected = window.echo?.getBackendContract;
+  if (!loadExpected) {
+    return rejectLocalBuildContract("expected-contract-bridge-missing");
+  }
   try {
+    return validateExpectedLocalBuildContract(await loadExpected());
+  } catch (error) {
+    if (error instanceof BackendContractMismatchError) throw error;
+    return rejectLocalBuildContract("expected-contract-unavailable");
+  }
+}
+
+function validateLocalBuildContract(
+  bootstrap: Partial<BackendBootstrap>,
+  expected: ElectronBackendBuildContract,
+): void {
+  if (
+    bootstrap.session_required !== false ||
+    bootstrap.backend_version !== expected.product_version ||
+    bootstrap.app_version !== expected.product_version
+  ) {
+    rejectLocalBuildContract("product-version-mismatch");
+  }
+  const actual = bootstrap.build_contract;
+  if (!actual || typeof actual !== "object") {
+    rejectLocalBuildContract("build-contract-missing");
+  }
+  for (const key of [
+    "schema_version",
+    "product_id",
+    "product_version",
+    "api_contract",
+    "build_id",
+  ] as const) {
+    if (actual[key] !== expected[key]) {
+      rejectLocalBuildContract(`${key.replaceAll("_", "-")}-mismatch`);
+    }
+  }
+  if (
+    !Number.isSafeInteger(actual.schema_catalog_max) ||
+    Number(actual.schema_catalog_max) < 1 ||
+    (expected.schema_catalog_max !== null &&
+      actual.schema_catalog_max !== expected.schema_catalog_max)
+  ) {
+    rejectLocalBuildContract("schema-catalog-mismatch");
+  }
+  const capabilities = bootstrap.capabilities;
+  if (!capabilities || typeof capabilities !== "object") {
+    rejectLocalBuildContract("capabilities-missing");
+  }
+  for (const [name, required] of Object.entries(REQUIRED_LOCAL_CAPABILITIES)) {
+    if (capabilities[name] !== required) {
+      rejectLocalBuildContract(`capability-${name}-mismatch`);
+    }
+  }
+}
+
+async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
+  const localBuildContractRequired = requireLocalBuildContract();
+  try {
+    const expected = await expectedLocalBuildContract();
     const response = await fetchWithTimeout(
       await backendUrlForOrigin("/bootstrap", origin),
       {
@@ -458,6 +579,7 @@ async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
       },
     );
     if (response.status === 404) {
+      if (expected) rejectLocalBuildContract("bootstrap-missing");
       publishCompatibilityForOrigin(origin, "legacy");
       return null;
     }
@@ -472,9 +594,11 @@ async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
       typeof body.session_required !== "boolean" ||
       !body.capabilities
     ) {
+      if (expected) rejectLocalBuildContract("bootstrap-contract-mismatch");
       publishCompatibilityForOrigin(origin, "legacy");
       return null;
     }
+    if (expected) validateLocalBuildContract(body, expected);
     const minimumVersion = body.minimum_client_version?.trim();
     if (
       minimumVersion &&
@@ -487,6 +611,14 @@ async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
     return body as BackendBootstrap;
   } catch (error) {
     if (error instanceof ClientUpgradeRequiredError) throw error;
+    if (localBuildContractRequired) {
+      const mismatch =
+        error instanceof BackendContractMismatchError
+          ? error
+          : new BackendContractMismatchError("bootstrap-unavailable");
+      publishCompatibilityForOrigin(origin, "incompatible");
+      throw mismatch;
+    }
     publishCompatibilityForOrigin(origin, "unreachable");
     console.warn("[backend] bootstrap unavailable", error);
     return null;
@@ -500,8 +632,28 @@ function bootstrapBackendForOrigin(
     return bootstrapPromise;
   }
   bootstrapPromiseOrigin = origin;
-  bootstrapPromise = loadBootstrap(origin);
-  return bootstrapPromise;
+  const pending = loadBootstrap(origin);
+  bootstrapPromise = pending;
+  void pending.catch((error: unknown) => {
+    // The packaged renderer commonly starts before its bundled backend has
+    // finished migrations and opened the socket.  Do not pin that transient
+    // bootstrap failure for the lifetime of the renderer: the WebSocket retry
+    // loop must be able to probe the now-ready backend on its next attempt.
+    //
+    // A concrete contract mismatch stays cached and therefore fail-closed;
+    // replacing an incompatible backend requires an explicit origin/session
+    // reset instead of silently reconnecting to a different binary.
+    if (
+      error instanceof BackendContractMismatchError &&
+      error.reason === "bootstrap-unavailable" &&
+      bootstrapPromise === pending &&
+      bootstrapPromiseOrigin === origin
+    ) {
+      bootstrapPromise = null;
+      bootstrapPromiseOrigin = null;
+    }
+  });
+  return pending;
 }
 
 export async function bootstrapBackend(): Promise<BackendBootstrap | null> {

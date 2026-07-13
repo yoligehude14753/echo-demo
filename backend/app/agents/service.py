@@ -144,6 +144,80 @@ def _state(raw: str | None) -> AgentTaskState:
         return AgentTaskState.PENDING
 
 
+def _agentos_terminal_event(status: str) -> tuple[str, str]:
+    state = _state(status)
+    if state == AgentTaskState.SUCCEEDED:
+        return "task.completed", state.value
+    if state == AgentTaskState.FAILED:
+        return "task.failed", state.value
+    if state == AgentTaskState.TIMEOUT:
+        return "task.timeout", state.value
+    if state == AgentTaskState.CANCELLED:
+        return "task.cancelled", state.value
+    if state == AgentTaskState.CANCEL_FAILED:
+        return "task.cancel_failed", state.value
+    return "task.failed", AgentTaskState.FAILED.value
+
+
+def _agentos_http_final_text(raw_task: dict[str, Any], status: str) -> str:
+    for key in ("final_text", "result_text", "message", "error"):
+        value = raw_task.get(key)
+        if value not in (None, ""):
+            return str(value)
+    if _state(status) == AgentTaskState.SUCCEEDED:
+        return "任务完成"
+    if _state(status) == AgentTaskState.CANCELLED:
+        return "任务已取消"
+    if _state(status) == AgentTaskState.TIMEOUT:
+        return "任务超时"
+    return "任务失败"
+
+
+def _normalize_agentos_http_artifacts(raw_task: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_artifacts = raw_task.get("artifacts")
+    if not isinstance(raw_artifacts, list):
+        return []
+    artifacts: list[dict[str, Any]] = []
+    for item in raw_artifacts:
+        if not isinstance(item, dict):
+            continue
+        relpath = str(item.get("relpath") or item.get("name") or "").strip()
+        if not relpath:
+            continue
+        artifacts.append(
+            {
+                "name": str(item.get("name") or relpath),
+                "relpath": relpath,
+                "kind": item.get("kind") or "agent",
+                "size_bytes": item.get("size_bytes"),
+                "has_preview": item.get("has_preview"),
+                "url": str(item.get("url") or ""),
+            }
+        )
+    return artifacts
+
+
+def _agentos_http_raw_hash(
+    runner_task_id: str,
+    raw_kind: str,
+    payload: Any,
+    ts: str,
+) -> str:
+    material = json.dumps(
+        {
+            "source": "agentos_http",
+            "runner_task_id": runner_task_id,
+            "raw_kind": raw_kind,
+            "payload": payload,
+            "ts": ts,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
 def _context_str(context: dict[str, Any], key: str) -> str | None:
     value = context.get(key)
     return str(value) if value not in (None, "") else None
@@ -2303,7 +2377,7 @@ class AgentTaskService:
 
         task.add_done_callback(_cleanup)
 
-    async def _run_bridge(self, rec: AgentTaskRecord) -> None:
+    async def _run_bridge(self, rec: AgentTaskRecord) -> None:  # noqa: PLR0912, PLR0915
         assert rec.runner_task_id is not None
         key = self._bridge_key(rec)
         lease: LeaseToken | None = None
@@ -2332,6 +2406,15 @@ class AgentTaskService:
                 self._clear_bridge_retry(key)
                 return
             result_seen = await self._has_runner_result(rec)
+            if await self._reconcile_runner_http_state(
+                rec,
+                lease,
+                result_seen=result_seen,
+            ):
+                await self._mark_bridge_completed(rec, lease)
+                retry = False
+                self._clear_bridge_retry(key)
+                return
 
             async def _record(
                 event: EchoTaskEvent,
@@ -2370,7 +2453,7 @@ class AgentTaskService:
                 return
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
-            if await bridge_task:
+            if await bridge_task or await self._reconcile_runner_http_state(rec, lease):
                 await self._mark_bridge_completed(rec, lease)
                 retry = False
                 self._clear_bridge_retry(key)
@@ -2433,6 +2516,130 @@ class AgentTaskService:
             row = await cur.fetchone()
             await cur.close()
         return row is not None
+
+    async def _reconcile_runner_http_state(
+        self,
+        rec: AgentTaskRecord,
+        lease: LeaseToken,
+        *,
+        result_seen: bool | None = None,
+    ) -> bool:
+        """Reconcile a task from AgentOS HTTP when the event stream is unavailable."""
+
+        if not rec.runner_task_id:
+            return False
+        get_task = getattr(self.backend, "get_task", None)
+        if get_task is None:
+            return False
+        try:
+            raw_task = await get_task(rec.runner_task_id)
+        except Exception as exc:
+            _log.warning(
+                "agentos http reconcile failed task=%s error_type=%s",
+                rec.task_id,
+                type(exc).__name__,
+            )
+            return False
+        if not isinstance(raw_task, dict):
+            return False
+
+        status = str(raw_task.get("status") or raw_task.get("state") or "").lower()
+        terminal = _state(status)
+        if not terminal.is_terminal:
+            return False
+
+        artifacts = _normalize_agentos_http_artifacts(raw_task)
+        final_text = _agentos_http_final_text(raw_task, status)
+        ts = str(
+            raw_task.get("finished_at")
+            or raw_task.get("completed_at")
+            or raw_task.get("updated_at")
+            or utc_now_iso()
+        )
+        duration_ms = raw_task.get("duration_ms")
+        if duration_ms is None:
+            duration_ms = raw_task.get("elapsed_ms")
+        snapshot = {"duration_ms": duration_ms} if duration_ms is not None else {}
+
+        if artifacts:
+            await self.record_task_event(
+                EchoTaskEvent(
+                    task_id=rec.task_id,
+                    runner_task_id=rec.runner_task_id,
+                    conversation_id=rec.conversation_id,
+                    message_id=rec.message_id,
+                    title=rec.title,
+                    event="task.artifact_updated",
+                    state="running",
+                    message="产物已更新",
+                    artifacts=artifacts,
+                    ts=ts,
+                ),
+                raw_hash=_agentos_http_raw_hash(
+                    rec.runner_task_id,
+                    "artifact_change",
+                    artifacts,
+                    ts,
+                ),
+                raw_kind="artifact_change",
+                lease_token=lease,
+            )
+
+        event_name, state_name = _agentos_terminal_event(status)
+        if result_seen is None:
+            result_seen = await self._has_runner_result(rec)
+        if not result_seen and state_name not in {
+            AgentTaskState.CANCELLED.value,
+            AgentTaskState.CANCEL_FAILED.value,
+        }:
+            await self.record_task_event(
+                EchoTaskEvent(
+                    task_id=rec.task_id,
+                    runner_task_id=rec.runner_task_id,
+                    conversation_id=rec.conversation_id,
+                    message_id=rec.message_id,
+                    title=rec.title,
+                    event=event_name,
+                    state=state_name,
+                    message=final_text,
+                    artifacts=artifacts,
+                    snapshot=snapshot,
+                    ts=ts,
+                ),
+                raw_hash=_agentos_http_raw_hash(
+                    rec.runner_task_id,
+                    "result",
+                    {"status": status, "final_text": final_text},
+                    ts,
+                ),
+                raw_kind="result",
+                lease_token=lease,
+            )
+
+        await self.record_task_event(
+            EchoTaskEvent(
+                task_id=rec.task_id,
+                runner_task_id=rec.runner_task_id,
+                conversation_id=rec.conversation_id,
+                message_id=rec.message_id,
+                title=rec.title,
+                event=event_name,
+                state=state_name,
+                message=final_text,
+                artifacts=artifacts,
+                snapshot=snapshot,
+                ts=ts,
+            ),
+            raw_hash=_agentos_http_raw_hash(
+                rec.runner_task_id,
+                "task_state",
+                {"status": status, "final_text": final_text},
+                ts,
+            ),
+            raw_kind="task_state",
+            lease_token=lease,
+        )
+        return await self._has_completed_runner_tail(rec)
 
     async def _has_completed_runner_tail(self, rec: AgentTaskRecord) -> bool:
         async with self._conn() as conn:

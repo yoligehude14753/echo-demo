@@ -1442,7 +1442,7 @@ async def manual_start_meeting(
 async def manual_end_meeting(
     state: Annotated[MeetingState, Depends(get_meeting_state)],
 ) -> dict[str, object]:
-    """用户点击状态栏：手动结束会议（含 finalize 纪要）。"""
+    """用户点击状态栏：先结束并返回 idle，纪要由后台 workflow 生成。"""
     state.start_watchdog()
     ended = await state.manual_end()
     return {"mode": "idle", "meeting_id": ended}
@@ -1899,13 +1899,13 @@ async def finalize(
 @router.post("/{meeting_id}/end")
 async def end_meeting(
     meeting_id: str,
-    pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
+    state: Annotated[MeetingState, Depends(get_meeting_state)],
     repository: Annotated[RepositoryPort, Depends(get_repository)],
 ) -> dict[str, str]:
-    """结束会议叠加层（不生成纪要）；ambient 主链路继续。"""
+    """结束会议叠加层（不生成纪要），同步 idle/cooldown；ambient 继续。"""
     if await repository.get_meeting(meeting_id) is None:
         raise HTTPException(status_code=404, detail="meeting not found")
-    await pipeline.end_meeting(meeting_id)
+    await state.end_without_finalize(meeting_id)
     return {"meeting_id": meeting_id, "status": "ended"}
 
 

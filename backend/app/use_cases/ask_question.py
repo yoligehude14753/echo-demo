@@ -28,9 +28,21 @@ def build_question_messages(
     question: str,
     *,
     history: list[ChatMessage] | None = None,
+    memory_context: str | None = None,
 ) -> list[ChatMessage]:
     """构造 EchoDesk 纯对话消息。"""
     messages: list[ChatMessage] = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
+    if memory_context:
+        messages.append(
+            ChatMessage(
+                role="system",
+                content=(
+                    "下面是按当前问题关联出的历史信息。回答时只能把原文中明确表达的内容"
+                    "当作事实；关联原因不是事实。引用历史会议、产物或长期记忆时，用其"
+                    "来源标记，无法由原文支持的内容静默省略。\n\n" + memory_context
+                ),
+            )
+        )
     if history:
         messages.extend(history)
     messages.append(ChatMessage(role="user", content=question))
@@ -42,6 +54,7 @@ async def answer_question_once(
     question: str,
     *,
     history: list[ChatMessage] | None = None,
+    memory_context: str | None = None,
     model: str | None = None,
     max_tokens: int | None = 768,
     timeout_s: float = 45.0,
@@ -52,7 +65,11 @@ async def answer_question_once(
     60s，但非流式短回答稳定得多。前端仍收到 SSE，只是服务端一帧返回完整回答。
     """
     return await llm.chat(
-        build_question_messages(question, history=history),
+        build_question_messages(
+            question,
+            history=history,
+            memory_context=memory_context,
+        ),
         model=model,
         max_tokens=max_tokens,
         timeout_s=timeout_s,

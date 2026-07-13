@@ -477,6 +477,20 @@ class AudioCapture {
         return;
       }
       this.stream = stream;
+      const selectedTrack = stream.getAudioTracks()[0];
+      if (selectedTrack) {
+        const selectedSettings = selectedTrack.getSettings();
+        // 不记录 deviceId/groupId（稳定标识不应进入日志）；label 足以判断是否
+        // 意外选中了 BlackHole/显示器/虚拟声卡等非预期输入。
+        console.info("[audio-capture] selected input", {
+          label: selectedTrack.label || "unnamed audio input",
+          sampleRate: selectedSettings.sampleRate,
+          channelCount: selectedSettings.channelCount,
+          echoCancellation: selectedSettings.echoCancellation,
+          noiseSuppression: selectedSettings.noiseSuppression,
+          autoGainControl: selectedSettings.autoGainControl,
+        });
+      }
 
       const ctx = isAndroidTvRuntime()
         ? new AudioContext()

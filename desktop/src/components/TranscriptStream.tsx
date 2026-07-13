@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Bot, UserRound } from "lucide-react";
+import { Bot, Brain, Clock3, UserRound } from "lucide-react";
 import {
   artifactDownloadUrl,
   artifactIdFromDownloadHref,
@@ -11,7 +11,7 @@ import {
 import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
-import type { TranscriptSegment } from "@/types";
+import type { MemorySourceCard, TranscriptSegment } from "@/types";
 import {
   buildSpeakerDisplayMap,
   colorForDisplayIdx,
@@ -44,7 +44,71 @@ interface DisplaySegment {
   text: string;
   captured_at: string;
   speaker_label: string | null;
-  role?: "speaker" | "user" | "assistant";
+  role?: "speaker" | "user" | "assistant" | "memory";
+  memorySources?: MemorySourceCard[];
+  memoryLabel?: string;
+  memoryModel?: string;
+}
+
+function MemoryAssociationCard({ segment }: { segment: DisplaySegment }): JSX.Element {
+  const sources = segment.memorySources ?? [];
+  const renderSource = (source: MemorySourceCard): JSX.Element => (
+    <div
+      key={source.candidate_id}
+      className="flex gap-2.5 py-2.5 border-t border-indigo-100 first:border-t-0"
+      data-testid="memory-source-item"
+      data-source-ref={source.source_ref}
+    >
+      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-[11px] font-semibold text-indigo-700">
+        {source.index}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-[13px] font-medium text-ink-900">{source.title}</span>
+          <span className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">
+            {source.level}
+          </span>
+        </div>
+        <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-ink-600">
+          {source.excerpt}
+        </p>
+        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-ink-400">
+          <Clock3 className="h-3 w-3" aria-hidden="true" />
+          <span>{fmtClockShort(source.occurred_at)}</span>
+          <span>·</span>
+          <span className="truncate">{source.relation}</span>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="mt-3 ml-10 max-w-[78%]" data-testid="memory-association-card">
+      <div className="rounded-2xl border border-indigo-200 bg-white px-4 py-3 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13px] font-medium text-indigo-800">
+            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-50 ring-1 ring-inset ring-indigo-200">
+              <Brain className="h-3.5 w-3.5" aria-hidden="true" />
+            </span>
+            <span>Echo Memory</span>
+          </div>
+          <span className="text-[10px] text-ink-400">{segment.memoryModel ?? "qwen3 8b"}</span>
+        </div>
+        <div className="mt-2 text-[14px] text-ink-800">
+          {segment.memoryLabel ?? `找到 ${sources.length} 条相关历史信息`}
+        </div>
+        <div className="mt-1">{sources.slice(0, 3).map(renderSource)}</div>
+        {sources.length > 3 && (
+          <details className="border-t border-indigo-100 pt-2">
+            <summary className="cursor-pointer select-none text-[11px] text-indigo-700">
+              展开其余 {sources.length - 3} 条来源
+            </summary>
+            <div>{sources.slice(3).map(renderSource)}</div>
+          </details>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ambientToDisplay(s: AmbientSegment): DisplaySegment {
@@ -171,9 +235,25 @@ export default function TranscriptStream(): JSX.Element {
         meetingSegmentToDisplay(s, meeting.started_at),
       );
     }
-    if (localOnlyAmbient) return localAmbient.map(ambientToDisplay);
-    return ambient.map(ambientToDisplay);
-  }, [showMeetingHistory, meeting, localOnlyAmbient, localAmbient, ambient]);
+    const source = localOnlyAmbient ? localAmbient : ambient;
+    const sourceDisplay = source.map(ambientToDisplay);
+    if (currentMeetingId !== null && meeting?.started_at) {
+      const start = new Date(meeting.started_at).getTime();
+      const end = meeting.ended_at ? new Date(meeting.ended_at).getTime() : null;
+      return sourceDisplay.filter((seg) => {
+        const t = new Date(seg.captured_at).getTime();
+        return Number.isFinite(t) && t >= start && (end === null || t <= end);
+      });
+    }
+    return sourceDisplay;
+  }, [
+    showMeetingHistory,
+    meeting,
+    currentMeetingId,
+    localOnlyAmbient,
+    localAmbient,
+    ambient,
+  ]);
 
   const dialogSegs: DisplaySegment[] = useMemo(() => {
     const out: DisplaySegment[] = [];
@@ -189,6 +269,9 @@ export default function TranscriptStream(): JSX.Element {
       const payload = (ev.payload ?? {}) as {
         question?: unknown;
         answer?: unknown;
+        label?: unknown;
+        model_display_name?: unknown;
+        sources?: unknown;
       };
       if (ev.type === "rag.query") {
         const question =
@@ -211,6 +294,22 @@ export default function TranscriptStream(): JSX.Element {
             captured_at: ev.ts,
             speaker_label: "assistant",
             role: "assistant",
+          });
+        }
+      }
+      if (ev.type === "memory.sources" && Array.isArray(payload.sources)) {
+        const sources = payload.sources as MemorySourceCard[];
+        if (sources.length > 0) {
+          out.push({
+            text: typeof payload.label === "string" ? payload.label : "相关历史信息",
+            captured_at: ev.ts,
+            speaker_label: "memory",
+            role: "memory",
+            memorySources: sources,
+            memoryLabel: typeof payload.label === "string" ? payload.label : undefined,
+            memoryModel: typeof payload.model_display_name === "string"
+              ? payload.model_display_name
+              : undefined,
           });
         }
       }
@@ -378,6 +477,9 @@ export default function TranscriptStream(): JSX.Element {
     >
       <div className="echodesk-stream-list max-w-3xl mx-auto">
         {segs.map((s, idx) => {
+          if (s.role === "memory") {
+            return <MemoryAssociationCard key={`${s.captured_at}-${idx}`} segment={s} />;
+          }
           const displayIdx = s.speaker_label
             ? (speakerDisplayMap.get(s.speaker_label) ?? 0)
             : 0;
@@ -390,11 +492,9 @@ export default function TranscriptStream(): JSX.Element {
 
           const isAssistant = s.role === "assistant";
           const isSelf = s.role === "user";
-          const c = isAssistant
-            ? { fg: "#047857", bg: "#ecfdf5", ring: "#a7f3d0" }
-            : isSelf
-              ? { fg: "#1d4ed8", bg: "#eff6ff", ring: "#bfdbfe" }
-              : speakerColor;
+          const c = isSelf
+            ? { fg: "#1d4ed8", bg: "#eff6ff", ring: "#bfdbfe" }
+            : speakerColor;
 
           // 连续同说话人合并：只在第一条显示头像，气泡间距收紧
           const prev = idx > 0 ? segs[idx - 1] : null;
@@ -416,12 +516,20 @@ export default function TranscriptStream(): JSX.Element {
           // 头像：32px 圆形，背景柔色 + 同色边框，居中数字
           const avatar = (
             <div
-              className="echodesk-stream-avatar shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none"
-              style={{
-                color: c.fg,
-                background: c.bg,
-                boxShadow: `inset 0 0 0 1px ${c.ring}`,
-              }}
+              className={`echodesk-stream-avatar shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold select-none ${
+                isAssistant
+                  ? "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200"
+                  : ""
+              }`}
+              style={
+                isAssistant
+                  ? undefined
+                  : {
+                      color: c.fg,
+                      background: c.bg,
+                      boxShadow: `inset 0 0 0 1px ${c.ring}`,
+                    }
+              }
               title={
                 isAssistant
                   ? displayLabel
@@ -432,7 +540,13 @@ export default function TranscriptStream(): JSX.Element {
               data-testid="speaker-avatar"
             >
               {isAssistant ? (
-                <Bot className="h-3.5 w-3.5" aria-hidden="true" />
+                <span
+                  className="inline-flex"
+                  data-testid="echo-ai-avatar"
+                  aria-hidden="true"
+                >
+                  <Bot className="h-3.5 w-3.5" />
+                </span>
               ) : isSelf ? (
                 <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
               ) : displayIdx > 0 ? (
@@ -464,11 +578,17 @@ export default function TranscriptStream(): JSX.Element {
               >
                 {!sameSpeakerAsPrev && (
                   <div
-                    className={`echodesk-stream-speaker text-[11px] mb-0.5 px-1 ${isSelf ? "text-right" : "text-left"}`}
-                    style={{ color: c.fg }}
+                    className={`echodesk-stream-speaker text-[11px] mb-0.5 px-1 ${
+                      isSelf ? "text-right" : "text-left"
+                    } ${isAssistant ? "text-indigo-700" : ""}`}
+                    style={isAssistant ? undefined : { color: c.fg }}
                     data-testid="speaker-tag"
                   >
-                    {displayLabel}
+                    {isAssistant ? (
+                      <span data-testid="echo-ai-label">{displayLabel}</span>
+                    ) : (
+                      displayLabel
+                    )}
                   </div>
                 )}
                 <div
@@ -482,7 +602,7 @@ export default function TranscriptStream(): JSX.Element {
                     isSelf
                       ? "bg-blue-500 text-white border-blue-500"
                       : isAssistant
-                        ? "bg-emerald-50 text-ink-900 border-emerald-200"
+                        ? "bg-indigo-50 text-ink-900 border-indigo-200"
                         : "bg-white text-ink-800"
                   }`}
                   data-testid={
@@ -549,7 +669,7 @@ export default function TranscriptStream(): JSX.Element {
                           </code>
                         ),
                         blockquote: ({ children }) => (
-                          <blockquote className="border-l-2 border-emerald-300 pl-3 my-2 text-ink-700">
+                          <blockquote className="border-l-2 border-indigo-300 pl-3 my-2 text-ink-700">
                             {children}
                           </blockquote>
                         ),

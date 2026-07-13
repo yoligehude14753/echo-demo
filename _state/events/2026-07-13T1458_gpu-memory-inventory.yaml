@@ -1,0 +1,57 @@
+event_id: "E-20260713T1458-001"
+event_type: "add"
+timestamp: "2026-07-13T14:57:56+08:00"
+author: "agent/codex-runtime-gpu-audit"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-033"
+      claim: "At 2026-07-13 14:57:56 +08:00, heyi-bj exposed two operational GPUs: GPU 0 had 32607 MiB total, 27719 MiB used, and 4391 MiB free; GPU 1 had 32607 MiB total, 24645 MiB used, and 7465 MiB free."
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-13T14:57:56+08:00"
+      observed_by: "agent/codex-runtime-gpu-audit"
+      valid_until: "2026-07-13T16:57:56+08:00"
+      ttl_hours: 2
+      source:
+        - "runtime:ssh heyi-bj nvidia-smi GPU and compute-process query"
+        - "runtime:docker inspect kvoffcap-T400_G60_ctx80k device request"
+      evidence: "nvidia-smi reported both cards and one Kimi-K2.7-Code process spanning them, with 27618 MiB on GPU 0 and 24542 MiB on GPU 1. No process or container was stopped or changed."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "gpu"
+        - "heyi-bj"
+        - "runtime-capacity"
+        - "inference"
+  - action: "add"
+    fact:
+      id: "F-ECHO-034"
+      claim: "At 2026-07-13 14:57:56 +08:00, heyi-daheng exposed one RTX 5090 D with 32607 MiB total, 17444 MiB used, and 14666 MiB free; GPU 1 was lost from the bus."
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-13T14:57:56+08:00"
+      observed_by: "agent/codex-runtime-gpu-audit"
+      valid_until: "2026-07-13T16:57:56+08:00"
+      ttl_hours: 2
+      source:
+        - "runtime:ssh heyi-daheng nvidia-smi GPU and compute-process query"
+        - "runtime:ssh heyi-daheng lspci and kernel journal query"
+      evidence: "The visible card had a 16932 MiB VLLM EngineCore process and a 498 MiB ComfyUI process. lspci still listed a second NVIDIA device at 81:00.0, while the kernel journal recorded NV_ERR_GPU_IS_LOST and device removal on 2026-07-10. No process or container was stopped or changed."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "gpu"
+        - "heyi-daheng"
+        - "runtime-capacity"
+        - "gpu-lost"
+git_commit: null

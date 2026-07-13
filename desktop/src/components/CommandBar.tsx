@@ -27,6 +27,7 @@ import {
   generateArtifact,
   ingestFile,
   listRagDocs,
+  memoryRecall,
   ragAsk,
   routeIntent,
   workspaceStatus,
@@ -350,11 +351,22 @@ export default function CommandBar(): JSX.Element {
     if (!value) return;
     const originGeneration = captureGeneration();
     if (!isCurrent(originGeneration)) return;
+    const interactionMeetingId = activePrefillMeta?.meeting_id ?? currentMeetingId ?? undefined;
+    const submittedAt = Date.now();
+    const messageId = `message_${submittedAt}_${Math.random().toString(36).slice(2, 9)}`;
+    // 用户消息必须先于意图路由和任何模型调用进入对话流，避免路由延迟造成“发送无响应”。
+    applyEvent({
+      type: "rag.query",
+      seq: 0,
+      ts: new Date(submittedAt).toISOString(),
+      meeting_id: interactionMeetingId,
+      payload: { question: value, message_id: messageId },
+    });
     setBusy(true);
     try {
       const r = routeExplicitGenerateCommand(value) ?? (await routeIntent(value, currentMeetingId));
       if (!isCurrent(originGeneration)) return;
-      await dispatch(r, value, activePrefillMeta, originGeneration);
+      await dispatch(r, value, activePrefillMeta, originGeneration, messageId);
       if (!isCurrent(originGeneration)) return;
       setText("");
       setPrefillMeta(null);
@@ -388,9 +400,23 @@ export default function CommandBar(): JSX.Element {
     originalText: string,
     meta: CommandBarPrefillMeta | null,
     originGeneration: number,
+    messageId: string,
   ): Promise<void> {
     if (!isCurrent(originGeneration)) return;
     const interactionMeetingId = meta?.meeting_id ?? currentMeetingId ?? undefined;
+    const conversationId = interactionMeetingId
+      ? `meeting:${interactionMeetingId}`
+      : "global";
+    const emitMemoryFrame = (frame: import("@/types").MemoryFramePayload): void => {
+      if (!isCurrent(originGeneration)) return;
+      applyEvent({
+        type: frame.type,
+        seq: 0,
+        ts: new Date().toISOString(),
+        meeting_id: interactionMeetingId,
+        payload: frame as unknown as Record<string, unknown>,
+      });
+    };
     switch (r.kind) {
       case "generate_html":
       case "generate_pptx":
@@ -405,14 +431,6 @@ export default function CommandBar(): JSX.Element {
           message.warning("请先描述想生成的内容");
           return;
         }
-        const now = new Date().toISOString();
-        applyEvent({
-          type: "rag.query",
-          seq: 0,
-          ts: now,
-          meeting_id: interactionMeetingId,
-          payload: { question: originalText },
-        });
         applyEvent({
           type: "chat.done",
           seq: 0,
@@ -494,12 +512,19 @@ export default function CommandBar(): JSX.Element {
           return;
         }
         message.info("正在生成会议纪要…");
-        const minutes = await finalizeMeeting(
+        void finalizeMeeting(
           mid,
           meetingDisplayTitle(currentMeeting, "会议纪要"),
-        );
-        if (!isCurrent(originGeneration)) return;
-        message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
+        )
+          .then((minutes) => {
+            if (!isCurrent(originGeneration)) return;
+            message.success(`会议纪要已生成，共 ${minutes.sections.length} 节`);
+          })
+          .catch((e) => {
+            if (!isCurrent(originGeneration)) return;
+            console.error("[command-bar] meeting finalization failed", e);
+            message.error("会议纪要生成失败，请稍后重试");
+          });
         return;
       }
       case "agent_task": {
@@ -508,6 +533,7 @@ export default function CommandBar(): JSX.Element {
           message.warning("请先描述需要完成的任务");
           return;
         }
+        const submittedAt = Date.now();
         const task = await createAgentTask({
           text: taskText,
           title: (r.params.title as string | undefined) ?? taskText.slice(0, 42),
@@ -518,6 +544,19 @@ export default function CommandBar(): JSX.Element {
         });
         if (!isCurrent(originGeneration)) return;
         upsertAgentTask(task);
+        applyEvent({
+          type: "chat.done",
+          seq: 0,
+          ts: new Date(submittedAt + 1).toISOString(),
+          meeting_id: interactionMeetingId,
+          payload: {
+            question: taskText,
+            answer:
+              task.state === "waiting_permission"
+                ? "已记录请求。需要授权后我会开始后台执行。"
+                : "已记录请求，并提交到后台执行。完成后会出现在右侧“工作产物”。",
+          },
+        });
         message.info(
           task.state === "waiting_permission" ? "需要授权后开始执行" : "已开始后台执行",
         );
@@ -531,15 +570,12 @@ export default function CommandBar(): JSX.Element {
           message.warning("请输入问题");
           return;
         }
-        applyEvent({
-          type: "rag.query",
-          seq: 0,
-          ts: new Date().toISOString(),
-          meeting_id: interactionMeetingId,
-          payload: { question },
-        });
         message.info("正在回复…");
-        void chatAsk(question)
+        void chatAsk(question, {
+          conversationId,
+          messageId,
+          onMemoryFrame: emitMemoryFrame,
+        })
           .then((answer) => {
             if (!isCurrent(originGeneration)) return;
             applyEvent({
@@ -550,6 +586,7 @@ export default function CommandBar(): JSX.Element {
               payload: {
                 question,
                 answer,
+                message_id: messageId,
               } as unknown as Record<string, unknown>,
             });
             message.success("已回复");
@@ -585,14 +622,13 @@ export default function CommandBar(): JSX.Element {
           message.warning("请输入问题");
           return;
         }
-        applyEvent({
-          type: "rag.query",
-          seq: 0,
-          ts: new Date().toISOString(),
-          meeting_id: interactionMeetingId,
-          payload: { question },
-        });
         message.info("正在检索相关资料…");
+
+        void memoryRecall(question, conversationId, messageId)
+          .then(emitMemoryFrame)
+          .catch((error) => {
+            console.warn("[command-bar] memory recall degraded", error);
+          });
 
         // 智能提示：当用户问问题但 RAG docs < 3 → 引导配置 workspace 目录
         // 让 RAG 覆盖整个文件夹，而不是只能用一两个手动上传的 PDF。
@@ -612,6 +648,7 @@ export default function CommandBar(): JSX.Element {
                 answer: ans.answer,
                 citations: ans.citations,
                 arbitration: ans.arbitration,
+                message_id: messageId,
               } as unknown as Record<string, unknown>,
             });
             const nCite = ans.citations?.length ?? 0;

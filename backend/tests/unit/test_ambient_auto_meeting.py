@@ -49,6 +49,7 @@ class StaticSTT:
     ) -> None:
         self._text = default_text
         self._dur = default_duration_ms
+        self._call_count = 0
 
     async def transcribe(
         self,
@@ -57,7 +58,11 @@ class StaticSTT:
         sample_rate: int = 16_000,
         language: str = "zh",
     ) -> list[TranscriptSegment]:
-        return [TranscriptSegment(text=self._text, start_ms=0, end_ms=self._dur)]
+        self._call_count += 1
+        # 每个真实 utterance 通常不同；避免新重复/幻觉过滤器把这个多人会议
+        # fixture 的第二段当作 ASR 卡复读而正确丢弃。
+        text = f"{self._text}（片段{self._call_count}）"
+        return [TranscriptSegment(text=text, start_ms=0, end_ms=self._dur)]
 
 
 class ScriptedDiarizer:

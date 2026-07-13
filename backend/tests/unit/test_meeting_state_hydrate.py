@@ -121,12 +121,8 @@ async def test_hydrate_keeps_fresh_auto_meeting(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_hydrate_keeps_old_manual_meeting(tmp_path: Path) -> None:
-    """24h 恢复窗口内的 manual 会议跨重启后继续保持 current。
-
-    10h 会议虽然很长，但仍可能是用户主动持续的工作，不应按 auto 的 30min
-    上限误杀。
-    """
+async def test_hydrate_ends_manual_meeting_above_four_hour_hard_limit(tmp_path: Path) -> None:
+    """v0.3.2 的可配置 4h hard limit 在重启 hydrate 时同样生效。"""
     repo = await _make_repo(tmp_path)
     try:
         old_started = datetime.now(UTC) - timedelta(hours=10)
@@ -140,13 +136,12 @@ async def test_hydrate_keeps_old_manual_meeting(tmp_path: Path) -> None:
         state = _make_state(repo, max_meeting_duration_s=1800.0)
         await state.hydrate()
 
-        assert state.current is not None
-        assert state.current.meeting_id == "m-deadbeef00"
-        assert state.current.started_by == "manual"
+        assert state.current is None
+        assert state.mode == "idle"
 
         rec = await repo.get_meeting("m-deadbeef00")
         assert rec is not None
-        assert rec.state == "in_meeting"
+        assert rec.state == "ended"
     finally:
         await repo.aclose()
 

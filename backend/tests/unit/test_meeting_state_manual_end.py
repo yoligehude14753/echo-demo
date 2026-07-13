@@ -154,6 +154,14 @@ def _good_minutes_json() -> str:
     )
 
 
+async def _wait_for_background_finalize(state: MeetingState) -> None:
+    """测试显式等待异步纪要；production 的 manual_end 必须先返回 ended。"""
+
+    tasks = tuple(state._finalize_tasks)
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
 async def _minutes_failed_outbox_rows(
     db_path: Path,
 ) -> list[tuple[str, dict[str, Any], str | None]]:
@@ -244,7 +252,7 @@ async def _seed_v37_unfinished_finalize(
         await conn.commit()
 
     upgraded = await run_migrations(db_path)
-    assert upgraded.errors == [] and upgraded.current_version == 38
+    assert upgraded.errors == [] and upgraded.current_version == 39
     return (
         Settings(
             db_path=db_path,
@@ -316,6 +324,9 @@ async def test_manual_end_passes_title_kwarg_no_missing_arg(tmp_path: Path) -> N
 
         ended = await state.manual_end()
         assert ended == mid
+        immediate = await repo.get_meeting(mid)
+        assert immediate is not None and immediate.state == "ended"
+        await _wait_for_background_finalize(state)
         assert captured["title"] == "Q3 销售评审", (
             "manual_end 必须把 user 在 manual_start 时给的 title 传给 finalize_meeting，"
             f"实际：{captured.get('title')!r}"
@@ -351,6 +362,7 @@ async def test_manual_end_title_fallback_to_meeting_id_when_no_user_title(
 
         pipe.finalize_meeting = spy  # type: ignore[assignment]
         await state.manual_end()
+        await _wait_for_background_finalize(state)
         # 兜底命名包含 meeting_id，但前缀是中文，避免直接显示 m-xxx
         assert captured["title"] == f"会议 {mid}"
     finally:
@@ -402,7 +414,8 @@ async def test_manual_end_does_not_mark_generating_before_workflow_dispatch(
         await pipe.add_audio_chunk(cur.meeting_id, b"\x00" * 16_000)
 
         assert await state.manual_end() == cur.meeting_id
-        assert observed == {"state": "in_meeting", "minutes_status": None}
+        await _wait_for_background_finalize(state)
+        assert observed == {"state": "ended", "minutes_status": None}
 
         completed = await repo.get_meeting(cur.meeting_id)
         assert completed is not None
@@ -448,8 +461,9 @@ async def test_auto_end_does_not_mark_generating_before_workflow_dispatch(
         await pipe.add_audio_chunk(meeting_id, b"\x00" * 16_000)
 
         await state._apply_auto_end(meeting_id, reason="silence_timeout")
+        await _wait_for_background_finalize(state)
 
-        assert observed == {"state": "in_meeting", "minutes_status": None}
+        assert observed == {"state": "ended", "minutes_status": None}
         completed = await repo.get_meeting(meeting_id)
         assert completed is not None
         assert completed.state == "finalized"
@@ -473,6 +487,7 @@ async def test_manual_end_finalize_failure_marks_generation_failed(tmp_path: Pat
         # finalize 失败时 manual_end 仍然成功返回 meeting_id（不抛给上层）
         ended = await state.manual_end()
         assert ended == mid
+        await _wait_for_background_finalize(state)
 
         rec = await repo.get_meeting(mid)
         assert rec is not None
@@ -519,6 +534,7 @@ async def test_manual_end_emits_minutes_failed_event_on_llm_error(tmp_path: Path
         cur = await state.manual_start(title="测试会议")
         await pipe.add_audio_chunk(cur.meeting_id, b"\x00" * 16_000)
         await state.manual_end()
+        await _wait_for_background_finalize(state)
 
         failed = [e for e in events if e.type == "minutes.failed"]
         assert len(failed) == 1, f"应发一条 minutes.failed，实际：{[e.type for e in events]}"
@@ -546,6 +562,7 @@ async def test_retry_finalize_covers_previous_failure(tmp_path: Path) -> None:
     try:
         # 第一次：manual_end 触发 finalize → 失败 → minutes_status="generation_failed"
         await state.manual_end()
+        await _wait_for_background_finalize(state)
         rec = await repo.get_meeting(mid)
         assert rec is not None
         assert rec.minutes_status == "generation_failed"
@@ -594,6 +611,7 @@ async def test_retry_finalize_after_restart_loads_segments_from_repo(tmp_path: P
         mid = cur.meeting_id
         await pipe1.add_audio_chunk(mid, b"\x00" * 16_000)
         await state1.manual_end()
+        await _wait_for_background_finalize(state1)
         rec = await repo1.get_meeting(mid)
         assert rec is not None
         assert rec.minutes_status == "generation_failed"
@@ -1460,7 +1478,7 @@ async def test_stale_finalize_terminal_never_revives_cleared_meeting_or_emits_mi
     workflow = WorkflowService(settings, bus)
     dispatcher = WorkflowDispatcher(workflow)
     if terminal == "timeout":
-        monkeypatch.setattr(dispatcher, "_remaining_timeout", lambda _run: 0.1)
+        monkeypatch.setattr(dispatcher, "_remaining_timeout", lambda _run: 1.0)
     task = asyncio.create_task(
         dispatch_meeting_finalize(
             dispatcher,

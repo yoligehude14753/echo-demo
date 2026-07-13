@@ -261,8 +261,10 @@ DEFAULT_CONFIG=$(cat <<'JSON'
   "agent_os_enabled": false,
   "agent_os_url": "http://127.0.0.1:4128",
   "llm_fast_provider": "yunwu",
-  "llm_fast_model": "MiniMax-M2.7",
+  "llm_fast_model": "gpt-5.4-nano",
   "llm_fast_base_url": "https://yunwu.ai/v1",
+  "llm_fast_display_name": "qwen3 8b",
+  "llm_fast_classification_timeout_s": 2.0,
   "yunwu_open_key": "",
   "tavily_api_key": "",
   "diarizer_enabled": true

@@ -471,7 +471,17 @@ test("formal macOS build rejects a non-Accepted notarization result", async () =
 test("formal Windows contract rejects missing, malformed, and cross-platform inputs", () => {
   assert.throws(
     () => windowsReleaseContract({ env: {}, platform: "win32" }),
-    /40-character certificate thumbprint/,
+    /Missing required ECHODESK_WINDOWS_CERTIFICATE_SHA1/,
+  );
+  assert.throws(
+    () =>
+      windowsReleaseContract({
+        env: {
+          ECHODESK_WINDOWS_CERTIFICATE_SHA1: "ab".repeat(20),
+        },
+        platform: "win32",
+      }),
+    /Missing required ECHODESK_WINDOWS_EXPECTED_PUBLISHER/,
   );
   assert.throws(
     () =>
@@ -483,6 +493,17 @@ test("formal Windows contract rejects missing, malformed, and cross-platform inp
         platform: "win32",
       }),
     /40-character certificate thumbprint/,
+  );
+  assert.throws(
+    () =>
+      windowsReleaseContract({
+        env: {
+          ...validWindowsEnv,
+          ECHODESK_WINDOWS_TIMESTAMP_URL: "https://user:secret@example.test",
+        },
+        platform: "win32",
+      }),
+    /without embedded credentials/,
   );
   assert.throws(
     () =>
@@ -522,6 +543,52 @@ test("formal Windows build refuses a wrong certificate before packaging", async 
     /publisher mismatch/,
   );
   assert.equal(calls.some((call) => call.command === "npm.cmd"), false);
+});
+
+test("formal Windows build reports every missing signed candidate asset before verification", async () => {
+  const version = JSON.parse(
+    readFileSync(path.join(desktopRoot, "package.json"), "utf8"),
+  ).version;
+  const missingCases = [
+    ["signed NSIS installer", `EchoDesk.Setup.${version}.exe`],
+    ["signed unpacked application", path.join("win-unpacked", "EchoDesk.exe")],
+    [
+      "signed bundled backend",
+      path.join(
+        "win-unpacked",
+        "resources",
+        "backend",
+        "echodesk-backend.exe",
+      ),
+    ],
+    ["Windows portable ZIP", `EchoDesk-${version}-win-x64.zip`],
+    ["NSIS installer blockmap", `EchoDesk.Setup.${version}.exe.blockmap`],
+    ["Windows update metadata", "latest.yml"],
+  ];
+
+  for (const [label, missingSuffix] of missingCases) {
+    const calls = [];
+    await assert.rejects(
+      runWindowsRelease({
+        env: validWindowsEnv,
+        platform: "win32",
+        exists: (candidate) => !candidate.endsWith(missingSuffix),
+        logger: silentLogger,
+        runner: (command, args, options) => {
+          calls.push({ command, args: [...args], options });
+          return ok();
+        },
+      }),
+      new RegExp(`Missing ${label}`),
+    );
+    assert.equal(
+      calls.some(
+        (call) => call.command === "pwsh" && call.args.includes("Verify"),
+      ),
+      false,
+      `${label} must fail before Authenticode artifact verification`,
+    );
+  }
 });
 
 test("formal Windows build enforces Authenticode chain and timestamp verification", async () => {
@@ -587,6 +654,13 @@ test("PowerShell verifier and CI encode an honest signing contract", () => {
     path.join(repoRoot, ".github/workflows/build-windows-installer.yml"),
     "utf8",
   );
+  const formalDesktop = readFileSync(
+    path.join(
+      repoRoot,
+      ".github/workflows/build-desktop-release-candidates.yml",
+    ),
+    "utf8",
+  );
 
   assert.match(verifier, /Get-AuthenticodeSignature/);
   assert.match(verifier, /SignatureStatus\]::Valid/);
@@ -611,6 +685,118 @@ test("PowerShell verifier and CI encode an honest signing contract", () => {
   assert.doesNotMatch(ci, /npm run app:dist:mac(?:\s|$)/m);
   assert.match(windows, /npm run app:dist:win:unsigned-test/);
   assert.doesNotMatch(windows, /npm run app:dist:win(?:\s|$)/m);
-  assert.match(windows, /name: echodesk-windows-unsigned-test/);
+  const unsignedWorkflow = yaml.load(windows);
+  const unsignedUploads = unsignedWorkflow.jobs["build-windows"].steps.filter(
+    (step) => String(step.uses || "").startsWith("actions/upload-artifact@"),
+  );
+  assert.ok(
+    unsignedUploads.length >= 1,
+    "unsigned smoke evidence must be retained",
+  );
+  for (const upload of unsignedUploads) {
+    assert.doesNotMatch(
+      String(upload.with?.path || ""),
+      /desktop\/release|EchoDesk\.Setup|win-x64\.zip|latest\.yml|SBOM|SHA256SUMS/,
+      "unsigned release assets must never be uploaded",
+    );
+  }
+  assert.doesNotMatch(windows, /name: echodesk-windows-unsigned-test/);
   assert.doesNotMatch(windows, /gh release upload/);
+
+  const formalWorkflow = yaml.load(formalDesktop);
+  const authorizeMain = formalWorkflow.jobs["authorize-main"];
+  assert.equal(authorizeMain.permissions.actions, "read");
+  const authorizationSteps = authorizeMain.steps;
+  const environmentGuardIndex = authorizationSteps.findIndex(
+    (step) =>
+      step.name === "Require pre-existing protected Windows release environment",
+  );
+  const exactShaCiIndex = authorizationSteps.findIndex((step) =>
+    String(step.run || "").includes("/actions/workflows/ci.yml/runs?"),
+  );
+  assert.ok(
+    environmentGuardIndex >= 0 && environmentGuardIndex < exactShaCiIndex,
+    "protected Windows environment must be verified before exact-SHA CI authorization",
+  );
+  const environmentGuard = authorizationSteps[environmentGuardIndex];
+  assert.equal(environmentGuard.env.GH_TOKEN, "${{ github.token }}");
+  assert.match(environmentGuard.run, /^set -euo pipefail$/m);
+  assert.match(
+    environmentGuard.run,
+    /environments\/desktop-release-windows/,
+  );
+  assert.match(environmentGuard.run, /\.can_admins_bypass == false/);
+  assert.match(environmentGuard.run, /required_reviewers/);
+  assert.match(environmentGuard.run, /custom_branch_policies/);
+  assert.match(environmentGuard.run, /deployment-branch-policies/);
+  assert.match(environmentGuard.run, /\.name == "main"/);
+  assert.doesNotMatch(environmentGuard.run, /\|\| true|2>\/?dev\/null/);
+
+  const formalWindows = formalWorkflow.jobs["windows-signed-candidate"];
+  assert.equal(formalWindows.environment, "desktop-release-windows");
+  const formalSteps = formalWindows.steps;
+  const credentialIndex = formalSteps.findIndex(
+    (step) => step.name === "Require protected Windows release credentials",
+  );
+  const setupIndex = formalSteps.findIndex((step) =>
+    /actions\/setup-(?:python|node)@/.test(String(step.uses || "")),
+  );
+  const installIndex = formalSteps.findIndex(
+    (step) => step.name === "Install locked build dependencies",
+  );
+  const buildIndex = formalSteps.findIndex(
+    (step) => step.name === "Build, sign, timestamp, and verify Windows candidate",
+  );
+  assert.ok(
+    credentialIndex >= 0,
+    "Windows release credential preflight is required",
+  );
+  assert.ok(
+    [setupIndex, installIndex, buildIndex].every(
+      (index) => index > credentialIndex,
+    ),
+    "Windows credential preflight must run before setup, install, and build",
+  );
+  const credentialStep = formalSteps[credentialIndex];
+  for (const secret of [
+    "ECHODESK_WINDOWS_CERTIFICATE_PFX_BASE64",
+    "ECHODESK_WINDOWS_CERTIFICATE_PASSWORD",
+    "ECHODESK_WINDOWS_CERTIFICATE_SHA1",
+    "ECHODESK_WINDOWS_EXPECTED_PUBLISHER",
+  ]) {
+    assert.equal(credentialStep.env[secret], `\${{ secrets.${secret} }}`);
+    assert.match(
+      credentialStep.run,
+      new RegExp(`(?:^|\\s)${secret}(?:\\s|$)`),
+      `${secret} must be named in the fail-fast missing-secret report`,
+    );
+  }
+  const attestation = formalSteps.find((step) =>
+    String(step.uses || "").startsWith("actions/attest-build-provenance@"),
+  );
+  const signedUpload = formalSteps.find(
+    (step) => step.name === "Upload signed Windows candidate without publishing",
+  );
+  assert.ok(attestation, "signed Windows candidate must have provenance");
+  assert.ok(signedUpload, "signed Windows candidate must be retained for review");
+  const expectedSignedAssets = [
+    "desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-win-x64.zip",
+    "desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe",
+    "desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe.blockmap",
+    "desktop/release/EchoDesk-SBOM.cdx.json",
+    "desktop/release/SHA256SUMS-Windows.txt",
+    "desktop/release/latest.yml",
+  ].sort();
+  const assetLines = (value) =>
+    String(value || "")
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .sort();
+  assert.deepEqual(
+    assetLines(attestation.with["subject-path"]),
+    expectedSignedAssets,
+  );
+  assert.deepEqual(assetLines(signedUpload.with.path), expectedSignedAssets);
 });

@@ -227,15 +227,27 @@ class MeetingPipeline:
         )
         return record
 
-    async def end_meeting(self, meeting_id: str) -> None:
+    async def end_meeting(
+        self,
+        meeting_id: str,
+        *,
+        ended_at: datetime | None = None,
+    ) -> None:
         """结束会议叠加层（不生成纪要）；ambient 主链路不受影响。"""
         if meeting_id in self._finalized:
             return
         self._finalized.add(meeting_id)
-        if self._repo is not None:
-            await self._repo.update_meeting_state(
-                meeting_id, state="ended", ended_at=datetime.now(UTC)
-            )
+        try:
+            if self._repo is not None:
+                await self._repo.update_meeting_state(
+                    meeting_id,
+                    state="ended",
+                    ended_at=ended_at or datetime.now(UTC),
+                )
+        except Exception:
+            # durable fence 没提交时恢复内存 append gate，允许调用方重试结束。
+            self._finalized.discard(meeting_id)
+            raise
         await self._publish("meeting.ended", meeting_id, {})
 
     async def ingest_from_stt(

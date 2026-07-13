@@ -289,6 +289,18 @@ def _discover(migrations_dir: Path) -> list[_MigrationFile]:
     return out
 
 
+def migration_catalog_max_version(migrations_dir: Path | None = None) -> int:
+    """Return the highest schema version this binary can understand.
+
+    The value is derived from the shipped catalog on every process build rather
+    than being copied into a constant.  This keeps the startup guard aligned
+    when a new migration is added (including source and frozen runtimes).
+    """
+
+    files = _discover(migrations_dir or _DEFAULT_MIGRATIONS_DIR)
+    return max((migration.version for migration in files), default=0)
+
+
 async def _ensure_bootstrap(conn: aiosqlite.Connection) -> None:
     """建 schema_version 自身（IF NOT EXISTS，幂等）。"""
     await conn.execute(_BOOTSTRAP_SQL)
@@ -982,8 +994,21 @@ async def run_migrations(  # noqa: PLR0912, PLR0915 - explicit fail-closed orche
         await _ensure_bootstrap(conn)
         applied = await _applied_versions(conn)
 
+        catalog_max_version = max((migration.version for migration in files), default=0)
+        unsupported_versions = sorted(
+            version for version in applied if version > catalog_max_version
+        )
+        if unsupported_versions:
+            msg = (
+                "migration integrity: database schema versions "
+                f"{unsupported_versions} exceed binary migration catalog max "
+                f"v{catalog_max_version}; refusing to open a newer database"
+            )
+            result.errors.append(msg)
+            logger.error("migrator: failed %s", msg)
+
         restored_applied = applied & _RESTORED_HISTORICAL_VERSIONS
-        if (
+        if not result.errors and (
             any(version > max(_RESTORED_HISTORICAL_VERSIONS) for version in applied)
             and restored_applied
             and restored_applied != _RESTORED_HISTORICAL_VERSIONS
@@ -1056,4 +1081,4 @@ async def run_migrations(  # noqa: PLR0912, PLR0915 - explicit fail-closed orche
     return result
 
 
-__all__ = ["MigrationResult", "run_migrations"]
+__all__ = ["MigrationResult", "migration_catalog_max_version", "run_migrations"]

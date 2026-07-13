@@ -413,6 +413,23 @@ function statusLabel(state: string): string {
   }
 }
 
+function terminalProgressText(state: string): string | null {
+  switch (state) {
+    case "succeeded":
+      return "任务已完成";
+    case "failed":
+      return "任务执行失败";
+    case "cancelled":
+      return "任务已取消";
+    case "cancel_failed":
+      return "任务取消失败";
+    case "timeout":
+      return "任务执行超时";
+    default:
+      return null;
+  }
+}
+
 function AgentTaskCardView({
   task,
   onUpdate,
@@ -428,10 +445,30 @@ function AgentTaskCardView({
   const [busy, setBusy] = useState(false);
   const snapshot = task.snapshot ?? {};
   const artifacts = Array.isArray(snapshot.artifacts) ? snapshot.artifacts : task.artifacts;
-  const terminal = ["succeeded", "failed", "cancelled", "cancel_failed", "timeout"].includes(task.state);
+  const terminalProgress = terminalProgressText(task.state);
+  const terminal = terminalProgress !== null;
   const needsGrant = task.state === "waiting_permission";
   const failed = task.state === "failed" || task.state === "timeout" || task.state === "cancel_failed";
-  const Icon = task.state === "succeeded" ? CheckCircle2 : failed ? AlertCircle : Clock3;
+  const cancelled = task.state === "cancelled";
+  const Icon = task.state === "succeeded"
+    ? CheckCircle2
+    : failed
+      ? AlertCircle
+      : cancelled
+        ? X
+        : Clock3;
+  const progressText = terminalProgress
+    ?? (typeof snapshot.progress_text === "string" && snapshot.progress_text.trim().length > 0
+      ? snapshot.progress_text.trim()
+      : task.progress_text?.trim() || statusLabel(task.state));
+  const finalText =
+    typeof snapshot.final_text === "string" && snapshot.final_text.trim().length > 0
+      ? snapshot.final_text.trim()
+      : task.final_text?.trim() ?? "";
+  const errorText =
+    typeof snapshot.error === "string" && snapshot.error.trim().length > 0
+      ? snapshot.error.trim()
+      : task.error?.trim() ?? "";
 
   useEffect(() => {
     setBusy(false);
@@ -467,6 +504,7 @@ function AgentTaskCardView({
     <div
       data-testid="agent-task-card"
       data-task-id={task.task_id}
+      data-task-state={task.state}
       className={`rounded-md border px-3 py-2.5 space-y-2 ${
         failed ? "border-err/30 bg-err/5" : "border-paper-300 bg-white"
       }`}
@@ -474,27 +512,37 @@ function AgentTaskCardView({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-800">
-            <Icon className={`w-3.5 h-3.5 ${failed ? "text-err" : "text-accent"}`} />
+            <Icon
+              className={`w-3.5 h-3.5 ${
+                failed ? "text-err" : cancelled ? "text-ink-400" : "text-accent"
+              }`}
+            />
             <span className="truncate">{task.title || "EchoDesk 正在执行"}</span>
           </div>
-          <div className="text-[11px] text-ink-500 leading-relaxed break-words [overflow-wrap:anywhere]">
-            {String(snapshot.progress_text ?? task.progress_text ?? statusLabel(task.state))}
+          <div
+            className="text-[11px] text-ink-500 leading-relaxed break-words [overflow-wrap:anywhere]"
+            data-testid="agent-task-progress"
+          >
+            {progressText}
           </div>
         </div>
-        <span className="shrink-0 rounded bg-paper-150 px-1.5 py-0.5 text-[10px] text-ink-500">
+        <span
+          className="shrink-0 rounded bg-paper-150 px-1.5 py-0.5 text-[10px] text-ink-500"
+          data-testid="agent-task-status"
+        >
           {statusLabel(task.state)}
         </span>
       </div>
 
-      {typeof snapshot.final_text === "string" && snapshot.final_text.length > 0 && (
+      {finalText.length > 0 && (
         <div className="rounded bg-paper-100 px-2 py-1.5 text-[11px] text-ink-700 leading-relaxed break-words [overflow-wrap:anywhere]">
-          {snapshot.final_text}
+          {finalText}
         </div>
       )}
 
-      {typeof snapshot.error === "string" && snapshot.error.length > 0 && (
+      {errorText.length > 0 && (
         <div className="text-[11px] text-err leading-relaxed break-words [overflow-wrap:anywhere]">
-          {friendlyFailureReason(snapshot.error)}
+          {friendlyFailureReason(errorText)}
         </div>
       )}
 
