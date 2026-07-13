@@ -107,7 +107,7 @@ jobs:
           Release tag: ${RELEASE_TAG}
           EOF
           (cd upload && sha256sum * > SHA256SUMS-Windows-UNSIGNED-TEST.txt)
-          sha256sum --check upload/SHA256SUMS-Windows-UNSIGNED-TEST.txt
+          (cd upload && sha256sum --check SHA256SUMS-Windows-UNSIGNED-TEST.txt)
 
       - name: Upload clearly marked assets to existing prerelease
         shell: bash
