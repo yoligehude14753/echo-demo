@@ -1,0 +1,155 @@
+name: Publish validated release assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag
+        required: true
+        type: string
+      source_run_id:
+        description: Successful exact-tag Actions run containing the candidate
+        required: true
+        type: string
+      platform:
+        description: Validated artifact family to publish
+        required: true
+        type: choice
+        options:
+          - linux
+          - android
+
+concurrency:
+  group: publish-release-${{ inputs.release_tag }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  publish:
+    name: ${{ inputs.platform }} / exact-tag release upload
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: authorize the source run and release tag
+        id: authorize
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ inputs.platform }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+
+          case "$PLATFORM" in
+            linux)
+              artifact="echodesk-linux-x64-release"
+              expected_event="push"
+              expected_workflow_path=".github/workflows/ci.yml"
+              ;;
+            android)
+              artifact="echodesk-android-tv-signed-release-candidate"
+              expected_event="workflow_dispatch"
+              expected_workflow_path=".github/workflows/build-android-tv-release.yml"
+              ;;
+            *)
+              printf 'unsupported platform: %s\n' "$PLATFORM" >&2
+              exit 1
+              ;;
+          esac
+
+          read -r run_status run_conclusion run_event run_branch run_sha run_path < <(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" \
+              --jq '[.status,.conclusion,.event,.head_branch,.head_sha,.path] | @tsv'
+          )
+          test "$run_status" = "completed"
+          test "$run_conclusion" = "success"
+          test "$run_event" = "$expected_event"
+          test "$run_branch" = "main"
+          test "$run_path" = "$expected_workflow_path"
+
+          tag_type="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .object.type
+          )"
+          tag_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .object.sha
+          )"
+          if [ "$tag_type" = "tag" ]; then
+            tag_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}" --jq .object.sha
+            )"
+          fi
+          test "$tag_sha" = "$run_sha"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+          printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
+          printf 'tag_sha=%s\n' "$tag_sha" >> "$GITHUB_OUTPUT"
+
+      - name: download the already-validated candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.authorize.outputs.artifact }}
+          path: candidate
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: verify candidate allowlist and checksums
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          case "$PLATFORM" in
+            linux)
+              expected=(
+                "EchoDesk-${version}-linux-x86_64.AppImage"
+                "EchoDesk-${version}-linux-amd64.deb"
+                "latest-linux.yml"
+                "SHA256SUMS-Linux.txt"
+                "EchoDesk-SBOM.cdx.json"
+              )
+              checksum="SHA256SUMS-Linux.txt"
+              ;;
+            android)
+              expected=(
+                "EchoDesk-${version}-android.apk"
+                "EchoDesk-${version}-android-tv.apk"
+                "EchoDesk-${version}-android-signing.json"
+                "EchoDesk-${version}-android-signing-lineage.bin"
+                "EchoDesk-${version}-smart-tv.apk"
+                "EchoDesk-${version}-smart-tv-oneclick.zip"
+                "EchoDesk-${version}-android-upgrade-smoke.json"
+                "EchoDesk-${version}-android-tv-upgrade-smoke.json"
+                "EchoDesk-${version}-Android-SBOM.cdx.json"
+                "SHA256SUMS-Android.txt"
+              )
+              checksum="SHA256SUMS-Android.txt"
+              ;;
+          esac
+          mapfile -t actual < <(
+            find candidate -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort
+          )
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
+            <(printf '%s\n' "${actual[@]}")
+          (cd candidate && sha256sum --check --strict "$checksum")
+
+      - name: publish assets to the existing GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" candidate/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
