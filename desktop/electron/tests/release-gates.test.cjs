@@ -469,7 +469,8 @@ test("required CI and live workflows encode honest release and network gates", (
   );
   assert.doesNotMatch(release, /path:[^\n]*(?:\.jks|\.keystore)/);
   assert.match(release, /npm run app:dist:android/);
-  assert.match(release, /MODE="0666"/);
+  assert.match(release, /test -c \/dev\/kvm/);
+  assert.match(release, /chmod a\+rw \/dev\/kvm/);
   assert.match(release, /test -r \/dev\/kvm/);
   assert.match(release, /test -w \/dev\/kvm/);
   assert.match(release, /disable-linux-hw-accel: false/);
