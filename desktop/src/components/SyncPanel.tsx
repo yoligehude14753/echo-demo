@@ -1,6 +1,6 @@
 import { Button, Input, Modal, Tag, Tooltip, message } from "antd";
 import { AlertCircle, CheckCircle2, Link2, RefreshCw, Unplug } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   configuredSyncHubBase,
   setSyncHubBase,
@@ -36,6 +36,14 @@ function syncErrorMessage(error: unknown): string {
   return "配对失败，请检查配对码和网络后重试";
 }
 
+function isHostPaired(status: HubStatusDTO | null): boolean {
+  return (
+    status?.enabled === true &&
+    status.paired === true &&
+    status.connection === "connected"
+  );
+}
+
 export default function SyncPanel(): JSX.Element {
   const [state, setState] = useState<SyncState>(() => loadSyncState());
   const [hostStatus, setHostStatus] = useState<HubStatusDTO | null>(null);
@@ -44,36 +52,40 @@ export default function SyncPanel(): JSX.Element {
   const [hubBase, setHubBase] = useState(() => configuredSyncHubBase() ?? "");
   const [busy, setBusy] = useState(false);
   const client = useMemo(() => new SyncHubClient(), []);
+  const mountedRef = useRef(false);
 
-  const refreshHostStatus = () => {
-    let alive = true;
+  const refreshHostStatus = useCallback(() => {
     void hubStatus()
       .then((next) => {
-        if (alive) setHostStatus(next);
+        if (mountedRef.current) setHostStatus(next);
       })
       .catch(() => {
-        if (alive) setHostStatus(null);
+        if (mountedRef.current) setHostStatus(null);
       });
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      alive = false;
+      mountedRef.current = false;
     };
-  };
+  }, []);
 
   useEffect(() => {
     const refresh = () => setState(loadSyncState());
     const refreshHubBase = () => setHubBase(configuredSyncHubBase() ?? "");
-    const refreshStatus = () => refreshHostStatus();
     window.addEventListener(SYNC_STATE_EVENT, refresh);
     window.addEventListener(SYNC_HUB_BASE_EVENT, refreshHubBase);
-    window.addEventListener(SYNC_HUB_BASE_EVENT, refreshStatus);
-    const stopStatusRefresh = refreshHostStatus();
+    window.addEventListener(SYNC_HUB_BASE_EVENT, refreshHostStatus);
+    void refreshHostStatus();
+    const statusTimer = window.setInterval(refreshHostStatus, 2_000);
     return () => {
       window.removeEventListener(SYNC_STATE_EVENT, refresh);
       window.removeEventListener(SYNC_HUB_BASE_EVENT, refreshHubBase);
-      window.removeEventListener(SYNC_HUB_BASE_EVENT, refreshStatus);
-      stopStatusRefresh();
+      window.removeEventListener(SYNC_HUB_BASE_EVENT, refreshHostStatus);
+      window.clearInterval(statusTimer);
     };
-  }, []);
+  }, [refreshHostStatus]);
 
   const openPanel = () => {
     setState(loadSyncState());
@@ -82,10 +94,7 @@ export default function SyncPanel(): JSX.Element {
     setOpen(true);
   };
 
-  const hostPaired =
-    hostStatus?.enabled === true &&
-    hostStatus.paired === true &&
-    hostStatus.connection === "connected";
+  const hostPaired = isHostPaired(hostStatus);
   const displayState: SyncState = hostPaired
     ? { ...state, status: "synced", last_error: null }
     : state;
