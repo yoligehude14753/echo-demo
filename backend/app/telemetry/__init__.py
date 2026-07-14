@@ -12,6 +12,7 @@ from app.telemetry.contracts import (
     FailureReasonCount,
     PseudonymousIdentity,
     TelemetryAggregate,
+    TelemetryContractValidationError,
     TelemetryDeleteRequest,
     TelemetryEvent,
     TelemetryIdentityInput,
@@ -21,6 +22,14 @@ from app.telemetry.contracts import (
     TelemetryProvider,
     TelemetryQuery,
     TelemetryRuntimeConfig,
+    TelemetryValidationCode,
+    TelemetryValidationIssue,
+    TelemetryValidationLocation,
+    parse_telemetry_delete_request,
+    parse_telemetry_identity_input,
+    parse_telemetry_observation,
+    parse_telemetry_query,
+    safe_validation_issues,
 )
 from app.telemetry.ports import TelemetryPort
 from app.telemetry.pseudonym import HmacPseudonymizer
@@ -36,6 +45,7 @@ __all__ = [
     "ProviderRegistry",
     "PseudonymousIdentity",
     "TelemetryAggregate",
+    "TelemetryContractValidationError",
     "TelemetryDeleteRequest",
     "TelemetryEvent",
     "TelemetryIdentityInput",
@@ -46,7 +56,15 @@ __all__ = [
     "TelemetryProvider",
     "TelemetryQuery",
     "TelemetryRuntimeConfig",
+    "TelemetryValidationCode",
+    "TelemetryValidationIssue",
+    "TelemetryValidationLocation",
     "build_test_telemetry_adapter",
+    "parse_telemetry_delete_request",
+    "parse_telemetry_identity_input",
+    "parse_telemetry_observation",
+    "parse_telemetry_query",
+    "safe_validation_issues",
 ]
 
 

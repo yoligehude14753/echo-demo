@@ -74,6 +74,17 @@ class HmacPseudonymizer:
     def rotation_period_s(self) -> int:
         return self._rotation_period_s
 
+    def _resolve_key_version(self, key_version: str | None) -> str:
+        if key_version is None:
+            return self._current_key_version
+        if not isinstance(key_version, str) or not key_version.strip():
+            raise ValueError("invalid telemetry key version")
+        if not re.fullmatch(KEY_VERSION_PATTERN, key_version):
+            raise ValueError("invalid telemetry key version")
+        if key_version not in self._keys:
+            raise ValueError("unknown telemetry key version")
+        return key_version
+
     def epoch_for(self, occurred_at: datetime) -> int:
         epoch = int(_as_utc(occurred_at).timestamp()) // self._rotation_period_s
         if epoch < 0:
@@ -90,10 +101,8 @@ class HmacPseudonymizer:
     ) -> str:
         if not value.strip():
             raise ValueError("identity value cannot be empty")
-        version = key_version or self._current_key_version
-        secret = self._keys.get(version)
-        if secret is None:
-            raise ValueError("unknown telemetry key version")
+        version = self._resolve_key_version(key_version)
+        secret = self._keys[version]
         epoch = self.epoch_for(occurred_at)
         message = (
             f"echodesk-telemetry-pseudonym-v1\0{version}\0{subject_kind}\0{epoch}\0{value}"
@@ -104,40 +113,56 @@ class HmacPseudonymizer:
         self,
         caller_event_id: str,
         identity: PseudonymousIdentity,
+        *,
+        key_version: str | None,
     ) -> str:
-        secret = self._keys[self._current_key_version]
+        version = self._resolve_key_version(key_version)
+        secret = self._keys[version]
         message = (
             "echodesk-telemetry-event-id-v1\0"
-            f"{self._current_key_version}\0{identity.epoch}\0"
+            f"{version}\0{identity.epoch}\0"
             f"{identity.tenant_pseudonym}\0{identity.user_pseudonym}\0"
             f"{identity.device_pseudonym}\0{caller_event_id}"
         ).encode()
         return hmac.new(secret, message, hashlib.sha256).hexdigest()
 
-    def materialize(self, observation: TelemetryObservation) -> TelemetryEvent:
+    def materialize(
+        self,
+        observation: TelemetryObservation,
+        *,
+        key_version: str | None = None,
+    ) -> TelemetryEvent:
         identity = observation.identity
+        version = self._resolve_key_version(key_version)
         epoch = self.epoch_for(observation.occurred_at)
         pseudonymous = PseudonymousIdentity(
             tenant_pseudonym=self.pseudonymize(
                 identity.tenant_id,
                 "tenant",
                 occurred_at=observation.occurred_at,
+                key_version=version,
             ),
             user_pseudonym=self.pseudonymize(
                 identity.user_id,
                 "user",
                 occurred_at=observation.occurred_at,
+                key_version=version,
             ),
             device_pseudonym=self.pseudonymize(
                 identity.device_id,
                 "device",
                 occurred_at=observation.occurred_at,
+                key_version=version,
             ),
-            key_version=self._current_key_version,
+            key_version=version,
             epoch=epoch,
         )
         return TelemetryEvent(
-            event_id=self._materialized_event_id(observation.event_id, pseudonymous),
+            event_id=self._materialized_event_id(
+                observation.event_id,
+                pseudonymous,
+                key_version=version,
+            ),
             occurred_at=observation.occurred_at,
             identity=pseudonymous,
             operation=observation.operation,

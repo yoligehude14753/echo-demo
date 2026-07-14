@@ -10,9 +10,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Final
+from typing import Final, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic.config import ExtraValues
 
 MAX_DURATION_MS: Final[int] = 86_400_000
 DEFAULT_K_THRESHOLD: Final[int] = 5
@@ -91,7 +92,236 @@ class FailureReason(StrEnum):
     UNKNOWN = "unknown"
 
 
-class FailureReasonCount(BaseModel):
+class TelemetryValidationCode(StrEnum):
+    MISSING_FIELD = "missing_field"
+    EXTRA_FIELD = "extra_field"
+    INVALID_ENUM = "invalid_enum"
+    INVALID_FORMAT = "invalid_format"
+    INVALID_RANGE = "invalid_range"
+    INVALID_INPUT = "invalid_input"
+
+
+class TelemetryValidationLocation(StrEnum):
+    ROOT = "root"
+    UNKNOWN = "unknown"
+    EVENT_ID = "event_id"
+    OCCURRED_AT = "occurred_at"
+    IDENTITY = "identity"
+    TENANT_ID = "tenant_id"
+    USER_ID = "user_id"
+    DEVICE_ID = "device_id"
+    OPERATION = "operation"
+    PLATFORM = "platform"
+    APP_VERSION = "app_version"
+    PROVIDER = "provider"
+    SUCCESS = "success"
+    FAILURE_REASON = "failure_reason"
+    END_TO_END_LATENCY_MS = "end_to_end_latency_ms"
+    QUEUE_WAIT_MS = "queue_wait_ms"
+    AUDIO_DURATION_MS = "audio_duration_ms"
+    TENANT_PSEUDONYM = "tenant_pseudonym"
+    USER_PSEUDONYM = "user_pseudonym"
+    DEVICE_PSEUDONYM = "device_pseudonym"
+    KEY_VERSION = "key_version"
+    EPOCH = "epoch"
+    START_AT = "start_at"
+    END_AT = "end_at"
+    K_THRESHOLD = "k_threshold"
+    REASON = "reason"
+    REQUEST_COUNT = "request_count"
+    SUCCESS_COUNT = "success_count"
+    FAILURE_COUNT = "failure_count"
+    SUCCESS_RATE = "success_rate"
+    LATENCY_SUM_MS = "latency_sum_ms"
+    QUEUE_WAIT_SUM_MS = "queue_wait_sum_ms"
+    AUDIO_DURATION_SUM_MS = "audio_duration_sum_ms"
+    AUDIO_DURATION_EVENT_COUNT = "audio_duration_event_count"
+    DISTINCT_USER_COUNT = "distinct_user_count"
+    AUDIT_ID = "audit_id"
+    DELETED_EVENT_COUNT = "deleted_event_count"
+    DELETED_AT = "deleted_at"
+
+
+_ALLOWED_VALIDATION_LOCATIONS = frozenset(
+    location.value for location in TelemetryValidationLocation
+)
+
+
+class TelemetryValidationIssue(BaseModel):
+    """Stable, value-free validation issue exposed by telemetry contracts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    location: tuple[TelemetryValidationLocation, ...]
+    code: TelemetryValidationCode
+
+
+def _stable_validation_code(error_type: object) -> TelemetryValidationCode:
+    if error_type == "missing":
+        return TelemetryValidationCode.MISSING_FIELD
+    if error_type == "extra_forbidden":
+        return TelemetryValidationCode.EXTRA_FIELD
+    if error_type in {"enum", "literal_error"}:
+        return TelemetryValidationCode.INVALID_ENUM
+    if error_type in {
+        "string_pattern_mismatch",
+        "string_too_short",
+        "string_too_long",
+        "value_error",
+    }:
+        return TelemetryValidationCode.INVALID_FORMAT
+    if error_type in {
+        "greater_than",
+        "greater_than_equal",
+        "less_than",
+        "less_than_equal",
+        "finite_number",
+    }:
+        return TelemetryValidationCode.INVALID_RANGE
+    return TelemetryValidationCode.INVALID_INPUT
+
+
+def _safe_validation_location(location: object) -> tuple[TelemetryValidationLocation, ...]:
+    if not isinstance(location, tuple) or not location:
+        return (TelemetryValidationLocation.ROOT,)
+    safe_location: list[TelemetryValidationLocation] = []
+    for part in location:
+        if isinstance(part, str) and part in _ALLOWED_VALIDATION_LOCATIONS:
+            safe_location.append(TelemetryValidationLocation(part))
+        else:
+            safe_location.append(TelemetryValidationLocation.UNKNOWN)
+    return tuple(safe_location)
+
+
+def safe_validation_issues(error: ValidationError) -> tuple[TelemetryValidationIssue, ...]:
+    """Project a Pydantic error into stable location/code data only."""
+
+    return tuple(
+        TelemetryValidationIssue(
+            location=_safe_validation_location(detail.get("loc")),
+            code=_stable_validation_code(detail.get("type")),
+        )
+        for detail in error.errors(
+            include_input=False,
+            include_url=False,
+            include_context=False,
+        )
+    )
+
+
+class TelemetryContractValidationError(ValueError):
+    """Public validation error containing no raw input or third-party details."""
+
+    def __init__(self, issues: tuple[TelemetryValidationIssue, ...]) -> None:
+        self._issues = tuple(issues)
+        super().__init__()
+
+    @property
+    def issues(self) -> tuple[TelemetryValidationIssue, ...]:
+        return self._issues
+
+    def errors(self) -> tuple[TelemetryValidationIssue, ...]:
+        return self._issues
+
+    def __str__(self) -> str:
+        codes = ",".join(issue.code.value for issue in self._issues)
+        return f"telemetry contract validation failed: {codes}"
+
+    def __repr__(self) -> str:
+        return f"TelemetryContractValidationError(issues={self._issues!r})"
+
+
+class _SafeTelemetryModel(BaseModel):
+    """Pydantic boundary that converts raw third-party errors to safe errors."""
+
+    @classmethod
+    def model_validate(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        extra: ExtraValues | None = None,
+        from_attributes: bool | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        validation_error: ValidationError | None = None
+        try:
+            return super(_SafeTelemetryModel, cls).model_validate(  # noqa: UP008
+                obj,
+                strict=strict,
+                from_attributes=from_attributes,
+                context=context,
+                by_alias=by_alias,
+                by_name=by_name,
+            )
+        except ValidationError as error:
+            validation_error = error
+        assert validation_error is not None
+        raise TelemetryContractValidationError(safe_validation_issues(validation_error))
+
+    @classmethod
+    def model_validate_json(
+        cls,
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        extra: ExtraValues | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        validation_error: ValidationError | None = None
+        try:
+            return super(_SafeTelemetryModel, cls).model_validate_json(  # noqa: UP008
+                json_data,
+                strict=strict,
+                context=context,
+                by_alias=by_alias,
+                by_name=by_name,
+            )
+        except ValidationError as error:
+            validation_error = error
+        assert validation_error is not None
+        raise TelemetryContractValidationError(safe_validation_issues(validation_error))
+
+    @classmethod
+    def model_validate_strings(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        extra: ExtraValues | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        validation_error: ValidationError | None = None
+        try:
+            return super(_SafeTelemetryModel, cls).model_validate_strings(  # noqa: UP008
+                obj,
+                strict=strict,
+                context=context,
+                by_alias=by_alias,
+                by_name=by_name,
+            )
+        except ValidationError as error:
+            validation_error = error
+        assert validation_error is not None
+        raise TelemetryContractValidationError(safe_validation_issues(validation_error))
+
+    def __init__(self, **data: object) -> None:
+        validation_error: ValidationError | None = None
+        try:
+            super().__init__(**data)
+        except ValidationError as error:
+            validation_error = error
+        if validation_error is not None:
+            raise TelemetryContractValidationError(safe_validation_issues(validation_error))
+
+
+class FailureReasonCount(_SafeTelemetryModel):
     """Typed count for one stable failure reason in an aggregate."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -109,7 +339,7 @@ class DeletionReason(StrEnum):
 PROVIDER_REGISTRY: Final[frozenset[TelemetryProvider]] = frozenset(TelemetryProvider)
 
 
-class TelemetryIdentityInput(BaseModel):
+class TelemetryIdentityInput(_SafeTelemetryModel):
     """Server-validated identity material accepted only at the adapter boundary."""
 
     model_config = ConfigDict(
@@ -124,7 +354,7 @@ class TelemetryIdentityInput(BaseModel):
     device_id: str = Field(min_length=1, max_length=256, repr=False)
 
 
-class PseudonymousIdentity(BaseModel):
+class PseudonymousIdentity(_SafeTelemetryModel):
     """The only identity representation allowed in stored events and results."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -136,7 +366,7 @@ class PseudonymousIdentity(BaseModel):
     epoch: int = Field(ge=0)
 
 
-class _TelemetryOutcome(BaseModel):
+class _TelemetryOutcome(_SafeTelemetryModel):
     """Shared allowlisted metrics and outcome fields."""
 
     model_config = ConfigDict(
@@ -200,7 +430,7 @@ class TelemetryEvent(_TelemetryOutcome):
         return _require_aware_utc(value)
 
 
-class TelemetryAggregate(BaseModel):
+class TelemetryAggregate(_SafeTelemetryModel):
     """Cohort aggregate returned by a privacy-filtered query."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -229,7 +459,7 @@ class TelemetryAggregate(BaseModel):
         return _validate_app_version(value)
 
 
-class TelemetryQuery(BaseModel):
+class TelemetryQuery(_SafeTelemetryModel):
     """Typed query; filters are pseudonyms or allowlisted enums only."""
 
     model_config = ConfigDict(
@@ -268,7 +498,7 @@ class TelemetryQuery(BaseModel):
         return self
 
 
-class TelemetryDeleteRequest(BaseModel):
+class TelemetryDeleteRequest(_SafeTelemetryModel):
     """Typed deletion hook addressed only by pseudonymous identity."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
@@ -294,7 +524,7 @@ class TelemetryDeleteRequest(BaseModel):
         return self
 
 
-class DeletionReceipt(BaseModel):
+class DeletionReceipt(_SafeTelemetryModel):
     """Deletion audit result without identity or free-text fields."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -330,6 +560,30 @@ class TelemetryRuntimeConfig:
             raise ValueError("telemetry k_threshold must be positive")
 
 
+def parse_telemetry_identity_input(value: object) -> TelemetryIdentityInput:
+    """Safely parse raw identity input at the server adapter boundary."""
+
+    return TelemetryIdentityInput.model_validate(value)
+
+
+def parse_telemetry_observation(value: object) -> TelemetryObservation:
+    """Safely parse a raw observation for the telemetry port."""
+
+    return TelemetryObservation.model_validate(value)
+
+
+def parse_telemetry_query(value: object) -> TelemetryQuery:
+    """Safely parse a typed aggregate query."""
+
+    return TelemetryQuery.model_validate(value)
+
+
+def parse_telemetry_delete_request(value: object) -> TelemetryDeleteRequest:
+    """Safely parse a pseudonymous deletion request."""
+
+    return TelemetryDeleteRequest.model_validate(value)
+
+
 __all__ = [
     "APP_VERSION_PATTERN",
     "DEFAULT_K_THRESHOLD",
@@ -344,6 +598,7 @@ __all__ = [
     "FailureReasonCount",
     "PseudonymousIdentity",
     "TelemetryAggregate",
+    "TelemetryContractValidationError",
     "TelemetryDeleteRequest",
     "TelemetryEvent",
     "TelemetryIdentityInput",
@@ -353,5 +608,13 @@ __all__ = [
     "TelemetryProvider",
     "TelemetryQuery",
     "TelemetryRuntimeConfig",
+    "TelemetryValidationCode",
+    "TelemetryValidationIssue",
+    "TelemetryValidationLocation",
+    "parse_telemetry_delete_request",
+    "parse_telemetry_identity_input",
+    "parse_telemetry_observation",
+    "parse_telemetry_query",
+    "safe_validation_issues",
     "utc_now",
 ]
