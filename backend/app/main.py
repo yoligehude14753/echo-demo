@@ -27,9 +27,12 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
 from app.adapters.repo.migrator import run_migrations
+from app.adapters.stt import start_asr_scheduler, stop_asr_scheduler
+from app.adapters.stt.errors import ASRError, as_http_error
 from app.api.admin import router as admin_router
 from app.api.agents import router as agents_router
 from app.api.artifacts import router as artifacts_router
+from app.api.asr import router as asr_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
 from app.api.deps import (
@@ -595,6 +598,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
     except Exception as e:
         logger.warning("health prober start failed: %s", e)
 
+    try:
+        await start_asr_scheduler(settings)
+    except Exception as e:
+        logger.warning("ASR scheduler start failed: type=%s", type(e).__name__)
+
     await start_runtime_janitor(settings)
     _app.state.ready = True
     yield
@@ -607,6 +615,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
         if callable(stop_watchdog):
             await stop_watchdog()
         _meeting_state_for_shutdown = None
+    try:
+        await stop_asr_scheduler(grace_period_s=min(5.0, settings.asr_job_deadline_s))
+    except Exception as e:
+        logger.warning("ASR scheduler stop failed: type=%s", type(e).__name__)
     await stop_prober()
     await stop_runtime_janitor()
     await _stop_lifespan_tasks()
@@ -712,6 +724,7 @@ def _defer_sse_lifecycle(
 def _include_api_routers(app: FastAPI) -> None:
     for api_router in (
         health_router,
+        asr_router,
         sessions_router,
         capture_router,
         chat_router,
@@ -784,6 +797,12 @@ def _new_fastapi(settings: Settings) -> FastAPI:
 
 
 def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
+    @app.exception_handler(ASRError)
+    async def asr_error(_request: Request, exc: ASRError) -> JSONResponse:
+        status_code, payload, headers = as_http_error(exc)
+        headers.update(PRIVATE_NO_STORE_HEADERS)
+        return JSONResponse(payload, status_code=status_code, headers=headers)
+
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
         headers = dict(exc.headers or {})
