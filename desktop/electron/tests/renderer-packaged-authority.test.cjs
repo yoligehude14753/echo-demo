@@ -17,13 +17,25 @@ test("packaged renderer prefers main-process backend authority over localStorage
     runtime.indexOf("export function isDefaultPublicBackend"),
   );
   assert.ok(
-    snapshot.indexOf("if (isPackagedElectronRenderer())") <
+    snapshot.indexOf("hasElectronBackendRouting()") <
       snapshot.indexOf("const configured = configuredBackendBase()"),
   );
-  assert.match(
-    runtime,
-    /setStoredBackendBase[\s\S]+?if \(isPackagedElectronRenderer\(\)\)[\s\S]+?window\.echo\?\.backendHost/,
+  assert.match(runtime, /setStoredBackendBase/);
+  assert.match(runtime, /hasElectronBackendRouting/);
+  assert.match(runtime, /window\.echo\?\.backendHost/);
+});
+
+test("artifact URL policy has no local fallback", () => {
+  const artifactApi = readFileSync(
+    path.resolve(__dirname, "../../src/api.ts"),
+    "utf8",
   );
+  const artifactFunction = artifactApi
+    .split("export function artifactDownloadUrl", 2)[1]
+    .split("\n}\n", 2)[0];
+  assert.doesNotMatch(artifactFunction, /DEFAULT_LOCAL_BACKEND_BASE|localhost|127\.0\.0\.1/);
+  assert.match(artifactFunction, /backendBaseSnapshot\(\)/);
+  assert.match(artifactFunction, /artifact_backend_snapshot_missing/);
 });
 
 test("installed Settings hides the mobile backend-origin editor", () => {

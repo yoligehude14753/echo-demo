@@ -1,13 +1,20 @@
 {
-  "local": {
-    "host": "127.0.0.1",
-    "port": 8769
+  "schemaVersion": 2,
+  "roles": {
+    "publicService": {
+      "baseUrl": "https://echodesk.yoliyoli.uk"
+    },
+    "pairedHubSyncGateway": {
+      "enabled": false,
+      "baseUrl": null
+    },
+    "localDevDiagnostic": {
+      "host": "127.0.0.1",
+      "port": 8769
+    }
   },
   "lanShare": {
     "enabled": true,
     "bindHost": "0.0.0.0"
-  },
-  "public": {
-    "baseUrl": "https://echodesk.yoliyoli.uk"
   }
 }

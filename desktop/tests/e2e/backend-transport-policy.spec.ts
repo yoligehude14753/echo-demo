@@ -37,7 +37,7 @@ test("Electron retries bootstrap after a transient unavailable failure", async (
 
   expect(result).toEqual({
     bootstrapCalls: 2,
-    firstReason: "bootstrap-unavailable",
+    firstReason: "backend_unreachable",
     backendVersion: "0.3.2",
   });
 });
@@ -1684,4 +1684,256 @@ test("WebSocket 4426 enters upgrade-required and never reconnects", async ({
     phase: "upgrade-required",
     message: "需要 EchoDesk 0.4.0 或更高版本才能连接公共服务",
   });
+});
+
+test("public session consumes layered readiness without transcription fallback", async ({
+  page,
+}) => {
+  await installEchoMock(page, {
+    isElectron: false,
+    skipPaths: ["/bootstrap", "/session/enroll", "/session/renew"],
+  });
+
+  let bootstrapStatus = 200;
+  let bootstrapBody: Record<string, unknown> = {
+    schema_version: 1,
+    api_version: "0.3",
+    session_required: false,
+    capabilities: { principal_sessions: true },
+  };
+  await page.route(/\/(?:api\/)?bootstrap$/, (route) =>
+    bootstrapStatus === 0
+      ? route.abort("failed")
+      : route.fulfill({
+          status: bootstrapStatus,
+          contentType: "application/json",
+          body: JSON.stringify(bootstrapBody),
+        }),
+  );
+  let sessionStatus = 200;
+  await page.route(/\/(?:api\/)?session\/(?:enroll|renew)$/, (route) =>
+    route.fulfill({
+      status: sessionStatus,
+      contentType: "application/json",
+      body: JSON.stringify({
+        token: "readiness-session-token",
+        backend_origin: "http://127.0.0.1:8769",
+      }),
+    }),
+  );
+  await page.goto("/");
+
+  const inspectBootstrap = async (
+    body: Record<string, unknown>,
+    status = 200,
+  ) => {
+    bootstrapBody = body;
+    bootstrapStatus = status;
+    return page.evaluate(async () => {
+      const session = await import("/src/session.ts");
+      session.resetSessionForTest();
+      try {
+        const bootstrap = await session.bootstrapBackend();
+        return {
+          ok: true,
+          bootstrap: bootstrap !== null,
+          readiness: session.backendReadiness(),
+          diagnostic: session.backendReadinessDiagnosticCode(),
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          name: error instanceof Error ? error.name : "",
+          code: (error as { code?: string }).code ?? "",
+          reason: (error as { reason?: string }).reason ?? "",
+          readiness: session.backendReadiness(),
+          diagnostic: session.backendReadinessDiagnosticCode(),
+        };
+      }
+    });
+  };
+
+  const old = await inspectBootstrap({
+    schema_version: 1,
+    api_version: "0.3",
+    session_required: false,
+    capabilities: { principal_sessions: true },
+  });
+  const ready = await inspectBootstrap({
+    schema_version: 1,
+    api_version: "0.3",
+    session_required: false,
+    capabilities: {
+      principal_sessions: true,
+      transcription_readiness: {
+        schema_version: 1,
+        status: "ready",
+        accepting: true,
+        checked_at: "2099-01-01T00:00:00.000Z",
+        ttl_s: 3600,
+      },
+    },
+  });
+  const degraded = await inspectBootstrap({
+    schema_version: 1,
+    api_version: "0.3",
+    session_required: false,
+    capabilities: {
+      principal_sessions: true,
+      transcription_readiness: {
+        schema_version: 1,
+        status: "degraded",
+        accepting: true,
+        checked_at: "2099-01-01T00:00:00.000Z",
+        ttl_s: 3600,
+        reason_code: "capacity_degraded",
+        retry_after_s: 30,
+      },
+    },
+  });
+  const unavailable = await inspectBootstrap({
+    schema_version: 1,
+    api_version: "0.3",
+    session_required: false,
+    capabilities: {
+      principal_sessions: true,
+      transcription_readiness: {
+        schema_version: 1,
+        status: "unavailable",
+        accepting: false,
+        checked_at: "2099-01-01T00:00:00.000Z",
+        ttl_s: 3600,
+      },
+    },
+  });
+  const malformed = await inspectBootstrap({
+    schema_version: 1,
+    api_version: "0.3",
+    session_required: false,
+    capabilities: {
+      principal_sessions: true,
+      transcription_readiness: {
+        schema_version: 1,
+        status: "ready",
+        accepting: false,
+        checked_at: "2099-01-01T00:00:00.000Z",
+        ttl_s: 3600,
+      },
+    },
+  });
+  const stale = await inspectBootstrap({
+    schema_version: 1,
+    api_version: "0.3",
+    session_required: false,
+    capabilities: {
+      principal_sessions: true,
+      transcription_readiness: {
+        schema_version: 1,
+        status: "ready",
+        accepting: true,
+        checked_at: "2020-01-01T00:00:00.000Z",
+        ttl_s: 1,
+      },
+    },
+  });
+  const mismatch = await inspectBootstrap({
+    schema_version: 99,
+    api_version: "0.3",
+    session_required: false,
+    capabilities: { principal_sessions: true },
+  });
+  const unreachable = await inspectBootstrap({}, 0);
+
+  const authCases: Record<number, unknown> = {};
+  for (const status of [401, 403]) {
+    sessionStatus = status;
+    const bootstrap = await inspectBootstrap({
+      schema_version: 1,
+      api_version: "0.3",
+      session_required: true,
+      capabilities: { principal_sessions: true },
+    });
+    const sessionResult = await page.evaluate(async () => {
+      const session = await import("/src/session.ts");
+      try {
+        await session.ensureServerSession();
+        return { ok: true, readiness: session.backendReadiness() };
+      } catch (error) {
+        return {
+          ok: false,
+          name: error instanceof Error ? error.name : "",
+          kind: (error as { kind?: string }).kind ?? "",
+          code: (error as { code?: string }).code ?? "",
+          readiness: session.backendReadiness(),
+        };
+      }
+    });
+    authCases[status] = { bootstrap, session: sessionResult };
+  }
+
+  const result = {
+    old,
+    ready,
+    degraded,
+    unavailable,
+    malformed,
+    stale,
+    mismatch,
+    unreachable,
+    authCases,
+  };
+
+  expect(result.old).toMatchObject({
+    ok: true,
+    bootstrap: true,
+    readiness: {
+      reachability: "reachable",
+      auth: "not_required",
+      api_contract: "legacy",
+      transcription_readiness: "unknown",
+    },
+  });
+  expect(result.ready).toMatchObject({
+    ok: true,
+    readiness: { api_contract: "compatible", transcription_readiness: "ready" },
+  });
+  expect(result.degraded).toMatchObject({
+    ok: true,
+    readiness: { transcription_readiness: "degraded" },
+  });
+  expect(result.unavailable).toMatchObject({
+    ok: true,
+    readiness: { transcription_readiness: "unavailable" },
+  });
+  expect(result.malformed).toMatchObject({
+    ok: true,
+    readiness: { transcription_readiness: "unknown" },
+    diagnostic: "readiness_unknown_malformed",
+  });
+  expect(result.stale).toMatchObject({
+    ok: true,
+    readiness: { transcription_readiness: "unknown" },
+    diagnostic: "readiness_unknown_stale",
+  });
+  expect(result.mismatch).toMatchObject({
+    ok: false,
+    name: "BackendContractMismatchError",
+    reason: "bootstrap-contract-mismatch",
+    readiness: { reachability: "reachable", api_contract: "mismatch" },
+  });
+  expect(result.unreachable).toMatchObject({
+    ok: false,
+    name: "BackendReadinessError",
+    code: "backend_unreachable",
+    readiness: { reachability: "unreachable" },
+  });
+  for (const status of [401, 403]) {
+    expect(result.authCases[status]).toMatchObject({
+      bootstrap: { ok: true },
+      session: {
+        ok: false,
+        readiness: { reachability: "reachable", auth: "failed" },
+      },
+    });
+  }
 });

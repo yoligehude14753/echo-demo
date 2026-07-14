@@ -83,11 +83,32 @@ export interface ElectronBackendBuildContract {
   schema_catalog_max: number | null;
 }
 
+export type EchoRuntimeMode = "release" | "development" | "diagnostic";
+export type EchoPrincipalMode = "local" | "public";
+export type EchoBackendRole =
+  | "public_service"
+  | "local_dev_diagnostic"
+  | "paired_hub_sync_gateway";
+
+export interface ElectronBackendRouting {
+  runtimeMode: EchoRuntimeMode;
+  principalMode: EchoPrincipalMode;
+  role: EchoBackendRole;
+  source: string;
+  schemaVersion: number;
+  backendBase: string;
+  publicServiceEndpoint: string;
+  pairedHubSyncGatewayEndpoint: null;
+  localDevDiagnosticEndpoint: string | null;
+}
+
 interface ElectronEchoBridge {
   isElectron?: boolean;
   isPublicDemo?: boolean;
   backendHost?: string;
+  backendRouting?: ElectronBackendRouting;
   getBackendHost?: () => Promise<string>;
+  getBackendRouting?: () => Promise<ElectronBackendRouting>;
   getBackendContract?: () => Promise<ElectronBackendBuildContract | null>;
   getShareBackendHost?: () => Promise<string>;
   loadLocalLegacyHistory?: () => Promise<unknown | null>;
@@ -163,29 +184,20 @@ export const MOBILE_BACKEND_BASE_KEY = "echodesk.mobileBackendBase";
 export const MOBILE_BACKEND_BASE_USER_SET_KEY = "echodesk.mobileBackendBase.userSet";
 export const BACKEND_ORIGIN_EVENT = "echodesk:backend-origin-change";
 export const PUBLIC_DATA_BOUNDARY_KEY = "echodesk.publicDataBoundary.v2";
-export const DEFAULT_ANDROID_BACKEND_BASE = backendConfig.public.baseUrl;
-export const DEFAULT_LOCAL_BACKEND_BASE = `http://${backendConfig.local.host}:${backendConfig.local.port}`;
+export const DEFAULT_ANDROID_BACKEND_BASE = backendConfig.roles.publicService.baseUrl;
+export const DEFAULT_LOCAL_BACKEND_BASE = `http://${backendConfig.roles.localDevDiagnostic.host}:${backendConfig.roles.localDevDiagnostic.port}`;
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
-const PUBLIC_DATA_BOUNDARY_SCHEMA = 3;
+const PUBLIC_DATA_BOUNDARY_SCHEMA = 4;
 export const RELEASES_URL =
   "https://github.com/yoligehude14753/echo-demo/releases/latest";
 const RELEASE_API_URL =
   "https://api.github.com/repos/yoligehude14753/echo-demo/releases/latest";
-const PUBLIC_HISTORY_STORAGE_KEYS = [
-  "echodesk.currentMeetingId",
-  "echodesk.lastMeetingId",
-  "echodesk.activeMeetingId",
-  "echodesk.meetingHistory",
-  "echodesk.meetings",
-  "echodesk.capture.recent",
-  "echodesk.localCaptureState.v1",
-  "echodesk.ambientSegments",
-  "echodesk.lastAmbientSegments",
-  "echodesk.currentMeeting",
-];
 
 export class BackendBasePolicyError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly code: string = "backend_base_policy",
+  ) {
     super(message);
     this.name = "BackendBasePolicyError";
   }
@@ -254,6 +266,90 @@ export function normalizeBackendBase(
     );
   }
   return parsed.origin;
+}
+
+function runtimeEnv(): Record<string, string | undefined> {
+  return (import.meta as { env?: Record<string, string | undefined> }).env ?? {};
+}
+
+function isEchoRuntimeMode(raw: string | undefined): raw is EchoRuntimeMode {
+  return raw === "release" || raw === "development" || raw === "diagnostic";
+}
+
+function isEchoPrincipalMode(raw: string | undefined): raw is EchoPrincipalMode {
+  return raw === "local" || raw === "public";
+}
+
+function hasElectronBackendRouting(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.echo?.isElectron === true &&
+    window.echo?.backendRouting !== undefined
+  );
+}
+
+export function runtimeMode(): EchoRuntimeMode {
+  const bridgeMode = window.echo?.backendRouting?.runtimeMode;
+  if (isEchoRuntimeMode(bridgeMode)) return bridgeMode;
+  if (isPackagedElectronRenderer()) return "release";
+  const configured = runtimeEnv().VITE_ECHODESK_RUNTIME_MODE;
+  if (isEchoRuntimeMode(configured)) return configured;
+  return runtimeEnv().DEV === "true" ? "development" : "release";
+}
+
+export function principalMode(): EchoPrincipalMode {
+  const bridgeMode = window.echo?.backendRouting?.principalMode;
+  if (isEchoPrincipalMode(bridgeMode)) return bridgeMode;
+  if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
+    return window.echo?.isPublicDemo === true ? "public" : "local";
+  }
+  const configured = runtimeEnv().VITE_ECHODESK_PRINCIPAL_MODE;
+  if (isEchoPrincipalMode(configured)) return configured;
+  return runtimeMode() === "release" ? "public" : "local";
+}
+
+export function backendRole(): EchoBackendRole {
+  const configured = window.echo?.backendRouting?.role;
+  if (
+    configured === "public_service" ||
+    configured === "local_dev_diagnostic" ||
+    configured === "paired_hub_sync_gateway"
+  ) {
+    return configured;
+  }
+  return principalMode() === "public" ? "public_service" : "local_dev_diagnostic";
+}
+
+function normalizedElectronBackendBase(): string | null {
+  const routing = window.echo?.backendRouting;
+  if (routing?.role === "paired_hub_sync_gateway") {
+    throw new BackendBasePolicyError("paired Hub sync gateway cannot carry business traffic");
+  }
+  const raw = window.echo?.backendHost ?? routing?.backendBase;
+  const normalized = normalizeBackendBase(raw);
+  if (!normalized) return null;
+  if (routing?.role === "public_service") {
+    if (!normalized.startsWith("https://")) {
+      throw new BackendBasePolicyError("public service endpoint must use HTTPS");
+    }
+    if (normalizeBackendBase(routing.publicServiceEndpoint) !== normalized) {
+      throw new BackendBasePolicyError("public service endpoint snapshot is inconsistent");
+    }
+    return normalized;
+  }
+  if (routing?.role === "local_dev_diagnostic") {
+    if (runtimeMode() === "release" || routing.localDevDiagnosticEndpoint === null) {
+      throw new BackendBasePolicyError("local dev endpoint is unavailable in release");
+    }
+    if (normalizeBackendBase(routing.localDevDiagnosticEndpoint) !== normalized) {
+      throw new BackendBasePolicyError("local dev endpoint snapshot is inconsistent");
+    }
+    return normalized;
+  }
+  if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
+    throw new BackendBasePolicyError("packaged backend role is unavailable");
+  }
+  return normalized;
 }
 
 function normalizeVersion(raw: string | null | undefined): string {
@@ -374,10 +470,8 @@ function preferredUpdateAsset(
 }
 
 function envBackendBase(): string | null {
-  const env = (import.meta as { env?: Record<string, string | undefined> }).env;
-  return normalizeBackendBase(
-    env?.VITE_ECHODESK_API_BASE ?? env?.VITE_API_BASE_URL,
-  );
+  const env = runtimeEnv();
+  return normalizeBackendBase(env.VITE_ECHODESK_API_BASE ?? env.VITE_API_BASE_URL);
 }
 
 export function storedBackendBase(): string | null {
@@ -391,10 +485,13 @@ export function storedBackendBase(): string | null {
 
 export function setStoredBackendBase(value: string): string | null {
   if (typeof window === "undefined") return null;
-  if (isPackagedElectronRenderer()) {
+  if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
     // Installed Electron transport identity is fixed by main/preload. A stale
     // mobile localStorage value must never redirect authenticated app traffic.
     return normalizeBackendBase(window.echo?.backendHost);
+  }
+  if (runtimeMode() === "release") {
+    return DEFAULT_ANDROID_BACKEND_BASE;
   }
   const previous = storedBackendBase();
   const normalized = normalizeBackendBase(value);
@@ -509,10 +606,11 @@ export async function installAppUpdate(status?: AppUpdateStatus): Promise<void> 
 }
 
 export function configuredBackendBase(): string | null {
-  if (isPackagedElectronRenderer()) {
-    return normalizeBackendBase(window.echo?.backendHost);
+  if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
+    return normalizedElectronBackendBase();
   }
-  return storedBackendBase() ?? envBackendBase();
+  if (runtimeMode() === "release") return DEFAULT_ANDROID_BACKEND_BASE;
+  return envBackendBase() ?? storedBackendBase();
 }
 
 export function isPackagedElectronRenderer(): boolean {
@@ -533,8 +631,8 @@ export function isPackagedElectronRenderer(): boolean {
 export function backendBaseSnapshot(): string | null {
   if (cachedBase !== null) return cachedBase;
 
-  if (isPackagedElectronRenderer()) {
-    const bridgeHost = normalizeBackendBase(window.echo?.backendHost);
+  if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
+    const bridgeHost = normalizedElectronBackendBase();
     if (!bridgeHost) return null;
     cachedBase = bridgeHost;
     return cachedBase;
@@ -546,7 +644,7 @@ export function backendBaseSnapshot(): string | null {
     return cachedBase;
   }
 
-  if (isNativeMobile()) {
+  if (isNativeMobile() && runtimeMode() === "release") {
     cachedBase = DEFAULT_ANDROID_BACKEND_BASE;
     return cachedBase;
   }
@@ -575,10 +673,7 @@ function isPublicDesktopDemo(): boolean {
   ) {
     return window.echo.isPublicDemo;
   }
-  return (
-    isPackagedElectronRenderer() &&
-    !storedBackendBase()
-  );
+  return isPackagedElectronRenderer() && backendRole() === "public_service";
 }
 
 function hasExplicitBackendOverride(): boolean {
@@ -600,31 +695,26 @@ function hasExplicitBackendOverride(): boolean {
  */
 export function isPublicRuntime(): boolean {
   if (typeof window === "undefined") return false;
+  if (backendRole() === "paired_hub_sync_gateway") return false;
   if (typeof window.echo?.isPublicDemo === "boolean") {
     return window.echo.isPublicDemo;
   }
   if (isPublicDesktopDemo()) return true;
-
-  const configured = configuredBackendBase();
-  if (configured !== null && isDefaultPublicBackend(configured)) return true;
-  return (
-    (isNativeMobile() || isTvLikeViewport()) &&
-    isDefaultPublicBackend(configured ?? DEFAULT_ANDROID_BACKEND_BASE)
-  );
+  return principalMode() === "public";
 }
 
 function isPublicNativeOrTvContext(): boolean {
   if (typeof window === "undefined") return false;
-  return window.echo?.isPublicDemo === true || isNativeMobile() || isTvLikeViewport();
+  return isPublicRuntime() && (isNativeMobile() || isTvLikeViewport());
 }
 
 /**
  * Public demo 的数据边界：
  * - public backend 是共享服务，新装客户端不能继承旧 WebView/localStorage 的会议选择、
  *   ambient 缓存或旧 backend URL，否则看起来像“数据库串了”。
- * - 仅当用户在设置中明确保存过自定义 backend（userSet=1）时，保留该地址作为
- *   私有/内网演示入口。
- * - 不清 onboarding / TTS 等纯偏好设置，避免升级后用户体验被重置。
+ * - release 只切换 endpoint 解析策略；旧 endpoint/cache 保留在 localStorage，
+ *   由 release policy 忽略，便于回滚而不触碰用户业务数据。
+ * - 不清会议、捕获、ambient 或 onboarding/TTS 等业务与偏好数据。
  */
 export function installPublicDemoStorageMigration(): void {
   if (typeof window === "undefined") return;
@@ -642,19 +732,14 @@ export function installPublicDemoStorageMigration(): void {
       }
     }
     const explicitBackend = hasExplicitBackendOverride();
-    if (!explicitBackend) {
-      window.localStorage.removeItem(MOBILE_BACKEND_BASE_KEY);
-      cachedBase = null;
-    }
-    for (const key of PUBLIC_HISTORY_STORAGE_KEYS) {
-      window.localStorage.removeItem(key);
-    }
+    cachedBase = null;
     window.localStorage.setItem(
       PUBLIC_DATA_BOUNDARY_KEY,
       JSON.stringify({
         schema: PUBLIC_DATA_BOUNDARY_SCHEMA,
         appVersion: typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "unknown",
         explicitBackend,
+        endpointPolicy: "release-public-service",
       }),
     );
   } catch {
@@ -679,7 +764,7 @@ export function shouldHideSharedPublicHistory(): boolean {
   if (explicitCustomBackend) return false;
   return (
     isPublicDesktopDemo() ||
-    ((isNativeMobile() || isTvLikeViewport()) && usesDefaultPublicBackend)
+    ((isNativeMobile() || isTvLikeViewport()) && usesDefaultPublicBackend && isPublicRuntime())
   );
 }
 
@@ -783,7 +868,10 @@ export async function shareBackendBase(): Promise<string> {
   ) {
     return window.location.origin;
   }
-  return DEFAULT_ANDROID_BACKEND_BASE;
+  if (runtimeMode() === "release") return DEFAULT_ANDROID_BACKEND_BASE;
+  throw new BackendBasePolicyError(
+    "explicit local dev/diagnostic endpoint is required for sharing",
+  );
 }
 
 export async function backendBase(): Promise<string> {
@@ -791,11 +879,20 @@ export async function backendBase(): Promise<string> {
   if (snapshot !== null) return snapshot;
 
   // 兼容旧 preload：当前版本会由 backendBaseSnapshot() 同步取得权威 host。
-  if (isPackagedElectronRenderer()) {
-    const host =
-      (await window.echo?.getBackendHost?.()) ?? DEFAULT_LOCAL_BACKEND_BASE;
-    cachedBase = normalizeBackendBase(host) ?? DEFAULT_LOCAL_BACKEND_BASE;
+  if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
+    const host = await window.echo?.getBackendHost?.();
+    const normalized = normalizeBackendBase(host);
+    if (!normalized) {
+      throw new BackendBasePolicyError("packaged backend route is unavailable");
+    }
+    cachedBase = normalized;
     return cachedBase;
+  }
+
+  if (isNativeMobile() && runtimeMode() !== "release") {
+    throw new BackendBasePolicyError(
+      "explicit local dev/diagnostic endpoint is required",
+    );
   }
 
   return "";
@@ -810,7 +907,7 @@ export async function backendWsUrl(): Promise<string> {
   if (typeof window !== "undefined" && window.location.protocol.startsWith("http")) {
     return `${window.location.protocol.replace("http", "ws")}//${window.location.host}/ws/echo`;
   }
-  return DEFAULT_LOCAL_BACKEND_BASE.replace(/^http/, "ws") + "/ws/echo";
+  throw new BackendBasePolicyError("backend WebSocket endpoint is unavailable");
 }
 
 export function apiPath(p: string): string {

@@ -369,6 +369,8 @@ async function launchInstalled(skillTimeoutSeconds: number, modelConfig: ModelCo
     ...process.env,
     ECHO_BACKEND_PORT: String(BACKEND_PORT),
     ECHO_BACKEND_BIND_HOST: "127.0.0.1",
+    ECHO_RUNTIME_MODE: "diagnostic",
+    ECHO_PRINCIPAL_MODE: "local",
     ECHODESK_DISABLE_AUTO_UPDATE_DOWNLOAD: "1",
     ECHO_USER_DIR: USER_DIR,
     DB_PATH,
@@ -400,8 +402,6 @@ async function launchInstalled(skillTimeoutSeconds: number, modelConfig: ModelCo
   ]) {
     delete env[name];
   }
-  env.ECHO_FORCE_LOCAL_BACKEND = "1";
-
   const app = await electron.launch({
     executablePath: APP_BIN,
     cwd: path.dirname(APP_BIN),

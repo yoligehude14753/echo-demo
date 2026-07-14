@@ -68,14 +68,14 @@ export default defineConfig({
       "/api": {
         target:
           process.env.VITE_API_TARGET ??
-          `http://${backendConfig.local.host}:${backendConfig.local.port}`,
+          `http://${backendConfig.roles.localDevDiagnostic.host}:${backendConfig.roles.localDevDiagnostic.port}`,
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, ""),
       },
       "/ws": {
         target:
           process.env.VITE_API_TARGET?.replace(/^http/, "ws") ??
-          `ws://${backendConfig.local.host}:${backendConfig.local.port}`,
+          `ws://${backendConfig.roles.localDevDiagnostic.host}:${backendConfig.roles.localDevDiagnostic.port}`,
         ws: true,
       },
     },

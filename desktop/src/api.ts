@@ -12,16 +12,18 @@ import type {
 } from "@/types";
 import {
   BACKEND_ORIGIN_EVENT,
-  DEFAULT_LOCAL_BACKEND_BASE,
+  BackendBasePolicyError,
   type ElectronWorkspaceContext,
   apiPath,
   apiUrl,
   backendBase,
   backendBaseSnapshot,
+  backendRole,
   configuredBackendBase,
   isDefaultPublicBackend,
   isNativeMobile,
   isPublicRuntime,
+  runtimeMode,
   shareBackendBase,
 } from "@/runtime";
 import { apiTransport } from "@/session";
@@ -577,12 +579,64 @@ export async function grantAgentRunnerAndResume(
 }
 
 export function artifactDownloadUrl(artifactId: string): string {
-  const path = `/artifacts/${encodeURIComponent(artifactId)}/download`;
+  const value = String(artifactId ?? "").trim();
+  if (!value || /[\\/?#]/.test(value) || /^[a-z][a-z\d+.-]*:/i.test(value)) {
+    throw new BackendBasePolicyError(
+      "产物路径无效，已拒绝跨 origin 访问",
+      "artifact_path_invalid",
+    );
+  }
+  const path = `/artifacts/${encodeURIComponent(value)}/download`;
+  const role = backendRole();
+  if (role === "paired_hub_sync_gateway") {
+    throw new BackendBasePolicyError(
+      "paired Hub sync gateway 不能承载业务产物",
+      "artifact_hub_role_forbidden",
+    );
+  }
   const base = backendBaseSnapshot();
-  if (base !== null) return base ? `${base}${path}` : `/api${path}`;
+  if (base === null) {
+    throw new BackendBasePolicyError(
+      "后端路由快照不可用，已停止产物下载",
+      "artifact_backend_snapshot_missing",
+    );
+  }
+  if (!base) {
+    if (runtimeMode() === "release") {
+      throw new BackendBasePolicyError(
+        "release 后端路由快照不可用，已停止产物下载",
+        "artifact_backend_snapshot_missing",
+      );
+    }
+    return `/api${path}`;
+  }
+  if (role === "public_service" && !base.startsWith("https://")) {
+    throw new BackendBasePolicyError(
+      "public service 产物地址必须使用 HTTPS",
+      "artifact_public_endpoint_invalid",
+    );
+  }
+  if (role === "local_dev_diagnostic" && runtimeMode() === "release") {
+    throw new BackendBasePolicyError(
+      "release 不允许使用 local dev 产物地址",
+      "artifact_local_role_forbidden",
+    );
+  }
 
-  // 仅兼容旧 preload；当前 Electron 会在首个 Renderer 脚本前同步提供 backendHost。
-  return `${DEFAULT_LOCAL_BACKEND_BASE}${path}`;
+  let resolved: URL;
+  try {
+    const origin = new URL(base).origin;
+    resolved = new URL(path, base);
+    if (resolved.origin !== origin || resolved.pathname !== path) {
+      throw new Error("artifact path escaped backend origin");
+    }
+  } catch {
+    throw new BackendBasePolicyError(
+      "后端产物地址无效，已停止下载",
+      "artifact_backend_endpoint_invalid",
+    );
+  }
+  return resolved.toString();
 }
 
 export function artifactIdFromDownloadHref(href: string | undefined): string | null {

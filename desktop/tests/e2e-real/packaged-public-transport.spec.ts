@@ -26,7 +26,8 @@ test("packaged public app uses the official Origin with anonymous health and ses
   }
   const env = {
     ...process.env,
-    ECHO_PUBLIC_DEMO: "1",
+    ECHO_RUNTIME_MODE: "diagnostic",
+    ECHO_PRINCIPAL_MODE: "public",
     ECHO_PUBLIC_BACKEND_BASE: PUBLIC_BACKEND_BASE,
   };
   delete env.ECHO_FORCE_LOCAL_BACKEND;

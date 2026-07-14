@@ -15,11 +15,15 @@ def test_desktop_and_backend_share_canonical_local_endpoint() -> None:
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert config == {
-        "local": {"host": "127.0.0.1", "port": 8769},
+        "schemaVersion": 2,
+        "roles": {
+            "publicService": {"baseUrl": "https://echodesk.yoliyoli.uk"},
+            "pairedHubSyncGateway": {"enabled": False, "baseUrl": None},
+            "localDevDiagnostic": {"host": "127.0.0.1", "port": 8769},
+        },
         "lanShare": {"enabled": True, "bindHost": "0.0.0.0"},
-        "public": {"baseUrl": "https://echodesk.yoliyoli.uk"},
     }
-    port = config["local"]["port"]
+    port = config["roles"]["localDevDiagnostic"]["port"]
     assert settings.port == port
     assert settings.public_http_url == f"http://localhost:{port}"
     assert settings.public_ws_url == f"ws://localhost:{port}/ws/echo"

@@ -118,7 +118,9 @@ try {
 
 const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
-const BACKEND_ENDPOINT = resolveBackendEndpoint(backendConfig, process.env);
+const BACKEND_ENDPOINT = resolveBackendEndpoint(backendConfig, process.env, {
+  isDevelopment: IS_DEV,
+});
 const BACKEND_PORT = BACKEND_ENDPOINT.port;
 const LOCAL_BACKEND_HOST = BACKEND_ENDPOINT.localBase;
 const PUBLIC_BACKEND_HOST = BACKEND_ENDPOINT.publicBase;
@@ -143,8 +145,8 @@ const BACKEND_BIND_HOST = BACKEND_ENDPOINT.bindHost;
 const ALLOW_PACKAGED_SOURCE_BACKEND =
   process.env.ECHO_ALLOW_PACKAGED_SOURCE_BACKEND === "1";
 
-// 0.3 Desktop Pro 默认 local-first。public demo 仍保留，但必须由发布入口显式设置
-// ECHO_PUBLIC_DEMO=1；ECHO_FORCE_LOCAL_BACKEND=1 作为旧部署兼容开关并拥有更高优先级。
+// Packaged/release 的业务 endpoint 固定为 public service；local 只由显式
+// development/diagnostic runtime 选择。旧 ECHO_* 只在这两类显式模式中作为兼容输入。
 const SPAWN_BACKEND = BACKEND_ENDPOINT.spawnBackend;
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
@@ -289,7 +291,7 @@ function credentialVault() {
       safeStorage,
       target: publicCredentialPath(),
       backendBase: BACKEND_HOST,
-      officialBackendBase: backendConfig.public.baseUrl,
+      officialBackendBase: BACKEND_ENDPOINT.publicServiceEndpoint,
       enabled: PUBLIC_DEMO_MODE,
       logger: (message) => log(`[credential] ${message}`),
     });
@@ -2737,9 +2739,27 @@ async function createWindow() {
 
 // ---------- IPC handlers ----------
 
+function backendRoutingSnapshot() {
+  return Object.freeze({
+    runtimeMode: BACKEND_ENDPOINT.runtimeMode,
+    principalMode: BACKEND_ENDPOINT.principalMode,
+    role: BACKEND_ENDPOINT.role,
+    source: BACKEND_ENDPOINT.source,
+    schemaVersion: BACKEND_ENDPOINT.schemaVersion,
+    backendBase: BACKEND_HOST,
+    publicServiceEndpoint: BACKEND_ENDPOINT.publicServiceEndpoint,
+    pairedHubSyncGatewayEndpoint: null,
+    localDevDiagnosticEndpoint: BACKEND_ENDPOINT.localDevDiagnosticEndpoint,
+  });
+}
+
 ipcMain.handle("echo:backend-host", (event) => {
   assertTrustedIpcOrigin(event);
   return BACKEND_HOST;
+});
+ipcMain.handle("echo:backend-routing", (event) => {
+  assertTrustedIpcOrigin(event);
+  return backendRoutingSnapshot();
 });
 ipcMain.handle("echo:backend-contract", async (event) => {
   assertTrustedIpcOrigin(event);
@@ -2752,6 +2772,10 @@ ipcMain.handle("echo:share-backend-host", (event) => {
 ipcMain.on("echo:backend-host-sync", (event) => {
   assertTrustedIpcOrigin(event);
   event.returnValue = BACKEND_HOST;
+});
+ipcMain.on("echo:backend-routing-sync", (event) => {
+  assertTrustedIpcOrigin(event);
+  event.returnValue = backendRoutingSnapshot();
 });
 ipcMain.on("echo:is-public-demo", (event) => {
   assertTrustedIpcOrigin(event);

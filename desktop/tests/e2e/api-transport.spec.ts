@@ -273,8 +273,18 @@ test("bounded bootstrap and identity invalid JSON expose only stable errors", as
       }
       return new Response(null, { status: 404 });
     };
+    let bootstrap: unknown = null;
+    let bootstrapError: Record<string, string> | null = null;
     try {
-      const bootstrap = await session.bootstrapBackend();
+      bootstrap = await session.bootstrapBackend();
+    } catch (error) {
+      bootstrapError = {
+        name: error instanceof Error ? error.name : "",
+        code: (error as { code?: string }).code ?? "",
+        reason: (error as { reason?: string }).reason ?? "",
+      };
+    }
+    try {
       mode = "identity";
       session.resetSessionForTest();
       let identityError = "";
@@ -286,7 +296,7 @@ test("bounded bootstrap and identity invalid JSON expose only stable errors", as
             ? `${error.name}:${error.message}:${String(error.cause ?? "")}`
             : String(error);
       }
-      return { bootstrap, warnings, identityError };
+      return { bootstrap, bootstrapError, warnings, identityError };
     } finally {
       window.fetch = originalFetch;
       console.warn = originalWarn;
@@ -294,6 +304,11 @@ test("bounded bootstrap and identity invalid JSON expose only stable errors", as
   });
 
   expect(result.bootstrap).toBeNull();
+  expect(result.bootstrapError).toEqual({
+    name: "BackendContractMismatchError",
+    code: "backend_contract_mismatch",
+    reason: "bootstrap-malformed",
+  });
   const serialized = JSON.stringify(result);
   expect(serialized).not.toContain("/Users/alice");
   expect(serialized).not.toContain("super-secret");
