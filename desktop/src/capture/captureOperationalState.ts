@@ -207,7 +207,25 @@ export function observeCaptureAdmission(
   const nextAccepted = finiteNumber(next.accepted_speech_frames);
   const previousObserved = finiteNumber(previous?.observed_audio_frames);
   const nextObserved = finiteNumber(next.observed_audio_frames);
+  const previousSequence = finiteNumber(previous?.stats_sequence);
+  const nextSequence = finiteNumber(next.stats_sequence);
+  const previousTimestamp =
+    typeof previous?.last_chunk_at === "string" && previous.last_chunk_at.length > 0
+      ? previous.last_chunk_at
+      : null;
+  const nextTimestamp =
+    typeof next.last_chunk_at === "string" && next.last_chunk_at.length > 0
+      ? next.last_chunk_at
+      : null;
   const gateReason = normalizeCaptureGateReason(next.last_gate_reason);
+  // stats_sequence 是 backend 进程生命周期内的游标。回退表示 backend
+  // 重启，重启后的低位计数不能再和旧进程的累计值直接比较。
+  const backendGenerationReset =
+    previousSequence !== null &&
+    nextSequence !== null &&
+    nextSequence < previousSequence &&
+    nextTimestamp !== null &&
+    isNewerTimestamp(nextTimestamp, previousTimestamp);
   const newChunk = nextChunks > previousChunks;
   const newAcceptedSpeech =
     nextAccepted !== null &&
@@ -216,7 +234,11 @@ export function observeCaptureAdmission(
     nextObserved !== null &&
     (previousObserved === null || nextObserved > previousObserved);
   const newAdmissionObservation =
-    newChunk || newAcceptedSpeech || newObservedAudio || nextStored > previousStored;
+    backendGenerationReset ||
+    newChunk ||
+    newAcceptedSpeech ||
+    newObservedAudio ||
+    nextStored > previousStored;
   const newLowRms =
     newAdmissionObservation &&
     (gateReason === "rms_too_low" || nextGatedRms > previousGatedRms);

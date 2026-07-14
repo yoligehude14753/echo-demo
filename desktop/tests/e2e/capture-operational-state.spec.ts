@@ -200,6 +200,66 @@ test("audio admission warning 不被 upload ack 代偿，新的有效语音观�
   await expect(status).toHaveAttribute("data-audio-warning", "none");
 });
 
+test("backend 重启后的新 stats 代际可以清除旧 audio admission warning", async ({
+  page,
+}) => {
+  test.setTimeout(30_000);
+  let statsRequests = 0;
+  let restarted = false;
+
+  await page.route(/\/(api\/)?capture\/stats$/, async (route) => {
+    statsRequests += 1;
+    const afterRestart = restarted;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        captureStats(
+          afterRestart
+            ? {
+                stats_sequence: 1,
+                chunks_total: 1,
+                stored: 1,
+                gated_rms: 0,
+                last_rms: 1_200,
+                last_speech_ratio: 1,
+                last_gate_reason: "ok",
+                observed_audio_frames: 1,
+                accepted_speech_frames: 1,
+                accepted_speech_ratio: 1,
+                last_chunk_at: "2026-07-14T09:01:00.000Z",
+              }
+            : {
+                stats_sequence: 5,
+                chunks_total: 10,
+                gated_rms: 10,
+                stored: 10,
+                last_rms: 4,
+                last_gate_reason: "rms_too_low",
+                observed_audio_frames: 10,
+                accepted_speech_frames: 10,
+                accepted_speech_ratio: 0,
+                last_chunk_at: "2026-07-14T09:00:00.000Z",
+              },
+        ),
+      ),
+    });
+  });
+  await stubMicPermission(page);
+  await installEchoMock(page, { skipPaths: ["/capture/stats"] });
+  await page.goto("/");
+
+  const status = await expectCaptureStatus(page);
+  await expect(status).toHaveAttribute("data-audio-warning", "rms_too_low");
+
+  restarted = true;
+  const beforeRestartPoll = statsRequests;
+  await expect
+    .poll(() => statsRequests, { timeout: 8_000, intervals: [100] })
+    .toBeGreaterThan(beforeRestartPoll);
+  await expect(status).toHaveAttribute("data-audio-warning", "none");
+});
+
 test("freshness warning 只由新的 stats sequence 清除", async ({ page }) => {
   test.setTimeout(30_000);
   let statsRequests = 0;
