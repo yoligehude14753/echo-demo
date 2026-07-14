@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from app.adapters.stt import build_asr_scheduler
 from app.adapters.stt.contracts import ASRRequestContext
 from app.adapters.stt.errors import (
     ASRDeadlineExceeded,
@@ -15,12 +16,10 @@ from app.adapters.stt.errors import (
     ASRQueueFull,
     ASRRateLimited,
 )
-from app.adapters.stt import build_asr_scheduler
 from app.config import Settings
 from app.main import _bootstrap_payload
 from app.schemas.meeting import TranscriptSegment
 from app.use_cases.ambient_capture import AmbientCapturePipeline
-
 
 LOUD_PCM = b"\x10\x10" * 800
 SILENT_PCM = b"\x00" * 1600

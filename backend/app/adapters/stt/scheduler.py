@@ -413,28 +413,47 @@ class ASRScheduler:
                 scope_key=scope_key,
                 accepted_at=now,
             )
-            try:
-                running_slots_used = self._active_jobs + self._dispatch_reserved
-                if running_slots_used < self._config.max_concurrency:
-                    self._dispatch_queue.put_nowait(job)
-                    self._dispatch_reserved += 1
-                else:
-                    self._queue.put_nowait(job)
-            except asyncio.QueueFull as error:
-                self._metrics["rejected_total"] += 1
-                raise ASRQueueFull(retry_after_s=1.0) from error
-            self._accepted_count += 1
-            scope.in_flight += 1
-            scope.request_times.append(now)
-            if idempotency_key is not None:
-                self._idempotency[(scope_key, idempotency_key)] = _IdempotencyRecord(
-                    fingerprint=fingerprint,
-                    expires_at=now + max(60.0, self._config.job_deadline_s * 4),
-                    future=job.future,
-                )
-            self._metrics["accepted_total"] += 1
-            self._work_available.set()
+            self._enqueue_admitted_job(
+                job,
+                now=now,
+                scope=scope,
+                scope_key=scope_key,
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+            )
             return job, True
+
+    def _enqueue_admitted_job(
+        self,
+        job: _QueuedJob,
+        *,
+        now: float,
+        scope: _ScopeState,
+        scope_key: tuple[str, str, str],
+        idempotency_key: str | None,
+        fingerprint: str,
+    ) -> None:
+        try:
+            running_slots_used = self._active_jobs + self._dispatch_reserved
+            if running_slots_used < self._config.max_concurrency:
+                self._dispatch_queue.put_nowait(job)
+                self._dispatch_reserved += 1
+            else:
+                self._queue.put_nowait(job)
+        except asyncio.QueueFull as error:
+            self._metrics["rejected_total"] += 1
+            raise ASRQueueFull(retry_after_s=1.0) from error
+        self._accepted_count += 1
+        scope.in_flight += 1
+        scope.request_times.append(now)
+        if idempotency_key is not None:
+            self._idempotency[(scope_key, idempotency_key)] = _IdempotencyRecord(
+                fingerprint=fingerprint,
+                expires_at=now + max(60.0, self._config.job_deadline_s * 4),
+                future=job.future,
+            )
+        self._metrics["accepted_total"] += 1
+        self._work_available.set()
 
     async def _worker_loop(self, _index: int) -> None:
         while True:
@@ -445,30 +464,8 @@ class ASRScheduler:
                     self._dispatch_reserved = max(0, self._dispatch_reserved - 1)
                 self._active_jobs += 1
             started_at = self._clock()
-            outcome_error: BaseException | None = None
-            outcome_success = False
             try:
-                if job.cancelled or job.future.cancelled():
-                    continue
-                result = await self._execute(job)
-                outcome_success = True
-                if not job.future.done():
-                    job.future.set_result(result)
-            except asyncio.CancelledError:
-                if not job.future.done():
-                    job.future.set_exception(ASRSchedulerShutdown())
-                raise
-            except ASRError as error:
-                outcome_error = error
-                if isinstance(error, ASRDeadlineExceeded):
-                    self._metrics["deadline_total"] += 1
-                if not job.future.done():
-                    job.future.set_exception(error)
-            except Exception as error:  # pragma: no cover - defensive adapter boundary
-                outcome_error = error
-                if not job.future.done():
-                    job.future.set_exception(ASRProviderPermanentError())
-                del error
+                outcome_success, outcome_error = await self._run_job(job)
             finally:
                 if not job.cancelled:
                     self._schedule_telemetry(
@@ -482,6 +479,29 @@ class ASRScheduler:
                     )
                 await self._finish_job(job)
                 source_queue.task_done()
+
+    async def _run_job(self, job: _QueuedJob) -> tuple[bool, BaseException | None]:
+        if job.cancelled or job.future.cancelled():
+            return False, None
+        try:
+            result = await self._execute(job)
+            if not job.future.done():
+                job.future.set_result(result)
+            return True, None
+        except asyncio.CancelledError:
+            if not job.future.done():
+                job.future.set_exception(ASRSchedulerShutdown())
+            raise
+        except ASRError as error:
+            if isinstance(error, ASRDeadlineExceeded):
+                self._metrics["deadline_total"] += 1
+            if not job.future.done():
+                job.future.set_exception(error)
+            return False, error
+        except Exception as error:  # pragma: no cover - defensive adapter boundary
+            if not job.future.done():
+                job.future.set_exception(ASRProviderPermanentError())
+            return False, error
 
     async def _next_job(
         self,
