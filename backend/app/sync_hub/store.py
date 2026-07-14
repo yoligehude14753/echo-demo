@@ -1034,6 +1034,14 @@ class SyncHubStore:
             latest_events: dict[tuple[str, str], aiosqlite.Row] = {}
             for row in event_rows:
                 latest_events[(str(row["entity_type"]), str(row["entity_id"]))] = row
+            transcript_events = sorted(
+                (
+                    row
+                    for (entity_type, _entity_id), row in latest_events.items()
+                    if entity_type == "transcript_segment"
+                ),
+                key=lambda row: int(row["cursor"]),
+            )
             transcript_rows = await self._fetchall(
                 conn,
                 """SELECT id, meeting_id, text, start_ms, end_ms,
@@ -1063,10 +1071,7 @@ class SyncHubStore:
                    FROM sync_events WHERE tenant_id = ? AND owner_id = ?""",
                 scope,
             )
-        transcript = [
-            self._snapshot_transcript(row, latest_events)
-            for row in transcript_rows
-        ]
+        transcript = self._snapshot_transcripts(transcript_rows, transcript_events)
         summaries = [self._snapshot_summary(row, latest_events) for row in summary_rows]
         memories = [self._snapshot_memory(row, latest_events) for row in memory_rows]
         return SnapshotResult(
@@ -1075,6 +1080,60 @@ class SyncHubStore:
             meeting_summaries=summaries,
             memories=memories,
         )
+
+    @staticmethod
+    def _transcript_event_matches_row(
+        event: aiosqlite.Row,
+        row: aiosqlite.Row,
+    ) -> bool:
+        payload = _json_load(event["payload_json"]) or {}
+        try:
+            if payload.get("segment_id") is not None and int(payload["segment_id"]) == int(
+                row["id"]
+            ):
+                return True
+        except (TypeError, ValueError):
+            pass
+        try:
+            return (
+                str(payload.get("meeting_id")) == str(row["meeting_id"])
+                and int(payload["start_ms"]) == int(row["start_ms"])
+                and int(payload["end_ms"]) == int(row["end_ms"])
+                and str(payload.get("text")) == str(row["text"])
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    @classmethod
+    def _snapshot_transcripts(
+        cls,
+        rows: list[aiosqlite.Row],
+        events: list[aiosqlite.Row],
+    ) -> list[SyncChangeRecord]:
+        consumed_cursors: set[int] = set()
+        emitted_cursors: set[int] = set()
+        records: list[SyncChangeRecord] = []
+        for row in rows:
+            matching = [
+                event
+                for event in events
+                if cls._transcript_event_matches_row(event, row)
+            ]
+            consumed_cursors.update(int(event["cursor"]) for event in matching)
+            if not matching:
+                records.append(cls._snapshot_transcript(row, {}))
+                continue
+            event = max(matching, key=lambda candidate: int(candidate["cursor"]))
+            cursor = int(event["cursor"])
+            if cursor in emitted_cursors:
+                continue
+            emitted_cursors.add(cursor)
+            records.append(cls._change_from_row(event))
+
+        for event in events:
+            if int(event["cursor"]) not in consumed_cursors:
+                records.append(cls._change_from_row(event))
+        return records
 
     @staticmethod
     def _snapshot_transcript(
@@ -1111,6 +1170,8 @@ class SyncHubStore:
     ) -> SyncChangeRecord:
         entity_id = str(row["id"])
         event = events.get(("meeting_summary", entity_id))
+        if event is not None:
+            return SyncHubStore._change_from_row(event)
         payload = _json_load(row["minutes_json"]) or {}
         payload["meeting_id"] = entity_id
         occurred_at = row["finalized_at"] or row["ended_at"] or row["started_at"]
@@ -1134,6 +1195,8 @@ class SyncHubStore:
     ) -> SyncChangeRecord:
         entity_id = str(row["memory_id"])
         event = events.get(("memory", entity_id))
+        if event is not None:
+            return SyncHubStore._change_from_row(event)
         return SyncChangeRecord(
             cursor=int(event["cursor"]) if event is not None else 0,
             source_device_id=(

@@ -396,3 +396,112 @@ def test_sync_data_survives_app_restart(
             "Persist this across restart"
         )
     deps_mod.reset_deps_for_test()
+
+
+@pytest.mark.unit
+def test_gateway_snapshot_deduplicates_remote_transcript_side_effect(
+    public_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    session = _issue(public_client, "gateway-snapshot")
+    device_id = "android-gateway-device"
+    token = _claim_device(public_client, session, device_id)
+    headers = {"X-Echo-Sync-Token": token}
+    first_entity_id = "meeting-gateway:0:1200"
+    first_payload = {
+        "meeting_id": "meeting-gateway",
+        "text": "remote canonical transcript",
+        "start_ms": 0,
+        "end_ms": 1200,
+        "captured_at": "2026-07-14T10:00:00Z",
+    }
+
+    applied = _push(
+        public_client,
+        token,
+        operation_id="op-gateway-canonical-1",
+        device_id=device_id,
+        entity_type="transcript_segment",
+        entity_id=first_entity_id,
+        base_revision=0,
+        payload=first_payload,
+    )
+    assert applied == {"status": "applied", "revision": 1, "cursor": 1}
+
+    changes = public_client.get("/hub/v1/sync/changes?cursor=0", headers=headers)
+    assert changes.status_code == 200, changes.text
+    change = changes.json()["changes"]
+    assert len(change) == 1
+    assert change[0]["entity_id"] == first_entity_id
+    assert change[0]["source_device_id"] == device_id
+    assert change[0]["revision"] == 1
+
+    initial_snapshot = public_client.get("/hub/v1/sync/snapshot", headers=headers)
+    assert initial_snapshot.status_code == 200, initial_snapshot.text
+    initial_transcript = initial_snapshot.json()["transcript_segments"]
+    assert len(initial_transcript) == 1
+    assert initial_transcript[0]["entity_id"] == first_entity_id
+    assert initial_transcript[0]["source_device_id"] == device_id
+    assert initial_transcript[0]["revision"] == 1
+
+    async def insert_legacy_side_effect() -> None:
+        async with aiosqlite.connect(str(tmp_path / "sync.db")) as conn:
+            scope = await (
+                await conn.execute(
+                    "SELECT tenant_id, user_id FROM devices WHERE device_id = ?",
+                    (device_id,),
+                )
+            ).fetchone()
+            assert scope is not None
+            await conn.execute(
+                """INSERT INTO meeting_segments (
+                       meeting_id, text, start_ms, end_ms, captured_at,
+                       tenant_id, device_id, owner_id
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'legacy-local', ?)""",
+                (
+                    first_payload["meeting_id"],
+                    first_payload["text"],
+                    first_payload["start_ms"],
+                    first_payload["end_ms"],
+                    "2026-07-14T10:00:01Z",
+                    scope[0],
+                    scope[1],
+                ),
+            )
+            await conn.commit()
+
+    asyncio.run(insert_legacy_side_effect())
+    repeated_snapshot = public_client.get("/hub/v1/sync/snapshot", headers=headers)
+    assert repeated_snapshot.status_code == 200, repeated_snapshot.text
+    repeated_transcript = repeated_snapshot.json()["transcript_segments"]
+    assert len(repeated_transcript) == 1
+    assert repeated_transcript[0]["entity_id"] == first_entity_id
+    assert repeated_transcript[0]["source_device_id"] == device_id
+
+    second_entity_id = "meeting-gateway:1200:2400"
+    second = _push(
+        public_client,
+        token,
+        operation_id="op-gateway-canonical-2",
+        device_id=device_id,
+        entity_type="transcript_segment",
+        entity_id=second_entity_id,
+        base_revision=0,
+        payload={
+            **first_payload,
+            "start_ms": 1200,
+            "end_ms": 2400,
+            "text": "second remote transcript",
+        },
+    )
+    assert second == {"status": "applied", "revision": 1, "cursor": 2}
+
+    final_snapshot = public_client.get("/hub/v1/sync/snapshot", headers=headers)
+    assert final_snapshot.status_code == 200, final_snapshot.text
+    final_transcript = final_snapshot.json()["transcript_segments"]
+    assert len(final_transcript) == 2
+    assert {item["entity_id"] for item in final_transcript} == {
+        first_entity_id,
+        second_entity_id,
+    }
+    assert {item["source_device_id"] for item in final_transcript} == {device_id}
