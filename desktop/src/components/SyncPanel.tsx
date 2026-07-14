@@ -39,13 +39,13 @@ export default function SyncPanel(): JSX.Element {
   const [state, setState] = useState<SyncState>(() => loadSyncState());
   const [open, setOpen] = useState(false);
   const [pairingCode, setPairingCode] = useState("");
-  const [hubBase, setHubBase] = useState(() => configuredSyncHubBase());
+  const [hubBase, setHubBase] = useState(() => configuredSyncHubBase() ?? "");
   const [busy, setBusy] = useState(false);
   const client = useMemo(() => new SyncHubClient(), []);
 
   useEffect(() => {
     const refresh = () => setState(loadSyncState());
-    const refreshHubBase = () => setHubBase(configuredSyncHubBase());
+    const refreshHubBase = () => setHubBase(configuredSyncHubBase() ?? "");
     window.addEventListener(SYNC_STATE_EVENT, refresh);
     window.addEventListener(SYNC_HUB_BASE_EVENT, refreshHubBase);
     return () => {
@@ -56,14 +56,14 @@ export default function SyncPanel(): JSX.Element {
 
   const openPanel = () => {
     setState(loadSyncState());
-    setHubBase(configuredSyncHubBase());
+    setHubBase(configuredSyncHubBase() ?? "");
     setOpen(true);
   };
 
   const saveHubBase = () => {
     try {
       const saved = setSyncHubBase(hubBase);
-      setHubBase(saved);
+      setHubBase(saved ?? "");
       message.success("同步服务地址已保存");
     } catch (error) {
       message.error(error instanceof Error ? error.message : "同步服务地址无效");

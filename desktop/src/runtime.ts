@@ -86,6 +86,9 @@ export interface ElectronBackendBuildContract {
 interface ElectronEchoBridge {
   isElectron?: boolean;
   isPublicDemo?: boolean;
+  backendRouting?: {
+    pairedHubSyncGatewayEndpoint?: string | null;
+  };
   backendHost?: string;
   getBackendHost?: () => Promise<string>;
   getBackendContract?: () => Promise<ElectronBackendBuildContract | null>;
@@ -167,7 +170,10 @@ export const SYNC_HUB_BASE_EVENT = "echodesk:sync-hub-change";
 export const PUBLIC_DATA_BOUNDARY_KEY = "echodesk.publicDataBoundary.v2";
 export const DEFAULT_ANDROID_BACKEND_BASE = backendConfig.public.baseUrl;
 export const DEFAULT_LOCAL_BACKEND_BASE = `http://${backendConfig.local.host}:${backendConfig.local.port}`;
-export const DEFAULT_SYNC_HUB_BASE = backendConfig.public.baseUrl;
+// Sync must never fall back to the public business service.  A paired Hub
+// gateway is supplied explicitly by runtime routing or by an explicit dev
+// configuration.
+export const DEFAULT_SYNC_HUB_BASE: string | null = null;
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
 const PUBLIC_DATA_BOUNDARY_SCHEMA = 3;
 export const RELEASES_URL =
@@ -397,7 +403,12 @@ function envSyncHubBase(): string | null {
   return normalizeBackendBase(env?.VITE_ECHODESK_SYNC_HUB_BASE);
 }
 
-export function configuredSyncHubBase(): string {
+export function configuredSyncHubBase(): string | null {
+  const runtimeGateway =
+    typeof window !== "undefined" ? window.echo?.backendRouting : undefined;
+  if (runtimeGateway) {
+    return normalizeBackendBase(runtimeGateway.pairedHubSyncGatewayEndpoint);
+  }
   if (typeof window !== "undefined") {
     try {
       const stored = normalizeBackendBase(window.localStorage.getItem(SYNC_HUB_BASE_KEY));
@@ -409,7 +420,12 @@ export function configuredSyncHubBase(): string {
   return envSyncHubBase() ?? DEFAULT_SYNC_HUB_BASE;
 }
 
-export function setSyncHubBase(value: string): string {
+export function setSyncHubBase(value: string): string | null {
+  if (typeof window !== "undefined" && window.echo?.backendRouting) {
+    throw new BackendBasePolicyError(
+      "同步网关地址由运行时路由提供，不能在客户端覆盖",
+    );
+  }
   const normalized = normalizeBackendBase(value);
   if (!normalized) {
     if (typeof window !== "undefined") {

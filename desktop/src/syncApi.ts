@@ -2,6 +2,7 @@ import { configuredSyncHubBase } from "@/runtime";
 import { apiTransport, ensureServerSession } from "@/session";
 import { loadSyncState, type SyncStorage } from "@/syncState";
 import {
+  SyncApiError,
   SyncHubClient as ProtocolSyncHubClient,
   type SyncAuthMode,
   type SyncTransport,
@@ -16,6 +17,9 @@ async function requestWithDefaultTransport(
   auth: SyncAuthMode,
 ): Promise<Response> {
   const hubBase = configuredSyncHubBase();
+  if (!hubBase) {
+    throw new SyncApiError("同步网关未配置", 503, "sync_gateway_unconfigured");
+  }
   const token =
     auth === "session"
       ? await ensureServerSession()
