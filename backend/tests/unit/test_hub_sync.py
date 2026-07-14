@@ -138,6 +138,80 @@ async def test_hub_sync_applies_android_transcript_and_memory_idempotently(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_hub_sync_transcript_snapshot_upserts_by_entity_revision(tmp_path):
+    db_path = tmp_path / "echo.db"
+    store = HubSyncStore(db_path, device_id="desktop-device")
+    await store.init()
+    captured_at = _timestamp()
+
+    def change(
+        operation_id: str,
+        text: str,
+        *,
+        entity_id: str = "android-device:segment-1",
+        base_revision: int = 0,
+    ) -> dict[str, object]:
+        return {
+            "operation_id": operation_id,
+            "device_id": "android-device",
+            "entity_type": "transcript_segment",
+            "entity_id": entity_id,
+            "base_revision": base_revision,
+            "updated_at": captured_at,
+            "payload": {
+                "meeting_id": "android-meeting-1",
+                "meeting_title": "Android meeting",
+                "meeting_state": "in_meeting",
+                "segment_id": entity_id.rsplit(":", 1)[-1],
+                "text": text,
+                "start_ms": 0,
+                "end_ms": 1_200,
+                "speaker_id": None,
+                "speaker_label": "Speaker 1",
+                "captured_at": captured_at,
+            },
+        }
+
+    first = change("snapshot:cursor0", "first transcript")
+    duplicate = change("snapshot:cursor1", "first transcript")
+    updated = change(
+        "changes:cursor2",
+        "updated transcript",
+        base_revision=1,
+    )
+    second_entity = change(
+        "snapshot:cursor3",
+        "second transcript",
+        entity_id="android-device:segment-2",
+    )
+    try:
+        first_result = await store.apply_changes([first], snapshot=True)
+        duplicate_result = await store.apply_changes([duplicate], snapshot=True)
+        updated_result = await store.apply_changes([updated])
+        second_result = await store.apply_changes([second_entity], snapshot=True)
+        await store.reconcile_local_changes()
+        conn = store._require_conn()
+        cursor = await conn.execute(
+            "SELECT text FROM meeting_segments ORDER BY id",
+        )
+        segment_rows = await cursor.fetchall()
+        await cursor.close()
+        outbox = await store.list_outbox()
+    finally:
+        await store.aclose()
+
+    assert first_result.applied == 1
+    assert duplicate_result.duplicate == 1
+    assert updated_result.applied == 1
+    assert second_result.applied == 1
+    assert [str(row["text"]) for row in segment_rows] == [
+        "updated transcript",
+        "second transcript",
+    ]
+    assert outbox == []
+
+
+@pytest.mark.asyncio
 async def test_hub_sync_conflict_and_snapshot_recovery(tmp_path):
     db_path = tmp_path / "echo.db"
     store = HubSyncStore(db_path, device_id="desktop-device")

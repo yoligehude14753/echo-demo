@@ -535,12 +535,26 @@ class HubSyncStore:
 
         payload_json = _dump(payload)
         cursor = await conn.execute(
-            "SELECT revision, payload_json FROM hub_sync_entities "
+            "SELECT revision, payload_json, source_device_id FROM hub_sync_entities "
             "WHERE entity_type = ? AND entity_id = ?",
             (entity_type, entity_id),
         )
         current = await cursor.fetchone()
         await cursor.close()
+        incoming_revision = max(1, _int(change.get("revision"), base_revision + 1))
+        if (
+            entity_type == "transcript_segment"
+            and current is not None
+            and str(current["source_device_id"]) == source_device_id
+            and incoming_revision <= int(current["revision"])
+        ):
+            await conn.execute(
+                "INSERT OR IGNORE INTO hub_sync_applied_operations (operation_id, applied_at) "
+                "VALUES (?, ?)",
+                (operation_id, _now()),
+            )
+            return "duplicate"
+
         if current is not None and str(current["payload_json"]) == payload_json:
             await conn.execute(
                 "INSERT OR IGNORE INTO hub_sync_applied_operations (operation_id, applied_at) "
@@ -551,8 +565,18 @@ class HubSyncStore:
         if current is not None and not snapshot and base_revision < int(current["revision"]):
             return "conflict"
 
-        await self._apply_entity_tx(conn, entity_type, payload)
-        revision = max(base_revision + 1, int(current["revision"]) + 1 if current else 1)
+        previous_payload = _load(current["payload_json"]) if current is not None else None
+        await self._apply_entity_tx(
+            conn,
+            entity_type,
+            payload,
+            previous_payload=previous_payload if entity_type == "transcript_segment" else None,
+        )
+        revision = (
+            incoming_revision
+            if entity_type == "transcript_segment"
+            else max(base_revision + 1, int(current["revision"]) + 1 if current else 1)
+        )
         await conn.execute(
             "INSERT INTO hub_sync_entities (entity_type, entity_id, revision, updated_at, "
             "payload_json, source_device_id, operation_id) VALUES (?, ?, ?, ?, ?, ?, ?) "
@@ -581,9 +605,11 @@ class HubSyncStore:
         conn: aiosqlite.Connection,
         entity_type: str,
         payload: dict[str, Any],
+        *,
+        previous_payload: dict[str, Any] | None = None,
     ) -> None:
         if entity_type == "transcript_segment":
-            await self._apply_segment_tx(conn, payload)
+            await self._apply_segment_tx(conn, payload, previous_payload=previous_payload)
         elif entity_type == "meeting_summary":
             await self._apply_summary_tx(conn, payload)
         elif entity_type == "memory":
@@ -615,9 +641,20 @@ class HubSyncStore:
             ),
         )
 
-    async def _apply_segment_tx(self, conn: aiosqlite.Connection, payload: dict[str, Any]) -> None:
+    async def _apply_segment_tx(
+        self,
+        conn: aiosqlite.Connection,
+        payload: dict[str, Any],
+        *,
+        previous_payload: dict[str, Any] | None = None,
+    ) -> None:
         meeting_id = _required_text(payload.get("meeting_id"))
         captured_at = _required_text(payload.get("captured_at"), limit=128)
+        text = _required_text(payload.get("text"), limit=32_000)
+        start_ms = _int(payload.get("start_ms"))
+        end_ms = _int(payload.get("end_ms"))
+        speaker_id = _text(payload.get("speaker_id"))
+        speaker_label = _text(payload.get("speaker_label"))
         await self._ensure_meeting_tx(
             conn,
             meeting_id,
@@ -625,16 +662,60 @@ class HubSyncStore:
             title=_text(payload.get("meeting_title"), limit=512),
             state=str(payload.get("meeting_state") or "in_meeting"),
         )
+
+        if previous_payload is not None:
+            try:
+                previous_identity = (
+                    _required_text(previous_payload.get("meeting_id")),
+                    _required_text(previous_payload.get("text"), limit=32_000),
+                    _int(previous_payload.get("start_ms")),
+                    _int(previous_payload.get("end_ms")),
+                    _text(previous_payload.get("speaker_id")),
+                    _text(previous_payload.get("speaker_label")),
+                    _required_text(previous_payload.get("captured_at"), limit=128),
+                )
+            except ValueError:
+                previous_identity = None
+            if previous_identity is not None:
+                cursor = await conn.execute(
+                    "SELECT id FROM meeting_segments WHERE meeting_id = ? AND text = ? "
+                    "AND start_ms = ? AND end_ms = ? AND speaker_id IS ? "
+                    "AND speaker_label IS ? AND captured_at = ? AND tenant_id = ? "
+                    "AND owner_id = ? ORDER BY id LIMIT 1",
+                    (*previous_identity, self.tenant_id, self.owner_id),
+                )
+                existing = await cursor.fetchone()
+                await cursor.close()
+                if existing is not None:
+                    await conn.execute(
+                        "UPDATE meeting_segments SET meeting_id = ?, text = ?, start_ms = ?, "
+                        "end_ms = ?, speaker_id = ?, speaker_label = ?, captured_at = ? "
+                        "WHERE id = ? AND tenant_id = ? AND owner_id = ?",
+                        (
+                            meeting_id,
+                            text,
+                            start_ms,
+                            end_ms,
+                            speaker_id,
+                            speaker_label,
+                            captured_at,
+                            int(existing["id"]),
+                            self.tenant_id,
+                            self.owner_id,
+                        ),
+                    )
+                    return
+
         await conn.execute(
             "INSERT INTO meeting_segments (meeting_id, text, start_ms, end_ms, speaker_id, "
             "speaker_label, captured_at, tenant_id, device_id, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 meeting_id,
-                _required_text(payload.get("text"), limit=32_000),
-                _int(payload.get("start_ms")),
-                _int(payload.get("end_ms")),
-                _text(payload.get("speaker_id")),
-                _text(payload.get("speaker_label")),
+                text,
+                start_ms,
+                end_ms,
+                speaker_id,
+                speaker_label,
                 captured_at,
                 self.tenant_id,
                 "hub-remote",
