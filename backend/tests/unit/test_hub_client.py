@@ -123,14 +123,14 @@ async def test_hub_client_sync_push_changes_and_snapshot_contract():
         if request.method == "GET" and request.url.path == "/base/hub/v1/sync/changes":
             return httpx.Response(
                 200,
-                json={"changes": [{"operation_id": "remote:1"}], "cursor": 2},
+                json={"changes": [{"operation_id": "remote:1"}], "cursor": 0},
                 request=request,
             )
         if request.method == "GET" and request.url.path == "/base/hub/v1/sync/snapshot":
             return httpx.Response(
                 200,
                 json={
-                    "cursor": 3,
+                    "cursor": 0,
                     "transcript_segments": [{"operation_id": "remote:transcript"}],
                     "meeting_summaries": [{"operation_id": "remote:summary"}],
                     "memories": [{"operation_id": "remote:memory"}],
@@ -162,15 +162,15 @@ async def test_hub_client_sync_push_changes_and_snapshot_contract():
     assert pushed.duplicate == ["sync:desktop:2"]
     assert pushed.conflict == ["sync:desktop:3"]
     assert changes == [{"operation_id": "remote:1"}]
-    assert changes_cursor == "2"
+    assert changes_cursor == "0"
     assert snapshot == [
         {"operation_id": "remote:transcript"},
         {"operation_id": "remote:summary"},
         {"operation_id": "remote:memory"},
     ]
-    assert snapshot_cursor == "3"
-    assert client._events_url("2") == (
-        "wss://hub.test/base/hub/v1/sync/events?cursor=2"
+    assert snapshot_cursor == "0"
+    assert client._events_url("0") == (
+        "wss://hub.test/base/hub/v1/sync/events?cursor=0"
     )
     changes_request = next(request for request in requests if request.url.path.endswith("/sync/changes"))
     assert "cursor" not in changes_request.url.params
