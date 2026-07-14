@@ -330,7 +330,7 @@ async def test_current_v36_switch_marks_restored_history_not_applicable_and_conv
 
     switched = await run_migrations(current_db)
 
-    assert switched.errors == [] and switched.applied == [37, 38, 39, 41]
+    assert switched.errors == [] and switched.applied == [37, 38, 39, 40, 41]
     assert switched.not_applicable == [6, 7, 8, 9]
     assert switched.current_version == 41
     assert await _integrity(current_db) == ("ok", [])
@@ -443,7 +443,7 @@ async def test_v37_rebuild_guard_rolls_back_compatibility_prelude(tmp_path: Path
     assert view is not None and version_37 is None
 
     resumed = await run_migrations(db_path)
-    assert resumed.errors == [] and resumed.applied == [37, 38, 39, 41]
+    assert resumed.errors == [] and resumed.applied == [37, 38, 39, 40, 41]
     assert await _integrity(db_path) == ("ok", [])
 
 
