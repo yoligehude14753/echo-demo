@@ -3,27 +3,33 @@
  *
  * M_diag_brake：
  * - 5s 轮询 GET /capture/stats，把 7 道门分布暴露给 CaptureStatus Popover
- * - 接收 captureChunkRouter 的 STT 熔断事件 → 持久化红色 toast + 倒计时
+ * - 接收 captureChunkRouter 的 STT 熔断事件 → capture-local 状态 + 倒计时
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { message } from "antd";
 
-import { getCaptureStats } from "@/api";
+import { getCaptureStats, type CaptureStats } from "@/api";
 import { audioCapture } from "@/capture/audioCapture";
 import { attachCaptureChunkRouter } from "@/capture/captureChunkRouter";
+import {
+  createCaptureAdmissionState,
+  createCaptureFreshnessState,
+  createCaptureTransportState,
+  observeCaptureAdmission,
+  observeCaptureStatsFailure,
+  observeCaptureStatsSuccess,
+  type CaptureViewModel,
+} from "@/capture/captureOperationalState";
 import type {
   CaptureState,
   CaptureStatsSnapshot,
-  CaptureStatus,
 } from "@/domain/session";
 import { useStore } from "@/store";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 const STATS_POLL_MS = 5_000;
 const CAPTURE_INIT_WATCHDOG_MS = 18_000;
-const UPLOAD_ERROR_TOAST_DURATION_SECONDS = 8;
 const CIRCUIT_TOAST_KEY = "stt-circuit-open";
-const FALLBACK_TOAST_KEY = "chunk-upload-error";
 const MIC_INIT_TIMEOUT_MESSAGE =
   "系统录音初始化超时；问答、知识库、联网搜索和文档生成仍可继续使用，请稍后重新打开 EchoDesk 或检查 macOS 麦克风权限。";
 
@@ -44,7 +50,7 @@ export interface EchoCaptureOptions {
   enabled: boolean;
 }
 
-export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
+export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewModel {
   const {
     revision: backendOriginRevision,
     captureGeneration,
@@ -66,6 +72,10 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
   );
   const [chunksDroppedCircuit, setChunksDroppedCircuit] = useState(0);
   const [stats, setStats] = useState<CaptureStatsSnapshot | null>(null);
+  const [transport, setTransport] = useState(createCaptureTransportState);
+  const [freshness, setFreshness] = useState(createCaptureFreshnessState);
+  const [admission, setAdmission] = useState(createCaptureAdmissionState);
+  const previousStatsRef = useRef<CaptureStats | null>(null);
 
   useEffect(() => {
     if (sttCircuitOpenUntil === null) return;
@@ -103,12 +113,21 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
       audioCapture.stop();
       setCaptureState("initializing");
       setErrorMessage(null);
+      setStats(null);
+      setTransport(createCaptureTransportState());
+      setFreshness(createCaptureFreshnessState());
+      setAdmission(createCaptureAdmissionState());
+      previousStatsRef.current = null;
       return;
     }
     const originGeneration = captureGeneration();
     const statsController = new AbortController();
     const unregisterController = registerAbortController(statsController);
     setStats(null);
+    setTransport(createCaptureTransportState());
+    setFreshness(createCaptureFreshnessState());
+    setAdmission(createCaptureAdmissionState());
+    previousStatsRef.current = null;
     setAmbientChunks(0);
     setAmbientStored(0);
     setMeetingChunks(0);
@@ -132,22 +151,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
       onChunkPosted: () => setAmbientChunks((n) => n + 1),
       onAmbientUploaded: () => setAmbientStored((n) => n + 1),
       onMeetingUploaded: () => setMeetingChunks((n) => n + 1),
-      onConnectionLost: (e) => {
-        const msg = e instanceof Error ? e.message : String(e);
-        message.error({
-          content: `采集上传暂时失败（${msg}），后台会自动重试`,
-          key: FALLBACK_TOAST_KEY,
-          duration: UPLOAD_ERROR_TOAST_DURATION_SECONDS,
-        });
-      },
-      onConnectionRecovered: () => {
-        message.destroy(FALLBACK_TOAST_KEY);
-        message.success({
-          content: "后端已恢复",
-          key: FALLBACK_TOAST_KEY,
-          duration: 2,
-        });
-      },
+      onTransportStateChange: setTransport,
       onSttCircuitOpen: ({ retryAtMs }) => {
         setSttCircuitOpenUntil(retryAtMs);
         message.destroy(CIRCUIT_TOAST_KEY);
@@ -159,31 +163,42 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
       onChunkDropped: (reason) => {
         if (reason === "circuit_open") {
           setChunksDroppedCircuit((n) => n + 1);
-          return;
         }
-        message.warning({
-          content: "音频上传较慢，已丢弃过期片段以保持实时性",
-          key: "capture-backpressure",
-          duration: 4,
-        });
       },
     });
 
-    // 5s 轮询 7 道门统计。失败静默（不打扰用户；下次重试）。
+    // 5s 轮询 stats；freshness/admission 各自归约，不能代偿 transport ack。
     let cancelled = false;
+    let statsRequestSeq = 0;
     const fetchStats = async () => {
+      const requestSeq = ++statsRequestSeq;
       try {
         const next = await getCaptureStats({ signal: statsController.signal });
         if (
           !cancelled &&
           isCurrent(originGeneration) &&
-          !statsController.signal.aborted
+          !statsController.signal.aborted &&
+          requestSeq === statsRequestSeq
         ) {
+          const previous = previousStatsRef.current;
+          previousStatsRef.current = next;
           setStats(next);
-          message.destroy(FALLBACK_TOAST_KEY);
+          setFreshness((current) =>
+            observeCaptureStatsSuccess(current, next),
+          );
+          setAdmission((current) =>
+            observeCaptureAdmission(current, previous, next),
+          );
         }
       } catch {
-        // 静默：stats 是诊断辅助，主路径不依赖它
+        if (
+          !cancelled &&
+          isCurrent(originGeneration) &&
+          !statsController.signal.aborted &&
+          requestSeq === statsRequestSeq
+        ) {
+          setFreshness((current) => observeCaptureStatsFailure(current));
+        }
       }
     };
     void fetchStats();
@@ -191,6 +206,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
 
     return () => {
       cancelled = true;
+      statsRequestSeq += 1;
       unregisterController();
       window.clearInterval(statsTimer);
       offStatus();
@@ -222,5 +238,8 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureStatus {
     sttCircuitOpenUntil,
     chunksDroppedCircuit,
     stats,
+    transport,
+    freshness,
+    admission,
   };
 }

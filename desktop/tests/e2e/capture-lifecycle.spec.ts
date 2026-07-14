@@ -255,6 +255,36 @@ test("Capture 上传单飞且队列有界，过载时明确背压", async ({ pag
   let concurrent = 0;
   let maxConcurrent = 0;
   let requests = 0;
+  await page.addInitScript(() => {
+    const md = window.navigator as unknown as {
+      mediaDevices?: { getUserMedia: (constraints: unknown) => Promise<MediaStream> };
+    };
+    if (md.mediaDevices) {
+      md.mediaDevices.getUserMedia = async () => {
+        const context = new AudioContext();
+        const destination = context.createMediaStreamDestination();
+        const oscillator = context.createOscillator();
+        oscillator.frequency.value = 0;
+        oscillator.connect(destination);
+        oscillator.start();
+        return destination.stream;
+      };
+    }
+    try {
+      Object.defineProperty(window.navigator, "permissions", {
+        configurable: true,
+        value: {
+          query: async () => ({
+            state: "granted",
+            addEventListener: () => undefined,
+            removeEventListener: () => undefined,
+          }),
+        },
+      });
+    } catch {
+      /* test environment may expose a readonly permissions object */
+    }
+  });
   await page.route(/\/(api\/)?capture\/chunk$/, async (route) => {
     requests += 1;
     concurrent += 1;
@@ -281,9 +311,10 @@ test("Capture 上传单飞且队列有界，过载时明确背压", async ({ pag
       window.__echoAudioCapture?.__emitChunkForTest();
     }
   });
-  await expect(
-    page.locator(".ant-message-warning").filter({ hasText: "已丢弃过期片段" }),
-  ).toBeVisible();
+  await expect(page.getByTestId("capture-status")).toHaveAttribute(
+    "data-transport-warning",
+    "backpressure",
+  );
   await expect.poll(() => requests, { timeout: 5_000 }).toBe(5);
   expect(maxConcurrent).toBe(1);
   expect(requests).toBeLessThanOrEqual(5);

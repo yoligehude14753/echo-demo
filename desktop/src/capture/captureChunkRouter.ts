@@ -18,6 +18,11 @@
  */
 import { uploadCaptureChunk } from "@/api";
 import { audioCapture } from "@/capture/audioCapture";
+import {
+  CAPTURE_QUEUE_CAPACITY,
+  createCaptureTransportState,
+  type CaptureTransportState,
+} from "@/capture/captureOperationalState";
 import { CAPTURE_SAMPLE_RATE } from "@/capture/pcm";
 import { shouldAttachMeetingOverlay } from "@/domain/session";
 import {
@@ -36,6 +41,10 @@ export interface CaptureRouterHandlers {
   onConnectionLost?: (err: unknown) => void;
   /** 失败后第一次成功 → 连接恢复。 */
   onConnectionRecovered?: () => void;
+  /** transport 轴的本地快照；不写入 session/domain/Hub event。 */
+  onTransportStateChange?: (state: CaptureTransportState) => void;
+  /** 队列从背压状态排空；仅清除 transport 背压告警。 */
+  onBackpressureRecovered?: () => void;
   /** M_diag_brake：STT 熔断 → 触发指数退避，给 UI 红条 + 倒计时。 */
   onSttCircuitOpen?: (info: { retryAtMs: number; level: number }) => void;
   /** M_diag_brake：熔断退出（探测 chunk 拿到非 circuit_open 响应）。 */
@@ -46,7 +55,7 @@ export interface CaptureRouterHandlers {
 
 const FAIL_STREAK_THRESHOLD = 2; // 连续 2 次才报错，避免一次抖动也弹 toast
 const CIRCUIT_STREAK_THRESHOLD = 3; // 连续 3 次 circuit_open 才认为 STT 真的不可用
-const MAX_PENDING_CHUNKS = 4;
+const MAX_PENDING_CHUNKS = CAPTURE_QUEUE_CAPACITY;
 
 /**
  * 指数退避梯子（毫秒）。每次拿到稳定 circuit_open 升一级，最长 30s。
@@ -81,6 +90,31 @@ export function attachCaptureChunkRouter(
   let drainingGeneration: number | null = null;
   let disposed = false;
   let activeAbort: AbortController | null = null;
+  let transport = createCaptureTransportState(MAX_PENDING_CHUNKS);
+  let backpressureActive = false;
+
+  const emitTransport = (
+    patch: Partial<CaptureTransportState>,
+  ): void => {
+    transport = { ...transport, ...patch };
+    handlers?.onTransportStateChange?.({ ...transport });
+  };
+
+  const acknowledgeUpload = (): void => {
+    if (lostNotified) {
+      handlers?.onConnectionRecovered?.();
+      lostNotified = false;
+    }
+    failStreak = 0;
+    emitTransport({
+      inFlight: false,
+      acknowledged: transport.acknowledged + 1,
+      consecutiveFailures: 0,
+      lastSuccessfulUploadAt: Date.now(),
+      warning: backpressureActive ? "backpressure" : "none",
+    });
+    handlers?.onChunkPosted?.();
+  };
 
   const processChunk = async (
     wav: Blob,
@@ -111,6 +145,11 @@ export function attachCaptureChunkRouter(
     const seq = ++requestSeq;
     const controller = new AbortController();
     activeAbort = controller;
+    emitTransport({
+      inFlight: true,
+      sent: transport.sent + 1,
+      queueDepth: pending.length,
+    });
     try {
       const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId, {
         signal: controller.signal,
@@ -124,8 +163,8 @@ export function attachCaptureChunkRouter(
       }
 
       // M_diag_brake：熔断检测优先于成功路径
+      acknowledgeUpload();
       if (result.stt_status === "circuit_open") {
-        handlers?.onChunkPosted?.();
         if (seq < lastHealthySeq) {
           return;
         }
@@ -152,12 +191,6 @@ export function attachCaptureChunkRouter(
         circuitOpenUntil = 0;
         handlers?.onSttCircuitClosed?.();
       }
-      if (lostNotified) {
-        handlers?.onConnectionRecovered?.();
-        lostNotified = false;
-      }
-      failStreak = 0;
-      handlers?.onChunkPosted?.();
       if (result.ambient_stored) {
         if (result.ambient_text) {
           useStore.getState().addAmbientSegment({
@@ -194,6 +227,16 @@ export function attachCaptureChunkRouter(
         return;
       }
       failStreak += 1;
+      emitTransport({
+        inFlight: false,
+        consecutiveFailures: failStreak,
+        warning:
+          failStreak >= FAIL_STREAK_THRESHOLD
+            ? "upload_unavailable"
+            : backpressureActive
+              ? "backpressure"
+              : transport.warning,
+      });
       if (failStreak >= FAIL_STREAK_THRESHOLD && !lostNotified) {
         lostNotified = true;
         handlers?.onConnectionLost?.(e);
@@ -219,6 +262,17 @@ export function attachCaptureChunkRouter(
         }
       } finally {
         if (drainingGeneration === generation) drainingGeneration = null;
+        if (!disposed && pending.length === 0 && backpressureActive) {
+          backpressureActive = false;
+          emitTransport({
+            queueDepth: 0,
+            warning:
+              transport.warning === "backpressure"
+                ? "none"
+                : transport.warning,
+          });
+          handlers?.onBackpressureRecovered?.();
+        }
         if (!disposed && pending.length > 0) drain();
       }
     })();
@@ -238,6 +292,9 @@ export function attachCaptureChunkRouter(
     circuitStreak = 0;
     requestSeq = 0;
     lastHealthySeq = 0;
+    backpressureActive = false;
+    transport = createCaptureTransportState(MAX_PENDING_CHUNKS);
+    handlers?.onTransportStateChange?.({ ...transport });
     if (hadOpenCircuit) handlers?.onSttCircuitClosed?.();
   };
 
@@ -246,12 +303,21 @@ export function attachCaptureChunkRouter(
   const offChunk = audioCapture.onChunk((wav) => {
     if (disposed) return;
     if (pending.length >= MAX_PENDING_CHUNKS) {
+      backpressureActive = true;
+      emitTransport({
+        queueDepth: pending.length,
+        droppedBackpressure: transport.droppedBackpressure + 1,
+        warning: "backpressure",
+      });
       handlers?.onChunkDropped?.("backpressure");
       return;
     }
     pending.push(wav);
+    emitTransport({ queueDepth: pending.length });
     drain();
   });
+
+  handlers?.onTransportStateChange?.({ ...transport });
 
   return () => {
     disposed = true;

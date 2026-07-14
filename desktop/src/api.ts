@@ -106,7 +106,13 @@ export async function startMeeting(meetingId: string): Promise<void> {
  * 7 道门处理结果分流标签（与 backend/app/schemas/capture.py:SttStatus 一一对应）。
  * captureChunkRouter 用 `circuit_open` 触发优雅止血（指数退避停止上传）。
  */
-export type SttStatus = "ok" | "empty" | "failed" | "circuit_open" | "gated";
+export type SttStatus =
+  | "ok"
+  | "empty"
+  | "failed"
+  | "circuit_open"
+  | "gated"
+  | "unknown";
 
 export interface CaptureChunkResponse {
   ambient_stored: boolean;
@@ -118,6 +124,62 @@ export interface CaptureChunkResponse {
   meeting_segments: TranscriptSegment[];
   /** M_diag_brake：让前端能区分被哪道门吃了，仅 circuit_open 触发止血。 */
   stt_status: SttStatus;
+}
+
+const CAPTURE_STT_STATUSES: readonly SttStatus[] = [
+  "ok",
+  "empty",
+  "failed",
+  "circuit_open",
+  "gated",
+  "unknown",
+];
+
+function captureRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function finiteNonNegative(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+function nullableFiniteNonNegative(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  return finiteNonNegative(value);
+}
+
+function normalizeSttStatus(value: unknown): SttStatus {
+  return CAPTURE_STT_STATUSES.includes(value as SttStatus)
+    ? (value as SttStatus)
+    : "unknown";
+}
+
+export function normalizeCaptureChunkResponse(
+  value: unknown,
+): CaptureChunkResponse {
+  const body = captureRecord(value);
+  return {
+    ambient_stored: body.ambient_stored === true,
+    ambient_text: nullableString(body.ambient_text),
+    audio_ref: nullableString(body.audio_ref),
+    speaker_id: nullableString(body.speaker_id),
+    speaker_label: nullableString(body.speaker_label),
+    meeting_id: nullableString(body.meeting_id),
+    // Older backends did not send this business array. Missing means no
+    // overlay segments, never a transport failure after a successful HTTP ack.
+    meeting_segments: Array.isArray(body.meeting_segments)
+      ? (body.meeting_segments as TranscriptSegment[])
+      : [],
+    stt_status: normalizeSttStatus(body.stt_status),
+  };
 }
 
 export async function uploadCaptureChunk(
@@ -137,10 +199,8 @@ export async function uploadCaptureChunk(
     options.timeoutMs ?? CAPTURE_UPLOAD_TIMEOUT_MS,
     options.signal,
   );
-  // backend 在引入 stt_status 字段前的旧版本可能不返回；缺省视为 "ok"。
-  const parsed = await asJson<CaptureChunkResponse>(r);
-  if (!parsed.stt_status) parsed.stt_status = "ok";
-  return parsed;
+  const parsed = await asJson<unknown>(r);
+  return normalizeCaptureChunkResponse(parsed);
 }
 
 /**
@@ -168,6 +228,40 @@ export interface CaptureStats {
   last_rms: number;
   last_speech_ratio: number;
   last_gate_reason: string | null;
+  last_audio_stored_at?: string | null;
+  /** Process-lifetime admission observation fields; null means legacy backend. */
+  observed_audio_frames?: number | null;
+  accepted_speech_frames?: number | null;
+  accepted_speech_ratio?: number | null;
+  /** Monotonic stats cursor; null means legacy backend. */
+  stats_sequence?: number | null;
+}
+
+export function normalizeCaptureStats(value: unknown): CaptureStats {
+  const body = captureRecord(value);
+  return {
+    chunks_total: finiteNonNegative(body.chunks_total),
+    gated_rms: finiteNonNegative(body.gated_rms),
+    gated_low_speech: finiteNonNegative(body.gated_low_speech),
+    stt_circuit_open: finiteNonNegative(body.stt_circuit_open),
+    stt_failed: finiteNonNegative(body.stt_failed),
+    stt_empty: finiteNonNegative(body.stt_empty),
+    hallu_dropped: finiteNonNegative(body.hallu_dropped),
+    repeat_dropped: finiteNonNegative(body.repeat_dropped),
+    diarize_failed: finiteNonNegative(body.diarize_failed),
+    diarize_returned_none: finiteNonNegative(body.diarize_returned_none),
+    stored: finiteNonNegative(body.stored),
+    last_chunk_at: nullableString(body.last_chunk_at),
+    last_stored_at: nullableString(body.last_stored_at),
+    last_audio_stored_at: nullableString(body.last_audio_stored_at),
+    last_rms: finiteNonNegative(body.last_rms),
+    last_speech_ratio: finiteNonNegative(body.last_speech_ratio),
+    last_gate_reason: nullableString(body.last_gate_reason),
+    observed_audio_frames: nullableFiniteNonNegative(body.observed_audio_frames),
+    accepted_speech_frames: nullableFiniteNonNegative(body.accepted_speech_frames),
+    accepted_speech_ratio: nullableFiniteNonNegative(body.accepted_speech_ratio),
+    stats_sequence: nullableFiniteNonNegative(body.stats_sequence),
+  };
 }
 
 export async function getCaptureStats(
@@ -175,7 +269,8 @@ export async function getCaptureStats(
 ): Promise<CaptureStats> {
   const u = await apiUrl("/capture/stats");
   const r = await fetch(u, { cache: "no-store", signal: options.signal });
-  return asJson<CaptureStats>(r);
+  const parsed = await asJson<unknown>(r);
+  return normalizeCaptureStats(parsed);
 }
 
 export async function endMeeting(meetingId: string): Promise<void> {

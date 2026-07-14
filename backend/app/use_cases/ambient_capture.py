@@ -45,6 +45,25 @@ from app.use_cases.speaker_registry import SpeakerRegistry
 
 logger = logging.getLogger("echodesk.ambient")
 
+_ADMISSION_FRAME_SAMPLES = 16_000 * 20 // 1_000
+_STABLE_GATE_REASONS = frozenset(
+    {"ok", "rms_too_low", "speech_ratio_too_low", "unknown"},
+)
+
+
+def _complete_admission_frames(audio_bytes: bytes) -> int:
+    """Return complete 20ms/16kHz/int16 frames in the normalized PCM buffer."""
+    if _ADMISSION_FRAME_SAMPLES <= 0:
+        return 0
+    return max(0, len(audio_bytes) // 2 // _ADMISSION_FRAME_SAMPLES)
+
+
+def _stable_gate_reason(reason: str | None) -> str:
+    """Keep frontend admission labels on a small, additive allowlist."""
+    if reason in _STABLE_GATE_REASONS:
+        return reason
+    return "unknown"
+
 
 # ─── M_diag_brake：7 道门诊断 ────────────────────────────────────────────
 #
@@ -97,6 +116,13 @@ class AmbientStats:
     last_rms: float = 0.0  # 最近 chunk 的整段 int16 RMS
     last_speech_ratio: float = 0.0  # 最近 chunk 的 20ms 活跃帧比例
     last_gate_reason: str | None = None  # 最近 chunk 的前置门控结果（ok/rms_too_low/...）
+    # Process-lifetime in-memory admission window; construction/restart resets it.
+    # The denominator is complete 20ms frames from every normalized chunk; the
+    # numerator is active frames from chunks that passed the pre-STT gate.
+    observed_audio_frames: int = 0
+    accepted_speech_frames: int = 0
+    accepted_speech_ratio: float = 0.0  # zero denominator is explicitly 0.0
+    stats_sequence: int = 0  # increments once for every normalized ingest
 
 
 class _STTCircuitOpenError(RuntimeError):
@@ -664,6 +690,7 @@ class AmbientCapturePipeline:
         # M_diag_brake：每条 ingest_chunk 头部记一次（含所有末态），
         # 后端日志即使只看 chunks_total 也能粗略知道 firehose 多大。
         self._stats.chunks_total += 1
+        self._stats.stats_sequence += 1
         self._stats.last_chunk_at = captured_at
 
         # ── 前置音频门控（RMS + 帧级 VAD） ──
@@ -677,7 +704,25 @@ class AmbientCapturePipeline:
         )
         self._stats.last_rms = round(gate.rms, 2)
         self._stats.last_speech_ratio = round(gate.speech_ratio, 4)
-        self._stats.last_gate_reason = gate.reason
+        self._stats.last_gate_reason = _stable_gate_reason(gate.reason)
+        observed_frames = _complete_admission_frames(audio_bytes)
+        accepted_frames = 0
+        if gate.pass_ and observed_frames > 0:
+            accepted_frames = min(
+                observed_frames,
+                max(0, round(observed_frames * gate.speech_ratio)),
+            )
+        self._stats.observed_audio_frames += observed_frames
+        self._stats.accepted_speech_frames += accepted_frames
+        self._stats.accepted_speech_ratio = (
+            round(
+                self._stats.accepted_speech_frames
+                / self._stats.observed_audio_frames,
+                4,
+            )
+            if self._stats.observed_audio_frames > 0
+            else 0.0
+        )
         audio_duration_ms = int(len(audio_bytes) / max(1, sample_rate * 2) * 1000)
         active_speech_ms = round(audio_duration_ms * gate.speech_ratio)
 
