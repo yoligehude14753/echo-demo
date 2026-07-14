@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  normalizeClaimResponse,
   SyncHubClient,
   type SyncTransport,
   // @ts-expect-error Node's strip-types runner executes the source test directly.
@@ -34,7 +35,7 @@ test("fake Hub adapter covers claim persistence and duplicate push", async () =>
       calls.push({ path, auth, body: String(init.body ?? "") });
       if (path === "/hub/v1/pairings/claim") {
         return new Response(
-          JSON.stringify({ device_id: "hub-device", sync_token: "token-1", cursor: "cursor-1" }),
+          JSON.stringify({ device_id: "hub-device", sync_token: "token-1", cursor: 0 }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
@@ -50,7 +51,7 @@ test("fake Hub adapter covers claim persistence and duplicate push", async () =>
   const paired = loadSyncState(storage);
   assert.equal(paired.device_id, "hub-device");
   assert.equal(paired.sync_token, "token-1");
-  assert.equal(paired.cursor, "cursor-1");
+  assert.equal(paired.cursor, "0");
   assert.equal(JSON.parse(calls[0].body).device_id, deviceId);
   assert.equal(calls[0].auth, "session");
 
@@ -70,4 +71,24 @@ test("fake Hub adapter covers claim persistence and duplicate push", async () =>
   assert.equal(result.result, "duplicate");
   assert.equal(calls[1].auth, "sync");
   assert.equal(JSON.parse(calls[1].body).operation_id, "op-1");
+});
+
+test("claim cursor accepts canonical numbers and numeric strings", () => {
+  assert.equal(
+    normalizeClaimResponse({ device_id: "device", sync_token: "token", cursor: 0 }).cursor,
+    "0",
+  );
+  assert.equal(
+    normalizeClaimResponse({ device_id: "device", sync_token: "token", cursor: "7" }).cursor,
+    "7",
+  );
+});
+
+test("claim cursor rejects negative, fractional, non-finite, and non-numeric values", () => {
+  for (const cursor of [-1, 1.5, Number.NaN, "-1", "1.5", "NaN"]) {
+    assert.throws(
+      () => normalizeClaimResponse({ device_id: "device", sync_token: "token", cursor }),
+      /同步游标/,
+    );
+  }
 });

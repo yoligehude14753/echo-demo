@@ -326,6 +326,84 @@ async def test_remote_lan_websocket_is_rejected_before_accept(
 
 
 @pytest.mark.unit
+def test_non_public_sync_gateway_uses_claimed_device_principal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "sync-principal.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        skill_executor_build_dir=tmp_path / "skills",
+        public_demo_mode=False,
+        workspace_scan_on_startup=False,
+        tts_enabled=False,
+        diarizer_enabled=False,
+        web_search_enabled=False,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    result = asyncio.run(run_migrations(settings.db_path))
+    assert result.errors == []
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    deps_mod.reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    with TestClient(app) as client:
+        pairing = client.post("/hub/v1/pairings")
+        assert pairing.status_code == 201, pairing.text
+        claim = client.post(
+            "/hub/v1/pairings/claim",
+            json={
+                "pairing_code": pairing.json()["pairing_code"],
+                "device_id": "non-public-paired-device",
+                "device_name": "Paired device",
+                "platform": "test",
+            },
+        )
+        assert claim.status_code == 200, claim.text
+        sync_headers = {"X-Echo-Sync-Token": claim.json()["sync_token"]}
+
+        devices = client.get("/hub/v1/devices", headers=sync_headers)
+        assert devices.status_code == 200, devices.text
+        assert [item["device_id"] for item in devices.json()] == [
+            "non-public-paired-device"
+        ]
+
+        push = client.post(
+            "/hub/v1/sync/push",
+            headers=sync_headers,
+            json={
+                "operation_id": "sync:non-public:1",
+                "device_id": "non-public-paired-device",
+                "entity_type": "memory",
+                "entity_id": "memory-1",
+                "base_revision": 0,
+                "updated_at": "2026-07-14T10:00:00Z",
+                "payload": {"content": "paired identity"},
+            },
+        )
+        assert push.status_code == 200, push.text
+
+        invalid = client.get(
+            "/hub/v1/sync/changes",
+            headers={"X-Echo-Sync-Token": "sync_invalid"},
+        )
+        assert invalid.status_code == 401, invalid.text
+
+    local = AccessPolicy(settings, SessionStore(settings.db_path))
+    local_principal = asyncio.run(
+        local.resolve_http_principal(
+            method="GET",
+            path="/meetings",
+            client_host="127.0.0.1",
+        )
+    )
+    assert local_principal.device_id == "legacy-local"
+    deps_mod.reset_deps_for_test()
+
+
+@pytest.mark.unit
 def test_explicit_http_origin_requires_allowlist_while_missing_origin_remains_compatible(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

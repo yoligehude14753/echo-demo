@@ -478,7 +478,7 @@ class AccessPolicy:
             return
         raise AccessPolicyError("host-admin authorization required", status_code=403)
 
-    async def resolve_http_principal(
+    async def resolve_http_principal(  # noqa: PLR0911 - ordered auth boundary
         self,
         *,
         method: str,
@@ -497,14 +497,14 @@ class AccessPolicy:
                 x_echo_admin_token=x_echo_admin_token,
             )
             return local_principal()
+        if path.startswith(_SYNC_HUB_PATH_PREFIX) and sync_token.strip():
+            return await self.sessions.validate_sync_token(sync_token)
         if not self.settings.public_demo_mode:
             return local_principal()
         if method.upper() == "OPTIONS" or path in _PUBLIC_METADATA_PATHS:
             return local_principal()
         if self._has_admin_token(authorization, x_echo_admin_token):
             return local_principal()
-        if path.startswith(_SYNC_HUB_PATH_PREFIX) and sync_token.strip():
-            return await self.sessions.validate_sync_token(sync_token)
         share_target = self.share_target(path)
         if method.upper() == "GET" and share_target is not None and share_token:
             return await self.sessions.validate_resource_ticket(

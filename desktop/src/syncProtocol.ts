@@ -92,15 +92,45 @@ function requireSyncToken(state: SyncState): string {
   return state.sync_token;
 }
 
-function normalizeClaimResponse(value: PairingClaimResponse): PairingClaimResponse {
+function normalizeClaimCursor(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value === "number") {
+    if (Number.isFinite(value) && Number.isInteger(value) && value >= 0) {
+      return String(value);
+    }
+    throw new SyncApiError("配对响应包含无效的同步游标");
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    const numeric = text === "" ? Number.NaN : Number(text);
+    if (Number.isFinite(numeric) && Number.isInteger(numeric) && numeric >= 0) {
+      return String(numeric);
+    }
+  }
+  throw new SyncApiError("配对响应包含无效的同步游标");
+}
+
+export function normalizeClaimResponse(value: unknown): PairingClaimResponse {
+  const deviceId =
+    typeof value === "object" && value !== null
+      ? (value as { device_id?: unknown }).device_id
+      : undefined;
+  const syncToken =
+    typeof value === "object" && value !== null
+      ? (value as { sync_token?: unknown }).sync_token
+      : undefined;
   if (
-    typeof value?.device_id !== "string" ||
-    typeof value.sync_token !== "string" ||
-    (typeof value.cursor !== "string" && value.cursor !== null)
+    typeof deviceId !== "string" ||
+    typeof syncToken !== "string"
   ) {
     throw new SyncApiError("配对响应缺少有效的设备身份或同步凭证");
   }
-  return value;
+  const response = value as Partial<PairingClaimResponse>;
+  return {
+    device_id: deviceId,
+    sync_token: syncToken,
+    cursor: normalizeClaimCursor(response.cursor),
+  };
 }
 
 function normalizeChanges(value: SyncChangesResponse | SyncChange[]): SyncChangesResponse {
@@ -153,7 +183,7 @@ export class SyncHubClient {
       },
       "session",
     );
-    const result = normalizeClaimResponse(await readJson<PairingClaimResponse>(response));
+    const result = normalizeClaimResponse(await readJson<unknown>(response));
     setPairingState({ ...result, device_id: result.device_id }, this.storage);
     return result;
   }
