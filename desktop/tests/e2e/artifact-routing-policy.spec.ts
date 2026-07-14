@@ -93,6 +93,43 @@ test("missing packaged snapshot and legacy preload never fall back to localhost"
   expect(result.message).not.toContain("127.0.0.1");
 });
 
+test("public development without a public snapshot fails artifact routing", async ({
+  page,
+}) => {
+  const routing: RoutingFixture = {
+    runtimeMode: "development",
+    principalMode: "public",
+    role: "public_service",
+    source: "development-public-missing",
+    schemaVersion: 2,
+    backendBase: "",
+    publicServiceEndpoint: "",
+    pairedHubSyncGatewayEndpoint: null,
+    localDevDiagnosticEndpoint: null,
+  };
+  await installRoutingFixture(page, routing, "");
+  await page.goto("/");
+
+  const result = await page.evaluate(async () => {
+    const { artifactDownloadUrl } = await import("/src/api.ts");
+    try {
+      artifactDownloadUrl("artifact-123");
+      return { name: "", code: "", value: "" };
+    } catch (error) {
+      return {
+        name: error instanceof Error ? error.name : "",
+        code: (error as { code?: string }).code ?? "",
+        value: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+  expect(result).toMatchObject({
+    name: "BackendBasePolicyError",
+    code: "artifact_backend_snapshot_missing",
+  });
+  expect(result.value).not.toContain("/api/artifacts");
+});
+
 test("explicit diagnostic local artifact URL is allowed only for local role", async ({
   page,
 }) => {

@@ -373,8 +373,7 @@ function normalizeTranscriptionReadiness(
     (typeof value.reason_code !== "string" ||
       !TRANSCRIPTION_REASON_CODES.has(value.reason_code))
   ) {
-    // Unknown reason codes are intentionally reduced to a generic internal
-    // value; free-form backend text never crosses the client boundary.
+    return { status: "unknown", diagnostic: "readiness_unknown_malformed" };
   }
   if (
     "retry_after_s" in value &&

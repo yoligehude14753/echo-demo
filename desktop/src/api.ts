@@ -19,6 +19,7 @@ import {
   backendBase,
   backendBaseSnapshot,
   backendRole,
+  canUseRelativeBackendProxy,
   configuredBackendBase,
   isDefaultPublicBackend,
   isNativeMobile,
@@ -594,7 +595,21 @@ export function artifactDownloadUrl(artifactId: string): string {
       "artifact_hub_role_forbidden",
     );
   }
-  const base = backendBaseSnapshot();
+  let base: string | null;
+  try {
+    base = backendBaseSnapshot();
+  } catch (error) {
+    if (
+      error instanceof BackendBasePolicyError &&
+      error.code === "backend_endpoint_unavailable"
+    ) {
+      throw new BackendBasePolicyError(
+        "后端路由快照不可用，已停止产物下载",
+        "artifact_backend_snapshot_missing",
+      );
+    }
+    throw error;
+  }
   if (base === null) {
     throw new BackendBasePolicyError(
       "后端路由快照不可用，已停止产物下载",
@@ -602,9 +617,9 @@ export function artifactDownloadUrl(artifactId: string): string {
     );
   }
   if (!base) {
-    if (runtimeMode() === "release") {
+    if (!canUseRelativeBackendProxy()) {
       throw new BackendBasePolicyError(
-        "release 后端路由快照不可用，已停止产物下载",
+        "后端路由快照不可用，已停止产物下载",
         "artifact_backend_snapshot_missing",
       );
     }

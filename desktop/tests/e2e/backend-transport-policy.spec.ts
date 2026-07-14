@@ -1,6 +1,64 @@
 import { expect, test } from "@playwright/test";
 import { installEchoMock } from "./_mock";
 
+test("public development without a public endpoint fails API and WS closed", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.echo = {
+      ...(window.echo ?? {}),
+      isElectron: true,
+      isPublicDemo: true,
+      backendHost: "",
+      backendRouting: {
+        runtimeMode: "development",
+        principalMode: "public",
+        role: "public_service",
+        source: "test-missing-public",
+        schemaVersion: 2,
+        backendBase: "",
+        publicServiceEndpoint: "",
+        pairedHubSyncGatewayEndpoint: null,
+        localDevDiagnosticEndpoint: null,
+      },
+    };
+  });
+  await installEchoMock(page, { isElectron: true });
+  await page.goto("/");
+
+  const result = await page.evaluate(async () => {
+    const runtime = await import("/src/runtime.ts");
+    const read = async (resolve: () => Promise<string>) => {
+      try {
+        return { ok: true, value: await resolve() };
+      } catch (error) {
+        return {
+          ok: false,
+          name: error instanceof Error ? error.name : "",
+          code: (error as { code?: string }).code ?? "",
+        };
+      }
+    };
+    return {
+      api: await read(() => runtime.apiUrl("/bootstrap")),
+      ws: await read(() => runtime.backendWsUrl()),
+    };
+  });
+
+  expect(result).toEqual({
+    api: {
+      ok: false,
+      name: "BackendBasePolicyError",
+      code: "backend_endpoint_unavailable",
+    },
+    ws: {
+      ok: false,
+      name: "BackendBasePolicyError",
+      code: "backend_endpoint_unavailable",
+    },
+  });
+});
+
 test("Electron retries bootstrap after a transient unavailable failure", async ({ page }) => {
   await installEchoMock(page);
   await page.goto("/");
@@ -1836,6 +1894,65 @@ test("public session consumes layered readiness without transcription fallback",
       },
     },
   });
+  const allowedReasonCodes = [
+    "capacity_degraded",
+    "maintenance",
+    "temporarily_unavailable",
+    "unknown",
+  ] as const;
+  const allowedReasons: Record<string, unknown> = {};
+  for (const reason_code of allowedReasonCodes) {
+    allowedReasons[reason_code] = await inspectBootstrap({
+      schema_version: 1,
+      api_version: "0.3",
+      session_required: false,
+      capabilities: {
+        principal_sessions: true,
+        transcription_readiness: {
+          schema_version: 1,
+          status: "degraded",
+          accepting: true,
+          checked_at: "2099-01-01T00:00:00.000Z",
+          ttl_s: 3600,
+          reason_code,
+        },
+      },
+    });
+  }
+  const malformedReasonCases = {
+    nonString: await inspectBootstrap({
+      schema_version: 1,
+      api_version: "0.3",
+      session_required: false,
+      capabilities: {
+        principal_sessions: true,
+        transcription_readiness: {
+          schema_version: 1,
+          status: "ready",
+          accepting: true,
+          checked_at: "2099-01-01T00:00:00.000Z",
+          ttl_s: 3600,
+          reason_code: 17,
+        },
+      },
+    }),
+    unknown: await inspectBootstrap({
+      schema_version: 1,
+      api_version: "0.3",
+      session_required: false,
+      capabilities: {
+        principal_sessions: true,
+        transcription_readiness: {
+          schema_version: 1,
+          status: "degraded",
+          accepting: true,
+          checked_at: "2099-01-01T00:00:00.000Z",
+          ttl_s: 3600,
+          reason_code: "vendor_capacity_detail",
+        },
+      },
+    }),
+  };
   const mismatch = await inspectBootstrap({
     schema_version: 99,
     api_version: "0.3",
@@ -1878,6 +1995,8 @@ test("public session consumes layered readiness without transcription fallback",
     unavailable,
     malformed,
     stale,
+    allowedReasons,
+    malformedReasonCases,
     mismatch,
     unreachable,
     authCases,
@@ -1914,6 +2033,25 @@ test("public session consumes layered readiness without transcription fallback",
     ok: true,
     readiness: { transcription_readiness: "unknown" },
     diagnostic: "readiness_unknown_stale",
+  });
+  for (const reason_code of allowedReasonCodes) {
+    expect(result.allowedReasons[reason_code]).toMatchObject({
+      ok: true,
+      readiness: { transcription_readiness: "degraded" },
+      diagnostic: null,
+    });
+  }
+  expect(result.malformedReasonCases).toMatchObject({
+    nonString: {
+      ok: true,
+      readiness: { transcription_readiness: "unknown" },
+      diagnostic: "readiness_unknown_malformed",
+    },
+    unknown: {
+      ok: true,
+      readiness: { transcription_readiness: "unknown" },
+      diagnostic: "readiness_unknown_malformed",
+    },
   });
   expect(result.mismatch).toMatchObject({
     ok: false,

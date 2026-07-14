@@ -38,6 +38,40 @@ test("artifact URL policy has no local fallback", () => {
   assert.match(artifactFunction, /artifact_backend_snapshot_missing/);
 });
 
+test("public endpoint absence cannot use the relative development proxy", () => {
+  assert.match(runtime, /function canUseRelativeBackendProxy\(\)/);
+  const wsFunction = runtime
+    .split("export async function backendWsUrl", 2)[1]
+    .split("export function apiPath", 2)[0];
+  const apiFunction = runtime
+    .split("export async function apiUrl", 2)[1]
+    .split("\n}", 2)[0];
+  const artifactApi = readFileSync(
+    path.resolve(__dirname, "../../src/api.ts"),
+    "utf8",
+  );
+  const artifactFunction = artifactApi
+    .split("export function artifactDownloadUrl", 2)[1]
+    .split("\n}\n", 2)[0];
+  assert.match(wsFunction, /canUseRelativeBackendProxy\(\)/);
+  assert.match(apiFunction, /canUseRelativeBackendProxy\(\)/);
+  assert.match(artifactFunction, /canUseRelativeBackendProxy\(\)/);
+});
+
+test("invalid transcription reason codes map to unknown", () => {
+  const session = readFileSync(
+    path.resolve(__dirname, "../../src/session.ts"),
+    "utf8",
+  );
+  const reasonValidation = session
+    .split('"reason_code" in value', 2)[1]
+    .split('if (\n    "retry_after_s"', 2)[0];
+  assert.match(
+    reasonValidation,
+    /return \{ status: "unknown", diagnostic: "readiness_unknown_malformed" \}/,
+  );
+});
+
 test("installed Settings hides the mobile backend-origin editor", () => {
   assert.match(settings, /backendOriginEditable = !isPackagedElectronRenderer\(\)/);
   assert.match(

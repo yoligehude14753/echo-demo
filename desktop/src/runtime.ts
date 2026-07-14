@@ -320,6 +320,14 @@ export function backendRole(): EchoBackendRole {
   return principalMode() === "public" ? "public_service" : "local_dev_diagnostic";
 }
 
+export function canUseRelativeBackendProxy(): boolean {
+  const mode = runtimeMode();
+  return (
+    (mode === "development" || mode === "diagnostic") &&
+    backendRole() === "local_dev_diagnostic"
+  );
+}
+
 function normalizedElectronBackendBase(): string | null {
   const routing = window.echo?.backendRouting;
   if (routing?.role === "paired_hub_sync_gateway") {
@@ -327,6 +335,12 @@ function normalizedElectronBackendBase(): string | null {
   }
   const raw = window.echo?.backendHost ?? routing?.backendBase;
   const normalized = normalizeBackendBase(raw);
+  if (!normalized && routing?.role === "public_service") {
+    throw new BackendBasePolicyError(
+      "public service endpoint is unavailable",
+      "backend_endpoint_unavailable",
+    );
+  }
   if (!normalized) return null;
   if (routing?.role === "public_service") {
     if (!normalized.startsWith("https://")) {
@@ -610,7 +624,17 @@ export function configuredBackendBase(): string | null {
     return normalizedElectronBackendBase();
   }
   if (runtimeMode() === "release") return DEFAULT_ANDROID_BACKEND_BASE;
-  return envBackendBase() ?? storedBackendBase();
+  const configured = envBackendBase();
+  if (backendRole() === "public_service") {
+    if (configured && !configured.startsWith("https://")) {
+      throw new BackendBasePolicyError(
+        "public service endpoint must use HTTPS",
+        "backend_public_endpoint_invalid",
+      );
+    }
+    return configured;
+  }
+  return configured ?? storedBackendBase();
 }
 
 export function isPackagedElectronRenderer(): boolean {
@@ -629,7 +653,15 @@ export function isPackagedElectronRenderer(): boolean {
  * 此时异步 API 路径仍可通过 getBackendHost() 完成兼容解析。
  */
 export function backendBaseSnapshot(): string | null {
-  if (cachedBase !== null) return cachedBase;
+  if (cachedBase !== null) {
+    if (!cachedBase && !canUseRelativeBackendProxy()) {
+      throw new BackendBasePolicyError(
+        "backend endpoint is unavailable",
+        "backend_endpoint_unavailable",
+      );
+    }
+    return cachedBase;
+  }
 
   if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
     const bridgeHost = normalizedElectronBackendBase();
@@ -649,6 +681,12 @@ export function backendBaseSnapshot(): string | null {
     return cachedBase;
   }
 
+  if (!canUseRelativeBackendProxy()) {
+    throw new BackendBasePolicyError(
+      "backend endpoint is unavailable",
+      "backend_endpoint_unavailable",
+    );
+  }
   cachedBase = "";
   return cachedBase;
 }
@@ -883,7 +921,10 @@ export async function backendBase(): Promise<string> {
     const host = await window.echo?.getBackendHost?.();
     const normalized = normalizeBackendBase(host);
     if (!normalized) {
-      throw new BackendBasePolicyError("packaged backend route is unavailable");
+      throw new BackendBasePolicyError(
+        "backend endpoint is unavailable",
+        "backend_endpoint_unavailable",
+      );
     }
     cachedBase = normalized;
     return cachedBase;
@@ -903,11 +944,18 @@ export async function backendWsUrl(): Promise<string> {
   if (base) {
     return base.replace(/^http/, "ws") + "/ws/echo";
   }
-  // vite dev server：ws 走 host
-  if (typeof window !== "undefined" && window.location.protocol.startsWith("http")) {
+  if (
+    canUseRelativeBackendProxy() &&
+    typeof window !== "undefined" &&
+    window.location.protocol.startsWith("http")
+  ) {
+    // 仅显式 local development/diagnostic role 使用 Vite 相对代理。
     return `${window.location.protocol.replace("http", "ws")}//${window.location.host}/ws/echo`;
   }
-  throw new BackendBasePolicyError("backend WebSocket endpoint is unavailable");
+  throw new BackendBasePolicyError(
+    "backend endpoint is unavailable",
+    "backend_endpoint_unavailable",
+  );
 }
 
 export function apiPath(p: string): string {
@@ -921,5 +969,9 @@ export async function apiUrl(p: string): Promise<string> {
   if (base) {
     return base + (p.startsWith("/") ? p : `/${p}`);
   }
-  return apiPath(p);
+  if (canUseRelativeBackendProxy()) return apiPath(p);
+  throw new BackendBasePolicyError(
+    "backend endpoint is unavailable",
+    "backend_endpoint_unavailable",
+  );
 }
