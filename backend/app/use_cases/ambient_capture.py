@@ -23,6 +23,9 @@ from app.adapters.audio_gate import (
     normalize_transcript_text,
     pre_stt_gate,
 )
+from app.adapters.stt.contracts import ASRRequestContext
+from app.adapters.stt.errors import ASRError
+from app.adapters.stt.scheduler import ASRScheduler
 from app.config import Settings
 from app.memory import MemoryScope, MemoryService
 from app.ports.diarizer import DiarizerPort
@@ -162,12 +165,14 @@ class AmbientCapturePipeline:
         meeting_state: MeetingState | None = None,
         event_bus: EventBusPort | None = None,
         punctuator: TextPunctuatorPort | None = None,
+        asr_scheduler: ASRScheduler | None = None,
         governor: PrincipalGovernor | None = None,
         principal: Principal | None = None,
         memory: MemoryService | None = None,
     ) -> None:
         self._settings = settings
         self._stt = stt
+        self._asr_scheduler = asr_scheduler
         self._rag = rag
         self._meeting = meeting
         self._repo = repository
@@ -677,6 +682,7 @@ class AmbientCapturePipeline:
         *,
         sample_rate: int = 16_000,
         meeting_id: str | None = None,
+        asr_context: ASRRequestContext | None = None,
     ) -> CaptureChunkResult:
         if self._state is not None and not self._settings.public_demo_mode:
             await self._state.hydrate()
@@ -742,7 +748,11 @@ class AmbientCapturePipeline:
                 captured_dt,
             )
             try:
-                stt_segs = await self._safe_stt(audio_bytes, sample_rate)
+                stt_segs = await self._safe_stt(
+                    audio_bytes,
+                    sample_rate,
+                    context=asr_context,
+                )
             except _STTCircuitOpenError:
                 # firered 已熔断；不再发起请求 → 前端应进入指数退避
                 self._stats.stt_circuit_open += 1
@@ -1016,7 +1026,13 @@ class AmbientCapturePipeline:
             stt_status=stt_status,
         )
 
-    async def _safe_stt(self, audio_bytes: bytes, sample_rate: int) -> list:  # type: ignore[type-arg]
+    async def _safe_stt(
+        self,
+        audio_bytes: bytes,
+        sample_rate: int,
+        *,
+        context: ASRRequestContext | None = None,
+    ) -> list:  # type: ignore[type-arg]
         """STT 调用 + typed exception 分流（M_diag_brake）。
 
         调用方需要区分"熔断（前端必须停止上传）"和"单次失败（前端可继续）"。
@@ -1029,6 +1045,30 @@ class AmbientCapturePipeline:
         "circuit open" 的异常，就继续暴露为 circuit_open；FireRed adapter
         本身不再主动打开本地熔断器。
         """
+        if self._settings.asr_scheduler_enabled and self._asr_scheduler is not None:
+            principal = self._principal
+            incoming = context or ASRRequestContext(
+                request_id=f"ambient-{uuid.uuid4().hex}",
+            )
+            request_context = ASRRequestContext(
+                request_id=incoming.request_id,
+                idempotency_key=incoming.idempotency_key,
+                tenant_id=principal.tenant_id,
+                principal_id=principal.user_id,
+                device_id=principal.device_id,
+                deadline_s=min(
+                    incoming.deadline_s or self._settings.asr_job_deadline_s,
+                    self._settings.asr_job_deadline_s,
+                ),
+                capability=incoming.capability or "ambient_capture",
+                options=incoming.options,
+            )
+            return await self._asr_scheduler.transcribe(
+                audio_bytes,
+                sample_rate=sample_rate,
+                context=request_context,
+            )
+
         if self._stt_lock.locked():
             msg = "stt busy: previous request still running"
             logger.warning("ambient STT busy (audio saved): %s", msg)
@@ -1037,6 +1077,8 @@ class AmbientCapturePipeline:
         async with self._stt_lock:
             try:
                 return await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
+            except ASRError:
+                raise
             except Exception as e:
                 msg = str(e)
                 if "circuit open" in msg.lower():

@@ -153,6 +153,7 @@ export function attachCaptureChunkRouter(
     try {
       const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId, {
         signal: controller.signal,
+        idempotencyKey: `capture:${generation}:${seq}`,
       });
       if (
         disposed ||

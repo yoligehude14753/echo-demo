@@ -27,7 +27,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
 from app.adapters.repo.migrator import run_migrations
-from app.adapters.stt import start_asr_scheduler, stop_asr_scheduler
+from app.adapters.stt import get_asr_scheduler, start_asr_scheduler, stop_asr_scheduler
 from app.adapters.stt.errors import ASRError, as_http_error
 from app.api.admin import router as admin_router
 from app.api.agents import router as agents_router
@@ -900,6 +900,9 @@ def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
 
 
 def _bootstrap_payload(settings: Settings) -> dict[str, object]:
+    transcription_readiness = get_asr_scheduler(settings).readiness().to_public(
+        ttl_s=settings.asr_readiness_stale_after_s
+    )
     capabilities: dict[str, object] = {
         "principal_sessions": True,
         "owner_isolation": True,
@@ -909,6 +912,7 @@ def _bootstrap_payload(settings: Settings) -> dict[str, object]:
         "ws_hello_bearer": settings.public_demo_mode,
         "server_resync_rehydrate_required": True,
         "host_runtime_requires_admin": settings.public_demo_mode,
+        "transcription_readiness": transcription_readiness.model_dump(mode="json"),
     }
     response: dict[str, object] = {
         "schema_version": 1,
