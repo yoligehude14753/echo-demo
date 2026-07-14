@@ -17,6 +17,26 @@ from app.telemetry.contracts import (
 )
 
 SubjectKind = Literal["tenant", "user", "device"]
+MIN_HMAC_KEY_BYTES = 32
+MAX_HMAC_KEY_BYTES = 4096
+
+
+def _normalize_key_ring(keys: Mapping[str, bytes]) -> dict[str, bytes]:
+    normalized: dict[str, bytes] = {}
+    owners: dict[bytes, str] = {}
+    for version, secret in keys.items():
+        if not isinstance(version, str) or not re.fullmatch(KEY_VERSION_PATTERN, version):
+            raise ValueError("invalid telemetry key version")
+        if not isinstance(secret, bytes):
+            raise ValueError("telemetry key material must be bytes")
+        if not MIN_HMAC_KEY_BYTES <= len(secret) <= MAX_HMAC_KEY_BYTES:
+            raise ValueError("telemetry key material has invalid strength")
+        previous_version = owners.get(secret)
+        if previous_version is not None and previous_version != version:
+            raise ValueError("telemetry key material cannot be reused across versions")
+        normalized[version] = secret
+        owners[secret] = version
+    return normalized
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -39,11 +59,9 @@ class HmacPseudonymizer:
             raise ValueError("rotation_period_s must be positive")
         if not re.fullmatch(KEY_VERSION_PATTERN, current_key_version):
             raise ValueError("invalid current key version")
-        normalized = {version: bytes(secret) for version, secret in keys.items()}
+        normalized = _normalize_key_ring(keys)
         if current_key_version not in normalized or not normalized[current_key_version]:
             raise ValueError("current key version must have a non-empty secret")
-        if any(not re.fullmatch(KEY_VERSION_PATTERN, version) for version in normalized):
-            raise ValueError("invalid key version")
         self._keys = normalized
         self._current_key_version = current_key_version
         self._rotation_period_s = rotation_period_s
@@ -77,7 +95,23 @@ class HmacPseudonymizer:
         if secret is None:
             raise ValueError("unknown telemetry key version")
         epoch = self.epoch_for(occurred_at)
-        message = f"echodesk-telemetry-v1\0{subject_kind}\0{epoch}\0{value}".encode()
+        message = (
+            f"echodesk-telemetry-pseudonym-v1\0{version}\0{subject_kind}\0{epoch}\0{value}"
+        ).encode()
+        return hmac.new(secret, message, hashlib.sha256).hexdigest()
+
+    def _materialized_event_id(
+        self,
+        caller_event_id: str,
+        identity: PseudonymousIdentity,
+    ) -> str:
+        secret = self._keys[self._current_key_version]
+        message = (
+            "echodesk-telemetry-event-id-v1\0"
+            f"{self._current_key_version}\0{identity.epoch}\0"
+            f"{identity.tenant_pseudonym}\0{identity.user_pseudonym}\0"
+            f"{identity.device_pseudonym}\0{caller_event_id}"
+        ).encode()
         return hmac.new(secret, message, hashlib.sha256).hexdigest()
 
     def materialize(self, observation: TelemetryObservation) -> TelemetryEvent:
@@ -103,7 +137,7 @@ class HmacPseudonymizer:
             epoch=epoch,
         )
         return TelemetryEvent(
-            event_id=observation.event_id,
+            event_id=self._materialized_event_id(observation.event_id, pseudonymous),
             occurred_at=observation.occurred_at,
             identity=pseudonymous,
             operation=observation.operation,
@@ -118,10 +152,8 @@ class HmacPseudonymizer:
         )
 
     def rotate(self, *, key_version: str, secret: bytes) -> HmacPseudonymizer:
-        if not secret:
-            raise ValueError("rotated telemetry secret cannot be empty")
         keys = dict(self._keys)
-        keys[key_version] = bytes(secret)
+        keys[key_version] = secret
         return HmacPseudonymizer(
             keys,
             current_key_version=key_version,
@@ -129,4 +161,9 @@ class HmacPseudonymizer:
         )
 
 
-__all__ = ["HmacPseudonymizer", "SubjectKind"]
+__all__ = [
+    "MAX_HMAC_KEY_BYTES",
+    "MIN_HMAC_KEY_BYTES",
+    "HmacPseudonymizer",
+    "SubjectKind",
+]

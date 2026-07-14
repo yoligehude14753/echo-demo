@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from app.telemetry import (
@@ -25,8 +26,8 @@ from app.telemetry import (
 )
 from pydantic import ValidationError
 
-FAKE_SECRET = b"fixed-test-secret"
-ROTATED_SECRET = b"rotated-test-secret"
+FAKE_SECRET = b"fixed-test-secret-" + b"x" * 32
+ROTATED_SECRET = b"rotated-test-secret-" + b"y" * 32
 BASE_TIME = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
 
 
@@ -42,13 +43,18 @@ def observation(
     event_id: str,
     *,
     subject: str = "one",
+    tenant: str | None = None,
     occurred_at: datetime = BASE_TIME,
     success: bool = True,
     **overrides: object,
 ) -> TelemetryObservation:
     payload: dict[str, object] = {
         "event_id": event_id,
-        "identity": identity(subject),
+        "identity": TelemetryIdentityInput(
+            tenant_id=f"tenant-sentinel-{tenant or subject}",
+            user_id=f"user-sentinel-{subject}",
+            device_id=f"device-sentinel-{subject}",
+        ),
         "occurred_at": occurred_at,
         "success": success,
         "operation": "request",
@@ -128,6 +134,86 @@ def test_hmac_pseudonym_is_stable_domain_separated_and_has_no_raw_identity() -> 
     assert first.identity.epoch == pseudonymizer.epoch_for(BASE_TIME)
 
 
+def test_server_event_id_is_opaque_and_retry_stable() -> None:
+    pseudonymizer = HmacPseudonymizer(
+        {"v1": FAKE_SECRET},
+        current_key_version="v1",
+        rotation_period_s=60,
+    )
+    first = pseudonymizer.materialize(observation("caller-event-sentinel"))
+    retry = pseudonymizer.materialize(observation("caller-event-sentinel"))
+
+    assert first.event_id == retry.event_id
+    assert first.event_id != "caller-event-sentinel"
+    assert len(first.event_id) == 64
+    assert "caller-event-sentinel" not in first.model_dump_json()
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    "bad_secret",
+    (b"", b"short", bytearray(b"x" * 32), "text", b"x" * 4097),
+)
+def test_all_key_versions_fail_closed_for_invalid_material(bad_secret: object) -> None:
+    with pytest.raises(ValueError):
+        HmacPseudonymizer(
+            {"v1": FAKE_SECRET, "v2": cast(bytes, bad_secret)},
+            current_key_version="v1",
+            rotation_period_s=60,
+        )
+    with pytest.raises(ValueError):
+        HmacPseudonymizer(
+            {"v1": cast(bytes, bad_secret)},
+            current_key_version="v1",
+            rotation_period_s=60,
+        )
+
+
+def test_key_material_cannot_be_reused_across_versions() -> None:
+    with pytest.raises(ValueError, match="reused"):
+        HmacPseudonymizer(
+            {"v1": FAKE_SECRET, "v2": FAKE_SECRET},
+            current_key_version="v1",
+            rotation_period_s=60,
+        )
+
+
+def test_raw_input_repr_and_validation_errors_are_log_safe() -> None:
+    raw = "tenant-review-raw-sentinel"
+    raw_identity = TelemetryIdentityInput(
+        tenant_id=raw,
+        user_id="user-review-raw-sentinel",
+        device_id="device-review-raw-sentinel",
+    )
+    raw_observation = TelemetryObservation(
+        event_id="caller-review-sentinel",
+        identity=raw_identity,
+        success=True,
+    )
+
+    assert raw not in repr(raw_identity)
+    assert raw not in repr(raw_observation)
+    assert raw not in repr(TelemetryQuery())
+
+    with pytest.raises(ValidationError) as captured:
+        TelemetryObservation.model_validate(
+            {
+                "event_id": "caller-review-sentinel",
+                "identity": {"tenant_id": raw},
+                "success": True,
+            }
+        )
+    error = captured.value
+    assert raw not in str(error)
+    assert raw not in repr(error)
+    assert raw not in repr(error.errors(include_input=False))
+
+    with pytest.raises(ValidationError) as query_error:
+        TelemetryQuery.model_validate({"tenant_pseudonym": raw})
+    assert raw not in str(query_error.value)
+    assert raw not in repr(query_error.value)
+    assert raw not in repr(query_error.value.errors(include_input=False))
+
+
 def test_key_rotation_and_epoch_rotation_break_cross_period_linkability() -> None:
     pseudonymizer = HmacPseudonymizer(
         {"v1": FAKE_SECRET},
@@ -174,7 +260,9 @@ def test_forbidden_payload_fields_are_rejected(field_name: str) -> None:
 
 def test_raw_identity_is_rejected_by_query_and_delete_contracts() -> None:
     with pytest.raises(ValidationError):
-        TelemetryQuery(user_pseudonym="user-sentinel-one")
+        TelemetryQuery.model_validate({"user_pseudonym": "user-sentinel-one"})
+    with pytest.raises(ValidationError):
+        TelemetryQuery.model_validate({"device_pseudonym": "device-sentinel-one"})
     with pytest.raises(ValidationError):
         TelemetryDeleteRequest(user_pseudonym="user-sentinel-one")
 
@@ -231,6 +319,8 @@ async def test_aggregate_contains_required_metrics_and_k_suppression() -> None:
     await telemetry.record(
         observation(
             "evt-failure",
+            subject="two",
+            tenant="one",
             success=False,
             end_to_end_latency_ms=300,
             queue_wait_ms=40,
@@ -246,6 +336,7 @@ async def test_aggregate_contains_required_metrics_and_k_suppression() -> None:
     assert aggregate.success_count == 1
     assert aggregate.failure_count == 1
     assert aggregate.success_rate == 0.5
+    assert aggregate.distinct_user_count == 2
     assert aggregate.failure_reason_counts == (
         FailureReasonCount(reason=FailureReason.UNKNOWN, event_count=1),
     )
@@ -255,7 +346,34 @@ async def test_aggregate_contains_required_metrics_and_k_suppression() -> None:
     assert aggregate.audio_duration_event_count == 2
     assert suppressed == ()
     serialized = aggregate.model_dump_json()
-    assert all(raw not in serialized for raw in ("tenant-sentinel-one", "user-sentinel-one"))
+    assert all(
+        raw not in serialized
+        for raw in ("tenant-sentinel-one", "user-sentinel-one", "user_pseudonym")
+    )
+
+
+@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+async def test_repeated_events_for_one_user_do_not_satisfy_k() -> None:
+    telemetry = adapter(k_threshold=2)
+    await telemetry.record(observation("evt-repeat-one"))
+    await telemetry.record(observation("evt-repeat-two"))
+
+    assert await telemetry.query(TelemetryQuery(k_threshold=2)) == ()
+
+
+@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+async def test_k_distinct_users_satisfy_cohort_threshold_without_individual_keys() -> None:
+    telemetry = adapter(k_threshold=2)
+    await telemetry.record(observation("evt-cohort-one", subject="one"))
+    await telemetry.record(observation("evt-cohort-two", subject="two", tenant="one"))
+
+    result = await telemetry.query(TelemetryQuery(k_threshold=2))
+
+    assert len(result) == 1
+    aggregate = result[0]
+    assert aggregate.distinct_user_count == 2
+    assert "user_pseudonym" not in aggregate.model_fields_set
+    assert "device_pseudonym" not in aggregate.model_fields_set
 
 
 @pytest.mark.asyncio  # type: ignore[untyped-decorator]

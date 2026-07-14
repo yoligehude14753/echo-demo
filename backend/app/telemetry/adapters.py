@@ -34,8 +34,6 @@ _AggregateKey = tuple[
     int,
     str,
     str,
-    str,
-    str,
     TelemetryOperation,
     TelemetryPlatform,
     str,
@@ -55,8 +53,6 @@ def _event_key(event: TelemetryEvent) -> _AggregateKey:
         identity.epoch,
         identity.key_version,
         identity.tenant_pseudonym,
-        identity.user_pseudonym,
-        identity.device_pseudonym,
         event.operation,
         event.platform,
         event.app_version,
@@ -82,8 +78,6 @@ def _matches_identity_and_dimensions(event: TelemetryEvent, query: TelemetryQuer
     return all(
         (
             query.tenant_pseudonym is None or identity.tenant_pseudonym == query.tenant_pseudonym,
-            query.user_pseudonym is None or identity.user_pseudonym == query.user_pseudonym,
-            query.device_pseudonym is None or identity.device_pseudonym == query.device_pseudonym,
             query.operation is None or event.operation == query.operation,
             query.platform is None or event.platform == query.platform,
             query.app_version is None or event.app_version == query.app_version,
@@ -112,6 +106,7 @@ def _make_aggregate(key: _AggregateKey, events: Iterable[TelemetryEvent]) -> Tel
     event_list = tuple(events)
     request_count = len(event_list)
     success_count = sum(event.success for event in event_list)
+    distinct_users = {event.identity.user_pseudonym for event in event_list}
     audio_events = tuple(event for event in event_list if event.audio_duration_ms is not None)
     failure_reason_counts: dict[FailureReason, int] = {}
     for event in event_list:
@@ -122,12 +117,11 @@ def _make_aggregate(key: _AggregateKey, events: Iterable[TelemetryEvent]) -> Tel
         epoch=key[0],
         key_version=key[1],
         tenant_pseudonym=key[2],
-        user_pseudonym=key[3],
-        device_pseudonym=key[4],
-        operation=key[5],
-        platform=key[6],
-        app_version=key[7],
-        provider=key[8],
+        operation=key[3],
+        platform=key[4],
+        app_version=key[5],
+        provider=key[6],
+        distinct_user_count=len(distinct_users),
         failure_reason_counts=tuple(
             FailureReasonCount(reason=reason, event_count=count)
             for reason, count in sorted(
@@ -223,7 +217,8 @@ class InMemoryAggregateTelemetry(TelemetryPort):
         aggregates = (
             _make_aggregate(key, events)
             for key, events in sorted(groups.items(), key=lambda item: item[0])
-            if len(events) >= max(self._k_threshold, query.k_threshold)
+            if len({event.identity.user_pseudonym for event in events})
+            >= max(self._k_threshold, query.k_threshold)
         )
         return tuple(aggregates)
 

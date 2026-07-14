@@ -112,11 +112,16 @@ PROVIDER_REGISTRY: Final[frozenset[TelemetryProvider]] = frozenset(TelemetryProv
 class TelemetryIdentityInput(BaseModel):
     """Server-validated identity material accepted only at the adapter boundary."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
+        str_strip_whitespace=True,
+    )
 
-    tenant_id: str = Field(min_length=1, max_length=256)
-    user_id: str = Field(min_length=1, max_length=256)
-    device_id: str = Field(min_length=1, max_length=256)
+    tenant_id: str = Field(min_length=1, max_length=256, repr=False)
+    user_id: str = Field(min_length=1, max_length=256, repr=False)
+    device_id: str = Field(min_length=1, max_length=256, repr=False)
 
 
 class PseudonymousIdentity(BaseModel):
@@ -134,7 +139,12 @@ class PseudonymousIdentity(BaseModel):
 class _TelemetryOutcome(BaseModel):
     """Shared allowlisted metrics and outcome fields."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
+        str_strip_whitespace=True,
+    )
 
     operation: TelemetryOperation = TelemetryOperation.UNKNOWN
     platform: TelemetryPlatform = TelemetryPlatform.UNKNOWN
@@ -167,9 +177,9 @@ class TelemetryObservation(_TelemetryOutcome):
     is never retained in the materialized event.
     """
 
-    event_id: str = Field(pattern=OPAQUE_TOKEN_PATTERN)
+    event_id: str = Field(pattern=OPAQUE_TOKEN_PATTERN, repr=False)
     occurred_at: datetime = Field(default_factory=utc_now)
-    identity: TelemetryIdentityInput
+    identity: TelemetryIdentityInput = Field(repr=False)
 
     @field_validator("occurred_at")
     @classmethod
@@ -198,12 +208,11 @@ class TelemetryAggregate(BaseModel):
     epoch: int = Field(ge=0)
     key_version: str = Field(pattern=KEY_VERSION_PATTERN)
     tenant_pseudonym: str = Field(pattern=PSEUDONYM_PATTERN)
-    user_pseudonym: str = Field(pattern=PSEUDONYM_PATTERN)
-    device_pseudonym: str = Field(pattern=PSEUDONYM_PATTERN)
     operation: TelemetryOperation
     platform: TelemetryPlatform
     app_version: str
     provider: TelemetryProvider
+    distinct_user_count: int = Field(ge=1)
     failure_reason_counts: tuple[FailureReasonCount, ...] = ()
     request_count: int = Field(ge=1)
     success_count: int = Field(ge=0)
@@ -223,15 +232,18 @@ class TelemetryAggregate(BaseModel):
 class TelemetryQuery(BaseModel):
     """Typed query; filters are pseudonyms or allowlisted enums only."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
+        str_strip_whitespace=True,
+    )
 
     start_at: datetime | None = None
     end_at: datetime | None = None
     epoch: int | None = Field(default=None, ge=0)
     key_version: str | None = Field(default=None, pattern=KEY_VERSION_PATTERN)
     tenant_pseudonym: str | None = Field(default=None, pattern=PSEUDONYM_PATTERN)
-    user_pseudonym: str | None = Field(default=None, pattern=PSEUDONYM_PATTERN)
-    device_pseudonym: str | None = Field(default=None, pattern=PSEUDONYM_PATTERN)
     operation: TelemetryOperation | None = None
     platform: TelemetryPlatform | None = None
     app_version: str | None = None
@@ -259,7 +271,7 @@ class TelemetryQuery(BaseModel):
 class TelemetryDeleteRequest(BaseModel):
     """Typed deletion hook addressed only by pseudonymous identity."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     tenant_pseudonym: str | None = Field(default=None, pattern=PSEUDONYM_PATTERN)
     user_pseudonym: str | None = Field(default=None, pattern=PSEUDONYM_PATTERN)
