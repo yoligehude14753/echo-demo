@@ -110,7 +110,13 @@ export class SyncWorkerCore {
         if (response.result === "conflict") {
           result.conflicts += 1;
           if (!response.current) {
-            throw new Error("同步冲突响应缺少服务端当前值");
+            failSyncOperation(
+              item.operation_id,
+              "同步冲突响应缺少服务端当前值",
+              this.storage,
+              { retryable: false },
+            );
+            continue;
           }
           this.apply(response.current);
         } else if (response.result === "duplicate") {

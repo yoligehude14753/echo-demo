@@ -60,7 +60,11 @@ export class SyncWorkerController {
     this.storage = options.storage;
     this.socketFactory = options.socketFactory ?? defaultSocketFactory;
     this.applyChange = options.applyChange ?? ((change) => {
-      useStore.getState().applyRemoteSyncEntity(change.entity_type, change.payload);
+      useStore.getState().applyRemoteSyncEntity(
+        change.entity_type,
+        change.payload,
+        change.revision,
+      );
     });
     this.core = new SyncWorkerCore(
       options.client ?? new SyncHubClient(),

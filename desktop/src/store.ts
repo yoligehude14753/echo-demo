@@ -20,7 +20,9 @@ import { shouldHideSharedPublicHistory } from "@/runtime";
 import {
   enqueueSyncOperation,
   ensureSyncDeviceId,
+  knownSyncEntityRevision,
   makeOperationId,
+  rememberSyncEntityRevision,
   SYNC_MEMORY_EVENT,
   type SyncEntityType,
 } from "@/syncState";
@@ -124,7 +126,11 @@ interface Store {
     segments: TranscriptSegment[],
     opts?: { startedAt?: string; select?: boolean },
   ): void;
-  applyRemoteSyncEntity(entityType: SyncEntityType, payload: Record<string, unknown>): void;
+  applyRemoteSyncEntity(
+    entityType: SyncEntityType,
+    payload: Record<string, unknown>,
+    revision?: number,
+  ): void;
   /**
    * 清空全局 outputs 列表（顶栏「清空」按钮）。
    * 不清 failedArtifacts —— 它们有独立 dismiss，避免一键覆盖失败上下文。
@@ -335,11 +341,11 @@ function speakerSetFromSegments(
 
 function queueLocalTranscriptSegments(
   meetingId: string,
-  baseRevision: number,
   segments: TranscriptSegment[],
 ): void {
   for (const segment of segments) {
     const entityId = `${meetingId}:${segment.start_ms}:${segment.end_ms}`;
+    const baseRevision = knownSyncEntityRevision("transcript_segment", entityId) ?? 0;
     enqueueSyncOperation({
       operation_id: makeOperationId("transcript_segment", entityId),
       device_id: ensureSyncDeviceId(),
@@ -716,7 +722,6 @@ export const useStore = create<Store>((set, get) => ({
     const cur = get().meetings[meetingId] ?? emptyMeeting(meetingId);
     const existing = new Set(cur.segments.map(segmentKey));
     const localSegments = segments.filter((segment) => !existing.has(segmentKey(segment)));
-    const baseRevision = get().meetingEventSeq[meetingId] ?? 0;
     set((s) => {
       const current = s.meetings[meetingId] ?? emptyMeeting(meetingId);
       const mergedSegments = mergeSegments(current.segments, segments);
@@ -744,14 +749,21 @@ export const useStore = create<Store>((set, get) => ({
         },
       };
     });
-    queueLocalTranscriptSegments(meetingId, baseRevision, localSegments);
+    queueLocalTranscriptSegments(meetingId, localSegments);
   },
 
-  applyRemoteSyncEntity: (entityType, payload) => {
+  applyRemoteSyncEntity: (entityType, payload, revision) => {
     if (entityType === "transcript_segment") {
       const meetingId = typeof payload.meeting_id === "string" ? payload.meeting_id : null;
       if (!meetingId) return;
       const segment = payload as unknown as TranscriptSegment;
+      if (revision !== undefined) {
+        rememberSyncEntityRevision(
+          entityType,
+          `${meetingId}:${segment.start_ms}:${segment.end_ms}`,
+          revision,
+        );
+      }
       const current = get().meetings[meetingId] ?? emptyMeeting(meetingId);
       const segments = mergeSegments(current.segments, [segment]);
       const speakers = speakerSetFromSegments(current.speakers, segments);

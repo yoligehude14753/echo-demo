@@ -6,10 +6,12 @@ import {
   enqueueSyncOperation,
   ensureSyncDeviceId,
   failSyncOperation,
+  knownSyncEntityRevision,
   loadSyncState,
   makeOperationId,
   markSyncOperationSending,
   pendingSyncOperations,
+  rememberSyncEntityRevision,
   resetSyncStateForTest,
   setPairingState,
   type SyncStorage,
@@ -117,6 +119,18 @@ test("canonical numeric zero cursor stays in the string state representation", (
   assert.equal(loadSyncState(storage).cursor, "0");
 });
 
+test("remote canonical revisions survive reload and older revisions do not overwrite them", () => {
+  const storage = new MemoryStorage();
+  rememberSyncEntityRevision("transcript_segment", "meeting-1:0:1000", 7, storage);
+  rememberSyncEntityRevision("transcript_segment", "meeting-1:0:1000", 3, storage);
+
+  assert.equal(
+    knownSyncEntityRevision("transcript_segment", "meeting-1:0:1000", storage),
+    7,
+  );
+  assert.equal(loadSyncState(storage).canonical_revisions["transcript_segment:meeting-1:0:1000"], 7);
+});
+
 test("outbox deduplicates operation ids and failed sends are retryable", () => {
   const storage = new MemoryStorage();
   const deviceId = ensureSyncDeviceId(storage);
@@ -135,6 +149,7 @@ test("outbox deduplicates operation ids and failed sends are retryable", () => {
   const failed = loadSyncState(storage);
   assert.equal(failed.status, "failed");
   assert.equal(failed.outbox[0]?.retry_count, 1);
+  assert.equal(failed.outbox[0]?.retryable, true);
   assert.equal(pendingSyncOperations(20, storage).length, 1);
 
   completeSyncOperation(item.operation_id, storage);

@@ -157,13 +157,17 @@ test("invalid cursor or server snapshot_required falls back to full snapshot", a
   assert.deepEqual(applied, ["meeting-1:from-snapshot"]);
 });
 
-test("conflict without current keeps the outbox item and failed status survives receive", async () => {
+test("conflict without current is terminal failed and is not retried automatically", async () => {
   const storage = new MemoryStorage();
   setPairingState({ sync_token: "token", cursor: "c1" }, storage);
   const deviceId = ensureSyncDeviceId(storage);
   const item = queueItem(deviceId, "op-conflict-without-current", storage);
+  let pushCalls = 0;
   const client: SyncClientLike = {
-    push: async () => ({ result: "conflict" }),
+    push: async () => {
+      pushCalls += 1;
+      return { result: "conflict" };
+    },
     changes: async () => ({ changes: [], cursor: "c2" }),
     snapshot: async () => ({ changes: [], cursor: "snapshot" }),
   };
@@ -178,4 +182,9 @@ test("conflict without current keeps the outbox item and failed status survives 
   assert.equal(state.outbox[0]?.operation_id, item.operation_id);
   assert.equal(state.outbox[0]?.status, "failed");
   assert.equal(state.outbox[0]?.retry_count, 1);
+  assert.equal(state.outbox[0]?.retryable, false);
+
+  const retry = await worker.pushBatch();
+  assert.equal(retry.attempted, 0);
+  assert.equal(pushCalls, 1);
 });

@@ -17,6 +17,7 @@ export interface SyncOutboxItem {
   status: SyncOutboxStatus;
   retry_count: number;
   last_error: string | null;
+  retryable?: boolean;
 }
 
 export interface SyncState {
@@ -30,6 +31,7 @@ export interface SyncState {
   last_error: string | null;
   last_synced_at: string | null;
   outbox: SyncOutboxItem[];
+  canonical_revisions: Record<string, number>;
 }
 
 export interface SyncStorage {
@@ -97,6 +99,7 @@ function defaultState(): SyncState {
     last_error: null,
     last_synced_at: null,
     outbox: [],
+    canonical_revisions: {},
   };
 }
 
@@ -144,7 +147,19 @@ function normalizeOutboxItem(value: unknown, deviceId: string): SyncOutboxItem |
         ? Math.max(0, item.retry_count)
         : 0,
     last_error: typeof item.last_error === "string" ? item.last_error : null,
+    retryable: item.retryable !== false,
   };
+}
+
+function normalizeCanonicalRevisions(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const revisions: Record<string, number> = {};
+  for (const [key, revision] of Object.entries(value)) {
+    if (Number.isSafeInteger(revision) && revision >= 0) {
+      revisions[key] = revision;
+    }
+  }
+  return revisions;
 }
 
 function normalizeState(value: unknown): SyncState | null {
@@ -171,6 +186,7 @@ function normalizeState(value: unknown): SyncState | null {
     last_error: typeof parsed.last_error === "string" ? parsed.last_error : null,
     last_synced_at: typeof parsed.last_synced_at === "string" ? parsed.last_synced_at : null,
     outbox,
+    canonical_revisions: normalizeCanonicalRevisions(parsed.canonical_revisions),
   };
 }
 
@@ -232,6 +248,10 @@ export function setPairingState(
       platform: pairing.platform ?? state.platform,
       status: "synced",
       last_error: null,
+      canonical_revisions:
+        pairing.device_id && pairing.device_id !== state.device_id
+          ? {}
+          : state.canonical_revisions,
       outbox: state.outbox.map((item) =>
         item.device_id === state.device_id && pairing.device_id
           ? { ...item, device_id: pairing.device_id }
@@ -263,7 +283,13 @@ export function enqueueSyncOperation(
       result = existing;
       return state;
     }
-    result = { ...item, status: "pending", retry_count: 0, last_error: null };
+    result = {
+      ...item,
+      status: "pending",
+      retry_count: 0,
+      last_error: null,
+      retryable: true,
+    };
     return { ...state, outbox: [...state.outbox, result] };
   }, storage);
   return result;
@@ -274,7 +300,7 @@ export function pendingSyncOperations(
   storage: SyncStorage | null = browserStorage(),
 ): SyncOutboxItem[] {
   return loadSyncState(storage).outbox
-    .filter((item) => item.status === "pending" || item.status === "failed")
+    .filter((item) => item.status === "pending" || (item.status === "failed" && item.retryable))
     .slice(0, Math.max(0, limit));
 }
 
@@ -314,6 +340,7 @@ export function failSyncOperation(
   operationId: string,
   error: string,
   storage: SyncStorage | null = browserStorage(),
+  options: { retryable?: boolean } = {},
 ): SyncState {
   return updateSyncState(
     (state) => ({
@@ -322,10 +349,50 @@ export function failSyncOperation(
       last_error: error,
       outbox: state.outbox.map((item) =>
         item.operation_id === operationId
-          ? { ...item, status: "failed", retry_count: item.retry_count + 1, last_error: error }
+          ? {
+              ...item,
+              status: "failed",
+              retry_count: item.retry_count + 1,
+              last_error: error,
+              retryable: options.retryable ?? true,
+            }
           : item,
       ),
     }),
+    storage,
+  );
+}
+
+export function syncEntityRevisionKey(entityType: SyncEntityType, entityId: string): string {
+  return `${entityType}:${entityId}`;
+}
+
+export function knownSyncEntityRevision(
+  entityType: SyncEntityType,
+  entityId: string,
+  storage: SyncStorage | null = browserStorage(),
+): number | null {
+  const revision = loadSyncState(storage).canonical_revisions[syncEntityRevisionKey(entityType, entityId)];
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+}
+
+export function rememberSyncEntityRevision(
+  entityType: SyncEntityType,
+  entityId: string,
+  revision: number,
+  storage: SyncStorage | null = browserStorage(),
+): SyncState {
+  if (!Number.isSafeInteger(revision) || revision < 0) return loadSyncState(storage);
+  const key = syncEntityRevisionKey(entityType, entityId);
+  return updateSyncState(
+    (state) => {
+      const current = state.canonical_revisions[key];
+      if (current !== undefined && current >= revision) return state;
+      return {
+        ...state,
+        canonical_revisions: { ...state.canonical_revisions, [key]: revision },
+      };
+    },
     storage,
   );
 }
