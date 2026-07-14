@@ -111,10 +111,10 @@ test("pairing token and cursor survive restart and unpair keeps outbox", () => {
 
 test("canonical numeric zero cursor stays in the string state representation", () => {
   const storage = new MemoryStorage();
-  setPairingState({ sync_token: "sync-token", cursor: "0" }, storage);
-  const state = loadSyncState(storage);
+  const state = setPairingState({ sync_token: "sync-token", cursor: 0 }, storage);
   assert.equal(state.cursor, "0");
   assert.equal(typeof state.cursor, "string");
+  assert.equal(loadSyncState(storage).cursor, "0");
 });
 
 test("outbox deduplicates operation ids and failed sends are retryable", () => {

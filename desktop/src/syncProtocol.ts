@@ -1,5 +1,6 @@
 import {
   loadSyncState,
+  normalizeSyncCursor,
   setPairingState,
   type SyncEntityType,
   type SyncOutboxItem,
@@ -7,6 +8,8 @@ import {
   type SyncStorage,
   // @ts-expect-error Node's strip-types runner executes the source test directly.
 } from "./syncState.ts";
+
+export { normalizeSyncCursor };
 
 export interface PairingClaimResponse {
   device_id: string;

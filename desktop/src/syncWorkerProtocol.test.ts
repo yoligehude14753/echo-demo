@@ -44,6 +44,24 @@ test("recognizes ping, hello and snapshot-required control frames", () => {
   );
 });
 
+test("normalizes numeric zero WS cursors and rejects invalid cursors", () => {
+  assert.equal(parseSyncFrame('{"type":"server_hello","cursor":0}')?.cursor, "0");
+  const change = parseSyncFrame(
+    JSON.stringify({
+      entity_type: "transcript_segment",
+      entity_id: "meeting-1:segment-1",
+      payload: { text: "hello" },
+      cursor: 0,
+    }),
+  );
+  assert.equal(change?.cursor, "0");
+  assert.equal(change?.change?.cursor, "0");
+
+  for (const cursor of ["", -1, 1.5]) {
+    assert.equal(parseSyncFrame(JSON.stringify({ type: "server_hello", cursor })), null);
+  }
+});
+
 test("rejects malformed and oversized frames", () => {
   assert.equal(parseSyncFrame("not json"), null);
   assert.equal(parseSyncFrame(JSON.stringify({ type: "unknown" })), null);

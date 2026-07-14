@@ -3,6 +3,7 @@ import {
   failSyncOperation,
   loadSyncState,
   markSyncOperationSending,
+  normalizeSyncCursor,
   pendingSyncOperations,
   updateSyncState,
   type SyncOutboxItem,
@@ -58,13 +59,14 @@ function applyChanges(
   apply: SyncChangeApplier,
   storage?: SyncStorage,
 ): number {
+  const cursor = normalizeSyncCursor(result.cursor);
   for (const change of result.changes) apply(change);
   updateSyncState(
     (state) => {
       const failedItem = state.outbox.find((item) => item.status === "failed");
       return {
         ...state,
-        cursor: result.cursor ?? state.cursor,
+        cursor: cursor ?? state.cursor,
         status: failedItem ? "failed" : "synced",
         last_error: failedItem?.last_error ?? null,
         last_synced_at: new Date().toISOString(),

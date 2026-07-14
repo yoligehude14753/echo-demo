@@ -43,6 +43,22 @@ export const SYNC_STATE_EVENT = "echodesk:sync-state-change";
 export const SYNC_MEMORY_EVENT = "echodesk:sync-memory-change";
 export const SYNC_SCHEMA = 1;
 
+export function normalizeSyncCursor(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error("同步 cursor 必须是非负整数或非空字符串");
+    }
+    return String(value);
+  }
+  if (typeof value === "string") {
+    const cursor = value.trim();
+    if (!cursor) throw new Error("同步 cursor 不能为空");
+    return cursor;
+  }
+  throw new Error("同步 cursor 类型无效");
+}
+
 function browserStorage(): SyncStorage | null {
   if (typeof window === "undefined") return null;
   try {
@@ -91,11 +107,11 @@ function validEntityType(value: unknown): value is SyncEntityType {
 }
 
 function normalizeStoredCursor(value: unknown): string | null {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0) {
-    return String(value);
+  try {
+    return normalizeSyncCursor(value);
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function normalizeOutboxItem(value: unknown, deviceId: string): SyncOutboxItem | null {
@@ -199,18 +215,19 @@ export function setPairingState(
   pairing: {
     device_id?: string;
     sync_token: string;
-    cursor: string | null;
+    cursor: string | number | null;
     device_name?: string;
     platform?: "android" | "web";
   },
   storage: SyncStorage | null = browserStorage(),
 ): SyncState {
+  const cursor = normalizeSyncCursor(pairing.cursor);
   return updateSyncState(
     (state) => ({
       ...state,
       device_id: pairing.device_id ?? state.device_id,
       sync_token: pairing.sync_token,
-      cursor: pairing.cursor,
+      cursor,
       device_name: pairing.device_name ?? state.device_name,
       platform: pairing.platform ?? state.platform,
       status: "synced",
