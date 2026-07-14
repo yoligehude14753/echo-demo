@@ -24,11 +24,9 @@ from app.adapters.audio_gate import (
     normalize_transcript_text,
     pre_stt_gate,
 )
-from app.adapters.stt.contracts import ASRRequestContext
-from app.adapters.stt.errors import ASRError
-from app.adapters.stt.scheduler import ASRScheduler
 from app.config import Settings
 from app.memory import MemoryScope, MemoryService
+from app.ports.asr import ASRErrorBase, ASRRequestContext, ASRSchedulerPort, ASRTelemetryPort
 from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
 from app.ports.punctuator import TextPunctuatorPort
@@ -43,7 +41,6 @@ from app.security.governor import PrincipalGovernor, QuotaExceeded, QuotaReserva
 from app.security.models import Principal
 from app.security.scope import scoped_directory
 from app.services.audio import normalize_audio_bytes, pcm_to_wav
-from app.telemetry.runtime import TelemetryRuntime
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
@@ -167,8 +164,8 @@ class AmbientCapturePipeline:
         meeting_state: MeetingState | None = None,
         event_bus: EventBusPort | None = None,
         punctuator: TextPunctuatorPort | None = None,
-        asr_scheduler: ASRScheduler | None = None,
-        telemetry: TelemetryRuntime | None = None,
+        asr_scheduler: ASRSchedulerPort | None = None,
+        telemetry: ASRTelemetryPort | None = None,
         governor: PrincipalGovernor | None = None,
         principal: Principal | None = None,
         memory: MemoryService | None = None,
@@ -1067,16 +1064,16 @@ class AmbientCapturePipeline:
             request_context = self._server_asr_context(context)
             try:
                 result = await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
-            except ASRError as error:
-                await self._record_legacy_telemetry(
-                    request_context,
-                    audio_bytes=audio_bytes,
-                    sample_rate=sample_rate,
-                    started_at=started_at,
-                    error=error,
-                )
-                raise
             except Exception as e:
+                if isinstance(e, ASRErrorBase):
+                    await self._record_legacy_telemetry(
+                        request_context,
+                        audio_bytes=audio_bytes,
+                        sample_rate=sample_rate,
+                        started_at=started_at,
+                        error=e,
+                    )
+                    raise
                 msg = str(e)
                 if "circuit open" in msg.lower():
                     logger.warning("ambient STT circuit open (audio saved): %s", e)

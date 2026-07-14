@@ -14,9 +14,15 @@ from app.adapters.stt.errors import (
     as_http_error,
 )
 from app.adapters.stt.scheduler import ASRProviderBinding, ASRScheduler, ASRSchedulerConfig
+from app.ports.asr import ASRErrorBase
 from app.schemas.meeting import TranscriptSegment
 
 VALID_AUDIO = b"\x01\x00" * 80
+
+
+@pytest.mark.unit
+def test_typed_asr_errors_inherit_from_port_boundary() -> None:
+    assert issubclass(ASRRateLimited, ASRErrorBase)
 
 
 class FaultProvider:

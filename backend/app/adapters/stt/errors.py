@@ -5,8 +5,10 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from app.ports.asr import ASRErrorBase
 
-class ASRError(RuntimeError):
+
+class ASRError(ASRErrorBase):
     """Base class for errors that may cross an ASR HTTP boundary."""
 
     status_code = 503
