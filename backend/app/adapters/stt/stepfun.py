@@ -11,8 +11,10 @@ import asyncio
 import base64
 import json
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Iterable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -27,6 +29,7 @@ from app.adapters.stt.errors import (
     ASRProviderMidstreamError,
     ASRProviderPermanentError,
     ASRProviderProtocolError,
+    ASRProviderRateLimited,
     ASRProviderSessionCapacity,
     ASRProviderTransientError,
 )
@@ -140,15 +143,18 @@ class StepFunSSEOneShotSTT:
             "Accept": "text/event-stream",
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=self._settings.timeout_s,
-                trust_env=False,
-            ) as client, client.stream(
-                "POST",
-                self._settings.sse_url,
-                headers=headers,
-                json=payload,
-            ) as response:
+            async with (
+                httpx.AsyncClient(
+                    timeout=self._settings.timeout_s,
+                    trust_env=False,
+                ) as client,
+                client.stream(
+                    "POST",
+                    self._settings.sse_url,
+                    headers=headers,
+                    json=payload,
+                ) as response,
+            ):
                 self._raise_http_status(response)
                 return await self._parse_sse(
                     response.aiter_lines(),
@@ -168,11 +174,37 @@ class StepFunSSEOneShotSTT:
         status_code = int(getattr(response, "status_code", 200))
         if status_code in {401, 403}:
             raise ASRProviderAuthError()
+        if status_code == 429:
+            raise ASRProviderRateLimited(
+                retry_after_s=StepFunSSEOneShotSTT._retry_after_s(response),
+            )
         if status_code >= 500:
             raise ASRProviderTransientError()
         if status_code >= 400:
             raise ASRProviderPermanentError()
         response.raise_for_status()
+
+    @staticmethod
+    def _retry_after_s(response: Any) -> float:
+        """Parse bounded provider retry advice without exposing response data."""
+
+        headers = getattr(response, "headers", {})
+        raw_value = headers.get("Retry-After") if hasattr(headers, "get") else None
+        if raw_value is None:
+            return 1.0
+        try:
+            value = float(str(raw_value).strip())
+        except (TypeError, ValueError):
+            try:
+                retry_at = parsedate_to_datetime(str(raw_value).strip())
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=UTC)
+                value = (retry_at - datetime.now(UTC)).total_seconds()
+            except (TypeError, ValueError, OverflowError):
+                return 1.0
+        if value < 0:
+            return 0.0
+        return min(value, 60.0)
 
     async def _parse_sse(
         self,
@@ -237,8 +269,11 @@ class StepFunWebSocketStreamSTT:
 
     transport = "websocket_stream"
 
-    def __init__(self, settings: StepFunSettings) -> None:
+    def __init__(
+        self, settings: StepFunSettings, *, clock: Callable[[], float] = time.monotonic
+    ) -> None:
         self._settings = settings
+        self._clock = clock
         self._session_slots = asyncio.Semaphore(settings.max_sessions)
 
     async def transcribe(
@@ -270,7 +305,7 @@ class StepFunWebSocketStreamSTT:
             raise ASRProviderSessionCapacity(retry_after_s=1.0) from error
 
         audio_sent = False
-        started = time.monotonic()
+        started = self._clock()
         try:
             headers = {"Authorization": f"Bearer {self._settings.api_key}"}
             async with websockets.connect(
@@ -443,10 +478,15 @@ class StepFunWebSocketStreamSTT:
         await self._wait_with_deadline(queue.put(item), started)
 
     async def _wait_with_deadline(self, awaitable: Any, started: float) -> Any:
-        return await asyncio.wait_for(awaitable, timeout=self._remaining(started))
+        remaining = self._remaining(started)
+        if remaining <= 0:
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise ASRDeadlineExceeded()
+        return await asyncio.wait_for(awaitable, timeout=remaining)
 
     def _remaining(self, started: float) -> float:
-        return max(0.001, self._settings.max_duration_s - (time.monotonic() - started))
+        return self._settings.max_duration_s - (self._clock() - started)
 
 
 __all__ = [

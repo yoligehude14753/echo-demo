@@ -6,6 +6,7 @@ contains no provider SDK types and no sync-outbox concepts.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
@@ -42,6 +43,8 @@ class ASRRequestContext:
     principal_id: str | None = None
     device_id: str | None = None
     deadline_s: float | None = None
+    capability: str | None = None
+    options: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.request_id.strip():
@@ -52,6 +55,10 @@ class ASRRequestContext:
             raise ValueError("idempotency_key is too long")
         if self.deadline_s is not None and self.deadline_s <= 0:
             raise ValueError("deadline_s must be positive")
+        if self.capability is not None and not self.capability.strip():
+            raise ValueError("capability must not be blank")
+        if any(not str(key).strip() for key in self.options):
+            raise ValueError("ASR option names must not be blank")
 
     @property
     def scope_key(self) -> tuple[str, str, str]:

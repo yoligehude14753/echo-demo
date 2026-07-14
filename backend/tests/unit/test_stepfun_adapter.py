@@ -6,7 +6,12 @@ import json
 from collections.abc import AsyncIterator
 
 import pytest
-from app.adapters.stt.errors import ASRProviderMidstreamError
+from app.adapters.stt.errors import (
+    ASRDeadlineExceeded,
+    ASRProviderMidstreamError,
+    ASRProviderRateLimited,
+    ASRProviderTransientError,
+)
 from app.adapters.stt.stepfun import (
     StepFunSettings,
     StepFunSSEOneShotSTT,
@@ -17,9 +22,16 @@ VALID_AUDIO = b"\x01\x00" * 80
 
 
 class FakeSSEResponse:
-    def __init__(self, lines: list[str], *, status_code: int = 200) -> None:
+    def __init__(
+        self,
+        lines: list[str],
+        *,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.lines = lines
         self.status_code = status_code
+        self.headers = headers or {}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -99,7 +111,9 @@ def settings() -> StepFunSettings:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_sse_one_shot_is_distinct_and_returns_final_plus_typed_partials(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sse_one_shot_is_distinct_and_returns_final_plus_typed_partials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     response = FakeSSEResponse(
         [
             "event: transcript.text.delta",
@@ -169,7 +183,9 @@ async def test_websocket_stream_has_session_admission_and_cumulative_delta_seman
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_websocket_midstream_error_is_fail_closed_without_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_websocket_midstream_error_is_fail_closed_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     websocket = FakeWebSocket(
         [
             {"type": "session.created"},
@@ -184,6 +200,56 @@ async def test_websocket_midstream_error_is_fail_closed_without_fallback(monkeyp
 
     with pytest.raises(ASRProviderMidstreamError):
         await adapter.stream([VALID_AUDIO], sample_rate=16_000, request_id="req-midstream")
+
+
+@pytest.mark.unit
+def test_sse_provider_429_is_retryable_and_retry_after_is_bounded() -> None:
+    response = FakeSSEResponse([], status_code=429, headers={"Retry-After": "999999"})
+
+    with pytest.raises(ASRProviderRateLimited) as error:
+        StepFunSSEOneShotSTT._raise_http_status(response)
+
+    assert error.value.machine_code == "provider_rate_limited"
+    assert error.value.status_code == 503
+    assert error.value.retryable is True
+    assert error.value.retry_after_s == 60.0
+    assert "stepfun" not in error.value.safe_detail.lower()
+    assert "provider status" not in error.value.safe_detail.lower()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_websocket_deadline_boundaries_do_not_send_after_expiry() -> None:
+    websocket = FakeWebSocket([])
+    expired = StepFunWebSocketStreamSTT(settings(), clock=lambda: 11.0)
+    with pytest.raises(ASRDeadlineExceeded):
+        await expired._send_json(websocket, {"type": "must-not-send"}, started=10.0)
+    assert websocket.sent == []
+
+    past = StepFunWebSocketStreamSTT(settings(), clock=lambda: 10.0)
+    with pytest.raises(ASRDeadlineExceeded):
+        await past._send_json(websocket, {"type": "must-not-send"}, started=9.0)
+    assert websocket.sent == []
+
+    normal = StepFunWebSocketStreamSTT(settings(), clock=lambda: 10.5)
+    await normal._send_json(websocket, {"type": "send-ok"}, started=10.0)
+    assert json.loads(websocket.sent[-1])["type"] == "send-ok"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_websocket_deadline_failure_releases_session_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = StepFunWebSocketStreamSTT(settings(), clock=lambda: 10.0)
+
+    def connect(*_args: object, **_kwargs: object) -> FakeWebSocketContext:
+        raise RuntimeError("connect failed")
+
+    monkeypatch.setattr("app.adapters.stt.stepfun.websockets.connect", connect)
+    with pytest.raises(ASRProviderTransientError):
+        await adapter.stream([VALID_AUDIO], sample_rate=16_000)
+    assert adapter._session_slots._value == 1
 
 
 @pytest.mark.unit

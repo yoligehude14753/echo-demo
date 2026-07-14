@@ -8,8 +8,10 @@ import pytest
 from app.adapters.stt.contracts import ASRRequestContext
 from app.adapters.stt.errors import (
     ASRDeadlineExceeded,
+    ASRProviderRateLimited,
     ASRProviderTransientError,
     ASRRateLimited,
+    as_http_error,
 )
 from app.adapters.stt.scheduler import ASRProviderBinding, ASRScheduler, ASRSchedulerConfig
 from app.schemas.meeting import TranscriptSegment
@@ -79,7 +81,14 @@ def make_scheduler(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider_error", [ASRRateLimited(retry_after_s=1.0), ASRProviderTransientError()])
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        ASRRateLimited(retry_after_s=1.0),
+        ASRProviderRateLimited(retry_after_s=2.0),
+        ASRProviderTransientError(),
+    ],
+)
 async def test_provider_429_or_5xx_transient_failure_falls_back_once(
     provider_error: Exception,
 ) -> None:
@@ -91,6 +100,37 @@ async def test_provider_429_or_5xx_transient_failure_falls_back_once(
         assert result[0].text == "ok"
         assert primary.calls == 1
         assert fallback.calls == 1
+    finally:
+        await scheduler.close(grace_period_s=0.2)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_provider_rate_limit_without_fallback_is_external_503_with_bounded_retry_after() -> (
+    None
+):
+    primary = FaultProvider(error=ASRProviderRateLimited(retry_after_s=120.0))
+    scheduler = ASRScheduler(
+        {"primary": ASRProviderBinding(name="primary", adapter=primary)},
+        ASRSchedulerConfig(
+            enabled=True,
+            eligible_providers=("primary",),
+            max_concurrency=1,
+            queue_size=0,
+            job_deadline_s=0.2,
+            max_attempts=1,
+            scope_max_concurrency=2,
+            scope_rate_limit_per_minute=20,
+        ),
+    )
+    try:
+        with pytest.raises(ASRProviderRateLimited) as error:
+            await scheduler.transcribe(VALID_AUDIO, context=ctx("fault-no-fallback"))
+        status, payload, headers = as_http_error(error.value)
+        assert status == 503
+        assert payload["error"]["code"] == "provider_rate_limited"
+        assert headers["Retry-After"] == "60"
+        assert primary.calls == 1
     finally:
         await scheduler.close(grace_period_s=0.2)
 

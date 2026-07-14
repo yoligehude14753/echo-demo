@@ -16,6 +16,7 @@ from app.adapters.stt.contracts import ASRRequestContext
 from app.adapters.stt.errors import (
     ASRAudioRejected,
     ASRDeadlineExceeded,
+    ASRIdempotencyConflict,
     ASRNoEligibleProvider,
     ASRProviderTransientError,
     ASRQueueFull,
@@ -116,6 +117,8 @@ def context(
     key: str | None = None,
     tenant: str | None = "tenant-a",
     deadline_s: float | None = None,
+    capability: str | None = None,
+    options: dict[str, object] | None = None,
 ) -> ASRRequestContext:
     return ASRRequestContext(
         request_id="request-1",
@@ -124,6 +127,8 @@ def context(
         principal_id="principal-a",
         device_id=None,
         deadline_s=deadline_s,
+        capability=capability,
+        options=options or {},
     )
 
 
@@ -326,6 +331,73 @@ async def test_idempotency_key_deduplicates_concurrent_success() -> None:
         assert one == two
         assert provider.calls == 1
         assert scheduler.metrics_snapshot()["idempotency_hits_total"] == 1
+        record = next(iter(scheduler._idempotency.values()))
+        assert hasattr(record, "fingerprint")
+        assert not hasattr(record, "audio_bytes")
+        assert not hasattr(record, "job")
+    finally:
+        await close_scheduler(scheduler)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_kwargs", "request_context"),
+    [
+        ({"audio_bytes": b"\x02\x00" * 80}, {}),
+        ({"sample_rate": 8_000}, {}),
+        ({"language": "en"}, {}),
+        ({}, {"options": {"temperature": 0.2}}),
+        ({}, {"capability": "websocket_stream"}),
+    ],
+)
+async def test_idempotency_conflict_is_typed_and_never_requeues_or_calls_provider(
+    request_kwargs: dict[str, object],
+    request_context: dict[str, object],
+) -> None:
+    provider = FakeSTT()
+    scheduler = ASRScheduler(
+        {"primary": binding("primary", provider)},
+        config(eligible_providers=("primary",)),
+    )
+    try:
+        await scheduler.transcribe(VALID_AUDIO, context=context(key="conflict"))
+        with pytest.raises(ASRIdempotencyConflict) as conflict:
+            await scheduler.transcribe(
+                request_kwargs.pop("audio_bytes", VALID_AUDIO),
+                context=context(key="conflict", **request_context),
+                **request_kwargs,
+            )
+        assert conflict.value.status_code == 409
+        assert conflict.value.machine_code == "asr_idempotency_conflict"
+        assert provider.calls == 1
+        assert scheduler.metrics_snapshot()["accepted_total"] == 1
+        assert scheduler.metrics_snapshot()["idempotency_conflict_total"] == 1
+    finally:
+        await close_scheduler(scheduler)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_idempotency_conflict_during_inflight_job_does_not_call_provider_twice() -> None:
+    provider = FakeSTT(delay_s=0.06)
+    scheduler = ASRScheduler(
+        {"primary": binding("primary", provider)},
+        config(eligible_providers=("primary",), max_concurrency=2),
+    )
+    try:
+        first = asyncio.create_task(
+            scheduler.transcribe(VALID_AUDIO, context=context(key="inflight"))
+        )
+        await asyncio.sleep(0.01)
+        with pytest.raises(ASRIdempotencyConflict):
+            await scheduler.transcribe(
+                VALID_AUDIO,
+                sample_rate=8_000,
+                context=context(key="inflight"),
+            )
+        await first
+        assert provider.calls == 1
     finally:
         await close_scheduler(scheduler)
 
@@ -448,6 +520,7 @@ async def test_readiness_internal_and_public_projections_are_distinct_and_truthf
 def test_asr_errors_map_to_stable_http_status_and_retry_after() -> None:
     cases: list[tuple[Exception, int, str, bool]] = [
         (ASRAudioRejected(), 422, "asr_audio_rejected", False),
+        (ASRIdempotencyConflict(), 409, "asr_idempotency_conflict", False),
         (ASRRateLimited(retry_after_s=2.0), 429, "asr_rate_limited", True),
         (ASRQueueFull(retry_after_s=1.0), 503, "asr_queue_full", True),
         (ASRDeadlineExceeded(), 504, "asr_deadline_exceeded", False),

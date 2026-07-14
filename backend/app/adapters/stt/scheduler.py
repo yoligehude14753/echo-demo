@@ -7,7 +7,9 @@ share queue, cursor, retry, or backpressure state with the sync outbox.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import math
 import time
 import uuid
@@ -28,6 +30,7 @@ from app.adapters.stt.errors import (
     ASRAudioRejected,
     ASRDeadlineExceeded,
     ASRError,
+    ASRIdempotencyConflict,
     ASRNoEligibleProvider,
     ASRProviderPermanentError,
     ASRProviderProtocolError,
@@ -149,9 +152,15 @@ class _QueuedJob:
 
 
 @dataclass(frozen=True, slots=True)
+class _IdempotencyHandle:
+    future: asyncio.Future[list[TranscriptSegment]]
+
+
+@dataclass(frozen=True, slots=True)
 class _IdempotencyRecord:
+    fingerprint: str
     expires_at: float
-    job: _QueuedJob
+    future: asyncio.Future[list[TranscriptSegment]]
 
 
 class ASRScheduler:
@@ -191,6 +200,7 @@ class ASRScheduler:
             "failed_total": 0,
             "rejected_total": 0,
             "idempotency_hits_total": 0,
+            "idempotency_conflict_total": 0,
             "provider_failover_total": 0,
             "deadline_total": 0,
             "cancelled_total": 0,
@@ -254,6 +264,8 @@ class ASRScheduler:
         sample_rate: int = 16_000,
         language: str = "zh",
         context: ASRRequestContext | None = None,
+        options: Mapping[str, object] | None = None,
+        capability: str | None = None,
     ) -> list[TranscriptSegment]:
         """Admit and await one ASR job without blocking the event loop."""
 
@@ -268,11 +280,13 @@ class ASRScheduler:
             sample_rate=sample_rate,
             language=language,
             context=request_context,
+            options=options,
+            capability=capability,
         )
         try:
             return await asyncio.shield(job.future)
         except asyncio.CancelledError:
-            if owns_job:
+            if owns_job and isinstance(job, _QueuedJob):
                 job.cancelled = True
                 if job.provider_task is not None and not job.provider_task.done():
                     job.provider_task.cancel()
@@ -288,12 +302,24 @@ class ASRScheduler:
         sample_rate: int,
         language: str,
         context: ASRRequestContext,
-    ) -> tuple[_QueuedJob, bool]:
+        options: Mapping[str, object] | None,
+        capability: str | None,
+    ) -> tuple[_QueuedJob | _IdempotencyHandle, bool]:
         now = self._clock()
-        deadline_s = min(context.deadline_s or self._config.job_deadline_s, self._config.job_deadline_s)
+        deadline_s = min(
+            context.deadline_s or self._config.job_deadline_s, self._config.job_deadline_s
+        )
         deadline_at = now + deadline_s
         scope_key = context.scope_key
         idempotency_key = context.idempotency_key
+        fingerprint = self._request_fingerprint(
+            audio_bytes,
+            sample_rate=sample_rate,
+            language=language,
+            context=context,
+            options=options,
+            capability=capability,
+        )
         async with self._state_lock:
             self._prune_idempotency(now)
             if self._closing:
@@ -302,11 +328,13 @@ class ASRScheduler:
             if not self._config.enabled:
                 self._metrics["rejected_total"] += 1
                 raise ASRSchedulerDisabled()
-            if idempotency_key is not None:
-                record = self._idempotency.get((scope_key, idempotency_key))
-                if record is not None:
-                    self._metrics["idempotency_hits_total"] += 1
-                    return record.job, False
+            reused = self._reuse_idempotent_job(
+                scope_key,
+                idempotency_key,
+                fingerprint,
+            )
+            if reused is not None:
+                return reused
 
             retry_after = self._no_eligible_retry_after(now)
             if not self._has_eligible_candidate(now):
@@ -352,8 +380,9 @@ class ASRScheduler:
             scope.request_times.append(now)
             if idempotency_key is not None:
                 self._idempotency[(scope_key, idempotency_key)] = _IdempotencyRecord(
+                    fingerprint=fingerprint,
                     expires_at=now + max(60.0, self._config.job_deadline_s * 4),
-                    job=job,
+                    future=job.future,
                 )
             self._metrics["accepted_total"] += 1
             return job, True
@@ -398,7 +427,9 @@ class ASRScheduler:
             if selected is None:
                 if last_error is not None:
                     raise ASRNoEligibleProvider(retry_after_s=1.0) from last_error
-                raise ASRNoEligibleProvider(retry_after_s=self._no_eligible_retry_after(self._clock()))
+                raise ASRNoEligibleProvider(
+                    retry_after_s=self._no_eligible_retry_after(self._clock())
+                )
             name, binding = selected
             tried.add(name)
             try:
@@ -485,7 +516,12 @@ class ASRScheduler:
                     continue
                 binding = self._providers.get(name)
                 state = self._states.get(name)
-                if binding is None or state is None or not binding.enabled or not binding.auth_ready:
+                if (
+                    binding is None
+                    or state is None
+                    or not binding.enabled
+                    or not binding.auth_ready
+                ):
                     continue
                 if state.circuit_state == "open":
                     if state.open_until is None or now < state.open_until:
@@ -584,12 +620,12 @@ class ASRScheduler:
                 eligible=is_eligible,
                 auth_ready=binding.auth_ready,
             )
-        available = max(0, self._config.max_concurrency + self._config.queue_size - self._accepted_count)
+        available = max(
+            0, self._config.max_concurrency + self._config.queue_size - self._accepted_count
+        )
         return ASRReadinessSnapshot(
             scheduler_accepting=(
-                self._config.enabled
-                and not self._closing
-                and self._has_configured_candidate()
+                self._config.enabled and not self._closing and self._has_configured_candidate()
             ),
             queue_capacity=self._config.max_concurrency + self._config.queue_size,
             queue_available=available,
@@ -599,7 +635,9 @@ class ASRScheduler:
             checked_at=self._last_controlled_probe_at,
             probe_ok=self._last_controlled_probe_ok,
             providers=provider_readiness,
-            reason_code="asr_probe_not_run" if self._last_controlled_probe_at is None else "asr_probe_recorded",
+            reason_code="asr_probe_not_run"
+            if self._last_controlled_probe_at is None
+            else "asr_probe_recorded",
             retry_after_s=self._no_eligible_retry_after(now),
         )
 
@@ -696,6 +734,62 @@ class ASRScheduler:
         expired = [key for key, record in self._idempotency.items() if record.expires_at <= now]
         for key in expired:
             del self._idempotency[key]
+
+    def _reuse_idempotent_job(
+        self,
+        scope_key: tuple[str, str, str],
+        idempotency_key: str | None,
+        fingerprint: str,
+    ) -> tuple[_QueuedJob | _IdempotencyHandle, bool] | None:
+        if idempotency_key is None:
+            return None
+        record = self._idempotency.get((scope_key, idempotency_key))
+        if record is None:
+            return None
+        if record.fingerprint != fingerprint:
+            self._metrics["idempotency_conflict_total"] += 1
+            raise ASRIdempotencyConflict()
+        self._metrics["idempotency_hits_total"] += 1
+        return _IdempotencyHandle(record.future), False
+
+    def _request_fingerprint(
+        self,
+        audio_bytes: bytes,
+        *,
+        sample_rate: int,
+        language: str,
+        context: ASRRequestContext,
+        options: Mapping[str, object] | None,
+        capability: str | None,
+    ) -> str:
+        canonical = json.dumps(
+            {
+                "audio_sha256": hashlib.sha256(audio_bytes).hexdigest(),
+                "sample_rate": sample_rate,
+                "language": language,
+                "capability": capability or context.capability or "scheduler",
+                "options": self._canonicalize_options(
+                    options if options is not None else context.options
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
+
+    @classmethod
+    def _canonicalize_options(cls, value: object) -> object:
+        if isinstance(value, Mapping):
+            return {
+                str(key): cls._canonicalize_options(item)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        if isinstance(value, (list, tuple)):
+            return [cls._canonicalize_options(item) for item in value]
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return value
+        raise ValueError("ASR options must be JSON-compatible")
 
     @staticmethod
     def _as_safe_provider_error(error: Exception) -> ASRError:

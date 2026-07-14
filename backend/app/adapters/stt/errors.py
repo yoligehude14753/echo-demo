@@ -26,6 +26,12 @@ class ASRAudioRejected(ASRError):
     default_detail = "Audio was rejected by ASR admission."
 
 
+class ASRIdempotencyConflict(ASRError):
+    status_code = 409
+    machine_code = "asr_idempotency_conflict"
+    default_detail = "ASR idempotency key conflicts with an existing request."
+
+
 class ASRRateLimited(ASRError):
     status_code = 429
     machine_code = "asr_rate_limited"
@@ -72,6 +78,15 @@ class ASRProviderTransientError(ASRError):
     status_code = 503
     machine_code = "asr_provider_transient"
     default_detail = "ASR provider returned a transient failure."
+    retryable = True
+
+
+class ASRProviderRateLimited(ASRError):
+    """Provider-side rate limiting, distinct from caller admission quota."""
+
+    status_code = 503
+    machine_code = "provider_rate_limited"
+    default_detail = "ASR provider rate limit is temporarily exhausted."
     retryable = True
 
 
@@ -123,7 +138,8 @@ def as_http_error(error: ASRError) -> tuple[int, dict[str, Any], dict[str, str]]
 
     headers: dict[str, str] = {}
     if error.retry_after_s is not None:
-        headers["Retry-After"] = str(max(1, math.ceil(error.retry_after_s)))
+        bounded_retry_after = min(60.0, max(0.0, error.retry_after_s))
+        headers["Retry-After"] = str(max(1, math.ceil(bounded_retry_after)))
     return (
         error.status_code,
         {
@@ -140,12 +156,14 @@ __all__ = [
     "ASRAudioRejected",
     "ASRDeadlineExceeded",
     "ASRError",
+    "ASRIdempotencyConflict",
     "ASRLocalUnavailable",
     "ASRNoEligibleProvider",
     "ASRProviderAuthError",
     "ASRProviderMidstreamError",
     "ASRProviderPermanentError",
     "ASRProviderProtocolError",
+    "ASRProviderRateLimited",
     "ASRProviderSessionCapacity",
     "ASRProviderTransientError",
     "ASRQueueFull",
