@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import httpx
+import websockets
 
 from .state import HubDevice
 
@@ -43,6 +47,13 @@ class PairingResult:
 @dataclass(frozen=True, slots=True)
 class ClaimResult:
     sync_token: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SyncPushResult:
+    applied: list[str]
+    duplicate: list[str]
+    conflict: list[str]
 
 
 def _value(payload: dict[str, Any], *keys: str) -> Any:
@@ -115,12 +126,14 @@ class HubClient:
         path: str,
         *,
         json_body: dict[str, Any] | None = None,
+        params: dict[str, str | int] | None = None,
     ) -> Any:
         try:
             response = await self._client.request(
                 method,
-                path,
+                path.lstrip("/"),
                 json=json_body,
+                params=params,
                 headers=self._headers(),
             )
         except httpx.TimeoutException as exc:
@@ -165,19 +178,13 @@ class HubClient:
             raise HubError("invalid_response")
         nested = payload.get("pairing")
         pairing = nested if isinstance(nested, dict) else payload
-        code = _text(
-            _value(pairing, "pairing_code", "code", "manual_code", "pairingCode")
-        )
+        code = _text(_value(pairing, "pairing_code", "code", "manual_code", "pairingCode"))
         if not code:
             raise HubError("invalid_response")
         return PairingResult(
             code=code,
-            expires_at=_text(
-                _value(pairing, "expires_at", "expiresAt", "expiration")
-            ),
-            sync_token=_text(
-                _value(pairing, "sync_token", "token", "syncToken")
-            ),
+            expires_at=_text(_value(pairing, "expires_at", "expiresAt", "expiration")),
+            sync_token=_text(_value(pairing, "sync_token", "token", "syncToken")),
         )
 
     async def claim_pairing(self, pairing_code: str) -> ClaimResult:
@@ -193,11 +200,7 @@ class HubClient:
             raise HubError("invalid_response")
         nested = payload.get("pairing")
         result = nested if isinstance(nested, dict) else payload
-        return ClaimResult(
-            sync_token=_text(
-                _value(result, "sync_token", "token", "syncToken")
-            )
-        )
+        return ClaimResult(sync_token=_text(_value(result, "sync_token", "token", "syncToken")))
 
     async def list_devices(self) -> list[HubDevice]:
         payload = await self._request("GET", "/hub/v1/devices")
@@ -222,6 +225,136 @@ class HubClient:
         if not value or "/" in value or "\\" in value:
             raise HubError("request_failed")
         await self._request("DELETE", f"/hub/v1/devices/{quote(value, safe='')}")
+
+    async def push(self, operations: list[dict[str, Any]]) -> SyncPushResult:
+        if not operations:
+            return SyncPushResult(applied=[], duplicate=[], conflict=[])
+        payload = await self._request(
+            "POST",
+            "/hub/v1/sync/push",
+            json_body={"operations": operations},
+        )
+        if not isinstance(payload, dict):
+            raise HubError("invalid_response")
+
+        def ids(value: Any) -> list[str]:
+            if isinstance(value, list):
+                result: list[str] = []
+                for item in value:
+                    if isinstance(item, str) and item.strip():
+                        result.append(item.strip())
+                    elif isinstance(item, dict):
+                        operation_id = _text(_value(item, "operation_id", "operationId", "id"))
+                        if operation_id:
+                            result.append(operation_id)
+                return result
+            return []
+
+        applied = ids(payload.get("applied"))
+        duplicate = ids(payload.get("duplicate"))
+        conflict = ids(payload.get("conflict"))
+        for item in payload.get("results", []):
+            if not isinstance(item, dict):
+                continue
+            operation_id = _text(_value(item, "operation_id", "operationId", "id"))
+            status = _text(item.get("status"))
+            if not operation_id or status not in {"applied", "duplicate", "conflict"}:
+                continue
+            target = {
+                "applied": applied,
+                "duplicate": duplicate,
+                "conflict": conflict,
+            }[status]
+            if operation_id not in target:
+                target.append(operation_id)
+        if not applied and not duplicate and not conflict:
+            status = _text(payload.get("status"))
+            if status in {"applied", "duplicate", "conflict"}:
+                target = {
+                    "applied": applied,
+                    "duplicate": duplicate,
+                    "conflict": conflict,
+                }[status]
+                target.extend(str(item["operation_id"]) for item in operations)
+        return SyncPushResult(applied=applied, duplicate=duplicate, conflict=conflict)
+
+    async def changes(
+        self,
+        *,
+        cursor: str | None,
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        payload = await self._request(
+            "GET",
+            "/hub/v1/sync/changes",
+            params={"cursor": cursor or "", "limit": max(1, min(limit, 500))},
+        )
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)], cursor
+        if not isinstance(payload, dict):
+            raise HubError("invalid_response")
+        raw_changes = payload.get("changes") or payload.get("items") or []
+        if not isinstance(raw_changes, list):
+            raise HubError("invalid_response")
+        next_cursor = _text(_value(payload, "next_cursor", "nextCursor", "cursor"))
+        return [item for item in raw_changes if isinstance(item, dict)], next_cursor
+
+    async def snapshot(self) -> tuple[list[dict[str, Any]], str | None]:
+        payload = await self._request("GET", "/hub/v1/sync/snapshot")
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)], None
+        if not isinstance(payload, dict):
+            raise HubError("invalid_response")
+        raw_entities = (
+            payload.get("entities") or payload.get("items") or payload.get("changes") or []
+        )
+        if not isinstance(raw_entities, list):
+            raise HubError("invalid_response")
+        return (
+            [item for item in raw_entities if isinstance(item, dict)],
+            _text(_value(payload, "cursor", "next_cursor", "nextCursor")),
+        )
+
+    def _events_url(self, cursor: str | None) -> str:
+        parsed = urlsplit(self.base_url)
+        query = urlencode({"cursor": cursor}) if cursor else ""
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        return urlunsplit(
+            (scheme, parsed.netloc, f"{parsed.path.rstrip('/')}/hub/v1/sync/events", query, "")
+        )
+
+    async def listen_events(
+        self,
+        *,
+        cursor: str | None,
+        stop_event: asyncio.Event,
+        on_event: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Listen until the runtime asks us to stop; callers reconnect on errors."""
+
+        async with websockets.connect(
+            self._events_url(cursor),
+            extra_headers=self._headers(),
+            open_timeout=self._client.timeout.connect,
+        ) as socket:
+            while not stop_event.is_set():
+                try:
+                    raw = await asyncio.wait_for(socket.recv(), timeout=1.0)
+                except TimeoutError:
+                    continue
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="replace")
+                try:
+                    payload = json.loads(raw)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, list):
+                    for item in payload:
+                        if isinstance(item, dict):
+                            await on_event(item)
+                elif isinstance(payload, dict):
+                    change = payload.get("change")
+                    await on_event(change if isinstance(change, dict) else payload)
 
     async def close(self) -> None:
         await self._client.aclose()

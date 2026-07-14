@@ -4,7 +4,6 @@ import json
 
 import httpx
 import pytest
-
 from app.hub.client import HubClient, HubError
 
 
@@ -93,3 +92,67 @@ async def test_hub_client_hides_http_body_from_public_error():
     assert error.value.code == "request_failed"
     assert str(error.value) == "request_failed"
     assert "provider-internal-secret" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_hub_client_sync_push_changes_and_snapshot_contract():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST" and request.url.path == "/base/hub/v1/sync/push":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"operation_id": "sync:desktop:1", "status": "applied"},
+                        {"operation_id": "sync:desktop:2", "status": "duplicate"},
+                        {"operation_id": "sync:desktop:3", "status": "conflict"},
+                    ]
+                },
+                request=request,
+            )
+        if request.method == "GET" and request.url.path == "/base/hub/v1/sync/changes":
+            return httpx.Response(
+                200,
+                json={"items": [{"operation_id": "remote:1"}], "next_cursor": "cursor-2"},
+                request=request,
+            )
+        if request.method == "GET" and request.url.path == "/base/hub/v1/sync/snapshot":
+            return httpx.Response(
+                200,
+                json={"entities": [{"operation_id": "remote:snapshot-1"}], "cursor": "cursor-1"},
+                request=request,
+            )
+        return httpx.Response(404, request=request)
+
+    client = HubClient(
+        "https://hub.test/base",
+        device_id="desktop",
+        sync_token="sync-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        pushed = await client.push(
+            [
+                {"operation_id": "sync:desktop:1"},
+                {"operation_id": "sync:desktop:2"},
+                {"operation_id": "sync:desktop:3"},
+            ]
+        )
+        changes, changes_cursor = await client.changes(cursor="cursor-1", limit=20)
+        snapshot, snapshot_cursor = await client.snapshot()
+    finally:
+        await client.close()
+
+    assert pushed.applied == ["sync:desktop:1"]
+    assert pushed.duplicate == ["sync:desktop:2"]
+    assert pushed.conflict == ["sync:desktop:3"]
+    assert changes == [{"operation_id": "remote:1"}]
+    assert changes_cursor == "cursor-2"
+    assert snapshot == [{"operation_id": "remote:snapshot-1"}]
+    assert snapshot_cursor == "cursor-1"
+    assert client._events_url("cursor-1") == (
+        "wss://hub.test/base/hub/v1/sync/events?cursor=cursor-1"
+    )
+    assert requests[1].url.params["cursor"] == "cursor-1"

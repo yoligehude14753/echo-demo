@@ -12,6 +12,7 @@ from app.config import Settings
 
 from .client import HubClient, HubError
 from .state import HubState, HubStateError, HubStateStore
+from .sync import HubSyncStore
 
 logger = logging.getLogger("echodesk.hub")
 
@@ -36,7 +37,9 @@ class HubRuntime:
         self.store = HubStateStore(settings.hub_state_file)
         self.state = HubState()
         self._client: HubClient | None = None
+        self.sync_store: HubSyncStore | None = None
         self._task: asyncio.Task[None] | None = None
+        self._ws_task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event | None = None
         self._lock = asyncio.Lock()
 
@@ -77,8 +80,19 @@ class HubRuntime:
             self._persist_safely()
             return
 
+        db_path = getattr(self.settings, "db_path", None)
+        if db_path is not None:
+            try:
+                self.sync_store = HubSyncStore(db_path, device_id=self.state.device_id)
+                await self.sync_store.init()
+            except Exception:
+                logger.warning("Hub sync store start failed")
+                self.sync_store = None
+
         self._stop_event = asyncio.Event()
         self._task = asyncio.create_task(self._connection_loop(), name="hub-runtime")
+        if self.state.sync_token:
+            self._ensure_ws_task()
 
     async def close(self) -> None:
         if self._stop_event is not None:
@@ -88,9 +102,17 @@ class HubRuntime:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+        if self._ws_task is not None:
+            self._ws_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._ws_task
+            self._ws_task = None
         if self._client is not None:
             await self._client.close()
             self._client = None
+        if self.sync_store is not None:
+            await self.sync_store.aclose()
+            self.sync_store = None
 
     def status(self) -> dict[str, Any]:
         return self.state.public_payload(
@@ -115,6 +137,7 @@ class HubRuntime:
             if result.sync_token:
                 self.state.sync_token = result.sync_token
                 client.set_sync_token(result.sync_token)
+                self._ensure_ws_task()
             self.state.connection = "connected" if self.state.sync_token else "pairing_required"
             self.state.last_error = None
             self._persist_or_raise()
@@ -144,10 +167,7 @@ class HubRuntime:
 
     async def list_devices(self) -> list[dict[str, Any]]:
         async with self._lock:
-            return [
-                device.to_payload()
-                for device in await self._list_devices_locked()
-            ]
+            return [device.to_payload() for device in await self._list_devices_locked()]
 
     async def revoke_device(self, device_id: str) -> None:
         async with self._lock:
@@ -158,9 +178,7 @@ class HubRuntime:
                 self._mark_error("connection_failed")
                 raise HubRuntimeError("connection_failed") from exc
             self.state.devices = [
-                device
-                for device in self.state.devices
-                if device.device_id != device_id
+                device for device in self.state.devices if device.device_id != device_id
             ]
             self.state.last_error = None
             self._persist_or_raise()
@@ -170,17 +188,123 @@ class HubRuntime:
         while not self._stop_event.is_set():
             if self.state.sync_token and self._client is not None:
                 async with self._lock:
-                    try:
-                        await self._list_devices_locked()
-                    except HubRuntimeError:
-                        pass
+                    with contextlib.suppress(HubRuntimeError):
+                        await self._sync_cycle_locked()
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),
                     timeout=self.settings.hub_sync_interval_s,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
+
+    async def _sync_cycle_locked(self) -> None:
+        client = self._require_client("connection_failed")
+        if self.sync_store is None:
+            await self._list_devices_locked()
+            return
+        try:
+            await self.sync_store.reconcile_local_changes()
+            pending = await self.sync_store.claim_pending()
+            if pending:
+                pushed = await client.push([operation.to_payload() for operation in pending])
+                await self.sync_store.mark_push_results(
+                    applied=pushed.applied,
+                    duplicate=pushed.duplicate,
+                    conflict=pushed.conflict,
+                )
+                pushed_ids = set(pushed.applied) | set(pushed.duplicate) | set(pushed.conflict)
+                missing_ids = [
+                    operation.operation_id
+                    for operation in pending
+                    if operation.operation_id not in pushed_ids
+                ]
+                await self.sync_store.mark_failed(missing_ids)
+
+            if self.state.cursor is None:
+                snapshot, snapshot_cursor = await client.snapshot()
+                if snapshot:
+                    await self.sync_store.apply_changes(snapshot, snapshot=True)
+                if snapshot_cursor is not None:
+                    self.state.cursor = snapshot_cursor
+
+            changes, next_cursor = await client.changes(
+                cursor=self.state.cursor,
+                limit=100,
+            )
+            if changes:
+                await self.sync_store.apply_changes(changes)
+            if next_cursor is not None:
+                self.state.cursor = next_cursor
+            self.state.connection = "connected"
+            self.state.last_connected_at = _now()
+            self.state.last_sync_at = _now()
+            self.state.last_error = None
+            self._persist_or_raise()
+        except HubError as exc:
+            self._mark_error("connection_failed")
+            raise HubRuntimeError("connection_failed") from exc
+        except HubRuntimeError:
+            raise
+        except Exception as exc:
+            self._mark_error("sync_failed")
+            raise HubRuntimeError("sync_failed") from exc
+
+    def _ensure_ws_task(self) -> None:
+        if (
+            self._ws_task is not None
+            or self._stop_event is None
+            or self._client is None
+            or self.sync_store is None
+        ):
+            return
+        self._ws_task = asyncio.create_task(self._event_loop(), name="hub-sync-events")
+
+    async def _event_loop(self) -> None:
+        assert self._stop_event is not None
+        backoff_s = 1.0
+        while not self._stop_event.is_set():
+            if not self.state.sync_token or self._client is None or self.sync_store is None:
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=1.0)
+                except TimeoutError:
+                    continue
+                continue
+            try:
+                await self._client.listen_events(
+                    cursor=self.state.cursor,
+                    stop_event=self._stop_event,
+                    on_event=self._apply_event,
+                )
+                backoff_s = 1.0
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._mark_error("connection_failed")
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=backoff_s)
+                except TimeoutError:
+                    backoff_s = min(backoff_s * 2.0, 30.0)
+
+    async def _apply_event(self, change: dict[str, Any]) -> None:
+        async with self._lock:
+            if self.sync_store is None:
+                return
+            try:
+                await self.sync_store.apply_changes([change])
+                cursor = change.get("cursor") or change.get("next_cursor")
+                if isinstance(cursor, str) and cursor.strip():
+                    self.state.cursor = cursor.strip()
+                self.state.connection = "connected"
+                self.state.last_connected_at = _now()
+                self.state.last_sync_at = _now()
+                self.state.last_error = None
+                self._persist_or_raise()
+            except HubRuntimeError:
+                raise
+            except Exception as exc:
+                self._mark_error("sync_failed")
+                raise HubRuntimeError("sync_failed") from exc
 
     async def _list_devices_locked(self) -> list[Any]:
         client = self._require_client("connection_failed")

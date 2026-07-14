@@ -7,6 +7,7 @@ to the current user; no custom cryptography is involved in the local store.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -14,7 +15,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
-
 
 HubConnectionState = Literal[
     "disabled",
@@ -57,9 +57,7 @@ class HubDevice:
         if not isinstance(payload, dict):
             return None
         device_id = _string(
-            payload.get("device_id")
-            or payload.get("deviceId")
-            or payload.get("id")
+            payload.get("device_id") or payload.get("deviceId") or payload.get("id")
         )
         if not device_id:
             return None
@@ -72,9 +70,7 @@ class HubDevice:
             platform=_string(payload.get("platform")),
             status=status,
             is_current=bool(payload.get("is_current") or payload.get("isCurrent")),
-            last_seen_at=_string(
-                payload.get("last_seen_at") or payload.get("lastSeenAt")
-            ),
+            last_seen_at=_string(payload.get("last_seen_at") or payload.get("lastSeenAt")),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -216,10 +212,8 @@ class HubStateStore:
                 os.replace(temporary_name, self.path)
                 os.chmod(self.path, 0o600)
             except Exception:
-                try:
+                with contextlib.suppress(FileNotFoundError):
                     os.unlink(temporary_name)
-                except FileNotFoundError:
-                    pass
                 raise
         except OSError as exc:
             raise HubStateError("unable to write Hub state") from exc
