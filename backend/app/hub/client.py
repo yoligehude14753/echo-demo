@@ -194,7 +194,12 @@ class HubClient:
         payload = await self._request(
             "POST",
             "/hub/v1/pairings/claim",
-            json_body={"pairing_code": code, "device_id": self.device_id},
+            json_body={
+                "pairing_code": code,
+                "device_id": self.device_id,
+                "device_name": "EchoDesk Desktop",
+                "platform": sys.platform,
+            },
         )
         if not isinstance(payload, dict):
             raise HubError("invalid_response")

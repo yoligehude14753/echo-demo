@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import httpx
 import pytest
@@ -66,6 +67,12 @@ async def test_hub_client_covers_pairing_devices_and_revoke_endpoints():
         ("DELETE", "/hub/v1/devices/phone-1"),
     ]
     assert json.loads(requests[0].content)["device_id"] == "desktop-1"
+    assert json.loads(requests[1].content) == {
+        "pairing_code": "ABCD-1234",
+        "device_id": "desktop-1",
+        "device_name": "EchoDesk Desktop",
+        "platform": sys.platform,
+    }
     assert requests[2].headers["Authorization"] == "Bearer sync-secret"
 
 
