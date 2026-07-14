@@ -7,6 +7,7 @@ import {
   ensureSyncDeviceId,
   failSyncOperation,
   loadSyncState,
+  makeOperationId,
   markSyncOperationSending,
   pendingSyncOperations,
   resetSyncStateForTest,
@@ -51,6 +52,36 @@ test("first startup creates a durable random device id and restart reuses it", (
   assert.match(first, /^device-[0-9a-f-]{32,36}$/);
   assert.equal(second, first);
   assert.equal(loadSyncState(storage).device_id, first);
+});
+
+test("sync operation ids stay outside the capture idempotency namespace", () => {
+  const operationId = makeOperationId("transcript_segment", "meeting-1:0:1000");
+
+  assert.match(operationId, /^transcript_segment:meeting-1:0:1000:/);
+  assert.equal(operationId.startsWith("capture:"), false);
+});
+
+test("capture idempotency keys cannot enter the sync outbox", () => {
+  const storage = new MemoryStorage();
+  const deviceId = ensureSyncDeviceId(storage);
+
+  assert.throws(
+    () =>
+      enqueueSyncOperation(
+        {
+          operation_id: "capture:g1:7",
+          device_id: deviceId,
+          entity_type: "transcript_segment",
+          entity_id: "meeting-1:0:1000",
+          base_revision: 0,
+          updated_at: "2026-07-14T12:00:00.000Z",
+          payload: { meeting_id: "meeting-1", text: "hello" },
+        },
+        storage,
+      ),
+    /capture.*sync outbox/,
+  );
+  assert.equal(loadSyncState(storage).outbox.length, 0);
 });
 
 test("pairing token and cursor survive restart and unpair keeps outbox", () => {

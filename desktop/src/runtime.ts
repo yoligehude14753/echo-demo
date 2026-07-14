@@ -170,9 +170,9 @@ export const SYNC_HUB_BASE_EVENT = "echodesk:sync-hub-change";
 export const PUBLIC_DATA_BOUNDARY_KEY = "echodesk.publicDataBoundary.v2";
 export const DEFAULT_ANDROID_BACKEND_BASE = backendConfig.public.baseUrl;
 export const DEFAULT_LOCAL_BACKEND_BASE = `http://${backendConfig.local.host}:${backendConfig.local.port}`;
-// Sync must never fall back to the public business service.  A paired Hub
-// gateway is supplied explicitly by runtime routing or by an explicit dev
-// configuration.
+// Sync must target an explicitly configured pairedHubSyncGateway and must
+// never inherit the publicService endpoint used by capture/ordinary API
+// traffic.
 export const DEFAULT_SYNC_HUB_BASE: string | null = null;
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
 const PUBLIC_DATA_BOUNDARY_SCHEMA = 3;

@@ -22,11 +22,16 @@ export interface SyncPushResponse {
 export interface SyncChange {
   operation_id?: string | null;
   device_id?: string | null;
+  cursor?: string | null;
   entity_type: SyncEntityType;
   entity_id: string;
   revision: number;
   updated_at: string;
   payload: Record<string, unknown>;
+}
+
+export function isSyncEntityType(value: unknown): value is SyncEntityType {
+  return value === "transcript_segment" || value === "meeting_summary" || value === "memory";
 }
 
 export interface SyncChangesResponse {
@@ -104,9 +109,9 @@ function normalizeChanges(value: SyncChangesResponse | SyncChange[]): SyncChange
   return {
     changes: changes.filter((change): change is SyncChange =>
       Boolean(
-        change &&
+          change &&
           typeof change.entity_id === "string" &&
-          typeof change.entity_type === "string" &&
+          isSyncEntityType(change.entity_type) &&
           typeof change.payload === "object" &&
           change.payload !== null,
       ),

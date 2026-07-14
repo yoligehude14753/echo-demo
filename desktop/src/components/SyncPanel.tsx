@@ -199,9 +199,21 @@ export default function SyncPanel(): JSX.Element {
 
           <div className="flex justify-end gap-2">
             {state.sync_token && (
-              <Button danger icon={<Unplug aria-hidden="true" />} onClick={unpair} disabled={busy}>
-                解除绑定
-              </Button>
+              <>
+                <Button
+                  icon={<RefreshCw aria-hidden="true" />}
+                  onClick={() => {
+                    updateSyncState((current) => ({ ...current, status: "syncing", last_error: null }));
+                    setState(loadSyncState());
+                  }}
+                  disabled={busy}
+                >
+                  立即重试
+                </Button>
+                <Button danger icon={<Unplug aria-hidden="true" />} onClick={unpair} disabled={busy}>
+                  解除绑定
+                </Button>
+              </>
             )}
             <Button
               type="primary"

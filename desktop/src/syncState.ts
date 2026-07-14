@@ -40,6 +40,7 @@ export interface SyncStorage {
 
 export const SYNC_STATE_KEY = "echodesk.syncState.v1";
 export const SYNC_STATE_EVENT = "echodesk:sync-state-change";
+export const SYNC_MEMORY_EVENT = "echodesk:sync-memory-change";
 export const SYNC_SCHEMA = 1;
 
 function browserStorage(): SyncStorage | null {
@@ -94,6 +95,7 @@ function normalizeOutboxItem(value: unknown, deviceId: string): SyncOutboxItem |
   const item = value as Partial<SyncOutboxItem>;
   if (
     typeof item.operation_id !== "string" ||
+    item.operation_id.startsWith("capture:") ||
     typeof item.entity_id !== "string" ||
     !validEntityType(item.entity_type) ||
     typeof item.payload !== "object" ||
@@ -226,6 +228,9 @@ export function enqueueSyncOperation(
   item: Omit<SyncOutboxItem, "status" | "retry_count" | "last_error">,
   storage: SyncStorage | null = browserStorage(),
 ): SyncOutboxItem {
+  if (item.operation_id.startsWith("capture:")) {
+    throw new Error("capture 幂等键不能写入 sync outbox");
+  }
   let result = item as SyncOutboxItem;
   updateSyncState((state) => {
     const existing = state.outbox.find((entry) => entry.operation_id === item.operation_id);

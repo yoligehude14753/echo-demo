@@ -23,6 +23,7 @@ import WorkspaceBar from "@/components/WorkspaceBar";
 import StatusBar from "@/components/StatusBar";
 import IdentityStatus from "@/components/IdentityStatus";
 import SyncPanel from "@/components/SyncPanel";
+import { useSyncWorker } from "@/syncWorker";
 import SettingsPanel from "@/components/SettingsPanel";
 import OnboardingModal from "@/components/OnboardingModal";
 import AboutModal from "@/components/AboutModal";
@@ -47,6 +48,7 @@ type InspectorView = "minutes" | "artifacts";
 
 export default function App(): JSX.Element {
   useEchoWS();
+  useSyncWorker();
   useMeetingHistory();
   const appUpdateStatus = useAppUpdateStatus();
   const onboarding = useOnboarding();

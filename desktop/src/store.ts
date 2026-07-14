@@ -21,6 +21,8 @@ import {
   enqueueSyncOperation,
   ensureSyncDeviceId,
   makeOperationId,
+  SYNC_MEMORY_EVENT,
+  type SyncEntityType,
 } from "@/syncState";
 
 export interface LocalAmbientSegment {
@@ -122,6 +124,7 @@ interface Store {
     segments: TranscriptSegment[],
     opts?: { startedAt?: string; select?: boolean },
   ): void;
+  applyRemoteSyncEntity(entityType: SyncEntityType, payload: Record<string, unknown>): void;
   /**
    * 清空全局 outputs 列表（顶栏「清空」按钮）。
    * 不清 failedArtifacts —— 它们有独立 dismiss，避免一键覆盖失败上下文。
@@ -742,6 +745,41 @@ export const useStore = create<Store>((set, get) => ({
       };
     });
     queueLocalTranscriptSegments(meetingId, baseRevision, localSegments);
+  },
+
+  applyRemoteSyncEntity: (entityType, payload) => {
+    if (entityType === "transcript_segment") {
+      const meetingId = typeof payload.meeting_id === "string" ? payload.meeting_id : null;
+      if (!meetingId) return;
+      const segment = payload as unknown as TranscriptSegment;
+      const current = get().meetings[meetingId] ?? emptyMeeting(meetingId);
+      const segments = mergeSegments(current.segments, [segment]);
+      const speakers = speakerSetFromSegments(current.speakers, segments);
+      get().upsertMeeting(meetingId, {
+        segments,
+        speakers,
+        state: current.state === "ended" ? "ended" : "in_meeting",
+        summary_segment_count: Math.max(current.summary_segment_count ?? 0, segments.length),
+        summary_speaker_count: Math.max(current.summary_speaker_count ?? 0, speakers.size),
+      });
+      return;
+    }
+    if (entityType === "meeting_summary") {
+      const minutes = payload as unknown as MeetingMinutes;
+      if (!minutes.meeting_id) return;
+      get().upsertMeeting(minutes.meeting_id, {
+        title: minutes.title,
+        display_title: minutes.title,
+        minutes,
+        minutes_status: "ok",
+        minutes_error: null,
+        state: "ended",
+      });
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(SYNC_MEMORY_EVENT, { detail: payload }));
+    }
   },
 
   clearArtifacts: () => set({ artifacts: [] }),
