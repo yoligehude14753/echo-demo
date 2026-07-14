@@ -53,6 +53,7 @@ from app.api.deps import (
 from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
 from app.api.health import start_prober, stop_prober
+from app.api.hub import router as hub_router
 from app.api.intent import router as intent_router
 from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
@@ -725,6 +726,7 @@ def _include_api_routers(app: FastAPI) -> None:
         intent_router,
         tts_router,
         agents_router,
+        hub_router,
         ws_router,
     ):
         app.include_router(api_router)
@@ -951,6 +953,7 @@ async def _resolve_request_principal(
                 client_host=client_key,
                 authorization=request.headers.get("Authorization", ""),
                 x_echo_admin_token=request.headers.get("X-Echo-Admin-Token", ""),
+                sync_token=request.headers.get("X-Echo-Sync-Token", ""),
                 share_token=request.query_params.get("share", ""),
                 client_version=request.headers.get(PUBLIC_CLIENT_VERSION_HEADER, ""),
             )

@@ -573,7 +573,7 @@ async def test_v36_backfills_existing_cancel_requested_agent_commands(
 
     upgraded = await run_migrations(db_path)
 
-    assert upgraded.errors == [] and upgraded.applied == [36, 37, 38, 39]
+    assert upgraded.errors == [] and upgraded.applied == [36, 37, 38, 39, 40]
     async with aiosqlite.connect(str(db_path)) as conn:
         row = await (
             await conn.execute(
@@ -647,7 +647,7 @@ async def test_v33_audits_and_closes_historical_duplicate_active_meetings(
     upgraded = await run_migrations(db_path)
 
     assert upgraded.errors == []
-    assert upgraded.applied == [33, 34, 35, 36, 37, 38, 39]
+    assert upgraded.applied == [33, 34, 35, 36, 37, 38, 39, 40]
     async with aiosqlite.connect(str(db_path)) as conn:
         rows = await (
             await conn.execute(
