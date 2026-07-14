@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
@@ -179,7 +180,9 @@ class SyncSnapshotResponse(BaseModel):
 
     @classmethod
     def from_record(cls, record: SnapshotResult) -> SyncSnapshotResponse:
-        convert = lambda items: [SyncChangeResponse.from_record(item) for item in items]
+        def convert(items: list[SyncChangeRecord]) -> list[SyncChangeResponse]:
+            return [SyncChangeResponse.from_record(item) for item in items]
+
         return cls(
             cursor=record.cursor,
             transcript_segments=convert(record.transcript_segments),
@@ -296,7 +299,7 @@ async def get_status(request: Request) -> dict[str, Any]:
 
 
 @host_router.post("/pairings")
-async def create_pairing(request: Request) -> dict[str, Any]:
+async def create_host_pairing(request: Request) -> dict[str, Any]:
     runtime = _runtime_from_request(request)
     try:
         return await runtime.create_pairing()
@@ -305,7 +308,7 @@ async def create_pairing(request: Request) -> dict[str, Any]:
 
 
 @host_router.post("/pairings/claim", status_code=204)
-async def claim_pairing(request: Request, body: HostPairingClaimRequest) -> Response:
+async def claim_host_pairing(request: Request, body: HostPairingClaimRequest) -> Response:
     runtime = _runtime_from_request(request)
     try:
         await runtime.claim_pairing(body.pairing_code)
@@ -315,7 +318,7 @@ async def claim_pairing(request: Request, body: HostPairingClaimRequest) -> Resp
 
 
 @host_router.get("/devices")
-async def list_devices(request: Request) -> dict[str, Any]:
+async def list_host_devices(request: Request) -> dict[str, Any]:
     runtime = _runtime_from_request(request)
     try:
         return {"items": await runtime.list_devices()}
@@ -324,7 +327,7 @@ async def list_devices(request: Request) -> dict[str, Any]:
 
 
 @host_router.delete("/devices/{device_id}", status_code=204)
-async def revoke_device(request: Request, device_id: str) -> Response:
+async def revoke_host_device(request: Request, device_id: str) -> Response:
     runtime = _runtime_from_request(request)
     try:
         await runtime.revoke_device(device_id)
@@ -407,7 +410,7 @@ async def _resolve_hub_websocket_principal(
 
 
 @sync_router.websocket("/sync/events")
-async def sync_events(
+async def sync_events(  # noqa: PLR0912, PLR0915 - websocket lifecycle boundary
     websocket: WebSocket,
     store: SyncHubStore = Depends(get_sync_hub_store),
     settings: Settings = Depends(get_settings),
@@ -439,16 +442,12 @@ async def sync_events(
             code = 4400
         elif exc.status_code == 429:
             code = 4429
-        try:
+        with suppress(RuntimeError):
             await websocket.close(code=code, reason=exc.detail)
-        except RuntimeError:
-            pass
         return
     except SessionError:
-        try:
+        with suppress(RuntimeError):
             await websocket.close(code=4401, reason="session required")
-        except RuntimeError:
-            pass
         return
     finally:
         if admission is not None:
@@ -476,15 +475,11 @@ async def sync_events(
     except WebSocketDisconnect:
         return
     except (AccessPolicyError, SessionError):
-        try:
+        with suppress(RuntimeError):
             await websocket.close(code=4401, reason="session required")
-        except RuntimeError:
-            pass
-    except (asyncio.TimeoutError, TimeoutError):
-        try:
+    except TimeoutError:
+        with suppress(RuntimeError):
             await websocket.close(code=1011, reason="sync event send timeout")
-        except RuntimeError:
-            pass
     finally:
         reset_principal(context_token)
 

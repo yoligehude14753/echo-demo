@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from app.api.deps import require_admin_access
 from app.api.hub import router
 from app.hub.runtime import HubRuntime
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 def _app(tmp_path, *, enabled: bool = True) -> FastAPI:

@@ -74,8 +74,8 @@ from app.api.ws import router as ws_router
 from app.build_contract import backend_build_contract
 from app.config import Settings, get_settings
 from app.config_io import user_config_dir
-from app.memory import aclose_memory_service
 from app.hub.runtime import HubRuntime
+from app.memory import aclose_memory_service
 from app.ports.repository import RepositoryPort
 from app.runtime import RuntimeCapacityExceeded, RuntimeLease, ScopeRuntime
 from app.security import (
