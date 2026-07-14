@@ -442,6 +442,64 @@ select:focus-visible,
   animation: identity-status-spin 0.8s linear infinite;
 }
 
+.sync-status {
+  display: inline-flex;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 7px;
+  background: transparent;
+  color: var(--ed-ink-tertiary);
+  font-size: 10px;
+  font-weight: 560;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sync-status svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.9;
+}
+
+.sync-status.is-idle {
+  border-color: rgba(14, 116, 144, 0.2);
+  background: rgba(236, 254, 255, 0.72);
+  color: #0e7490;
+}
+
+.sync-status.is-busy {
+  border-color: rgba(180, 116, 22, 0.2);
+  background: rgba(255, 246, 224, 0.82);
+  color: #8a5a13;
+}
+
+.sync-status.is-ready {
+  border-color: rgba(16, 163, 127, 0.2);
+  background: rgba(236, 253, 245, 0.82);
+  color: var(--ed-accent);
+}
+
+.sync-status.is-error {
+  border-color: rgba(185, 45, 40, 0.2);
+  background: rgba(255, 236, 234, 0.9);
+  color: var(--ed-danger);
+}
+
+.sync-status:hover,
+.sync-status:focus-visible {
+  border-color: var(--ed-border-strong);
+  outline: none;
+}
+
+.sync-status .is-spinning {
+  animation: identity-status-spin 0.8s linear infinite;
+}
+
 @keyframes identity-status-spin {
   to {
     transform: rotate(360deg);

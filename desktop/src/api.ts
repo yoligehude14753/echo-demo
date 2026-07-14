@@ -25,6 +25,11 @@ import {
   shareBackendBase,
 } from "@/runtime";
 import { apiTransport } from "@/session";
+import {
+  enqueueSyncOperation,
+  ensureSyncDeviceId,
+  makeOperationId,
+} from "@/syncState";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
 const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
@@ -212,7 +217,17 @@ export async function finalizeMeeting(
     MEETING_FINALIZE_TIMEOUT_MS,
     options.signal,
   );
-  return asJson<MeetingMinutes>(r);
+  const minutes = await asJson<MeetingMinutes>(r);
+  enqueueSyncOperation({
+    operation_id: makeOperationId("meeting_summary", meetingId),
+    device_id: ensureSyncDeviceId(),
+    entity_type: "meeting_summary",
+    entity_id: meetingId,
+    base_revision: 0,
+    updated_at: minutes.created_at || new Date().toISOString(),
+    payload: minutes as unknown as Record<string, unknown>,
+  });
+  return minutes;
 }
 
 /**

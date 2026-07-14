@@ -1,0 +1,58 @@
+import { configuredSyncHubBase } from "@/runtime";
+import { apiTransport, ensureServerSession } from "@/session";
+import { loadSyncState, type SyncStorage } from "@/syncState";
+import {
+  SyncHubClient as ProtocolSyncHubClient,
+  type SyncAuthMode,
+  type SyncTransport,
+} from "@/syncProtocol";
+
+const SYNC_TIMEOUT_MS = 20_000;
+const SYNC_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+async function requestWithDefaultTransport(
+  path: string,
+  init: RequestInit,
+  auth: SyncAuthMode,
+): Promise<Response> {
+  const hubBase = configuredSyncHubBase();
+  const token =
+    auth === "session"
+      ? await ensureServerSession()
+      : loadSyncState().sync_token;
+  const url = `${hubBase}${path}`;
+  return apiTransport(url, init, {
+    timeoutMs: SYNC_TIMEOUT_MS,
+    maxResponseBytes: SYNC_MAX_RESPONSE_BYTES,
+    throwHttpErrors: false,
+    targetOrigin: new URL(hubBase).origin,
+    bearerToken: token,
+  });
+}
+
+export const defaultSyncTransport: SyncTransport = {
+  request: requestWithDefaultTransport,
+};
+
+export class SyncHubClient extends ProtocolSyncHubClient {
+  constructor(transport: SyncTransport = defaultSyncTransport, storage?: SyncStorage) {
+    super(transport, storage);
+  }
+}
+
+export function createSyncHubClient(
+  transport: SyncTransport,
+  storage?: SyncStorage,
+): SyncHubClient {
+  return new SyncHubClient(transport, storage);
+}
+
+export {
+  SyncApiError,
+  type PairingClaimResponse,
+  type SyncChange,
+  type SyncChangesResponse,
+  type SyncPushResponse,
+  type SyncSnapshotResponse,
+} from "@/syncProtocol";
+export type { SyncAuthMode, SyncTransport } from "@/syncProtocol";

@@ -17,6 +17,11 @@ import {
   type FailedArtifact,
 } from "@/lib/failedArtifact";
 import { shouldHideSharedPublicHistory } from "@/runtime";
+import {
+  enqueueSyncOperation,
+  ensureSyncDeviceId,
+  makeOperationId,
+} from "@/syncState";
 
 export interface LocalAmbientSegment {
   text: string;
@@ -323,6 +328,25 @@ function speakerSetFromSegments(
     if (seg.speaker_label) speakers.add(seg.speaker_label);
   }
   return speakers;
+}
+
+function queueLocalTranscriptSegments(
+  meetingId: string,
+  baseRevision: number,
+  segments: TranscriptSegment[],
+): void {
+  for (const segment of segments) {
+    const entityId = `${meetingId}:${segment.start_ms}:${segment.end_ms}`;
+    enqueueSyncOperation({
+      operation_id: makeOperationId("transcript_segment", entityId),
+      device_id: ensureSyncDeviceId(),
+      entity_type: "transcript_segment",
+      entity_id: entityId,
+      base_revision: Math.max(0, baseRevision),
+      updated_at: new Date().toISOString(),
+      payload: { meeting_id: meetingId, ...segment } as Record<string, unknown>,
+    });
+  }
 }
 
 function shouldPersistLocalCaptureState(): boolean {
@@ -685,34 +709,40 @@ export const useStore = create<Store>((set, get) => ({
       };
     }),
 
-  addMeetingSegments: (meetingId, segments, opts) =>
+  addMeetingSegments: (meetingId, segments, opts) => {
+    const cur = get().meetings[meetingId] ?? emptyMeeting(meetingId);
+    const existing = new Set(cur.segments.map(segmentKey));
+    const localSegments = segments.filter((segment) => !existing.has(segmentKey(segment)));
+    const baseRevision = get().meetingEventSeq[meetingId] ?? 0;
     set((s) => {
-      const cur = s.meetings[meetingId] ?? emptyMeeting(meetingId);
-      const mergedSegments = mergeSegments(cur.segments, segments);
-      const speakers = speakerSetFromSegments(cur.speakers, mergedSegments);
+      const current = s.meetings[meetingId] ?? emptyMeeting(meetingId);
+      const mergedSegments = mergeSegments(current.segments, segments);
+      const speakers = speakerSetFromSegments(current.speakers, mergedSegments);
       return {
         currentMeetingId: opts?.select ? meetingId : s.currentMeetingId,
         meetings: {
           ...s.meetings,
           [meetingId]: {
-            ...cur,
-            state: cur.state === "ended" ? "ended" : "in_meeting",
+            ...current,
+            state: current.state === "ended" ? "ended" : "in_meeting",
             started_at:
-              cur.started_at ?? opts?.startedAt ?? new Date().toISOString(),
+              current.started_at ?? opts?.startedAt ?? new Date().toISOString(),
             segments: mergedSegments,
             speakers,
             summary_segment_count: Math.max(
-              cur.summary_segment_count ?? 0,
+              current.summary_segment_count ?? 0,
               mergedSegments.length,
             ),
             summary_speaker_count: Math.max(
-              cur.summary_speaker_count ?? 0,
+              current.summary_speaker_count ?? 0,
               speakers.size,
             ),
           },
         },
       };
-    }),
+    });
+    queueLocalTranscriptSegments(meetingId, baseRevision, localSegments);
+  },
 
   clearArtifacts: () => set({ artifacts: [] }),
 

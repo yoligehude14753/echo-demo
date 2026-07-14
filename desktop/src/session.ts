@@ -126,6 +126,10 @@ export interface ApiTransportOptions {
    * 开启后不会建立/续签 session，也不会发送 Authorization。
    */
   anonymous?: boolean;
+  /** 供 Hub 等同一用户域外的受控服务请求使用；仍受 origin 校验约束。 */
+  targetOrigin?: string;
+  /** 已由调用方取得的服务 token；传入后不自动建立或续签桌面 session。 */
+  bearerToken?: string | null;
 }
 
 let bootstrapPromise: Promise<BackendBootstrap | null> | null = null;
@@ -1558,7 +1562,7 @@ export async function apiTransport(
   }, Math.max(1, timeoutMs));
 
   try {
-    const leaseOrigin = await configuredBackendOrigin();
+    const leaseOrigin = options.targetOrigin ?? (await configuredBackendOrigin());
     const actualOrigin = new URL(url, window.location.href).origin;
     if (
       leaseEpoch !== transportOriginEpoch ||
@@ -1573,16 +1577,23 @@ export async function apiTransport(
     }
     const baseRequestInit = {
       ...init,
-      credentials: options.anonymous === true ? "omit" : init.credentials,
+      credentials:
+        options.anonymous === true || options.bearerToken !== undefined
+          ? "omit"
+          : init.credentials,
       redirect: "error" as const,
       signal: controller.signal,
     };
     const requestInit =
-      options.anonymous === true
+      options.bearerToken !== undefined
+        ? withAuthorization(input, baseRequestInit, options.bearerToken)
+        : options.anonymous === true
         ? withoutAuthorization(input, baseRequestInit)
         : baseRequestInit;
     const response =
-      options.anonymous === true
+      options.bearerToken !== undefined
+        ? await fetch(input, requestInit)
+        : options.anonymous === true
         ? await fetch(input, requestInit)
         : await authenticatedFetch(input, requestInit, leaseOrigin);
     if (isRedirectResponse(response)) {

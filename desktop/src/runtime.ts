@@ -162,9 +162,12 @@ let cachedBase: string | null = null;
 export const MOBILE_BACKEND_BASE_KEY = "echodesk.mobileBackendBase";
 export const MOBILE_BACKEND_BASE_USER_SET_KEY = "echodesk.mobileBackendBase.userSet";
 export const BACKEND_ORIGIN_EVENT = "echodesk:backend-origin-change";
+export const SYNC_HUB_BASE_KEY = "echodesk.syncHubBase";
+export const SYNC_HUB_BASE_EVENT = "echodesk:sync-hub-change";
 export const PUBLIC_DATA_BOUNDARY_KEY = "echodesk.publicDataBoundary.v2";
 export const DEFAULT_ANDROID_BACKEND_BASE = backendConfig.public.baseUrl;
 export const DEFAULT_LOCAL_BACKEND_BASE = `http://${backendConfig.local.host}:${backendConfig.local.port}`;
+export const DEFAULT_SYNC_HUB_BASE = backendConfig.public.baseUrl;
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
 const PUBLIC_DATA_BOUNDARY_SCHEMA = 3;
 export const RELEASES_URL =
@@ -387,6 +390,39 @@ export function storedBackendBase(): string | null {
   } catch {
     return null;
   }
+}
+
+function envSyncHubBase(): string | null {
+  const env = (import.meta as { env?: Record<string, string | undefined> }).env;
+  return normalizeBackendBase(env?.VITE_ECHODESK_SYNC_HUB_BASE);
+}
+
+export function configuredSyncHubBase(): string {
+  if (typeof window !== "undefined") {
+    try {
+      const stored = normalizeBackendBase(window.localStorage.getItem(SYNC_HUB_BASE_KEY));
+      if (stored) return stored;
+    } catch {
+      // 继续使用环境变量或内置地址。
+    }
+  }
+  return envSyncHubBase() ?? DEFAULT_SYNC_HUB_BASE;
+}
+
+export function setSyncHubBase(value: string): string {
+  const normalized = normalizeBackendBase(value);
+  if (!normalized) {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(SYNC_HUB_BASE_KEY);
+      window.dispatchEvent(new Event(SYNC_HUB_BASE_EVENT));
+    }
+    return configuredSyncHubBase();
+  }
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(SYNC_HUB_BASE_KEY, normalized);
+    window.dispatchEvent(new Event(SYNC_HUB_BASE_EVENT));
+  }
+  return normalized;
 }
 
 export function setStoredBackendBase(value: string): string | null {
