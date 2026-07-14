@@ -2024,7 +2024,7 @@ async def test_v35_upgrade_drains_existing_sparse_rows_in_order(tmp_path: Path) 
         )
         await conn.commit()
     upgraded = await run_migrations(db_path)
-    assert upgraded.errors == [] and upgraded.applied == [35, 36, 37, 38, 39]
+    assert upgraded.errors == [] and upgraded.applied == [35, 36, 37, 38, 39, 40]
 
     settings = Settings(
         db_path=db_path,

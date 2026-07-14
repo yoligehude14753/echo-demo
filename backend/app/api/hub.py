@@ -2,22 +2,52 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-from typing import Any
+import asyncio
+from datetime import datetime, timedelta
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_request_principal, get_sync_hub_store, require_admin_access
+from app.api.deps import (
+    get_access_policy,
+    get_request_principal,
+    get_settings,
+    get_sync_hub_store,
+    require_admin_access,
+)
+from app.config import Settings
 from app.hub.runtime import HubRuntime, HubRuntimeError
+from app.security import AccessPolicy, AccessPolicyError, SessionError, route_scope_path
+from app.security.context import bind_principal, reset_principal
 from app.security.models import Principal
 from app.sync_hub import (
     DeviceAlreadyExistsError,
+    OperationIdCollisionError,
     PairingNotFoundError,
+    PushResult,
+    SnapshotResult,
     SyncDeviceNotFoundError,
+    SyncEntityValidationError,
     SyncHubStore,
 )
-from app.sync_hub.store import ClaimedDevice, PairingRecord, SyncDeviceRecord
+from app.sync_hub.store import (
+    ClaimedDevice,
+    PairingRecord,
+    SyncChangeRecord,
+    SyncDeviceRecord,
+)
 
 sync_router = APIRouter(prefix="/hub/v1", tags=["sync-hub"])
 
@@ -85,6 +115,90 @@ class DeviceResponse(BaseModel):
         )
 
 
+SyncEntityType = Literal["transcript_segment", "meeting_summary", "memory"]
+
+
+class SyncPushRequest(BaseModel):
+    operation_id: str = Field(min_length=1, max_length=128)
+    device_id: str = Field(min_length=1, max_length=128)
+    entity_type: SyncEntityType
+    entity_id: str = Field(min_length=1, max_length=256)
+    base_revision: int = Field(default=0, ge=0)
+    updated_at: datetime
+    payload: dict[str, Any]
+
+
+class SyncPushResponse(BaseModel):
+    status: Literal["applied", "duplicate", "conflict"]
+    revision: int
+    cursor: int | None
+    current: dict[str, Any] | None = None
+
+    @classmethod
+    def from_record(cls, record: PushResult) -> SyncPushResponse:
+        return cls(
+            status=record.status,
+            revision=record.revision,
+            cursor=record.cursor,
+            current=record.current,
+        )
+
+
+class SyncChangeResponse(BaseModel):
+    cursor: int
+    source_device_id: str
+    entity_type: SyncEntityType
+    entity_id: str
+    revision: int
+    updated_at: str
+    payload: dict[str, Any]
+
+    @classmethod
+    def from_record(cls, record: SyncChangeRecord) -> SyncChangeResponse:
+        return cls(
+            cursor=record.cursor,
+            source_device_id=record.source_device_id,
+            entity_type=record.entity_type,
+            entity_id=record.entity_id,
+            revision=record.revision,
+            updated_at=record.updated_at.isoformat(),
+            payload=record.payload,
+        )
+
+
+class SyncChangesResponse(BaseModel):
+    cursor: int
+    changes: list[SyncChangeResponse]
+
+
+class SyncSnapshotResponse(BaseModel):
+    cursor: int
+    transcript_segments: list[SyncChangeResponse]
+    meeting_summaries: list[SyncChangeResponse]
+    memories: list[SyncChangeResponse]
+
+    @classmethod
+    def from_record(cls, record: SnapshotResult) -> SyncSnapshotResponse:
+        convert = lambda items: [SyncChangeResponse.from_record(item) for item in items]
+        return cls(
+            cursor=record.cursor,
+            transcript_segments=convert(record.transcript_segments),
+            meeting_summaries=convert(record.meeting_summaries),
+            memories=convert(record.memories),
+        )
+
+
+def _get_sync_gateway_principal(
+    principal: Principal = Depends(get_request_principal),
+    settings: Settings = Depends(get_settings),
+) -> Principal:
+    """Keep public-service sessions out of the paired sync gateway routes."""
+
+    if settings.public_demo_mode and not principal.session_id.startswith("sync:"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="sync token required")
+    return principal
+
+
 @sync_router.post(
     "/pairings",
     response_model=PairingResponse,
@@ -126,7 +240,7 @@ async def claim_pairing(
 
 @sync_router.get("/devices", response_model=list[DeviceResponse])
 async def list_devices(
-    principal: Principal = Depends(get_request_principal),
+    principal: Principal = Depends(_get_sync_gateway_principal),
     store: SyncHubStore = Depends(get_sync_hub_store),
 ) -> list[DeviceResponse]:
     records = await store.list_devices(principal)
@@ -136,7 +250,7 @@ async def list_devices(
 @sync_router.delete("/devices/{device_id}", response_model=DeviceResponse)
 async def revoke_device(
     device_id: str = Path(min_length=1, max_length=128),
-    principal: Principal = Depends(get_request_principal),
+    principal: Principal = Depends(_get_sync_gateway_principal),
     store: SyncHubStore = Depends(get_sync_hub_store),
 ) -> DeviceResponse:
     try:
@@ -217,6 +331,162 @@ async def revoke_device(request: Request, device_id: str) -> Response:
     except HubRuntimeError as exc:
         raise _runtime_error(exc) from exc
     return Response(status_code=204)
+
+
+@sync_router.post(
+    "/sync/push",
+    response_model=SyncPushResponse,
+    response_model_exclude_none=True,
+)
+async def push_sync(
+    body: SyncPushRequest,
+    principal: Principal = Depends(_get_sync_gateway_principal),
+    store: SyncHubStore = Depends(get_sync_hub_store),
+) -> SyncPushResponse:
+    try:
+        record = await store.push(
+            principal,
+            operation_id=body.operation_id,
+            device_id=body.device_id,
+            entity_type=body.entity_type,
+            entity_id=body.entity_id,
+            base_revision=body.base_revision,
+            updated_at=body.updated_at,
+            payload=body.payload,
+        )
+    except OperationIdCollisionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except SyncEntityValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return SyncPushResponse.from_record(record)
+
+
+@sync_router.get("/sync/changes", response_model=SyncChangesResponse)
+async def get_sync_changes(
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    principal: Principal = Depends(_get_sync_gateway_principal),
+    store: SyncHubStore = Depends(get_sync_hub_store),
+) -> SyncChangesResponse:
+    returned_cursor, records = await store.list_changes(
+        principal,
+        cursor=cursor,
+        limit=limit,
+    )
+    return SyncChangesResponse(
+        cursor=returned_cursor,
+        changes=[SyncChangeResponse.from_record(record) for record in records],
+    )
+
+
+@sync_router.get("/sync/snapshot", response_model=SyncSnapshotResponse)
+async def get_sync_snapshot(
+    principal: Principal = Depends(_get_sync_gateway_principal),
+    store: SyncHubStore = Depends(get_sync_hub_store),
+) -> SyncSnapshotResponse:
+    return SyncSnapshotResponse.from_record(await store.snapshot(principal))
+
+
+async def _resolve_hub_websocket_principal(
+    websocket: WebSocket,
+    policy: AccessPolicy,
+) -> tuple[Principal, str]:
+    sync_token = (
+        websocket.query_params.get("sync_token", "").strip()
+        or websocket.headers.get("x-echo-sync-token", "").strip()
+    )
+    if sync_token:
+        return await policy.sessions.validate_sync_token(sync_token), sync_token
+    principal = await policy.resolve_websocket_principal(
+        client_host=policy.client_host(websocket.client),
+        path=route_scope_path(websocket.scope),
+        authorization=websocket.headers.get("authorization", ""),
+        query_token=websocket.query_params.get("session", "").strip(),
+    )
+    return principal, ""
+
+
+@sync_router.websocket("/sync/events")
+async def sync_events(
+    websocket: WebSocket,
+    store: SyncHubStore = Depends(get_sync_hub_store),
+    settings: Settings = Depends(get_settings),
+    policy: AccessPolicy = Depends(get_access_policy),
+) -> None:
+    client_key = policy.client_host(websocket.client)
+    admission = None
+    try:
+        admission = await policy.admit_websocket(client_key)
+        policy.require_allowed_origin(
+            websocket.headers.getlist("origin"),
+            client_host=client_key,
+        )
+        principal, sync_token = await _resolve_hub_websocket_principal(websocket, policy)
+        if settings.public_demo_mode and not sync_token:
+            raise AccessPolicyError("sync token required", status_code=401)
+        try:
+            cursor = int(websocket.query_params.get("cursor", "0") or "0")
+        except ValueError as exc:
+            raise AccessPolicyError("cursor must be an integer", status_code=400) from exc
+        if cursor < 0:
+            raise AccessPolicyError("cursor must be non-negative", status_code=400)
+        await websocket.accept()
+    except WebSocketDisconnect:
+        return
+    except AccessPolicyError as exc:
+        code = 4403 if exc.status_code == 403 else 4401
+        if exc.status_code == 400:
+            code = 4400
+        elif exc.status_code == 429:
+            code = 4429
+        try:
+            await websocket.close(code=code, reason=exc.detail)
+        except RuntimeError:
+            pass
+        return
+    except SessionError:
+        try:
+            await websocket.close(code=4401, reason="session required")
+        except RuntimeError:
+            pass
+        return
+    finally:
+        if admission is not None:
+            await admission.release()
+
+    context_token = bind_principal(principal)
+    try:
+        while True:
+            if sync_token:
+                principal = await policy.sessions.validate_sync_token(sync_token)
+            _, records = await store.list_changes(
+                principal,
+                cursor=cursor,
+                limit=100,
+            )
+            if records:
+                for record in records:
+                    await asyncio.wait_for(
+                        websocket.send_json(SyncChangeResponse.from_record(record).model_dump()),
+                        timeout=settings.ws_send_timeout_s,
+                    )
+                cursor = records[-1].cursor
+                continue
+            await store.wait_for_change(principal, cursor=cursor, timeout_s=15.0)
+    except WebSocketDisconnect:
+        return
+    except (AccessPolicyError, SessionError):
+        try:
+            await websocket.close(code=4401, reason="session required")
+        except RuntimeError:
+            pass
+    except (asyncio.TimeoutError, TimeoutError):
+        try:
+            await websocket.close(code=1011, reason="sync event send timeout")
+        except RuntimeError:
+            pass
+    finally:
+        reset_principal(context_token)
 
 
 # Keep the existing ``app.api.hub.router`` import stable while exposing both

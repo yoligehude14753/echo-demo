@@ -572,7 +572,7 @@ async def test_v37_ambient_reconciliation_repairs_crash_gap_without_legacy_dupli
         await conn.commit()
 
     migration = await run_migrations(db_path)
-    assert migration.errors == [] and migration.current_version == 39
+    assert migration.errors == [] and migration.current_version == 40
     repo = SQLiteRepository(db_path)
     await repo.init()
     pipeline = MeetingPipeline(
