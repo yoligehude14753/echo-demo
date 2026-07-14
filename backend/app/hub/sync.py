@@ -330,19 +330,6 @@ class HubSyncStore:
         equivalent = await cursor.fetchone()
         await cursor.close()
         if current is None and equivalent is not None:
-            await conn.execute(
-                "INSERT OR IGNORE INTO hub_sync_entities "
-                "(entity_type, entity_id, revision, updated_at, payload_json, "
-                "source_device_id, operation_id) VALUES (?, ?, ?, ?, ?, ?, NULL)",
-                (
-                    entity_type,
-                    entity_id,
-                    int(equivalent["revision"]),
-                    updated_at,
-                    payload_json,
-                    str(equivalent["source_device_id"]),
-                ),
-            )
             return 0
 
         if current is None:
@@ -360,19 +347,6 @@ class HubSyncStore:
                     != comparison
                 ):
                     continue
-                await conn.execute(
-                    "INSERT OR IGNORE INTO hub_sync_entities "
-                    "(entity_type, entity_id, revision, updated_at, payload_json, "
-                    "source_device_id, operation_id) VALUES (?, ?, ?, ?, ?, ?, NULL)",
-                    (
-                        entity_type,
-                        entity_id,
-                        int(row["revision"]),
-                        updated_at,
-                        payload_json,
-                        str(row["source_device_id"]),
-                    ),
-                )
                 return 0
 
         base_revision = int(current["revision"]) if current is not None else 0
@@ -536,8 +510,8 @@ class HubSyncStore:
         payload_json = _dump(payload)
         cursor = await conn.execute(
             "SELECT revision, payload_json, source_device_id FROM hub_sync_entities "
-            "WHERE entity_type = ? AND entity_id = ?",
-            (entity_type, entity_id),
+            "WHERE entity_type = ? AND entity_id = ? AND source_device_id = ?",
+            (entity_type, entity_id, source_device_id),
         )
         current = await cursor.fetchone()
         await cursor.close()

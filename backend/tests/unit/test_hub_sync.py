@@ -143,17 +143,18 @@ async def test_hub_sync_transcript_snapshot_upserts_by_entity_revision(tmp_path)
     store = HubSyncStore(db_path, device_id="desktop-device")
     await store.init()
     captured_at = _timestamp()
+    canonical_entity_id = "m-1d9d8f6e:0:1200"
 
     def change(
         operation_id: str,
         text: str,
         *,
-        entity_id: str = "android-device:segment-1",
+        entity_id: str = canonical_entity_id,
         base_revision: int = 0,
     ) -> dict[str, object]:
         return {
             "operation_id": operation_id,
-            "device_id": "android-device",
+            "device_id": "Android",
             "entity_type": "transcript_segment",
             "entity_id": entity_id,
             "base_revision": base_revision,
@@ -182,7 +183,7 @@ async def test_hub_sync_transcript_snapshot_upserts_by_entity_revision(tmp_path)
     second_entity = change(
         "snapshot:cursor3",
         "second transcript",
-        entity_id="android-device:segment-2",
+        entity_id="m-1d9d8f6e:1200:2400",
     )
     try:
         first_result = await store.apply_changes([first], snapshot=True)
@@ -196,6 +197,12 @@ async def test_hub_sync_transcript_snapshot_upserts_by_entity_revision(tmp_path)
         )
         segment_rows = await cursor.fetchall()
         await cursor.close()
+        cursor = await conn.execute(
+            "SELECT entity_id, source_device_id FROM hub_sync_entities "
+            "WHERE entity_type = 'transcript_segment' ORDER BY entity_id",
+        )
+        canonical_rows = await cursor.fetchall()
+        await cursor.close()
         outbox = await store.list_outbox()
     finally:
         await store.aclose()
@@ -207,6 +214,12 @@ async def test_hub_sync_transcript_snapshot_upserts_by_entity_revision(tmp_path)
     assert [str(row["text"]) for row in segment_rows] == [
         "updated transcript",
         "second transcript",
+    ]
+    assert [
+        (str(row["entity_id"]), str(row["source_device_id"])) for row in canonical_rows
+    ] == [
+        ("m-1d9d8f6e:0:1200", "Android"),
+        ("m-1d9d8f6e:1200:2400", "Android"),
     ]
     assert outbox == []
 
