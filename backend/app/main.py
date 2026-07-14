@@ -40,6 +40,7 @@ from app.api.deps import (
     aclose_event_bus,
     aclose_llm_singleton,
     aclose_repository,
+    aclose_telemetry,
     aclose_workflow_service,
     configure_event_bus,
     get_access_policy,
@@ -49,6 +50,7 @@ from app.api.deps import (
     get_scope_runtime_registry,
     get_session_store,
     get_speaker_registry,
+    get_telemetry,
     require_admin_access,
     start_runtime_janitor,
     stop_runtime_janitor,
@@ -592,6 +594,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
             [str(d) for d in settings.workspace_dirs_list],
         )
 
+    # Telemetry configuration is a startup gate and must fail before any
+    # background probe is launched.
+    telemetry = get_telemetry(settings)
+
     # P1.4：启动远程依赖探针后台 task
     try:
         await start_prober()
@@ -599,7 +605,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
         logger.warning("health prober start failed: %s", e)
 
     try:
-        await start_asr_scheduler(settings)
+        await start_asr_scheduler(settings, telemetry=telemetry)
     except Exception as e:
         logger.warning("ASR scheduler start failed: type=%s", type(e).__name__)
 
@@ -626,6 +632,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
     await aclose_workflow_service()
     await aclose_memory_service()
     await aclose_llm_singleton()
+    await aclose_telemetry()
     await aclose_event_bus()
     await aclose_repository()
     logger.info("echodesk 关闭")

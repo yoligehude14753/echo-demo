@@ -149,6 +149,8 @@ class _QueuedJob:
     cancelled: bool = False
     provider_task: asyncio.Task[list[TranscriptSegment]] | None = None
     provider_name: str | None = None
+    last_provider_name: str | None = None
+    queue_wait_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,10 +174,12 @@ class ASRScheduler:
         config: ASRSchedulerConfig,
         *,
         clock: Any = time.monotonic,
+        telemetry: object | None = None,
     ) -> None:
         self._providers = dict(providers)
         self._config = config
         self._clock = clock
+        self._telemetry = telemetry
         self._states = {name: _ProviderState() for name in self._providers}
         self._semaphores = {
             name: asyncio.Semaphore(binding.max_concurrency)
@@ -205,6 +209,11 @@ class ASRScheduler:
             "deadline_total": 0,
             "cancelled_total": 0,
         }
+
+    def set_telemetry(self, telemetry: object | None) -> None:
+        """Attach the process telemetry hook without changing queue state."""
+
+        self._telemetry = telemetry
 
     async def start(self) -> None:
         """Start only scheduler workers for an enabled, configured candidate set."""
@@ -271,18 +280,40 @@ class ASRScheduler:
 
         if not self._audio_is_admissible(audio_bytes):
             self._metrics["rejected_total"] += 1
-            raise ASRAudioRejected()
+            error = ASRAudioRejected()
+            self._schedule_telemetry(
+                context=context,
+                audio_bytes=audio_bytes,
+                provider=None,
+                success=False,
+                error=error,
+                latency_ms=0,
+                queue_wait_ms=0,
+            )
+            raise error
 
         request_context = context or ASRRequestContext(request_id=f"asr-{uuid.uuid4().hex}")
         await self.start()
-        job, owns_job = await self._admit(
-            audio_bytes,
-            sample_rate=sample_rate,
-            language=language,
-            context=request_context,
-            options=options,
-            capability=capability,
-        )
+        try:
+            job, owns_job = await self._admit(
+                audio_bytes,
+                sample_rate=sample_rate,
+                language=language,
+                context=request_context,
+                options=options,
+                capability=capability,
+            )
+        except ASRError as error:
+            self._schedule_telemetry(
+                context=request_context,
+                audio_bytes=audio_bytes,
+                provider=None,
+                success=False,
+                error=error,
+                latency_ms=0,
+                queue_wait_ms=0,
+            )
+            raise
         try:
             return await asyncio.shield(job.future)
         except asyncio.CancelledError:
@@ -390,12 +421,17 @@ class ASRScheduler:
     async def _worker_loop(self, _index: int) -> None:
         while True:
             job = await self._queue.get()
+            job.queue_wait_ms = max(0, round((self._clock() - job.accepted_at) * 1000))
             async with self._state_lock:
                 self._active_jobs += 1
+            started_at = self._clock()
+            outcome_error: BaseException | None = None
+            outcome_success = False
             try:
                 if job.cancelled or job.future.cancelled():
                     continue
                 result = await self._execute(job)
+                outcome_success = True
                 if not job.future.done():
                     job.future.set_result(result)
             except asyncio.CancelledError:
@@ -403,15 +439,27 @@ class ASRScheduler:
                     job.future.set_exception(ASRSchedulerShutdown())
                 raise
             except ASRError as error:
+                outcome_error = error
                 if isinstance(error, ASRDeadlineExceeded):
                     self._metrics["deadline_total"] += 1
                 if not job.future.done():
                     job.future.set_exception(error)
             except Exception as error:  # pragma: no cover - defensive adapter boundary
+                outcome_error = error
                 if not job.future.done():
                     job.future.set_exception(ASRProviderPermanentError())
                 del error
             finally:
+                if not job.cancelled:
+                    self._schedule_telemetry(
+                        context=job.context,
+                        audio_bytes=job.audio_bytes,
+                        provider=job.last_provider_name,
+                        success=outcome_success,
+                        error=outcome_error,
+                        latency_ms=max(0, round((self._clock() - started_at) * 1000)),
+                        queue_wait_ms=job.queue_wait_ms,
+                    )
                 await self._finish_job(job)
                 self._queue.task_done()
 
@@ -455,6 +503,66 @@ class ASRScheduler:
                 raise safe_error from error
         raise last_error or ASRProviderPermanentError()
 
+    def _schedule_telemetry(
+        self,
+        *,
+        context: ASRRequestContext | None,
+        audio_bytes: bytes,
+        provider: str | None,
+        success: bool,
+        error: BaseException | None,
+        latency_ms: int,
+        queue_wait_ms: int,
+    ) -> None:
+        if context is None or self._telemetry is None:
+            return
+        task = asyncio.create_task(
+            self._emit_telemetry(
+                context=context,
+                audio_bytes=audio_bytes,
+                provider=provider,
+                success=success,
+                error=error,
+                latency_ms=latency_ms,
+                queue_wait_ms=queue_wait_ms,
+            ),
+            name=f"asr-telemetry:{context.request_id}",
+        )
+        task.add_done_callback(self._consume_telemetry_task)
+
+    async def _emit_telemetry(
+        self,
+        *,
+        context: ASRRequestContext,
+        audio_bytes: bytes,
+        provider: str | None,
+        success: bool,
+        error: BaseException | None,
+        latency_ms: int,
+        queue_wait_ms: int,
+    ) -> None:
+        record_asr = getattr(self._telemetry, "record_asr", None)
+        if not callable(record_asr):
+            return
+        try:
+            await record_asr(
+                context=context,
+                provider=provider,
+                success=success,
+                error=error,
+                latency_ms=latency_ms,
+                queue_wait_ms=queue_wait_ms,
+                audio_duration_ms=round(len(audio_bytes) / 2 / 16_000 * 1000),
+            )
+        except Exception:
+            # Test doubles and shutdown races must be fail-soft as well.
+            return
+
+    @staticmethod
+    def _consume_telemetry_task(task: asyncio.Task[None]) -> None:
+        if not task.cancelled():
+            task.exception()
+
     async def _call_provider(
         self,
         binding: ASRProviderBinding,
@@ -476,6 +584,7 @@ class ASRScheduler:
                 state.waiting -= 1
                 state.in_flight += 1
             job.provider_name = binding.name
+            job.last_provider_name = binding.name
             provider_task = asyncio.create_task(
                 binding.adapter.transcribe(
                     job.audio_bytes,

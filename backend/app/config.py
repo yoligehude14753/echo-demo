@@ -244,6 +244,34 @@ class Settings(BaseSettings):
     asr_local_compute_type: str = "int8"
     asr_local_worker_count: int = Field(default=1, ge=1, le=1)
 
+    # ── Privacy-safe production telemetry ────────────────────────
+    # Disabled by default; when enabled the independent SQLite sink must be
+    # fully configured before application startup can succeed.
+    telemetry_enabled: bool = False
+    telemetry_db_path: Path | None = Field(
+        default_factory=lambda: user_config_dir() / "telemetry.sqlite3",
+        validation_alias=AliasChoices("telemetry_db_path", "TELEMETRY_DB_PATH"),
+    )
+    telemetry_hmac_key_ring: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices(
+            "telemetry_hmac_key_ring",
+            "TELEMETRY_HMAC_KEY_RING",
+        ),
+        repr=False,
+    )
+    telemetry_hmac_current_key_version: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "telemetry_hmac_current_key_version",
+            "TELEMETRY_HMAC_CURRENT_KEY_VERSION",
+        ),
+        repr=False,
+    )
+    telemetry_retention_s: int = Field(default=30 * 24 * 60 * 60, gt=0)
+    telemetry_k_threshold: int = Field(default=5, ge=1, le=100_000)
+    telemetry_rotation_period_s: int = Field(default=30 * 24 * 60 * 60, gt=0)
+
     @field_validator("asr_eligible_providers")
     @classmethod
     def _validate_asr_provider_names(cls, values: tuple[str, ...]) -> tuple[str, ...]:

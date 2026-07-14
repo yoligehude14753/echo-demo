@@ -44,6 +44,8 @@ class ASRRequestContext:
     device_id: str | None = None
     deadline_s: float | None = None
     capability: str | None = None
+    platform: str | None = None
+    app_version: str | None = None
     options: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -57,6 +59,10 @@ class ASRRequestContext:
             raise ValueError("deadline_s must be positive")
         if self.capability is not None and not self.capability.strip():
             raise ValueError("capability must not be blank")
+        if self.platform is not None and not self.platform.strip():
+            raise ValueError("platform must not be blank")
+        if self.app_version is not None and not self.app_version.strip():
+            raise ValueError("app_version must not be blank")
         if any(not str(key).strip() for key in self.options):
             raise ValueError("ASR option names must not be blank")
 

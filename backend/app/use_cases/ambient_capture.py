@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import stat
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ from app.security.governor import PrincipalGovernor, QuotaExceeded, QuotaReserva
 from app.security.models import Principal
 from app.security.scope import scoped_directory
 from app.services.audio import normalize_audio_bytes, pcm_to_wav
+from app.telemetry.runtime import TelemetryRuntime
 from app.use_cases.meeting_pipeline import MeetingPipeline, MeetingPipelineError
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
@@ -166,6 +168,7 @@ class AmbientCapturePipeline:
         event_bus: EventBusPort | None = None,
         punctuator: TextPunctuatorPort | None = None,
         asr_scheduler: ASRScheduler | None = None,
+        telemetry: TelemetryRuntime | None = None,
         governor: PrincipalGovernor | None = None,
         principal: Principal | None = None,
         memory: MemoryService | None = None,
@@ -173,6 +176,7 @@ class AmbientCapturePipeline:
         self._settings = settings
         self._stt = stt
         self._asr_scheduler = asr_scheduler
+        self._telemetry = telemetry
         self._rag = rag
         self._meeting = meeting
         self._repo = repository
@@ -1046,23 +1050,7 @@ class AmbientCapturePipeline:
         本身不再主动打开本地熔断器。
         """
         if self._settings.asr_scheduler_enabled and self._asr_scheduler is not None:
-            principal = self._principal
-            incoming = context or ASRRequestContext(
-                request_id=f"ambient-{uuid.uuid4().hex}",
-            )
-            request_context = ASRRequestContext(
-                request_id=incoming.request_id,
-                idempotency_key=incoming.idempotency_key,
-                tenant_id=principal.tenant_id,
-                principal_id=principal.user_id,
-                device_id=principal.device_id,
-                deadline_s=min(
-                    incoming.deadline_s or self._settings.asr_job_deadline_s,
-                    self._settings.asr_job_deadline_s,
-                ),
-                capability=incoming.capability or "ambient_capture",
-                options=incoming.options,
-            )
+            request_context = self._server_asr_context(context)
             return await self._asr_scheduler.transcribe(
                 audio_bytes,
                 sample_rate=sample_rate,
@@ -1075,17 +1063,90 @@ class AmbientCapturePipeline:
             raise _STTCallFailedError(msg)
 
         async with self._stt_lock:
+            started_at = time.monotonic()
+            request_context = self._server_asr_context(context)
             try:
-                return await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
-            except ASRError:
+                result = await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
+            except ASRError as error:
+                await self._record_legacy_telemetry(
+                    request_context,
+                    audio_bytes=audio_bytes,
+                    sample_rate=sample_rate,
+                    started_at=started_at,
+                    error=error,
+                )
                 raise
             except Exception as e:
                 msg = str(e)
                 if "circuit open" in msg.lower():
                     logger.warning("ambient STT circuit open (audio saved): %s", e)
-                    raise _STTCircuitOpenError(msg) from e
+                    error = _STTCircuitOpenError(msg)
+                    await self._record_legacy_telemetry(
+                        request_context,
+                        audio_bytes=audio_bytes,
+                        sample_rate=sample_rate,
+                        started_at=started_at,
+                        error=error,
+                    )
+                    raise error from e
                 logger.warning("ambient STT failed (audio saved): %s", e)
-                raise _STTCallFailedError(msg) from e
+                error = _STTCallFailedError(msg)
+                await self._record_legacy_telemetry(
+                    request_context,
+                    audio_bytes=audio_bytes,
+                    sample_rate=sample_rate,
+                    started_at=started_at,
+                    error=error,
+                )
+                raise error from e
+            await self._record_legacy_telemetry(
+                request_context,
+                audio_bytes=audio_bytes,
+                sample_rate=sample_rate,
+                started_at=started_at,
+                error=None,
+            )
+            return result
+
+    def _server_asr_context(self, context: ASRRequestContext | None) -> ASRRequestContext:
+        principal = self._principal
+        incoming = context or ASRRequestContext(request_id=f"ambient-{uuid.uuid4().hex}")
+        return ASRRequestContext(
+            request_id=incoming.request_id,
+            idempotency_key=incoming.idempotency_key,
+            tenant_id=principal.tenant_id,
+            principal_id=principal.user_id,
+            device_id=principal.device_id,
+            deadline_s=min(
+                incoming.deadline_s or self._settings.asr_job_deadline_s,
+                self._settings.asr_job_deadline_s,
+            ),
+            capability=incoming.capability or "ambient_capture",
+            platform=incoming.platform,
+            app_version=incoming.app_version,
+            options=incoming.options,
+        )
+
+    async def _record_legacy_telemetry(
+        self,
+        context: ASRRequestContext,
+        *,
+        audio_bytes: bytes,
+        sample_rate: int,
+        started_at: float,
+        error: BaseException | None,
+    ) -> None:
+        if self._telemetry is None:
+            return
+        await self._telemetry.record_asr(
+            context=context,
+            provider=self._settings.stt_backend,
+            success=error is None,
+            error=error,
+            latency_ms=round((time.monotonic() - started_at) * 1000),
+            queue_wait_ms=0,
+            audio_duration_ms=round(len(audio_bytes) / 2 / max(1, sample_rate) * 1000),
+        )
 
     async def _safe_diarize(
         self,

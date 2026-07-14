@@ -46,7 +46,11 @@ def make_stt(settings: Settings) -> STTPort:
     return FireRedSTT(settings)
 
 
-def build_asr_scheduler(settings: Settings) -> ASRScheduler:
+def build_asr_scheduler(
+    settings: Settings,
+    *,
+    telemetry: object | None = None,
+) -> ASRScheduler:
     """Build the ASR-owned scheduler without changing legacy call sites."""
 
     bindings: dict[str, ASRProviderBinding] = {}
@@ -69,7 +73,7 @@ def build_asr_scheduler(settings: Settings) -> ASRScheduler:
         scope_rate_limit_per_minute=settings.asr_scope_rate_limit_per_minute,
         readiness_stale_after_s=settings.asr_readiness_stale_after_s,
     )
-    return ASRScheduler(bindings, scheduler_config)
+    return ASRScheduler(bindings, scheduler_config, telemetry=telemetry)
 
 
 def _build_binding(name: str, settings: Settings) -> ASRProviderBinding | None:
@@ -121,17 +125,27 @@ def _build_binding(name: str, settings: Settings) -> ASRProviderBinding | None:
     )
 
 
-def get_asr_scheduler(settings: Settings) -> ASRScheduler:
+def get_asr_scheduler(
+    settings: Settings,
+    *,
+    telemetry: object | None = None,
+) -> ASRScheduler:
     """Return one process-wide scheduler for global queue/quota semantics."""
 
     global _scheduler  # noqa: PLW0603
     if _scheduler is None:
-        _scheduler = build_asr_scheduler(settings)
+        _scheduler = build_asr_scheduler(settings, telemetry=telemetry)
+    elif telemetry is not None:
+        _scheduler.set_telemetry(telemetry)
     return _scheduler
 
 
-async def start_asr_scheduler(settings: Settings) -> ASRScheduler:
-    scheduler = get_asr_scheduler(settings)
+async def start_asr_scheduler(
+    settings: Settings,
+    *,
+    telemetry: object | None = None,
+) -> ASRScheduler:
+    scheduler = get_asr_scheduler(settings, telemetry=telemetry)
     await scheduler.start()
     return scheduler
 
