@@ -53,14 +53,18 @@ export default function SyncPanel(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const client = useMemo(() => new SyncHubClient(), []);
   const mountedRef = useRef(false);
+  const statusRequestRef = useRef(0);
 
   const refreshHostStatus = useCallback(() => {
+    const requestId = ++statusRequestRef.current;
     void hubStatus()
       .then((next) => {
-        if (mountedRef.current) setHostStatus(next);
+        if (mountedRef.current && requestId === statusRequestRef.current) {
+          setHostStatus(next);
+        }
       })
       .catch(() => {
-        if (mountedRef.current) setHostStatus(null);
+        // 保留最后一次成功状态，避免瞬时刷新失败把已配对 UI 闪回“未配对”。
       });
   }, []);
 

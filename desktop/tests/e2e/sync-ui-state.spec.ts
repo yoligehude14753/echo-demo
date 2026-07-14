@@ -34,6 +34,33 @@ test("sync indicator refreshes after an initial Hub status failure", async ({ pa
   });
 });
 
+test("paired display survives a transient Hub status refresh failure", async ({ page }) => {
+  await installEchoMock(page);
+  await page.addInitScript(() => {
+    let hubStatusCalls = 0;
+    const mockedFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/hub/status") && hubStatusCalls++ === 1) {
+        return new Response(JSON.stringify({ detail: "temporary status failure" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return mockedFetch(input, init);
+    };
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("sync-status")).toContainText("已同步", {
+    timeout: 5_000,
+  });
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("echodesk:sync-hub-change"));
+  });
+  await expect(page.getByTestId("sync-status")).toContainText("已同步");
+});
+
 test("an active meeting loaded from history is selected for transcript display", async ({ page }) => {
   const meetingId = "gateway-meeting";
   const marker = "SYNC_UI_HISTORY_MARKER";
