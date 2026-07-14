@@ -185,9 +185,18 @@ class ASRScheduler:
             name: asyncio.Semaphore(binding.max_concurrency)
             for name, binding in self._providers.items()
         }
-        # A queue size of zero is represented by the explicit accepted-count
-        # guard. The internal queue still needs a positive maxsize for asyncio.
-        self._queue: asyncio.Queue[_QueuedJob] = asyncio.Queue(maxsize=max(1, config.queue_size))
+        # ``accepted_count`` is the authoritative outstanding-capacity guard.
+        # Keep dispatch reservations separate from the configured pending
+        # backlog so a same-tick burst can reserve all running slots without
+        # changing the meaning of ``queue_size``.
+        self._dispatch_queue: asyncio.Queue[_QueuedJob] = asyncio.Queue(
+            maxsize=config.max_concurrency
+        )
+        self._queue: asyncio.Queue[_QueuedJob] = asyncio.Queue(
+            maxsize=max(1, config.queue_size)
+        )
+        self._dispatch_reserved = 0
+        self._work_available = asyncio.Event()
         self._workers: list[asyncio.Task[None]] = []
         self._scope_states: dict[tuple[str, str, str], _ScopeState] = {}
         self._idempotency: dict[tuple[tuple[str, str, str], str], _IdempotencyRecord] = {}
@@ -242,7 +251,10 @@ class ASRScheduler:
 
         if workers:
             try:
-                await asyncio.wait_for(self._queue.join(), timeout=grace_period_s)
+                await asyncio.wait_for(
+                    asyncio.gather(self._dispatch_queue.join(), self._queue.join()),
+                    timeout=grace_period_s,
+                )
             except TimeoutError:
                 await self._fail_queued_jobs(ASRSchedulerShutdown())
             finally:
@@ -402,7 +414,12 @@ class ASRScheduler:
                 accepted_at=now,
             )
             try:
-                self._queue.put_nowait(job)
+                running_slots_used = self._active_jobs + self._dispatch_reserved
+                if running_slots_used < self._config.max_concurrency:
+                    self._dispatch_queue.put_nowait(job)
+                    self._dispatch_reserved += 1
+                else:
+                    self._queue.put_nowait(job)
             except asyncio.QueueFull as error:
                 self._metrics["rejected_total"] += 1
                 raise ASRQueueFull(retry_after_s=1.0) from error
@@ -416,13 +433,16 @@ class ASRScheduler:
                     future=job.future,
                 )
             self._metrics["accepted_total"] += 1
+            self._work_available.set()
             return job, True
 
     async def _worker_loop(self, _index: int) -> None:
         while True:
-            job = await self._queue.get()
+            job, source_queue = await self._next_job()
             job.queue_wait_ms = max(0, round((self._clock() - job.accepted_at) * 1000))
             async with self._state_lock:
+                if source_queue is self._dispatch_queue:
+                    self._dispatch_reserved = max(0, self._dispatch_reserved - 1)
                 self._active_jobs += 1
             started_at = self._clock()
             outcome_error: BaseException | None = None
@@ -461,7 +481,25 @@ class ASRScheduler:
                         queue_wait_ms=job.queue_wait_ms,
                     )
                 await self._finish_job(job)
-                self._queue.task_done()
+                source_queue.task_done()
+
+    async def _next_job(
+        self,
+    ) -> tuple[_QueuedJob, asyncio.Queue[_QueuedJob]]:
+        """Take a reserved dispatch job before consuming pending backlog."""
+
+        while True:
+            await self._work_available.wait()
+            async with self._state_lock:
+                try:
+                    job = self._dispatch_queue.get_nowait()
+                    return job, self._dispatch_queue
+                except asyncio.QueueEmpty:
+                    try:
+                        job = self._queue.get_nowait()
+                        return job, self._queue
+                    except asyncio.QueueEmpty:
+                        self._work_available.clear()
 
     async def _execute(self, job: _QueuedJob) -> list[TranscriptSegment]:
         tried: set[str] = set()
@@ -692,17 +730,21 @@ class ASRScheduler:
                 self._metrics["failed_total"] += 1
 
     async def _fail_queued_jobs(self, error: ASRError) -> None:
-        while True:
-            try:
-                job = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return
-            try:
-                if not job.future.done():
-                    job.future.set_exception(error)
-                await self._finish_job(job)
-            finally:
-                self._queue.task_done()
+        for queue in (self._dispatch_queue, self._queue):
+            while True:
+                try:
+                    job = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                try:
+                    if queue is self._dispatch_queue:
+                        async with self._state_lock:
+                            self._dispatch_reserved = max(0, self._dispatch_reserved - 1)
+                    if not job.future.done():
+                        job.future.set_exception(error)
+                    await self._finish_job(job)
+                finally:
+                    queue.task_done()
 
     def record_controlled_probe(self, ok: bool, *, checked_at: datetime | None = None) -> None:
         """Record an externally controlled probe result without doing work here."""

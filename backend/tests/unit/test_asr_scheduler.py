@@ -188,6 +188,38 @@ async def test_global_queue_is_bounded_and_overflow_returns_503() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_same_tick_burst_uses_running_slots_plus_configured_backlog() -> None:
+    provider = FakeSTT(delay_s=0.05)
+    scheduler = ASRScheduler(
+        {"primary": binding("primary", provider, max_concurrency=2)},
+        config(
+            eligible_providers=("primary",),
+            max_concurrency=2,
+            queue_size=3,
+            scope_max_concurrency=20,
+        ),
+    )
+    try:
+        results = await asyncio.gather(
+            *[
+                scheduler.transcribe(
+                    VALID_AUDIO,
+                    context=context(key=f"burst-{index}", tenant=f"tenant-{index}"),
+                )
+                for index in range(20)
+            ],
+            return_exceptions=True,
+        )
+        assert sum(isinstance(result, list) for result in results) == 5
+        assert sum(isinstance(result, ASRQueueFull) for result in results) == 15
+        assert scheduler.readiness().queue_capacity == 5
+        assert provider.max_active <= 2
+    finally:
+        await close_scheduler(scheduler)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_scope_quota_returns_429_without_consuming_global_queue() -> None:
     provider = FakeSTT(delay_s=0.1)
     scheduler = ASRScheduler(
