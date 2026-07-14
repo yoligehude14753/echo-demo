@@ -33,8 +33,10 @@ from app.telemetry.contracts import (
 )
 from app.telemetry.ports import TelemetryPort
 from app.telemetry.pseudonym import HmacPseudonymizer
+from app.telemetry.sqlite import TELEMETRY_SCHEMA_VERSION, SQLiteTelemetryAdapter
 
 __all__ = [
+    "TELEMETRY_SCHEMA_VERSION",
     "DeletionReason",
     "DeletionReceipt",
     "FailureReason",
@@ -44,6 +46,7 @@ __all__ = [
     "NoopTelemetryAdapter",
     "ProviderRegistry",
     "PseudonymousIdentity",
+    "SQLiteTelemetryAdapter",
     "TelemetryAggregate",
     "TelemetryContractValidationError",
     "TelemetryDeleteRequest",
