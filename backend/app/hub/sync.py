@@ -15,7 +15,7 @@ import aiosqlite
 
 from app.adapters.repo.connection import configure_aiosqlite_connection
 from app.adapters.repo.migrator import run_migrations
-from app.security.models import local_principal
+from app.security.models import LEGACY_DEVICE_ID, local_principal
 
 EntityType = Literal["transcript_segment", "meeting_summary", "memory"]
 _ENTITY_TYPES = {"transcript_segment", "meeting_summary", "memory"}
@@ -459,7 +459,11 @@ class HubSyncStore:
         )
         rows = await cursor.fetchall()
         await cursor.close()
-        local_sources = {self.device_id, self.local_principal_device_id}
+        local_sources = {
+            self.device_id,
+            self.local_principal_device_id,
+            LEGACY_DEVICE_ID,
+        }
         return [
             row
             for row in rows

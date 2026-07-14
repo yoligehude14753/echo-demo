@@ -249,6 +249,7 @@ async def test_hub_sync_remote_snapshot_promotes_local_alias_to_canonical(tmp_pa
 
     store = HubSyncStore(db_path, device_id="desktop-device")
     await store.init()
+    store.local_principal_device_id = "authenticated-principal-device"
     captured_at_text = captured_at.isoformat()
 
     def change(
@@ -283,6 +284,20 @@ async def test_hub_sync_remote_snapshot_promotes_local_alias_to_canonical(tmp_pa
 
     try:
         assert await store.reconcile_local_changes() == 1
+        conn = store._require_conn()
+        cursor = await conn.execute(
+            "SELECT entity_id FROM hub_sync_entities "
+            "WHERE entity_type = 'transcript_segment'",
+        )
+        alias = await cursor.fetchone()
+        await cursor.close()
+        assert alias is not None
+        await conn.execute(
+            "UPDATE hub_sync_entities SET source_device_id = ? "
+            "WHERE entity_type = 'transcript_segment' AND entity_id = ?",
+            ("legacy-local", str(alias["entity_id"])),
+        )
+        await conn.commit()
         first = await store.apply_changes(
             [change("snapshot:cursor0")],
             snapshot=True,
@@ -313,7 +328,6 @@ async def test_hub_sync_remote_snapshot_promotes_local_alias_to_canonical(tmp_pa
             snapshot=True,
         )
         await store.reconcile_local_changes()
-        conn = store._require_conn()
         cursor = await conn.execute(
             "SELECT text FROM meeting_segments ORDER BY id",
         )
