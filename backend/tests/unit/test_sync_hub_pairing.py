@@ -163,3 +163,62 @@ def test_pairing_and_sync_tokens_are_stored_only_as_hashes(
     assert sync_hash == hashlib.sha256(claim["sync_token"].encode()).hexdigest()
     assert pairing["pairing_code"] not in pairing_hash
     assert claim["sync_token"] not in sync_hash
+
+
+@pytest.mark.unit
+def test_sync_token_principal_matches_claimed_device(
+    public_client: TestClient,
+) -> None:
+    session = public_client.post("/session", json=_enrollment("identity"))
+    assert session.status_code == 201, session.text
+    pairing = public_client.post(
+        "/hub/v1/pairings",
+        headers={"Authorization": f"Bearer {session.json()['token']}"},
+    )
+    assert pairing.status_code == 201, pairing.text
+    claim = public_client.post(
+        "/hub/v1/pairings/claim",
+        json={
+            "pairing_code": pairing.json()["pairing_code"],
+            "device_id": "paired-device",
+            "device_name": "Paired device",
+            "platform": "test",
+        },
+    )
+    assert claim.status_code == 200, claim.text
+    token = claim.json()["sync_token"]
+    headers = {"X-Echo-Sync-Token": token}
+
+    devices = public_client.get("/hub/v1/devices", headers=headers)
+    assert devices.status_code == 200, devices.text
+    assert [item["device_id"] for item in devices.json()] == ["paired-device"]
+
+    valid_push = public_client.post(
+        "/hub/v1/sync/push",
+        headers=headers,
+        json={
+            "operation_id": "sync:paired:1",
+            "device_id": "paired-device",
+            "entity_type": "memory",
+            "entity_id": "memory-1",
+            "base_revision": 0,
+            "updated_at": "2026-07-14T10:00:00Z",
+            "payload": {"content": "paired identity"},
+        },
+    )
+    assert valid_push.status_code == 200, valid_push.text
+
+    forged_push = public_client.post(
+        "/hub/v1/sync/push",
+        headers=headers,
+        json={
+            "operation_id": "sync:paired:2",
+            "device_id": "forged-device",
+            "entity_type": "memory",
+            "entity_id": "memory-2",
+            "base_revision": 0,
+            "updated_at": "2026-07-14T10:00:00Z",
+            "payload": {"content": "forged identity"},
+        },
+    )
+    assert forged_push.status_code == 400, forged_push.text

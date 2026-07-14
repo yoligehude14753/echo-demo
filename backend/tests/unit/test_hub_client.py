@@ -73,7 +73,8 @@ async def test_hub_client_covers_pairing_devices_and_revoke_endpoints():
         "device_name": "EchoDesk Desktop",
         "platform": sys.platform,
     }
-    assert requests[2].headers["Authorization"] == "Bearer sync-secret"
+    assert requests[2].headers["X-Echo-Sync-Token"] == "sync-secret"
+    assert "Authorization" not in requests[2].headers
 
 
 @pytest.mark.asyncio
@@ -174,3 +175,11 @@ async def test_hub_client_sync_push_changes_and_snapshot_contract():
     )
     changes_request = next(request for request in requests if request.url.path.endswith("/sync/changes"))
     assert "cursor" not in changes_request.url.params
+    sync_requests = [
+        request
+        for request in requests
+        if "/sync/" in request.url.path
+    ]
+    assert sync_requests
+    assert all(request.headers["X-Echo-Sync-Token"] == "sync-secret" for request in sync_requests)
+    assert all("Authorization" not in request.headers for request in sync_requests)

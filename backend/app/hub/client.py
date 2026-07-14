@@ -125,7 +125,7 @@ class HubClient:
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
         if self.sync_token:
-            headers["Authorization"] = f"Bearer {self.sync_token}"
+            headers["X-Echo-Sync-Token"] = self.sync_token
         return headers
 
     async def _request(
