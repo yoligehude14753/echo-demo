@@ -70,6 +70,14 @@ def _text(value: Any) -> str | None:
     return None
 
 
+def _cursor_text(value: Any) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return str(value)
+    return _text(value)
+
+
 class HubClient:
     """Async client with no provider-specific protocol or crypto layer."""
 
@@ -234,37 +242,24 @@ class HubClient:
     async def push(self, operations: list[dict[str, Any]]) -> SyncPushResult:
         if not operations:
             return SyncPushResult(applied=[], duplicate=[], conflict=[])
-        payload = await self._request(
-            "POST",
-            "/hub/v1/sync/push",
-            json_body={"operations": operations},
-        )
-        if not isinstance(payload, dict):
-            raise HubError("invalid_response")
+        applied: list[str] = []
+        duplicate: list[str] = []
+        conflict: list[str] = []
 
-        def ids(value: Any) -> list[str]:
-            if isinstance(value, list):
-                result: list[str] = []
-                for item in value:
-                    if isinstance(item, str) and item.strip():
-                        result.append(item.strip())
-                    elif isinstance(item, dict):
-                        operation_id = _text(_value(item, "operation_id", "operationId", "id"))
-                        if operation_id:
-                            result.append(operation_id)
-                return result
-            return []
-
-        applied = ids(payload.get("applied"))
-        duplicate = ids(payload.get("duplicate"))
-        conflict = ids(payload.get("conflict"))
-        for item in payload.get("results", []):
-            if not isinstance(item, dict):
-                continue
-            operation_id = _text(_value(item, "operation_id", "operationId", "id"))
-            status = _text(item.get("status"))
-            if not operation_id or status not in {"applied", "duplicate", "conflict"}:
-                continue
+        for operation in operations:
+            payload = await self._request(
+                "POST",
+                "/hub/v1/sync/push",
+                json_body=operation,
+            )
+            if not isinstance(payload, dict):
+                raise HubError("invalid_response")
+            operation_id = _text(_value(payload, "operation_id", "operationId", "id"))
+            if operation_id is None:
+                operation_id = _text(_value(operation, "operation_id", "operationId", "id"))
+            status = _text(payload.get("status"))
+            if operation_id is None or status not in {"applied", "duplicate", "conflict"}:
+                raise HubError("invalid_response")
             target = {
                 "applied": applied,
                 "duplicate": duplicate,
@@ -272,15 +267,6 @@ class HubClient:
             }[status]
             if operation_id not in target:
                 target.append(operation_id)
-        if not applied and not duplicate and not conflict:
-            status = _text(payload.get("status"))
-            if status in {"applied", "duplicate", "conflict"}:
-                target = {
-                    "applied": applied,
-                    "duplicate": duplicate,
-                    "conflict": conflict,
-                }[status]
-                target.extend(str(item["operation_id"]) for item in operations)
         return SyncPushResult(applied=applied, duplicate=duplicate, conflict=conflict)
 
     async def changes(
@@ -289,10 +275,13 @@ class HubClient:
         cursor: str | None,
         limit: int = 100,
     ) -> tuple[list[dict[str, Any]], str | None]:
+        params: dict[str, str | int] = {"limit": max(1, min(limit, 500))}
+        if cursor is not None and cursor.strip():
+            params["cursor"] = cursor
         payload = await self._request(
             "GET",
             "/hub/v1/sync/changes",
-            params={"cursor": cursor or "", "limit": max(1, min(limit, 500))},
+            params=params,
         )
         if isinstance(payload, list):
             return [item for item in payload if isinstance(item, dict)], cursor
@@ -301,7 +290,7 @@ class HubClient:
         raw_changes = payload.get("changes") or payload.get("items") or []
         if not isinstance(raw_changes, list):
             raise HubError("invalid_response")
-        next_cursor = _text(_value(payload, "next_cursor", "nextCursor", "cursor"))
+        next_cursor = _cursor_text(_value(payload, "next_cursor", "nextCursor", "cursor"))
         return [item for item in raw_changes if isinstance(item, dict)], next_cursor
 
     async def snapshot(self) -> tuple[list[dict[str, Any]], str | None]:
@@ -310,14 +299,21 @@ class HubClient:
             return [item for item in payload if isinstance(item, dict)], None
         if not isinstance(payload, dict):
             raise HubError("invalid_response")
-        raw_entities = (
-            payload.get("entities") or payload.get("items") or payload.get("changes") or []
-        )
-        if not isinstance(raw_entities, list):
-            raise HubError("invalid_response")
+        raw_entities: list[Any] | None = None
+        for key in ("entities", "items", "changes"):
+            candidate = payload.get(key)
+            if isinstance(candidate, list) and candidate:
+                raw_entities = candidate
+                break
+        if raw_entities is None:
+            raw_entities = []
+            for key in ("transcript_segments", "meeting_summaries", "memories"):
+                candidate = payload.get(key)
+                if isinstance(candidate, list):
+                    raw_entities.extend(candidate)
         return (
             [item for item in raw_entities if isinstance(item, dict)],
-            _text(_value(payload, "cursor", "next_cursor", "nextCursor")),
+            _cursor_text(_value(payload, "cursor", "next_cursor", "nextCursor")),
         )
 
     def _events_url(self, cursor: str | None) -> str:

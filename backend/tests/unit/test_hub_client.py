@@ -108,27 +108,33 @@ async def test_hub_client_sync_push_changes_and_snapshot_contract():
     async def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if request.method == "POST" and request.url.path == "/base/hub/v1/sync/push":
+            operation = json.loads(request.content)
+            operation_id = operation["operation_id"]
+            status = {
+                "sync:desktop:1": "applied",
+                "sync:desktop:2": "duplicate",
+                "sync:desktop:3": "conflict",
+            }[operation_id]
             return httpx.Response(
                 200,
-                json={
-                    "results": [
-                        {"operation_id": "sync:desktop:1", "status": "applied"},
-                        {"operation_id": "sync:desktop:2", "status": "duplicate"},
-                        {"operation_id": "sync:desktop:3", "status": "conflict"},
-                    ]
-                },
+                json={"operation_id": operation_id, "status": status, "revision": 1, "cursor": 1},
                 request=request,
             )
         if request.method == "GET" and request.url.path == "/base/hub/v1/sync/changes":
             return httpx.Response(
                 200,
-                json={"items": [{"operation_id": "remote:1"}], "next_cursor": "cursor-2"},
+                json={"changes": [{"operation_id": "remote:1"}], "cursor": 2},
                 request=request,
             )
         if request.method == "GET" and request.url.path == "/base/hub/v1/sync/snapshot":
             return httpx.Response(
                 200,
-                json={"entities": [{"operation_id": "remote:snapshot-1"}], "cursor": "cursor-1"},
+                json={
+                    "cursor": 3,
+                    "transcript_segments": [{"operation_id": "remote:transcript"}],
+                    "meeting_summaries": [{"operation_id": "remote:summary"}],
+                    "memories": [{"operation_id": "remote:memory"}],
+                },
                 request=request,
             )
         return httpx.Response(404, request=request)
@@ -147,7 +153,7 @@ async def test_hub_client_sync_push_changes_and_snapshot_contract():
                 {"operation_id": "sync:desktop:3"},
             ]
         )
-        changes, changes_cursor = await client.changes(cursor="cursor-1", limit=20)
+        changes, changes_cursor = await client.changes(cursor=None, limit=20)
         snapshot, snapshot_cursor = await client.snapshot()
     finally:
         await client.close()
@@ -156,10 +162,15 @@ async def test_hub_client_sync_push_changes_and_snapshot_contract():
     assert pushed.duplicate == ["sync:desktop:2"]
     assert pushed.conflict == ["sync:desktop:3"]
     assert changes == [{"operation_id": "remote:1"}]
-    assert changes_cursor == "cursor-2"
-    assert snapshot == [{"operation_id": "remote:snapshot-1"}]
-    assert snapshot_cursor == "cursor-1"
-    assert client._events_url("cursor-1") == (
-        "wss://hub.test/base/hub/v1/sync/events?cursor=cursor-1"
+    assert changes_cursor == "2"
+    assert snapshot == [
+        {"operation_id": "remote:transcript"},
+        {"operation_id": "remote:summary"},
+        {"operation_id": "remote:memory"},
+    ]
+    assert snapshot_cursor == "3"
+    assert client._events_url("2") == (
+        "wss://hub.test/base/hub/v1/sync/events?cursor=2"
     )
-    assert requests[1].url.params["cursor"] == "cursor-1"
+    changes_request = next(request for request in requests if request.url.path.endswith("/sync/changes"))
+    assert "cursor" not in changes_request.url.params
