@@ -659,7 +659,9 @@ class Settings(BaseSettings):
     allowed_origins: str = (
         f"{OFFICIAL_ELECTRON_ORIGIN},app://.,capacitor://localhost,"
         "https://localhost,http://localhost,"
-        "http://localhost:5173,http://localhost:8769"
+        "http://localhost:5173,http://localhost:8769,"
+        "http://localhost:5174,http://127.0.0.1:5174,"
+        "https://localhost:5174,https://127.0.0.1:5174"
     )
     # 旧版 packaged renderer 会发送 ``Origin: file://``。仅保留为显式开启的
     # loopback-only 升级兼容；当前桌面包固定使用 OFFICIAL_ELECTRON_ORIGIN。

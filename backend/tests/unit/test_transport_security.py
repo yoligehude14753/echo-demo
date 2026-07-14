@@ -455,6 +455,43 @@ def test_explicit_http_origin_requires_allowlist_while_missing_origin_remains_co
 
 
 @pytest.mark.unit
+def test_default_local_renderer_origin_preflight_is_allowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "default-origin.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        skill_executor_build_dir=tmp_path / "skills",
+        public_demo_mode=False,
+        workspace_scan_on_startup=False,
+        tts_enabled=False,
+        diarizer_enabled=False,
+        web_search_enabled=False,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    deps_mod.reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    origin = "http://127.0.0.1:5174"
+    with TestClient(app) as client:
+        response = client.options(
+            "/bootstrap",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    deps_mod.reset_deps_for_test()
+
+
+@pytest.mark.unit
 def test_public_allowed_origin_still_receives_cors_and_can_enroll(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
