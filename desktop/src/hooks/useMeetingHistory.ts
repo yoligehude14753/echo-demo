@@ -46,6 +46,7 @@ export function useMeetingHistory(): void {
   const markDetailLoaded = useStore((s) => s.markMeetingDetailLoaded);
   const markDetailError = useStore((s) => s.markMeetingDetailError);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
+  const selectMeeting = useStore((s) => s.selectMeeting);
   const meetingListRetryRevision = useStore((s) => s.meetingListRetryRevision);
   const startMeetingListLoad = useStore((s) => s.startMeetingListLoad);
   const completeMeetingListLoad = useStore((s) => s.completeMeetingListLoad);
@@ -105,6 +106,10 @@ export function useMeetingHistory(): void {
           } else {
             hydrateMeetings(list);
           }
+          if (!useStore.getState().currentMeetingId) {
+            const activeMeeting = list.find((meeting) => meeting.state === "in_meeting");
+            if (activeMeeting) selectMeeting(activeMeeting.meeting_id);
+          }
           completeMeetingListLoad();
           return; // 成功立即终止
         } catch (e) {
@@ -130,6 +135,7 @@ export function useMeetingHistory(): void {
     rehydrateMeetings,
     rehydrateRevision,
     rehydrateFenceSeq,
+    selectMeeting,
     meetingListRetryRevision,
     startMeetingListLoad,
     completeMeetingListLoad,

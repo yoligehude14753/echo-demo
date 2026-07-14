@@ -6,6 +6,7 @@ import {
   setSyncHubBase,
   SYNC_HUB_BASE_EVENT,
 } from "@/runtime";
+import { hubStatus, type HubStatusDTO } from "@/api";
 import { SyncApiError, SyncHubClient } from "@/syncApi";
 import {
   clearPairing,
@@ -37,28 +38,57 @@ function syncErrorMessage(error: unknown): string {
 
 export default function SyncPanel(): JSX.Element {
   const [state, setState] = useState<SyncState>(() => loadSyncState());
+  const [hostStatus, setHostStatus] = useState<HubStatusDTO | null>(null);
   const [open, setOpen] = useState(false);
   const [pairingCode, setPairingCode] = useState("");
   const [hubBase, setHubBase] = useState(() => configuredSyncHubBase() ?? "");
   const [busy, setBusy] = useState(false);
   const client = useMemo(() => new SyncHubClient(), []);
 
+  const refreshHostStatus = () => {
+    let alive = true;
+    void hubStatus()
+      .then((next) => {
+        if (alive) setHostStatus(next);
+      })
+      .catch(() => {
+        if (alive) setHostStatus(null);
+      });
+    return () => {
+      alive = false;
+    };
+  };
+
   useEffect(() => {
     const refresh = () => setState(loadSyncState());
     const refreshHubBase = () => setHubBase(configuredSyncHubBase() ?? "");
+    const refreshStatus = () => refreshHostStatus();
     window.addEventListener(SYNC_STATE_EVENT, refresh);
     window.addEventListener(SYNC_HUB_BASE_EVENT, refreshHubBase);
+    window.addEventListener(SYNC_HUB_BASE_EVENT, refreshStatus);
+    const stopStatusRefresh = refreshHostStatus();
     return () => {
       window.removeEventListener(SYNC_STATE_EVENT, refresh);
       window.removeEventListener(SYNC_HUB_BASE_EVENT, refreshHubBase);
+      window.removeEventListener(SYNC_HUB_BASE_EVENT, refreshStatus);
+      stopStatusRefresh();
     };
   }, []);
 
   const openPanel = () => {
     setState(loadSyncState());
     setHubBase(configuredSyncHubBase() ?? "");
+    refreshHostStatus();
     setOpen(true);
   };
+
+  const hostPaired =
+    hostStatus?.enabled === true &&
+    hostStatus.paired === true &&
+    hostStatus.connection === "connected";
+  const displayState: SyncState = hostPaired
+    ? { ...state, status: "synced", last_error: null }
+    : state;
 
   const saveHubBase = () => {
     try {
@@ -115,24 +145,24 @@ export default function SyncPanel(): JSX.Element {
 
   return (
     <>
-      <Tooltip title={`多端同步：${statusText(state)}`}>
+      <Tooltip title={`多端同步：${statusText(displayState)}`}>
         <button
           type="button"
-          className={`sync-status ${statusClass(state)}`}
+          className={`sync-status ${statusClass(displayState)}`}
           data-testid="sync-status"
           onClick={openPanel}
-          aria-label={`打开多端同步设置，当前${statusText(state)}`}
+          aria-label={`打开多端同步设置，当前${statusText(displayState)}`}
         >
-          {state.status === "failed" ? (
+          {displayState.status === "failed" ? (
             <AlertCircle aria-hidden="true" />
-          ) : state.status === "synced" ? (
+          ) : displayState.status === "synced" ? (
             <CheckCircle2 aria-hidden="true" />
-          ) : state.status === "syncing" ? (
+          ) : displayState.status === "syncing" ? (
             <RefreshCw className="is-spinning" aria-hidden="true" />
           ) : (
             <Link2 aria-hidden="true" />
           )}
-          <span>{statusText(state)}</span>
+          <span>{statusText(displayState)}</span>
         </button>
       </Tooltip>
 
@@ -147,8 +177,8 @@ export default function SyncPanel(): JSX.Element {
         <div className="space-y-4 py-2 text-[12px] text-ink-600">
           <div className="flex items-center justify-between rounded-lg border border-paper-300 bg-paper-100 px-3 py-2">
             <span>当前状态</span>
-            <Tag color={state.status === "failed" ? "error" : state.status === "synced" ? "success" : "default"}>
-              {statusText(state)}
+            <Tag color={displayState.status === "failed" ? "error" : displayState.status === "synced" ? "success" : "default"}>
+              {statusText(displayState)}
             </Tag>
           </div>
 
