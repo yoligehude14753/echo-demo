@@ -130,6 +130,7 @@ class HubSyncStore:
         principal = local_principal()
         self.tenant_id = principal.tenant_id
         self.owner_id = principal.owner_id
+        self.local_principal_device_id = principal.device_id
         self._conn: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
 
@@ -321,7 +322,6 @@ class HubSyncStore:
             return 0
 
         # A remote entity may have the same content but a source-prefixed id.
-        # Record a local alias so the next reconcile does not create a loop.
         cursor = await conn.execute(
             "SELECT revision, source_device_id FROM hub_sync_entities "
             "WHERE entity_type = ? AND payload_json = ? LIMIT 1",
@@ -445,6 +445,49 @@ class HubSyncStore:
             )
             await conn.commit()
 
+    async def _find_local_transcript_aliases(
+        self,
+        conn: aiosqlite.Connection,
+        payload: dict[str, Any],
+        canonical_entity_id: str,
+    ) -> list[sqlite3.Row]:
+        comparison = _dump(_comparison_payload("transcript_segment", payload))
+        cursor = await conn.execute(
+            "SELECT entity_id, revision, payload_json, source_device_id "
+            "FROM hub_sync_entities WHERE entity_type = ? AND entity_id != ?",
+            ("transcript_segment", canonical_entity_id),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        local_sources = {self.device_id, self.local_principal_device_id}
+        return [
+            row
+            for row in rows
+            if str(row["source_device_id"]) in local_sources
+            and _dump(_comparison_payload("transcript_segment", _load(row["payload_json"])))
+            == comparison
+        ]
+
+    async def _remove_local_transcript_aliases(
+        self,
+        conn: aiosqlite.Connection,
+        aliases: list[sqlite3.Row],
+    ) -> None:
+        for alias in aliases:
+            await conn.execute(
+                "DELETE FROM hub_sync_outbox WHERE entity_type = ? AND entity_id = ?",
+                ("transcript_segment", str(alias["entity_id"])),
+            )
+            await conn.execute(
+                "DELETE FROM hub_sync_entities WHERE entity_type = ? AND entity_id = ? "
+                "AND source_device_id = ?",
+                (
+                    "transcript_segment",
+                    str(alias["entity_id"]),
+                    str(alias["source_device_id"]),
+                ),
+            )
+
     async def apply_changes(
         self,
         changes: list[dict[str, Any]],
@@ -516,12 +559,22 @@ class HubSyncStore:
         current = await cursor.fetchone()
         await cursor.close()
         incoming_revision = max(1, _int(change.get("revision"), base_revision + 1))
+        canonical_current = current
+        aliases: list[sqlite3.Row] = []
+        if entity_type == "transcript_segment":
+            aliases = await self._find_local_transcript_aliases(
+                conn,
+                payload,
+                entity_id,
+            )
+            if canonical_current is None and aliases:
+                current = aliases[0]
         if (
             entity_type == "transcript_segment"
-            and current is not None
-            and str(current["source_device_id"]) == source_device_id
-            and incoming_revision <= int(current["revision"])
+            and canonical_current is not None
+            and incoming_revision <= int(canonical_current["revision"])
         ):
+            await self._remove_local_transcript_aliases(conn, aliases)
             await conn.execute(
                 "INSERT OR IGNORE INTO hub_sync_applied_operations (operation_id, applied_at) "
                 "VALUES (?, ?)",
@@ -529,14 +582,18 @@ class HubSyncStore:
             )
             return "duplicate"
 
-        if current is not None and str(current["payload_json"]) == payload_json:
+        if canonical_current is not None and str(canonical_current["payload_json"]) == payload_json:
             await conn.execute(
                 "INSERT OR IGNORE INTO hub_sync_applied_operations (operation_id, applied_at) "
                 "VALUES (?, ?)",
                 (operation_id, _now()),
             )
             return "duplicate"
-        if current is not None and not snapshot and base_revision < int(current["revision"]):
+        if (
+            canonical_current is not None
+            and not snapshot
+            and base_revision < int(canonical_current["revision"])
+        ):
             return "conflict"
 
         previous_payload = _load(current["payload_json"]) if current is not None else None
@@ -551,6 +608,7 @@ class HubSyncStore:
             if entity_type == "transcript_segment"
             else max(base_revision + 1, int(current["revision"]) + 1 if current else 1)
         )
+        await self._remove_local_transcript_aliases(conn, aliases)
         await conn.execute(
             "INSERT INTO hub_sync_entities (entity_type, entity_id, revision, updated_at, "
             "payload_json, source_device_id, operation_id) VALUES (?, ?, ?, ?, ?, ?, ?) "

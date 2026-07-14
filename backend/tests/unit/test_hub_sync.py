@@ -225,6 +225,128 @@ async def test_hub_sync_transcript_snapshot_upserts_by_entity_revision(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_hub_sync_remote_snapshot_promotes_local_alias_to_canonical(tmp_path):
+    db_path = tmp_path / "echo.db"
+    captured_at = datetime.now(UTC)
+    repository = SQLiteRepository(db_path)
+    await repository.init()
+    await repository.create_meeting(
+        "m-1d9d8f6e",
+        started_at=captured_at,
+        title="Android meeting",
+    )
+    assert await repository.append_meeting_segment(
+        "m-1d9d8f6e",
+        TranscriptSegment(
+            text="remote marker",
+            start_ms=0,
+            end_ms=1_200,
+            speaker_label="Speaker 1",
+        ),
+        captured_at=captured_at,
+    )
+    await repository.aclose()
+
+    store = HubSyncStore(db_path, device_id="desktop-device")
+    await store.init()
+    captured_at_text = captured_at.isoformat()
+
+    def change(
+        operation_id: str,
+        *,
+        entity_id: str = "m-1d9d8f6e:0:1200",
+        text: str = "remote marker",
+        start_ms: int = 0,
+        end_ms: int = 1_200,
+        base_revision: int = 0,
+    ) -> dict[str, object]:
+        return {
+            "operation_id": operation_id,
+            "device_id": "Android",
+            "entity_type": "transcript_segment",
+            "entity_id": entity_id,
+            "base_revision": base_revision,
+            "updated_at": captured_at_text,
+            "payload": {
+                "meeting_id": "m-1d9d8f6e",
+                "meeting_title": "Android meeting",
+                "meeting_state": "in_meeting",
+                "segment_id": entity_id.rsplit(":", 1)[-1],
+                "text": text,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "speaker_id": None,
+                "speaker_label": "Speaker 1",
+                "captured_at": captured_at_text,
+            },
+        }
+
+    try:
+        assert await store.reconcile_local_changes() == 1
+        first = await store.apply_changes(
+            [change("snapshot:cursor0")],
+            snapshot=True,
+        )
+        duplicate = await store.apply_changes(
+            [change("snapshot:cursor1")],
+            snapshot=True,
+        )
+        updated = await store.apply_changes(
+            [
+                change(
+                    "changes:cursor2",
+                    text="updated marker",
+                    base_revision=1,
+                )
+            ]
+        )
+        second = await store.apply_changes(
+            [
+                change(
+                    "snapshot:cursor3",
+                    entity_id="m-1d9d8f6e:1200:2400",
+                    text="second marker",
+                    start_ms=1_200,
+                    end_ms=2_400,
+                )
+            ],
+            snapshot=True,
+        )
+        await store.reconcile_local_changes()
+        conn = store._require_conn()
+        cursor = await conn.execute(
+            "SELECT text FROM meeting_segments ORDER BY id",
+        )
+        segments = await cursor.fetchall()
+        await cursor.close()
+        cursor = await conn.execute(
+            "SELECT entity_id, source_device_id FROM hub_sync_entities "
+            "WHERE entity_type = 'transcript_segment' ORDER BY entity_id",
+        )
+        mappings = await cursor.fetchall()
+        await cursor.close()
+        outbox = await store.list_outbox()
+    finally:
+        await store.aclose()
+
+    assert first.applied == 1
+    assert duplicate.duplicate == 1
+    assert updated.applied == 1
+    assert second.applied == 1
+    assert [str(row["text"]) for row in segments] == [
+        "updated marker",
+        "second marker",
+    ]
+    assert [
+        (str(row["entity_id"]), str(row["source_device_id"])) for row in mappings
+    ] == [
+        ("m-1d9d8f6e:0:1200", "Android"),
+        ("m-1d9d8f6e:1200:2400", "Android"),
+    ]
+    assert outbox == []
+
+
+@pytest.mark.asyncio
 async def test_hub_sync_conflict_and_snapshot_recovery(tmp_path):
     db_path = tmp_path / "echo.db"
     store = HubSyncStore(db_path, device_id="desktop-device")
