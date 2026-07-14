@@ -1,6 +1,7 @@
 import { configuredSyncHubBase } from "@/runtime";
 import { apiTransport, ensureServerSession } from "@/session";
 import { loadSyncState, type SyncStorage } from "@/syncState";
+import { prepareSyncRequest } from "@/syncTransportHeaders";
 import {
   SyncApiError,
   SyncHubClient as ProtocolSyncHubClient,
@@ -25,12 +26,13 @@ async function requestWithDefaultTransport(
       ? await ensureServerSession()
       : loadSyncState().sync_token;
   const url = `${hubBase}${path}`;
-  return apiTransport(url, init, {
+  const prepared = prepareSyncRequest(init, auth, token);
+  return apiTransport(url, prepared.init, {
     timeoutMs: SYNC_TIMEOUT_MS,
     maxResponseBytes: SYNC_MAX_RESPONSE_BYTES,
     throwHttpErrors: false,
     targetOrigin: new URL(hubBase).origin,
-    bearerToken: token,
+    bearerToken: prepared.bearerToken,
   });
 }
 
