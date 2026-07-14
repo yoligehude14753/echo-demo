@@ -90,6 +90,14 @@ function validEntityType(value: unknown): value is SyncEntityType {
   );
 }
 
+function normalizeStoredCursor(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0) {
+    return String(value);
+  }
+  return null;
+}
+
 function normalizeOutboxItem(value: unknown, deviceId: string): SyncOutboxItem | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Partial<SyncOutboxItem>;
@@ -139,7 +147,7 @@ function normalizeState(value: unknown): SyncState | null {
     device_name: typeof parsed.device_name === "string" ? parsed.device_name : "EchoDesk",
     platform: parsed.platform === "android" ? "android" : "web",
     sync_token: typeof parsed.sync_token === "string" ? parsed.sync_token : null,
-    cursor: typeof parsed.cursor === "string" ? parsed.cursor : null,
+    cursor: normalizeStoredCursor(parsed.cursor),
     status:
       parsed.status === "syncing" || parsed.status === "synced" || parsed.status === "failed"
         ? parsed.status

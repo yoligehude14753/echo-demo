@@ -64,6 +64,16 @@ export class SyncApiError extends Error {
   }
 }
 
+function readableDetail(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   let body: unknown = null;
   try {
@@ -72,10 +82,11 @@ async function readJson<T>(response: Response): Promise<T> {
     throw new SyncApiError("同步服务响应格式无效", response.status);
   }
   if (!response.ok) {
-    const detail =
+    const detailValue =
       typeof body === "object" && body !== null && "detail" in body
-        ? String((body as { detail?: unknown }).detail ?? "")
-        : "";
+        ? (body as { detail?: unknown }).detail
+        : undefined;
+    const detail = readableDetail(detailValue);
     throw new SyncApiError(
       detail ? `同步服务请求失败：${detail.slice(0, 160)}` : "同步服务请求失败，请稍后重试",
       response.status,
@@ -108,6 +119,15 @@ function normalizeClaimCursor(value: unknown): string | null {
     }
   }
   throw new SyncApiError("配对响应包含无效的同步游标");
+}
+
+function normalizeChangesCursor(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value.trim() || null;
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0) {
+    return String(value);
+  }
+  throw new SyncApiError("同步变更响应包含无效的同步游标");
 }
 
 export function normalizeClaimResponse(value: unknown): PairingClaimResponse {
@@ -146,7 +166,7 @@ function normalizeChanges(value: SyncChangesResponse | SyncChange[]): SyncChange
           change.payload !== null,
       ),
     ),
-    cursor: Array.isArray(value) ? null : value.cursor ?? null,
+    cursor: Array.isArray(value) ? null : normalizeChangesCursor(value.cursor),
     reset_required: Array.isArray(value) ? false : value.reset_required === true,
     snapshot_required: Array.isArray(value) ? false : value.snapshot_required === true,
   };
@@ -230,6 +250,6 @@ export class SyncHubClient {
     );
     const result = await readJson<SyncSnapshotResponse | SyncChangesResponse>(response);
     const changes = normalizeChanges(result);
-    return { cursor: result.cursor ?? changes.cursor, changes: changes.changes };
+    return { cursor: changes.cursor, changes: changes.changes };
   }
 }

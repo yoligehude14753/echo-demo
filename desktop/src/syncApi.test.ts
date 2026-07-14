@@ -10,6 +10,7 @@ import {
   enqueueSyncOperation,
   ensureSyncDeviceId,
   loadSyncState,
+  setPairingState,
   type SyncStorage,
   // @ts-expect-error Node's strip-types runner executes the source test directly.
 } from "./syncState.ts";
@@ -91,4 +92,52 @@ test("claim cursor rejects negative, fractional, non-finite, and non-numeric val
       /同步游标/,
     );
   }
+});
+
+test("changes keep numeric zero cursor and readable structured errors", async () => {
+  const storage = new MemoryStorage();
+  setPairingState({ sync_token: "token-1", cursor: "0" }, storage);
+  const paths: string[] = [];
+  const transport: SyncTransport = {
+    request: async (path) => {
+      paths.push(path);
+      return new Response(JSON.stringify({ changes: [], cursor: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  };
+  const client = new SyncHubClient(transport, storage);
+
+  const first = await client.changes(loadSyncState(storage).cursor);
+  const second = await client.changes(first.cursor);
+  assert.equal(first.cursor, "0");
+  assert.equal(second.cursor, "0");
+  assert.equal(new URL(`http://hub.test${paths[0]}`).searchParams.get("cursor"), "0");
+  assert.equal(new URL(`http://hub.test${paths[1]}`).searchParams.get("cursor"), "0");
+});
+
+test("structured sync errors do not render as object strings", async () => {
+  const storage = new MemoryStorage();
+  setPairingState({ sync_token: "token-1", cursor: "0" }, storage);
+  const client = new SyncHubClient(
+    {
+      request: async () =>
+        new Response(JSON.stringify({ detail: [{ msg: "cursor must be an integer" }] }), {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        }),
+    },
+    storage,
+  );
+
+  await assert.rejects(
+    () => client.changes("0"),
+    (error: unknown) => {
+      assert(error instanceof Error);
+      assert.match(error.message, /cursor must be an integer/);
+      assert.doesNotMatch(error.message, /\[object Object\]/);
+      return true;
+    },
+  );
 });

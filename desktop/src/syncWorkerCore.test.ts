@@ -113,6 +113,26 @@ test("changes apply through the injected repository and persist cursor without c
   assert.equal(loadSyncState(storage).outbox.length, 0);
 });
 
+test("numeric zero changes cursor persists as string and is reused on the next poll", async () => {
+  const storage = new MemoryStorage();
+  setPairingState({ sync_token: "token", cursor: "0" }, storage);
+  const calls: Array<string | null> = [];
+  const client: SyncClientLike = {
+    push: async () => ({ result: "applied" }),
+    changes: async (cursor) => {
+      calls.push(cursor);
+      return { changes: [], cursor: 0 as unknown as string };
+    },
+    snapshot: async () => ({ changes: [], cursor: "0" }),
+  };
+  const worker = new SyncWorkerCore(client, () => undefined, storage);
+
+  await worker.receiveChanges();
+  assert.equal(loadSyncState(storage).cursor, "0");
+  await worker.receiveChanges();
+  assert.deepEqual(calls, ["0", "0"]);
+});
+
 test("invalid cursor or server snapshot_required falls back to full snapshot", async () => {
   const storage = new MemoryStorage();
   setPairingState({ sync_token: "token", cursor: "stale" }, storage);
