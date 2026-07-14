@@ -12,6 +12,7 @@ from app.adapters.stt import (
 from app.api.asr import get_asr_readiness, router
 from app.config import Settings
 from app.main import create_app
+from fastapi.testclient import TestClient
 
 
 @pytest.mark.unit
@@ -45,8 +46,17 @@ def test_asr_readiness_route_is_owned_by_asr_module() -> None:
 @pytest.mark.unit
 def test_main_registers_asr_readiness_router_without_sync_or_capture_route_copy() -> None:
     app = create_app()
-    assert any(route.path == "/asr/readiness" for route in app.routes)
-    assert not any(route.path == "/capture/readiness" for route in app.routes)
+    paths = app.openapi()["paths"]
+    assert "/asr/readiness" in paths
+    assert "/capture/readiness" not in paths
+
+    with TestClient(app) as client:
+        readiness = client.get("/asr/readiness")
+        capture_readiness = client.get("/capture/readiness")
+
+    assert readiness.status_code == 200
+    assert readiness.json()["schema_version"] == 1
+    assert capture_readiness.status_code == 404
 
 
 @pytest.mark.unit
