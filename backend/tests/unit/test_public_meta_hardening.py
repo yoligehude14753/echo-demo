@@ -110,7 +110,7 @@ def test_public_anonymous_meta_is_minimal(public_meta_client: TestClient) -> Non
     bootstrap = public_meta_client.get("/bootstrap").json()
     assert bootstrap["ws_path"] == "/ws/echo"
     assert bootstrap["session_required"] is True
-    assert bootstrap["minimum_client_version"] == "0.3.1"
+    assert bootstrap["minimum_client_version"] == MINIMUM_PUBLIC_CLIENT_VERSION
     assert bootstrap["capabilities"]["ws_stream_epoch"] is True
     assert bootstrap["capabilities"]["ws_hello_bearer"] is True
     for sensitive in ("backend_version", "app_version", "ws_url", "http_url"):

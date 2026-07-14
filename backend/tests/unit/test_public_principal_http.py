@@ -604,7 +604,7 @@ def test_public_http_workflow_and_websocket_redact_server_paths(  # noqa: PLR091
             {
                 "type": "client_hello",
                 "last_seq": replay_after_seq,
-                "client_version": "0.3.1",
+                "client_version": "0.3.2",
                 "auth": {"type": "bearer", "token": session["token"]},
             }
         )
@@ -740,7 +740,7 @@ def test_public_agent_history_and_websocket_project_private_failure_details(  # 
             {
                 "type": "client_hello",
                 "last_seq": replay_after_seq,
-                "client_version": "0.3.1",
+                "client_version": "0.3.2",
                 "auth": {"type": "bearer", "token": session["token"]},
             }
         )
@@ -1001,7 +1001,7 @@ def test_public_routes_require_server_issued_session(public_client: TestClient) 
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "version",
-    ["", "0.2.50", "0.3.0", "0.3.1-rc.1", "invalid", "0.3"],
+    ["", "0.2.50", "0.3.0", "0.3.1", "0.3.1-rc.1", "invalid", "0.3"],
 )
 def test_public_routes_reject_missing_invalid_or_old_client_versions(
     public_client: TestClient,
@@ -1015,15 +1015,15 @@ def test_public_routes_reject_missing_invalid_or_old_client_versions(
     assert response.status_code == 426
     assert response.json()["error"] == {
         "code": "client_upgrade_required",
-        "minimum_client_version": "0.3.1",
+        "minimum_client_version": MINIMUM_PUBLIC_CLIENT_VERSION,
         "upgrade_url": "https://github.com/yoligehude14753/echo-demo/releases",
     }
-    assert response.headers["x-echodesk-minimum-client-version"] == "0.3.1"
+    assert response.headers["x-echodesk-minimum-client-version"] == MINIMUM_PUBLIC_CLIENT_VERSION
     assert response.headers["cache-control"] == "private, no-store, max-age=0"
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("version", ["0.3.1", "v0.3.1", "echodesk-0.3.1", "0.4.0"])
+@pytest.mark.parametrize("version", ["0.3.2", "v0.3.2", "echodesk-0.3.2", "0.3.10"])
 def test_supported_public_client_versions_continue_to_session_auth(
     public_client: TestClient,
     version: str,
@@ -1071,10 +1071,10 @@ def test_malformed_host_cannot_poison_identity_or_lan_policy_path(
     assert canonical.json()["detail"] == "session required"
     assert canonical.json()["error"] == {
         "code": "session_required",
-        "minimum_client_version": "0.3.1",
+        "minimum_client_version": MINIMUM_PUBLIC_CLIENT_VERSION,
         "upgrade_url": "https://github.com/yoligehude14753/echo-demo/releases",
     }
-    assert canonical.headers["x-echodesk-minimum-client-version"] == "0.3.1"
+    assert canonical.headers["x-echodesk-minimum-client-version"] == MINIMUM_PUBLIC_CLIENT_VERSION
     assert canonical.headers["cache-control"] == "private, no-store, max-age=0"
     assert canonical.headers["link"].endswith('; rel="upgrade"')
 
@@ -1525,7 +1525,7 @@ def test_public_websocket_requires_session_and_replays_only_owner_events(
     public_client: TestClient,
 ) -> None:
     with public_client.websocket_connect("/ws/echo") as ws:
-        ws.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.1"})
+        ws.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.2"})
         with pytest.raises(WebSocketDisconnect) as anonymous:
             ws.receive_json()
     assert anonymous.value.code == 4401
@@ -1546,7 +1546,7 @@ def test_public_websocket_requires_session_and_replays_only_owner_events(
                 {
                     "type": "client_hello",
                     "last_seq": 0,
-                    "client_version": "0.3.1",
+                    "client_version": "0.3.2",
                     "auth": {"type": "bearer", "token": session["token"]},
                 }
             )
@@ -1559,7 +1559,7 @@ def test_public_websocket_requires_session_and_replays_only_owner_events(
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "version",
-    [None, "0.2.50", "0.3.0", "invalid", f"0.3.1-{'x' * 80}"],
+    [None, "0.2.50", "0.3.0", "0.3.1", "invalid", f"0.3.2-{'x' * 80}"],
 )
 def test_public_websocket_rejects_missing_or_old_client_version(
     public_client: TestClient,
@@ -1579,7 +1579,7 @@ def test_public_websocket_rejects_missing_or_old_client_version(
         with pytest.raises(WebSocketDisconnect) as rejected:
             ws.receive_json()
     assert rejected.value.code == 4426
-    assert rejected.value.reason == "client upgrade required:0.3.1"
+    assert rejected.value.reason == f"client upgrade required:{MINIMUM_PUBLIC_CLIENT_VERSION}"
 
 
 @pytest.mark.unit
@@ -1588,7 +1588,7 @@ def test_public_websocket_rejects_query_bearer_and_oversized_first_frame(
 ) -> None:
     session, _credential = _issue(public_client, "ws-query")
     with public_client.websocket_connect(f"/ws/echo?session={session['token']}") as ws:
-        ws.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.1"})
+        ws.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.2"})
         with pytest.raises(WebSocketDisconnect) as query_rejected:
             ws.receive_json()
     assert query_rejected.value.code == 4401
@@ -1608,7 +1608,7 @@ def test_public_websocket_bounds_authenticated_client_frames(
     hello = {
         "type": "client_hello",
         "last_seq": 0,
-        "client_version": "0.3.1",
+        "client_version": "0.3.2",
         "auth": {"type": "bearer", "token": session["token"]},
     }
 
@@ -1645,7 +1645,7 @@ def test_public_websocket_rate_limits_authenticated_frames_per_principal(
     hello = {
         "type": "client_hello",
         "last_seq": 0,
-        "client_version": "0.3.1",
+        "client_version": "0.3.2",
         "auth": {"type": "bearer", "token": session["token"]},
     }
 
@@ -1674,7 +1674,7 @@ def test_public_websocket_revalidates_revoke_and_releases_subscriber(
             {
                 "type": "client_hello",
                 "last_seq": 0,
-                "client_version": "0.3.1",
+                "client_version": "0.3.2",
                 "auth": {"type": "bearer", "token": token},
             }
         )
@@ -1707,7 +1707,7 @@ def test_public_websocket_revalidates_expired_connected_session(
             {
                 "type": "client_hello",
                 "last_seq": 0,
-                "client_version": "0.3.1",
+                "client_version": "0.3.2",
                 "auth": {"type": "bearer", "token": token},
             }
         )
@@ -1736,7 +1736,7 @@ def test_public_websocket_revalidates_session_generation_after_renew(
             {
                 "type": "client_hello",
                 "last_seq": 0,
-                "client_version": "0.3.1",
+                "client_version": "0.3.2",
                 "auth": {"type": "bearer", "token": token},
             }
         )
