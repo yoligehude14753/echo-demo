@@ -138,18 +138,40 @@ export function observeCaptureStatsSuccess(
     typeof stats.last_chunk_at === "string" && stats.last_chunk_at.length > 0
       ? stats.last_chunk_at
       : null;
-  const source = sequence !== null ? "sequence" : timestamp ? "timestamp" : "legacy";
-  const advanced =
-    sequence !== null
-      ? current.lastSequence === null || sequence > current.lastSequence
-      : timestamp !== null && isNewerTimestamp(timestamp, current.lastTimestamp);
+  const sequenceAdvanced =
+    sequence !== null &&
+    (current.lastSequence === null || sequence > current.lastSequence);
+  const timestampAdvanced =
+    timestamp !== null && isNewerTimestamp(timestamp, current.lastTimestamp);
+  const generationReset =
+    sequence !== null &&
+    current.lastSequence !== null &&
+    sequence < current.lastSequence &&
+    timestampAdvanced;
+  const advanced = sequenceAdvanced || timestampAdvanced;
+  const source =
+    timestampAdvanced && !sequenceAdvanced
+      ? "timestamp"
+      : sequence !== null
+        ? "sequence"
+        : timestamp
+          ? "timestamp"
+          : "legacy";
 
   return {
     warning: advanced ? "none" : current.warning,
     consecutiveFailures: 0,
     source,
-    lastSequence: sequence ?? current.lastSequence,
-    lastTimestamp: timestamp ?? current.lastTimestamp,
+    lastSequence:
+      sequence !== null &&
+      (current.lastSequence === null || sequenceAdvanced || generationReset)
+        ? sequence
+        : current.lastSequence,
+    lastTimestamp:
+      timestamp !== null &&
+      (current.lastTimestamp === null || timestampAdvanced)
+        ? timestamp
+        : current.lastTimestamp,
     lastFreshAt: advanced ? now : current.lastFreshAt,
   };
 }

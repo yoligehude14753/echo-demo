@@ -249,3 +249,90 @@ test("freshness warning 只由新的 stats sequence 清除", async ({ page }) =>
     .toBeGreaterThan(beforeFreshSequence);
   await expect(status).toHaveAttribute("data-freshness-warning", "none");
 });
+
+test("freshness backend generation reset 由更新的 timestamp 清除", async ({
+  page,
+}) => {
+  test.setTimeout(30_000);
+  let statsRequests = 0;
+  let sequence = 5;
+  let lastChunkAt = "2026-07-14T09:00:00.000Z";
+
+  await page.route(/\/(api\/)?capture\/stats$/, async (route) => {
+    statsRequests += 1;
+    if (statsRequests > 1 && statsRequests <= 3) {
+      await route.fulfill({ status: 503, body: "stats unavailable" });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        captureStats({ stats_sequence: sequence, last_chunk_at: lastChunkAt }),
+      ),
+    });
+  });
+  await stubMicPermission(page);
+  await installEchoMock(page, { skipPaths: ["/capture/stats"] });
+  await page.goto("/");
+
+  const status = await expectCaptureStatus(page);
+  await expect(status).toHaveAttribute(
+    "data-freshness-warning",
+    "stats_unavailable",
+    { timeout: 12_000 },
+  );
+
+  sequence = 1;
+  lastChunkAt = "2026-07-14T09:01:00.000Z";
+  const beforeReset = statsRequests;
+  await expect
+    .poll(() => statsRequests, { timeout: 8_000, intervals: [100] })
+    .toBeGreaterThan(beforeReset);
+  await expect(status).toHaveAttribute("data-freshness-warning", "none");
+});
+
+test("freshness backend generation reset 的旧 timestamp 不能清除 warning", async ({
+  page,
+}) => {
+  test.setTimeout(30_000);
+  let statsRequests = 0;
+  let sequence = 5;
+  let lastChunkAt = "2026-07-14T09:00:00.000Z";
+
+  await page.route(/\/(api\/)?capture\/stats$/, async (route) => {
+    statsRequests += 1;
+    if (statsRequests > 1 && statsRequests <= 3) {
+      await route.fulfill({ status: 503, body: "stats unavailable" });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        captureStats({ stats_sequence: sequence, last_chunk_at: lastChunkAt }),
+      ),
+    });
+  });
+  await stubMicPermission(page);
+  await installEchoMock(page, { skipPaths: ["/capture/stats"] });
+  await page.goto("/");
+
+  const status = await expectCaptureStatus(page);
+  await expect(status).toHaveAttribute(
+    "data-freshness-warning",
+    "stats_unavailable",
+    { timeout: 12_000 },
+  );
+
+  sequence = 1;
+  lastChunkAt = "2026-07-14T08:59:00.000Z";
+  const beforeReset = statsRequests;
+  await expect
+    .poll(() => statsRequests, { timeout: 8_000, intervals: [100] })
+    .toBeGreaterThan(beforeReset);
+  await expect(status).toHaveAttribute(
+    "data-freshness-warning",
+    "stats_unavailable",
+  );
+});

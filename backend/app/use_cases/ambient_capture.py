@@ -716,8 +716,7 @@ class AmbientCapturePipeline:
         self._stats.accepted_speech_frames += accepted_frames
         self._stats.accepted_speech_ratio = (
             round(
-                self._stats.accepted_speech_frames
-                / self._stats.observed_audio_frames,
+                self._stats.accepted_speech_frames / self._stats.observed_audio_frames,
                 4,
             )
             if self._stats.observed_audio_frames > 0

@@ -32,10 +32,7 @@ QUIET_NOISE_1KB = b"\x00\x00" * 500
 def _sine_pcm(duration_ms: int, amplitude: int = 4_000) -> bytes:
     """合成完整 20ms VAD 帧，用于验证 admission 分子/分母。"""
     n_samples = int(16_000 * duration_ms / 1000)
-    samples = [
-        int(amplitude * math.sin(2 * math.pi * 440 * i / 16_000))
-        for i in range(n_samples)
-    ]
+    samples = [int(amplitude * math.sin(2 * math.pi * 440 * i / 16_000)) for i in range(n_samples)]
     return struct.pack(f"<{n_samples}h", *samples)
 
 
