@@ -31,6 +31,7 @@ from app.security import (
 from app.security.context import bind_principal, current_principal, reset_principal
 from app.security.governor import PrincipalGovernor
 from app.sync_hub import SyncHubStore
+from app.telemetry.runtime import TelemetryRuntime, build_telemetry_runtime
 from app.use_cases.auto_meeting_detector import AutoMeetingDetector
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
@@ -48,6 +49,8 @@ _session_store_singleton: SessionStore | None = None
 _sync_hub_store_singleton: SyncHubStore | None = None
 _access_policy_singleton: AccessPolicy | None = None
 _governor_singleton: PrincipalGovernor | None = None
+_telemetry_singleton: TelemetryRuntime | None = None
+_telemetry_signature: tuple[object, ...] | None = None
 _scope_runtime_registry: ScopedRuntimeRegistry[tuple[str, str], ScopeRuntime] | None = None
 _runtime_janitor_task: asyncio.Task[None] | None = None
 
@@ -95,6 +98,19 @@ def get_quota_governor(
     if _governor_singleton is None or _governor_singleton.settings is not settings:
         _governor_singleton = PrincipalGovernor(settings)
     return _governor_singleton
+
+
+def get_telemetry(settings: Settings = Depends(get_settings)) -> TelemetryRuntime:
+    global _telemetry_singleton, _telemetry_signature  # noqa: PLW0603
+    signature = (
+        settings.telemetry_enabled,
+        str(settings.telemetry_db_path),
+        settings.telemetry_hmac_current_key_version,
+    )
+    if _telemetry_singleton is None or _telemetry_signature != signature:
+        _telemetry_singleton = build_telemetry_runtime(settings)
+        _telemetry_signature = signature
+    return _telemetry_singleton
 
 
 def get_scope_runtime_registry(
@@ -411,6 +427,12 @@ async def aclose_agents() -> None:
     await aclose_agent_task_service()
 
 
+async def aclose_telemetry() -> None:
+    global _telemetry_singleton, _telemetry_signature  # noqa: PLW0603
+    _telemetry_singleton = None
+    _telemetry_signature = None
+
+
 def reset_deps_for_test() -> None:
     """测试用：清掉所有单例缓存。"""
     global _llm_singleton, _event_bus_singleton, _repo_singleton  # noqa: PLW0603
@@ -419,6 +441,7 @@ def reset_deps_for_test() -> None:
     global _session_store_singleton, _sync_hub_store_singleton  # noqa: PLW0603
     global _access_policy_singleton  # noqa: PLW0603
     global _governor_singleton, _scope_runtime_registry  # noqa: PLW0603
+    global _telemetry_singleton, _telemetry_signature  # noqa: PLW0603
     _llm_singleton = None
     _event_bus_singleton = None
     _repo_singleton = None
@@ -432,6 +455,8 @@ def reset_deps_for_test() -> None:
     _sync_hub_store_singleton = None
     _access_policy_singleton = None
     _governor_singleton = None
+    _telemetry_singleton = None
+    _telemetry_signature = None
     # meetings/capture 为避免循环依赖各自在 API 模块维护缓存；统一重置必须连同
     # 这些缓存一起清掉，否则下一次 app lifespan 会复用已经关闭的 repository。
     from app.api.capture import reset_ambient_pipeline

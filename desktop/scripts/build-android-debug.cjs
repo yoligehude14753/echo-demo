@@ -26,7 +26,13 @@ function buildDebugVariant(applicationId, outputPath, env) {
 }
 
 function main() {
-  const env = androidEnvironment();
+  const baseEnv = androidEnvironment();
+  const env = {
+    ...baseEnv,
+    VITE_ECHODESK_RUNTIME_MODE: "development",
+    VITE_ECHODESK_PRINCIPAL_MODE:
+      baseEnv.VITE_ECHODESK_PRINCIPAL_MODE || "local",
+  };
   mkdirSync(RELEASE_DIR, { recursive: true });
   rmSync(ANDROID_OUTPUT, { force: true });
   rmSync(TV_OUTPUT, { force: true });

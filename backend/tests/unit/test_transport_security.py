@@ -112,7 +112,7 @@ def test_cors_wraps_identity_policy_errors(
 
     upgrade = TestClient(app).get("/meetings", headers={"Origin": origin})
     assert upgrade.status_code == 426
-    assert upgrade.headers["x-echodesk-minimum-client-version"] == "0.3.1"
+    assert upgrade.headers["x-echodesk-minimum-client-version"] == MINIMUM_PUBLIC_CLIENT_VERSION
     exposed = upgrade.headers["access-control-expose-headers"].lower()
     assert "x-echodesk-minimum-client-version" in exposed
 
@@ -446,7 +446,7 @@ def test_official_electron_origin_keeps_public_session_boundary(
         )
 
         with client.websocket_connect("/ws/echo", headers=origin_headers) as websocket:
-            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.1"})
+            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.2"})
             with pytest.raises(WebSocketDisconnect) as unauthenticated_ws:
                 websocket.receive_json()
         assert unauthenticated_ws.value.code == 4401
@@ -477,7 +477,7 @@ def test_official_electron_origin_keeps_public_session_boundary(
                 {
                     "type": "client_hello",
                     "last_seq": 0,
-                    "client_version": "0.3.1",
+                    "client_version": "0.3.2",
                     "auth": {"type": "bearer", "token": enrolled.json()["token"]},
                 }
             )
@@ -1098,7 +1098,7 @@ def test_allowed_websocket_origin_connects_and_public_failures_are_rate_limited(
     public_app.dependency_overrides[get_settings] = lambda: public_settings
     with TestClient(public_app) as client:
         with client.websocket_connect("/ws/echo") as websocket:
-            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.1"})
+            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.2"})
             with pytest.raises(WebSocketDisconnect) as unauthorized:
                 websocket.receive_json()
         assert unauthorized.value.code == 4401

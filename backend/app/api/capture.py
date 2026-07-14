@@ -11,13 +11,16 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import OpenAICompatibleLLM
-from app.adapters.stt import make_stt
+from app.adapters.stt import get_asr_scheduler, make_stt
+from app.adapters.stt.contracts import ASRRequestContext
 from app.adapters.stt.llm_punctuator import LLMPunctuator
+from app.adapters.stt.scheduler import ASRScheduler
 from app.api.deps import (
     get_diarizer_singleton,
     get_event_bus,
@@ -27,6 +30,7 @@ from app.api.deps import (
     get_repository,
     get_scope_runtime,
     get_speaker_registry,
+    get_telemetry,
     reset_scope_runtime_component_for_test,
 )
 from app.api.meetings import get_meeting_pipeline
@@ -41,6 +45,7 @@ from app.schemas.capture import CaptureChunkResult
 from app.security.context import current_principal
 from app.security.governor import PrincipalGovernor
 from app.security.public_projection import project_client_dict
+from app.telemetry.runtime import TelemetryRuntime
 from app.upload import UploadTooLarge, read_limited_upload
 from app.use_cases.ambient_capture import AmbientCapturePipeline
 from app.use_cases.meeting_pipeline import MeetingPipeline
@@ -48,6 +53,34 @@ from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
 
 router = APIRouter(prefix="/capture", tags=["capture"])
+
+
+def get_capture_asr_scheduler(
+    settings: Settings = Depends(get_settings),
+    telemetry: TelemetryRuntime = Depends(get_telemetry),
+) -> ASRScheduler:
+    return get_asr_scheduler(settings, telemetry=telemetry)
+
+
+def _capture_asr_context(request: Request, settings: Settings) -> ASRRequestContext:
+    """Build scheduler identity from the middleware-authenticated principal only."""
+
+    principal = current_principal()
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip() or None
+    request_id = request.headers.get("X-Request-ID", "").strip() or (
+        f"capture-{uuid4().hex}"
+    )
+    return ASRRequestContext(
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.user_id,
+        device_id=principal.device_id,
+        deadline_s=settings.asr_job_deadline_s,
+        capability="ambient_capture",
+        platform=request.headers.get("X-Echo-Platform") or "unknown",
+        app_version=request.headers.get("X-Echo-App-Version") or "unknown",
+    )
 
 
 def get_ambient_pipeline(
@@ -62,6 +95,8 @@ def get_ambient_pipeline(
     rag: RagPort = Depends(get_rag),
     governor: PrincipalGovernor = Depends(get_quota_governor),
     memory: MemoryService = Depends(get_memory_dependency),
+    asr_scheduler: ASRScheduler = Depends(get_capture_asr_scheduler),
+    telemetry: TelemetryRuntime = Depends(get_telemetry),
 ) -> AmbientCapturePipeline:
     runtime = get_scope_runtime(settings)
 
@@ -80,6 +115,8 @@ def get_ambient_pipeline(
             meeting_state=meeting_state,
             event_bus=event_bus,
             punctuator=punctuator,
+            asr_scheduler=asr_scheduler,
+            telemetry=telemetry,
             governor=governor,
             principal=current_principal(),
             memory=memory,
@@ -122,6 +159,7 @@ async def capture_chunk(
         audio_bytes,
         sample_rate=sample_rate,
         meeting_id=mid or None,
+        asr_context=_capture_asr_context(request, settings),
     )
     return CaptureChunkResult.model_validate(
         project_client_dict(result.model_dump(mode="json"), current_principal())

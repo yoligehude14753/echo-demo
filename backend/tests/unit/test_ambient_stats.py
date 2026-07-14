@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import struct
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -25,6 +27,13 @@ from app.use_cases.ambient_capture import AmbientCapturePipeline, AmbientStats
 SILENT_1KB = b"\x00" * 1000
 # 几乎全零但插一个尖峰：让 integer_rms 仍极低
 QUIET_NOISE_1KB = b"\x00\x00" * 500
+
+
+def _sine_pcm(duration_ms: int, amplitude: int = 4_000) -> bytes:
+    """合成完整 20ms VAD 帧，用于验证 admission 分子/分母。"""
+    n_samples = int(16_000 * duration_ms / 1000)
+    samples = [int(amplitude * math.sin(2 * math.pi * 440 * i / 16_000)) for i in range(n_samples)]
+    return struct.pack(f"<{n_samples}h", *samples)
 
 
 def _make_pipeline(
@@ -111,6 +120,31 @@ async def test_gated_rms_increment(tmp_path: Path) -> None:
     assert s.last_speech_ratio == 0
     assert s.last_gate_reason == "rms_too_low"
     stt.transcribe.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_admission_stats_define_lifetime_frames_and_zero_denominator(
+    tmp_path: Path,
+) -> None:
+    """累计分母是完整 20ms 音频帧，分子是通过 gate 的活跃帧；零分母为 0。"""
+    stt = AsyncMock(return_value=[])
+    pipe = _make_pipeline(tmp_path=tmp_path, stt=stt, rms_gate=1_000)
+
+    await pipe.ingest_chunk(_sine_pcm(40))  # 2 个 active frame
+    await pipe.ingest_chunk(SILENT_1KB)  # 1 个 frame，RMS gate 拒绝
+
+    s = pipe.get_stats()
+    assert s.observed_audio_frames == 3
+    assert s.accepted_speech_frames == 2
+    assert s.accepted_speech_ratio == pytest.approx(2 / 3, abs=0.0001)
+    assert s.stats_sequence == 2
+    assert s.last_gate_reason == "rms_too_low"
+
+    empty_pipe = _make_pipeline(tmp_path=tmp_path / "empty", stt=AsyncMock())
+    empty_stats = empty_pipe.get_stats()
+    assert empty_stats.observed_audio_frames == 0
+    assert empty_stats.accepted_speech_frames == 0
+    assert empty_stats.accepted_speech_ratio == 0.0
 
 
 @pytest.mark.asyncio

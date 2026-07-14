@@ -294,7 +294,12 @@ function buildReleaseVariant(
 }
 
 function main() {
-  const env = androidEnvironment();
+  const baseEnv = androidEnvironment();
+  const env = {
+    ...baseEnv,
+    VITE_ECHODESK_RUNTIME_MODE: "release",
+    VITE_ECHODESK_PRINCIPAL_MODE: "public",
+  };
   // Validate both private keys and pinned public fingerprints before npm/Gradle work.
   // The historical signer is intentionally retained only for API <= 32 updates.
   const signing = releaseSigningContract(env);

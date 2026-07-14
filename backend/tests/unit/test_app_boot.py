@@ -35,15 +35,24 @@ def test_bootstrap_payload(client: TestClient) -> None:
     assert body["api_version"] == "0.3"
     assert body["session_required"] is False
     assert "minimum_client_version" not in body
-    assert body["capabilities"] == {
-        "principal_sessions": True,
-        "owner_isolation": True,
-        "workflow_kernel": "dispatcher-v1",
-        "ws_owner_filtering": True,
-        "ws_stream_epoch": True,
-        "ws_hello_bearer": False,
-        "server_resync_rehydrate_required": True,
-        "host_runtime_requires_admin": False,
+    assert body["capabilities"]["principal_sessions"] is True
+    assert body["capabilities"]["owner_isolation"] is True
+    assert body["capabilities"]["workflow_kernel"] == "dispatcher-v1"
+    assert body["capabilities"]["ws_owner_filtering"] is True
+    assert body["capabilities"]["ws_stream_epoch"] is True
+    assert body["capabilities"]["ws_hello_bearer"] is False
+    assert body["capabilities"]["server_resync_rehydrate_required"] is True
+    assert body["capabilities"]["host_runtime_requires_admin"] is False
+    readiness = body["capabilities"]["transcription_readiness"]
+    assert readiness["schema_version"] == 1
+    assert set(readiness) == {
+        "schema_version",
+        "status",
+        "accepting",
+        "checked_at",
+        "ttl_s",
+        "reason_code",
+        "retry_after_s",
     }
 
 

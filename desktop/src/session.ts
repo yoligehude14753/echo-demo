@@ -61,6 +61,42 @@ export interface BackendBootstrap {
   capabilities: Record<string, unknown>;
 }
 
+export type BackendReachability = "unknown" | "reachable" | "unreachable";
+export type BackendAuthReadiness =
+  | "unknown"
+  | "pending"
+  | "not_required"
+  | "authenticated"
+  | "failed";
+export type BackendApiContractReadiness =
+  | "unknown"
+  | "compatible"
+  | "legacy"
+  | "mismatch";
+export type TranscriptionReadiness =
+  | "ready"
+  | "degraded"
+  | "unavailable"
+  | "unknown";
+
+export interface BackendReadiness {
+  reachability: BackendReachability;
+  auth: BackendAuthReadiness;
+  api_contract: BackendApiContractReadiness;
+  transcription_readiness: TranscriptionReadiness;
+}
+
+export type BackendReadinessDiagnosticCode =
+  | "readiness_unknown_malformed"
+  | "readiness_unknown_stale";
+
+const INITIAL_BACKEND_READINESS: BackendReadiness = Object.freeze({
+  reachability: "unknown",
+  auth: "unknown",
+  api_contract: "unknown",
+  transcription_readiness: "unknown",
+});
+
 export type BackendCompatibility =
   | "unknown"
   | "compatible"
@@ -82,9 +118,30 @@ export class ClientUpgradeRequiredError extends Error {
 
 export class BackendContractMismatchError extends Error {
   constructor(public readonly reason: string) {
-    super("本机 backend 与当前 EchoDesk 构建不匹配，已拒绝连接");
+    super("EchoDesk 服务合同与当前客户端不匹配，已拒绝连接");
     this.name = "BackendContractMismatchError";
+    this.code = "backend_contract_mismatch";
   }
+
+  readonly code: "backend_contract_mismatch";
+}
+
+export type BackendReadinessFailureCode =
+  | "backend_unreachable"
+  | "backend_auth_failed";
+
+export class BackendReadinessError extends Error {
+  constructor(public readonly code: BackendReadinessFailureCode) {
+    super(
+      code === "backend_auth_failed"
+        ? "EchoDesk 服务身份验证未通过，已停止连接"
+        : "EchoDesk 服务当前不可达，已停止连接",
+    );
+    this.name = "BackendReadinessError";
+    this.reason = code;
+  }
+
+  readonly reason: BackendReadinessFailureCode;
 }
 
 export type ApiTransportErrorKind =
@@ -146,6 +203,8 @@ let currentSession: {
 } | null = null;
 let activeBackendOrigin: string | null = null;
 let compatibility: BackendCompatibility = "unknown";
+let readiness: BackendReadiness = INITIAL_BACKEND_READINESS;
+let readinessDiagnosticCode: BackendReadinessDiagnosticCode | null = null;
 let identityStatus: SessionIdentityStatus = { phase: "idle", message: null };
 let rendererIdentityTail: Promise<void> = Promise.resolve();
 let clientUpgradeRequired: {
@@ -228,6 +287,110 @@ export function currentSessionIdentityStatus(): SessionIdentityStatus {
   return identityStatus;
 }
 
+function publishBackendReadiness(
+  next: BackendReadiness,
+  diagnostic: BackendReadinessDiagnosticCode | null = null,
+  origin: string | null = activeBackendOrigin,
+): void {
+  if (origin !== null && activeBackendOrigin !== origin) return;
+  readiness = Object.freeze({ ...next });
+  readinessDiagnosticCode = diagnostic;
+  if (typeof document !== "undefined") {
+    document.documentElement.dataset.backendReachability = next.reachability;
+    document.documentElement.dataset.backendAuth = next.auth;
+    document.documentElement.dataset.backendApiContract = next.api_contract;
+    document.documentElement.dataset.transcriptionReadiness =
+      next.transcription_readiness;
+  }
+}
+
+export function backendReadiness(): BackendReadiness {
+  return { ...readiness };
+}
+
+export function transcriptionReadiness(): TranscriptionReadiness {
+  return readiness.transcription_readiness;
+}
+
+export function backendReadinessDiagnosticCode(): BackendReadinessDiagnosticCode | null {
+  return readinessDiagnosticCode;
+}
+
+const TRANSCRIPTION_REASON_CODES = new Set([
+  "capacity_degraded",
+  "maintenance",
+  "temporarily_unavailable",
+  "unknown",
+]);
+
+interface NormalizedTranscriptionReadiness {
+  status: TranscriptionReadiness;
+  diagnostic: BackendReadinessDiagnosticCode | null;
+}
+
+function normalizeTranscriptionReadiness(
+  capabilities: Record<string, unknown>,
+): NormalizedTranscriptionReadiness {
+  if (!("transcription_readiness" in capabilities)) {
+    return { status: "unknown", diagnostic: null };
+  }
+  const raw = capabilities.transcription_readiness;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { status: "unknown", diagnostic: "readiness_unknown_malformed" };
+  }
+  const value = raw as Record<string, unknown>;
+  if (
+    value.schema_version !== 1 ||
+    (value.status !== "ready" &&
+      value.status !== "degraded" &&
+      value.status !== "unavailable" &&
+      value.status !== "unknown") ||
+    typeof value.accepting !== "boolean" ||
+    typeof value.checked_at !== "string" ||
+    !value.checked_at.endsWith("Z") ||
+    !Number.isFinite(Date.parse(value.checked_at)) ||
+    typeof value.ttl_s !== "number" ||
+    !Number.isFinite(value.ttl_s) ||
+    value.ttl_s < 0
+  ) {
+    return { status: "unknown", diagnostic: "readiness_unknown_malformed" };
+  }
+  const checkedAt = Date.parse(value.checked_at);
+  if (Date.now() > checkedAt + value.ttl_s * 1000) {
+    return { status: "unknown", diagnostic: "readiness_unknown_stale" };
+  }
+  if (
+    (value.status === "ready" || value.status === "degraded") &&
+    value.accepting !== true
+  ) {
+    return { status: "unknown", diagnostic: "readiness_unknown_malformed" };
+  }
+  if (
+    (value.status === "unavailable" || value.status === "unknown") &&
+    value.accepting !== false
+  ) {
+    return { status: "unknown", diagnostic: "readiness_unknown_malformed" };
+  }
+  if (
+    "reason_code" in value &&
+    value.reason_code !== undefined &&
+    (typeof value.reason_code !== "string" ||
+      !TRANSCRIPTION_REASON_CODES.has(value.reason_code))
+  ) {
+    return { status: "unknown", diagnostic: "readiness_unknown_malformed" };
+  }
+  if (
+    "retry_after_s" in value &&
+    value.retry_after_s !== undefined &&
+    (typeof value.retry_after_s !== "number" ||
+      !Number.isFinite(value.retry_after_s) ||
+      value.retry_after_s < 0)
+  ) {
+    return { status: "unknown", diagnostic: "readiness_unknown_malformed" };
+  }
+  return { status: value.status as TranscriptionReadiness, diagnostic: null };
+}
+
 export function isIdentityLostError(
   error: unknown,
 ): error is IdentityCredentialStoreError {
@@ -240,6 +403,7 @@ export function isIdentityLostError(
 function userVisibleIdentityError(error: unknown): string {
   if (error instanceof ClientUpgradeRequiredError) return error.message;
   if (error instanceof BackendContractMismatchError) return error.message;
+  if (error instanceof BackendReadinessError) return error.message;
   if (
     error instanceof IdentityCredentialStoreError &&
     error.kind === "invalid-origin"
@@ -582,27 +746,67 @@ async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
         cache: "no-store",
       },
     );
-    if (response.status === 404) {
-      if (expected) rejectLocalBuildContract("bootstrap-missing");
-      publishCompatibilityForOrigin(origin, "legacy");
-      return null;
+    if (response.status === 401 || response.status === 403) {
+      publishBackendReadiness(
+        {
+          reachability: "reachable",
+          auth: "failed",
+          api_contract: "unknown",
+          transcription_readiness: "unknown",
+        },
+        null,
+        origin,
+      );
+      throw new BackendReadinessError("backend_auth_failed");
     }
-    if (!response.ok) throw new Error(`bootstrap ${response.status}`);
-    const body = await parseBoundedJsonResponse<Partial<BackendBootstrap>>(
-      response,
-      "bootstrap",
-    );
+    if (response.status === 404) {
+      throw new BackendContractMismatchError("bootstrap-missing");
+    }
+    if (!response.ok) {
+      publishBackendReadiness(
+        {
+          reachability: "reachable",
+          auth: "unknown",
+          api_contract: "unknown",
+          transcription_readiness: "unknown",
+        },
+        null,
+        origin,
+      );
+      throw new BackendReadinessError("backend_unreachable");
+    }
+    let body: Partial<BackendBootstrap>;
+    try {
+      body = await parseBoundedJsonResponse<Partial<BackendBootstrap>>(
+        response,
+        "bootstrap",
+      );
+    } catch {
+      throw new BackendContractMismatchError("bootstrap-malformed");
+    }
     if (
       body.schema_version !== 1 ||
       body.api_version !== "0.3" ||
       typeof body.session_required !== "boolean" ||
-      !body.capabilities
+      !body.capabilities ||
+      typeof body.capabilities !== "object" ||
+      Array.isArray(body.capabilities)
     ) {
-      if (expected) rejectLocalBuildContract("bootstrap-contract-mismatch");
-      publishCompatibilityForOrigin(origin, "legacy");
-      return null;
+      throw new BackendContractMismatchError("bootstrap-contract-mismatch");
     }
     if (expected) validateLocalBuildContract(body, expected);
+    const capabilities = body.capabilities as Record<string, unknown>;
+    const transcription = normalizeTranscriptionReadiness(capabilities);
+    publishBackendReadiness(
+      {
+        reachability: "reachable",
+        auth: body.session_required ? "pending" : "not_required",
+        api_contract: "transcription_readiness" in capabilities ? "compatible" : "legacy",
+        transcription_readiness: transcription.status,
+      },
+      transcription.diagnostic,
+      origin,
+    );
     const minimumVersion = body.minimum_client_version?.trim();
     if (
       minimumVersion &&
@@ -615,17 +819,58 @@ async function loadBootstrap(origin: string): Promise<BackendBootstrap | null> {
     return body as BackendBootstrap;
   } catch (error) {
     if (error instanceof ClientUpgradeRequiredError) throw error;
+    if (error instanceof BackendReadinessError) {
+      if (error.code === "backend_unreachable") {
+        publishCompatibilityForOrigin(origin, "unreachable");
+      }
+      throw error;
+    }
+    if (error instanceof BackendContractMismatchError) {
+      publishBackendReadiness(
+        {
+          reachability:
+            readiness.reachability === "unknown" ? "reachable" : readiness.reachability,
+          auth: readiness.auth,
+          api_contract: "mismatch",
+          transcription_readiness: "unknown",
+        },
+        null,
+        origin,
+      );
+      publishCompatibilityForOrigin(origin, "incompatible");
+      throw error;
+    }
     if (localBuildContractRequired) {
       const mismatch =
         error instanceof BackendContractMismatchError
           ? error
           : new BackendContractMismatchError("bootstrap-unavailable");
+      publishBackendReadiness(
+        {
+          reachability: "unreachable",
+          auth: "unknown",
+          api_contract: "mismatch",
+          transcription_readiness: "unknown",
+        },
+        null,
+        origin,
+      );
       publishCompatibilityForOrigin(origin, "incompatible");
       throw mismatch;
     }
+    publishBackendReadiness(
+      {
+        reachability: "unreachable",
+        auth: "unknown",
+        api_contract: "unknown",
+        transcription_readiness: "unknown",
+      },
+      null,
+      origin,
+    );
     publishCompatibilityForOrigin(origin, "unreachable");
-    console.warn("[backend] bootstrap unavailable", error);
-    return null;
+    console.warn("[backend] bootstrap unavailable", error instanceof Error ? error.name : "unknown");
+    throw new BackendReadinessError("backend_unreachable");
   }
 }
 
@@ -648,8 +893,10 @@ function bootstrapBackendForOrigin(
     // replacing an incompatible backend requires an explicit origin/session
     // reset instead of silently reconnecting to a different binary.
     if (
-      error instanceof BackendContractMismatchError &&
-      error.reason === "bootstrap-unavailable" &&
+      ((error instanceof BackendReadinessError &&
+        error.code === "backend_unreachable") ||
+        (error instanceof BackendContractMismatchError &&
+          error.reason === "bootstrap-unavailable")) &&
       bootstrapPromise === pending &&
       bootstrapPromiseOrigin === origin
     ) {
@@ -713,6 +960,11 @@ function acceptSession(
       scopeKey,
       origin,
     };
+    publishBackendReadiness(
+      { ...readiness, auth: "authenticated" },
+      readinessDiagnosticCode,
+      origin,
+    );
     publishIdentityStatus("ready");
   }
   return token;
@@ -752,6 +1004,8 @@ function selectBackendOrigin(origin: string): void {
   currentSession = null;
   clientUpgradeRequired = null;
   compatibility = "unknown";
+  readiness = INITIAL_BACKEND_READINESS;
+  readinessDiagnosticCode = null;
   if (typeof document !== "undefined") {
     document.documentElement.dataset.backendCompatibility = "unknown";
   }
@@ -795,6 +1049,17 @@ async function postDeviceSession(
   });
   const upgradeError = upgradeErrorFromResponse(response, origin);
   if (upgradeError) throw upgradeError;
+  if (response.status === 401 || response.status === 403) {
+    publishBackendReadiness(
+      {
+        ...readiness,
+        reachability: "reachable",
+        auth: "failed",
+      },
+      readinessDiagnosticCode,
+      origin,
+    );
+  }
   if (response.status === 404) {
     publishCompatibilityForOrigin(origin, "legacy");
     throw new DeviceSessionRequestError(endpoint, response.status);
@@ -1146,8 +1411,9 @@ export async function ensureServerSession(force = false): Promise<string | null>
       throwIfClientUpgradeRequired(origin);
       const bootstrap = await bootstrapBackendForOrigin(origin);
       throwIfClientUpgradeRequired(origin);
+      if (!bootstrap) throw new BackendReadinessError("backend_unreachable");
       const requiresSession =
-        bootstrap?.session_required ?? shouldHideSharedPublicHistory();
+        bootstrap.session_required || shouldHideSharedPublicHistory();
       if (!requiresSession) {
         publishIdentityStatusForOrigin(origin, "idle");
         return null;
@@ -1188,7 +1454,9 @@ export async function ensureServerSession(force = false): Promise<string | null>
   const pending = (async () => {
     const bootstrap = await bootstrapBackendForOrigin(origin);
     throwIfClientUpgradeRequired(origin);
-    const requiresSession = bootstrap?.session_required ?? shouldHideSharedPublicHistory();
+    if (!bootstrap) throw new BackendReadinessError("backend_unreachable");
+    const requiresSession =
+      bootstrap.session_required || shouldHideSharedPublicHistory();
     if (!requiresSession) {
       publishIdentityStatusForOrigin(origin, "idle");
       return null;
@@ -1751,5 +2019,7 @@ export function resetSessionForTest(): void {
   resetIdentityCredentialStoreForTest();
   rendererIdentityTail = Promise.resolve();
   compatibility = "unknown";
+  readiness = INITIAL_BACKEND_READINESS;
+  readinessDiagnosticCode = null;
   publishIdentityStatus("idle");
 }
