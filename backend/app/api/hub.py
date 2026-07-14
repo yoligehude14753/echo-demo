@@ -1,13 +1,15 @@
-"""Pairing and device lifecycle endpoints for the sync hub."""
+"""Hub sync endpoints plus the desktop-local Hub lifecycle façade."""
 
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_request_principal, get_sync_hub_store
+from app.api.deps import get_request_principal, get_sync_hub_store, require_admin_access
+from app.hub.runtime import HubRuntime, HubRuntimeError
 from app.security.models import Principal
 from app.sync_hub import (
     DeviceAlreadyExistsError,
@@ -17,7 +19,7 @@ from app.sync_hub import (
 )
 from app.sync_hub.store import ClaimedDevice, PairingRecord, SyncDeviceRecord
 
-router = APIRouter(prefix="/hub/v1", tags=["sync-hub"])
+sync_router = APIRouter(prefix="/hub/v1", tags=["sync-hub"])
 
 
 class PairingCreateRequest(BaseModel):
@@ -83,7 +85,7 @@ class DeviceResponse(BaseModel):
         )
 
 
-@router.post(
+@sync_router.post(
     "/pairings",
     response_model=PairingResponse,
     status_code=status.HTTP_201_CREATED,
@@ -100,7 +102,7 @@ async def create_pairing(
     return PairingResponse.from_record(record)
 
 
-@router.post(
+@sync_router.post(
     "/pairings/claim",
     response_model=PairingClaimResponse,
 )
@@ -122,7 +124,7 @@ async def claim_pairing(
     return PairingClaimResponse.from_record(record)
 
 
-@router.get("/devices", response_model=list[DeviceResponse])
+@sync_router.get("/devices", response_model=list[DeviceResponse])
 async def list_devices(
     principal: Principal = Depends(get_request_principal),
     store: SyncHubStore = Depends(get_sync_hub_store),
@@ -131,7 +133,7 @@ async def list_devices(
     return [DeviceResponse.from_record(record) for record in records]
 
 
-@router.delete("/devices/{device_id}", response_model=DeviceResponse)
+@sync_router.delete("/devices/{device_id}", response_model=DeviceResponse)
 async def revoke_device(
     device_id: str = Path(min_length=1, max_length=128),
     principal: Principal = Depends(get_request_principal),
@@ -144,4 +146,84 @@ async def revoke_device(
     return DeviceResponse.from_record(record)
 
 
-__all__ = ["router"]
+host_router = APIRouter(
+    prefix="/hub",
+    tags=["hub"],
+    dependencies=[Depends(require_admin_access)],
+)
+
+
+class HostPairingClaimRequest(BaseModel):
+    pairing_code: str = Field(min_length=1, max_length=128)
+
+
+def _runtime_error(exc: HubRuntimeError) -> HTTPException:
+    messages = {
+        "pairing_failed": "配对失败，请重试",
+        "connection_failed": "连接失败，请检查 Hub 地址",
+        "sync_failed": "同步失败，请稍后重试",
+    }
+    return HTTPException(
+        status_code=503,
+        detail=messages.get(exc.code, "同步失败，请稍后重试"),
+    )
+
+
+def _runtime_from_request(request: Request) -> HubRuntime:
+    runtime = getattr(request.app.state, "hub_runtime", None)
+    if not isinstance(runtime, HubRuntime):
+        raise HTTPException(status_code=503, detail="连接失败，请检查 Hub 地址")
+    return runtime
+
+
+@host_router.get("/status")
+async def get_status(request: Request) -> dict[str, Any]:
+    return _runtime_from_request(request).status()
+
+
+@host_router.post("/pairings")
+async def create_pairing(request: Request) -> dict[str, Any]:
+    runtime = _runtime_from_request(request)
+    try:
+        return await runtime.create_pairing()
+    except HubRuntimeError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@host_router.post("/pairings/claim", status_code=204)
+async def claim_pairing(request: Request, body: HostPairingClaimRequest) -> Response:
+    runtime = _runtime_from_request(request)
+    try:
+        await runtime.claim_pairing(body.pairing_code)
+    except HubRuntimeError as exc:
+        raise _runtime_error(exc) from exc
+    return Response(status_code=204)
+
+
+@host_router.get("/devices")
+async def list_devices(request: Request) -> dict[str, Any]:
+    runtime = _runtime_from_request(request)
+    try:
+        return {"items": await runtime.list_devices()}
+    except HubRuntimeError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@host_router.delete("/devices/{device_id}", status_code=204)
+async def revoke_device(request: Request, device_id: str) -> Response:
+    runtime = _runtime_from_request(request)
+    try:
+        await runtime.revoke_device(device_id)
+    except HubRuntimeError as exc:
+        raise _runtime_error(exc) from exc
+    return Response(status_code=204)
+
+
+# Keep the existing ``app.api.hub.router`` import stable while exposing both
+# the remote sync Hub API and the desktop-local lifecycle API.
+router = APIRouter()
+router.include_router(sync_router)
+router.include_router(host_router)
+
+
+__all__ = ["host_router", "router", "sync_router"]

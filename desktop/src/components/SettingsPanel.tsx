@@ -32,12 +32,16 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  hubCreatePairing,
+  hubRevokeDevice,
+  hubStatus,
   workspaceAddDir,
   workspacePickDirectory,
   workspaceRemoveDir,
   workspaceScan,
   workspaceStatus,
   workspaceCapability,
+  type HubStatusDTO,
 } from "@/api";
 import {
   DEFAULT_ANDROID_BACKEND_BASE,
@@ -249,6 +253,36 @@ function updateInstallButtonLabel(status: AppUpdateStatus | null): string {
   return "检查后可更新";
 }
 
+function hubConnectionLabel(status: HubStatusDTO | null): string {
+  if (!status) return "读取中";
+  if (!status.enabled) return "未启用";
+  if (!status.configured) return "未配置地址";
+  switch (status.connection) {
+    case "connected":
+      return "已连接";
+    case "connecting":
+      return "连接中";
+    case "pairing_required":
+      return "等待配对确认";
+    case "error":
+      return "连接失败";
+    case "disabled":
+      return "未启用";
+    default:
+      return "未连接";
+  }
+}
+
+function hubTimestampLabel(value: string | null): string {
+  if (!value) return "尚未同步";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "尚未同步";
+  return parsed.toLocaleString("zh-CN", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
 export default function SettingsPanel({
   open,
   onClose,
@@ -284,6 +318,10 @@ export default function SettingsPanel({
   const [ws, setWs] = useState<WorkspaceStatusDTO | null>(null);
   const [wsBusy, setWsBusy] = useState(false);
   const [wsScanBusy, setWsScanBusy] = useState(false);
+  const [hub, setHub] = useState<HubStatusDTO | null>(null);
+  const [hubLoadFailed, setHubLoadFailed] = useState(false);
+  const [hubBusy, setHubBusy] = useState(false);
+  const [hubRevokeBusy, setHubRevokeBusy] = useState<string | null>(null);
   const [drawerOpenSettled, setDrawerOpenSettled] = useState(false);
   const privateBackendDialogRef = useRef<HTMLDivElement | null>(null);
   const privateBackendConfirmRef = useRef<HTMLButtonElement | null>(null);
@@ -292,12 +330,14 @@ export default function SettingsPanel({
   const dataDirGenerationRef = useRef<number | null>(null);
   const remoteGenerationRef = useRef<number | null>(null);
   const workspaceGenerationRef = useRef<number | null>(null);
+  const hubGenerationRef = useRef<number | null>(null);
   const backendBaseDraftGenerationRef = useRef<number | null>(null);
   const pendingPrivateBackendGenerationRef = useRef<number | null>(null);
   const settingsConfirmDestroyersRef = useRef<Set<() => void>>(new Set());
   const renderedDataDirGeneration = dataDirGenerationRef.current;
   const renderedRemoteGeneration = remoteGenerationRef.current;
   const renderedWorkspaceGeneration = workspaceGenerationRef.current;
+  const renderedHubGeneration = hubGenerationRef.current;
   const renderedBackendBaseDraftGeneration =
     backendBaseDraftGenerationRef.current;
   const renderedPendingPrivateBackendGeneration =
@@ -312,6 +352,7 @@ export default function SettingsPanel({
     dataDirGenerationRef.current = null;
     remoteGenerationRef.current = null;
     workspaceGenerationRef.current = null;
+    hubGenerationRef.current = null;
     pendingPrivateBackendGenerationRef.current = null;
     backendBaseDraftGenerationRef.current = renderedOriginGeneration;
     backendBaseDraftRef.current =
@@ -333,6 +374,10 @@ export default function SettingsPanel({
     setWs(null);
     setWsBusy(false);
     setWsScanBusy(false);
+    setHub(null);
+    setHubLoadFailed(false);
+    setHubBusy(false);
+    setHubRevokeBusy(null);
     workspaceInitialFocusDoneRef.current = false;
     form.resetFields();
   }, [backendOriginRevision, form, renderedOriginGeneration]);
@@ -449,6 +494,30 @@ export default function SettingsPanel({
     }
   }, [isCurrent, renderedOriginGeneration, workspaceDirectoryAvailable]);
 
+  const refreshHub = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    if (!hostAdminAvailable) {
+      hubGenerationRef.current = null;
+      setHub(null);
+      return;
+    }
+    try {
+      if (!isCurrent(generation)) return;
+      const json = await hubStatus();
+      if (!isCurrent(generation)) return;
+      hubGenerationRef.current = generation;
+      setHubLoadFailed(false);
+      setHub(json);
+    } catch (e) {
+      if (!isCurrent(generation)) return;
+      reportSettingsError("load Hub status", e, "暂时无法读取同步状态");
+      hubGenerationRef.current = null;
+      setHubLoadFailed(true);
+      setHub(null);
+    }
+  }, [hostAdminAvailable, isCurrent, renderedOriginGeneration]);
+
   const refreshBackendVersion = useCallback(async () => {
     const generation = renderedOriginGeneration;
     if (!isCurrent(generation)) return;
@@ -492,6 +561,7 @@ export default function SettingsPanel({
         setBackendVersion(null);
       }
       if (workspaceDirectoryAvailable) void refreshWorkspace();
+      void refreshHub();
       const nextBackendBase =
         configuredBackendBase() ?? DEFAULT_ANDROID_BACKEND_BASE;
       backendBaseDraftGenerationRef.current = generation;
@@ -507,6 +577,7 @@ export default function SettingsPanel({
     refreshDataDir,
     refreshRemote,
     refreshWorkspace,
+    refreshHub,
     refreshBackendVersion,
     workspaceDirectoryAvailable,
   ]);
@@ -627,6 +698,79 @@ export default function SettingsPanel({
       if (isCurrent(generation)) setWsBusy(false);
     }
   }, [isCurrent, refreshWorkspace, renderedWorkspaceGeneration, ws]);
+
+  const onCreateHubPairing = useCallback(async () => {
+    const generation = renderedHubGeneration;
+    if (generation === null || !isCurrent(generation)) return;
+    setHubBusy(true);
+    try {
+      if (!isCurrent(generation)) return;
+      await hubCreatePairing();
+      if (!isCurrent(generation)) return;
+      message.success("配对码已生成");
+      await refreshHub();
+    } catch (e) {
+      if (!isCurrent(generation)) return;
+      reportSettingsError("create Hub pairing", e, "配对失败，请重试");
+    } finally {
+      if (isCurrent(generation)) setHubBusy(false);
+    }
+  }, [isCurrent, refreshHub, renderedHubGeneration]);
+
+  const onCopyHubPairing = useCallback(async () => {
+    const generation = renderedHubGeneration;
+    if (generation === null || !isCurrent(generation) || !hub?.pairing_code) return;
+    try {
+      await navigator.clipboard.writeText(hub.pairing_code);
+      if (isCurrent(generation)) message.success("配对码已复制");
+    } catch (e) {
+      if (isCurrent(generation)) {
+        reportSettingsError("copy Hub pairing", e, "复制配对码失败，请重试");
+      }
+    }
+  }, [hub?.pairing_code, isCurrent, renderedHubGeneration]);
+
+  const onRevokeHubDevice = useCallback(
+    (deviceId: string, deviceName: string) => {
+      const generation = renderedHubGeneration;
+      if (generation === null || !isCurrent(generation)) return;
+      let destroyer: (() => void) | null = null;
+      const modal = Modal.confirm({
+        title: "解除设备绑定？",
+        icon: <AlertTriangle className="w-4 h-4 text-amber-500" />,
+        content: (
+          <div className="text-[12px] leading-relaxed">
+            将解除 <span className="font-medium">{deviceName}</span> 的绑定，
+            该设备之后需要重新配对。
+          </div>
+        ),
+        okText: "解除绑定",
+        okButtonProps: { danger: true },
+        cancelText: "取消",
+        afterClose: () => {
+          if (destroyer) settingsConfirmDestroyersRef.current.delete(destroyer);
+        },
+        onOk: async () => {
+          if (!isCurrent(generation)) return;
+          setHubRevokeBusy(deviceId);
+          try {
+            await hubRevokeDevice(deviceId);
+            if (!isCurrent(generation)) return;
+            message.success("设备绑定已解除");
+            await refreshHub();
+          } catch (e) {
+            if (!isCurrent(generation)) return;
+            reportSettingsError("revoke Hub device", e, "解除绑定失败，请重试");
+          } finally {
+            if (isCurrent(generation)) setHubRevokeBusy(null);
+          }
+        },
+      });
+      destroyer = modal.destroy;
+      settingsConfirmDestroyersRef.current.add(destroyer);
+    },
+    [isCurrent, refreshHub, renderedHubGeneration],
+  );
 
   const onRemoveWorkspaceDir = useCallback(
     async (dir: string) => {
@@ -1309,6 +1453,154 @@ export default function SettingsPanel({
               <span className="font-mono ml-1">http://10.10.12.32:8769</span>。
               局域网 HTTP 仅用于临时匿名/开发连接；设备身份与凭证始终要求 HTTPS。
             </div>
+          </div>
+        </section>
+        )}
+
+        {hostAdminAvailable && (
+        <section data-testid="hub-settings-section">
+          <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
+            <Server className="w-4 h-4" />
+            <span>设备同步</span>
+            <Tag
+              color={hub?.connection === "connected" ? "green" : "default"}
+              className="!m-0 ml-auto"
+              data-testid="hub-connection-status"
+            >
+              {hubConnectionLabel(hub)}
+            </Tag>
+            <Tooltip title="刷新同步状态">
+              <button
+                type="button"
+                onClick={() => void refreshHub()}
+                className="text-ink-400 hover:text-ink-700"
+                aria-label="刷新同步状态"
+                data-testid="hub-refresh-status"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </Tooltip>
+          </div>
+          <div className="bg-paper-150 rounded-md p-3 space-y-2" data-testid="hub-settings-body">
+            {hubLoadFailed ? (
+              <div className="text-[12px] text-ink-500 leading-relaxed">
+                暂时无法读取同步状态，请稍后重试。
+              </div>
+            ) : !hub ? (
+              <Spin size="small" />
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2 text-[11px] text-ink-600">
+                  <div className="rounded bg-white border border-paper-300 px-2 py-1.5">
+                    <div className="text-ink-400">本机设备 ID</div>
+                    <div className="font-mono text-ink-800 break-all" data-testid="hub-device-id">
+                      {hub.device_id}
+                    </div>
+                  </div>
+                  <div className="rounded bg-white border border-paper-300 px-2 py-1.5">
+                    <div className="text-ink-400">最后同步</div>
+                    <div className="font-mono text-ink-800" data-testid="hub-last-sync">
+                      {hubTimestampLabel(hub.last_sync_at)}
+                    </div>
+                  </div>
+                </div>
+                {hub.connection === "error" && (
+                  <div className="rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] text-red-600">
+                    连接失败，请检查 Hub 地址。
+                  </div>
+                )}
+                {!hub.enabled || !hub.configured ? (
+                  <div className="text-[11px] text-ink-500 leading-relaxed">
+                    {hub.enabled ? "尚未配置 Hub 地址。" : "本机设备同步未启用。"}
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex gap-2">
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={hubBusy}
+                        onClick={() => void onCreateHubPairing()}
+                        data-testid="hub-generate-pairing"
+                      >
+                        生成/刷新配对码
+                      </Button>
+                      <Button
+                        size="small"
+                        disabled={!hub.pairing_code}
+                        onClick={() => void onCopyHubPairing()}
+                        data-testid="hub-copy-pairing"
+                      >
+                        复制配对码
+                      </Button>
+                    </div>
+                    {hub.pairing_code && (
+                      <div
+                        className="rounded border border-accent/30 bg-white px-3 py-2"
+                        data-testid="hub-pairing-code"
+                      >
+                        <div className="text-[11px] text-ink-500">手机端输入此配对码</div>
+                        <div className="font-mono text-[24px] tracking-[0.22em] text-accent">
+                          {hub.pairing_code}
+                        </div>
+                        {hub.pairing_expires_at && (
+                          <div className="text-[10px] text-ink-400">
+                            有效期至 {hubTimestampLabel(hub.pairing_expires_at)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-[11px] text-ink-500">
+                      <span>最近连接</span>
+                      <span className="font-mono">{hubTimestampLabel(hub.last_connected_at)}</span>
+                    </div>
+                    <div className="border-t border-paper-300 pt-2" data-testid="hub-device-list">
+                      <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-700 mb-1">
+                        <Users className="w-3.5 h-3.5" />
+                        <span>已绑定设备</span>
+                      </div>
+                      {hub.devices.length === 0 ? (
+                        <div className="text-[11px] text-ink-400">暂无已绑定设备</div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {hub.devices.map((device) => {
+                            const deviceName = device.name || device.platform || "未命名设备";
+                            return (
+                              <div
+                                key={device.device_id}
+                                className="flex items-center gap-2 rounded bg-white border border-paper-300 px-2 py-1.5"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1 text-[11px] text-ink-700">
+                                    <span className="truncate">{deviceName}</span>
+                                    {device.is_current && <Tag color="blue" className="!m-0 !text-[10px]">本机</Tag>}
+                                  </div>
+                                  <div className="font-mono text-[10px] text-ink-400 truncate" title={device.device_id}>
+                                    {device.device_id}
+                                  </div>
+                                </div>
+                                {!device.is_current && (
+                                  <Button
+                                    size="small"
+                                    danger
+                                    type="text"
+                                    icon={<Trash2 className="w-3.5 h-3.5" />}
+                                    loading={hubRevokeBusy === device.device_id}
+                                    onClick={() => onRevokeHubDevice(device.device_id, deviceName)}
+                                    aria-label={`解除${deviceName}绑定`}
+                                    data-testid={`hub-revoke-${device.device_id}`}
+                                  />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </div>
         </section>
         )}

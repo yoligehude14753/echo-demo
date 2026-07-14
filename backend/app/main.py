@@ -70,6 +70,7 @@ from app.build_contract import backend_build_contract
 from app.config import Settings, get_settings
 from app.config_io import user_config_dir
 from app.memory import aclose_memory_service
+from app.hub.runtime import HubRuntime
 from app.ports.repository import RepositoryPort
 from app.runtime import RuntimeCapacityExceeded, RuntimeLease, ScopeRuntime
 from app.security import (
@@ -371,6 +372,7 @@ async def _stop_lifespan_tasks() -> None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0915
     global _meeting_state_for_shutdown  # noqa: PLW0603
     settings = get_settings()
+    hub_runtime: HubRuntime | None = None
     logger.info(
         "echodesk 启动: version=%s port=%d llm_main=%s llm_fast=%s stt=%s tts=%s",
         __version__,
@@ -394,6 +396,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
     # SQLite repository：连接 + hydrate 未结束的会议 + 加载已知说话人
     repo = get_repository(settings)
     await repo.init()
+    try:
+        hub_runtime = HubRuntime(settings)
+        await hub_runtime.start()
+        _app.state.hub_runtime = hub_runtime
+    except Exception:
+        # Hub is an optional development integration.  A Hub failure must not
+        # prevent the existing desktop backend and its local repositories from
+        # starting.
+        logger.warning("Hub lifecycle start failed")
+        _app.state.hub_runtime = None
     try:
         from app.api.deps import get_artifact_repository as _get_artifact_repo
         from app.artifacts.recovery import (
@@ -616,6 +628,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
     await aclose_memory_service()
     await aclose_llm_singleton()
     await aclose_event_bus()
+    if hub_runtime is not None:
+        await hub_runtime.close()
     await aclose_repository()
     logger.info("echodesk 关闭")
 

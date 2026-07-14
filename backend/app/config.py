@@ -81,6 +81,17 @@ class Settings(BaseSettings):
     public_http_url: str = "http://localhost:8769"
     app_version: str = __version__
 
+    # Hub sync runs inside the existing backend lifecycle.  The development
+    # env template opts in explicitly; installed clients remain disconnected
+    # until Hub is enabled and a base URL is configured.
+    hub_enabled: bool = False
+    hub_base_url: str = ""
+    hub_sync_interval_s: float = Field(default=15.0, gt=1.0, le=300.0)
+    hub_request_timeout_s: float = Field(default=15.0, gt=1.0, le=120.0)
+    hub_state_file: Path = Field(
+        default_factory=lambda: user_config_dir() / "hub_state.json"
+    )
+
     @field_validator("app_version", mode="after")
     @classmethod
     def _use_code_version(cls, _configured_version: str) -> str:

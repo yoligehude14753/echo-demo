@@ -232,6 +232,24 @@ export async function installEchoMock(
       if (path === "/healthz" || path === "/api/healthz") {
         return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
+      if (path === "/hub/status" || path === "/api/hub/status") {
+        return new Response(
+          JSON.stringify({
+            enabled: true,
+            configured: true,
+            device_id: "mock-desktop-device",
+            paired: true,
+            connection: "connected",
+            pairing_code: null,
+            pairing_expires_at: null,
+            devices: [],
+            last_sync_at: null,
+            last_connected_at: "2026-07-14T12:00:00Z",
+            last_error: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (path === "/bootstrap" || path === "/api/bootstrap") {
         return new Response(
           JSON.stringify({

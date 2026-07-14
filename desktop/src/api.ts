@@ -1330,6 +1330,70 @@ export async function workspaceRemoveDir(
   return asJson(r);
 }
 
+// ── Desktop Hub pairing / device management ──────────────────────
+
+export interface HubDeviceDTO {
+  device_id: string;
+  name: string | null;
+  platform: string | null;
+  status: string | null;
+  is_current: boolean;
+  last_seen_at: string | null;
+}
+
+export interface HubStatusDTO {
+  enabled: boolean;
+  configured: boolean;
+  device_id: string;
+  paired: boolean;
+  connection:
+    | "disabled"
+    | "pairing_required"
+    | "connecting"
+    | "connected"
+    | "disconnected"
+    | "error";
+  pairing_code: string | null;
+  pairing_expires_at: string | null;
+  devices: HubDeviceDTO[];
+  last_sync_at: string | null;
+  last_connected_at: string | null;
+  last_error: string | null;
+}
+
+export interface HubPairingDTO {
+  pairing_code: string;
+  expires_at: string | null;
+}
+
+export async function hubStatus(): Promise<HubStatusDTO> {
+  const u = await apiUrl("/hub/status");
+  const r = await fetch(u, { cache: "no-store" });
+  return asJson<HubStatusDTO>(r);
+}
+
+export async function hubCreatePairing(): Promise<HubPairingDTO> {
+  const u = await apiUrl("/hub/pairings");
+  const r = await fetch(u, { method: "POST" });
+  return asJson<HubPairingDTO>(r);
+}
+
+export async function hubDevices(): Promise<HubDeviceDTO[]> {
+  const u = await apiUrl("/hub/devices");
+  const r = await fetch(u, { cache: "no-store" });
+  const payload = await asJson<{ items?: HubDeviceDTO[] }>(r);
+  return Array.isArray(payload.items) ? payload.items : [];
+}
+
+export async function hubRevokeDevice(deviceId: string): Promise<void> {
+  const u = await apiUrl(`/hub/devices/${encodeURIComponent(deviceId)}`);
+  const r = await fetch(u, { method: "DELETE" });
+  if (!r.ok) {
+    await r.body?.cancel().catch(() => undefined);
+    throw new Error(`EchoDesk Hub 请求失败（HTTP ${r.status}）`);
+  }
+}
+
 // ── TTS ─────────────────────────────────────────────────────
 
 /**
