@@ -832,22 +832,7 @@ export const useStore = create<Store>((set, get) => ({
       case "meeting.segment": {
         if (!mid) break;
         const seg = e.payload as unknown as TranscriptSegment;
-        const cur = get().meetings[mid] ?? emptyMeeting(mid);
-        const mergedSegments = mergeSegments(cur.segments, [seg]);
-        const speakers = speakerSetFromSegments(cur.speakers, mergedSegments);
-        get().upsertMeeting(mid, {
-          segments: mergedSegments,
-          speakers,
-          summary_segment_count: Math.max(
-            cur.summary_segment_count ?? 0,
-            mergedSegments.length,
-          ),
-          summary_speaker_count: Math.max(
-            cur.summary_speaker_count ?? 0,
-            speakers.size,
-          ),
-          state: "in_meeting",
-        });
+        get().addMeetingSegments(mid, [seg], { startedAt: e.ts });
         break;
       }
       case "meeting.ended":
