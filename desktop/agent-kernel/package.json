@@ -1,0 +1,23 @@
+{
+  "name": "@echodesk/agent-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-injected EchoDesk agent kernel foundation",
+  "exports": {
+    ".": "./core/index.ts"
+  },
+  "files": [
+    "core/**",
+    "package.json",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:lifecycle": "node --experimental-strip-types --test core/lifecycle.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "typescript": "^5.9.3"
+  }
+}

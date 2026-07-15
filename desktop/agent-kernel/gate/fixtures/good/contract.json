@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "contract": "echo-agent-kernel/v1",
+  "identity": {
+    "source_snapshot_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "echo_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+    "build_identity": {
+      "id": "b01-agent-kernel-v1",
+      "kernel_contract": "echo-agent-kernel/v1",
+      "runtime": {
+        "engine": "node",
+        "major": 24
+      },
+      "worker": {
+        "kind": "electron-worker",
+        "modules": "148"
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "open-run-checkpoint-close",
+      "events": [
+        {
+          "type": "open",
+          "task_id": "task-happy",
+          "operation_key": "op-happy",
+          "source_snapshot_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "build_identity": {
+            "id": "b01-agent-kernel-v1",
+            "kernel_contract": "echo-agent-kernel/v1",
+            "runtime": {
+              "engine": "node",
+              "major": 24
+            },
+            "worker": {
+              "kind": "electron-worker",
+              "modules": "148"
+            }
+          }
+        },
+        {
+          "type": "run",
+          "task_id": "task-happy",
+          "operation_key": "op-happy",
+          "request_id": "req-1"
+        },
+        {
+          "type": "checkpoint",
+          "task_id": "task-happy",
+          "operation_key": "op-happy",
+          "request_id": "req-1",
+          "grant_revision": 1,
+          "last_durable_event_seq": 2,
+          "snapshot": {
+            "messages": [
+              "system",
+              "user"
+            ],
+            "budget": {
+              "used": 12
+            }
+          },
+          "checksum": "sha256:e6e34572e542b8aa0ad2e235f92f11cf9b4bf1d859cf593795e3511b4d0e4b2f"
+        },
+        {
+          "type": "terminal",
+          "state": "succeeded"
+        },
+        {
+          "type": "close",
+          "state": "succeeded"
+        }
+      ]
+    },
+    {
+      "name": "cancel-first-terminal-wins",
+      "events": [
+        {
+          "type": "open",
+          "task_id": "task-cancel",
+          "operation_key": "op-cancel",
+          "source_snapshot_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "build_identity": {
+            "id": "b01-agent-kernel-v1",
+            "kernel_contract": "echo-agent-kernel/v1",
+            "runtime": {
+              "engine": "node",
+              "major": 24
+            },
+            "worker": {
+              "kind": "electron-worker",
+              "modules": "148"
+            }
+          }
+        },
+        {
+          "type": "run",
+          "task_id": "task-cancel",
+          "operation_key": "op-cancel",
+          "request_id": "req-cancel"
+        },
+        {
+          "type": "cancel"
+        },
+        {
+          "type": "terminal",
+          "state": "failed",
+          "late": true
+        },
+        {
+          "type": "close",
+          "state": "cancelled"
+        }
+      ]
+    }
+  ]
+}

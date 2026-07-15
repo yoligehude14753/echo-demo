@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_snapshot_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "source_manifest_sha256": "786fe885de0eb12c5d04013c7c754bb7ca3865d7cc1488686248762d7c649d32",
+  "echo_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "build_identity": {
+    "id": "b01-agent-kernel-v1",
+    "kernel_contract": "echo-agent-kernel/v1",
+    "runtime": {
+      "engine": "node",
+      "major": 24
+    },
+    "worker": {
+      "kind": "electron-worker",
+      "modules": "148"
+    }
+  }
+}

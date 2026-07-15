@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "artifact": "B01-source-closure-manifest",
+  "role": "B01 Subagent 1 - Source cartographer",
+  "status": "accepted_with_blockers",
+  "verdict": "SOURCE_ADAPTER_REQUIRED",
+  "scope": {
+    "kind": "evidence_bounded_source_closure",
+    "inputs": [
+      "docs/0.3.3-bundled-agent-runtime/evidence/F01/claude-source-identity.json",
+      "docs/0.3.3-bundled-agent-runtime/evidence/F01/claude-source-manifest.sha256",
+      "docs/0.3.3-bundled-agent-runtime/evidence/F01/query-production-import-graph.json",
+      "docs/0.3.3-bundled-agent-runtime/evidence/F01/source-gap-ledger.md",
+      "docs/0.3.3-bundled-agent-runtime/evidence/F04/FUSION_COMPATIBILITY_BASELINE_V1.json",
+      "docs/0.3.3-bundled-agent-runtime/evidence/F04/version-and-interface-freeze.md"
+    ],
+    "source_roots_restored": false,
+    "full_transitive_paths_available": false,
+    "evidence_limit": "F01 supplies exact query direct lists and aggregate transitive counts; it does not supply QueryEngine.ts or Tool.ts direct path lists.",
+    "no_f04_copy": true
+  },
+  "frozen_identity": {
+    "source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+    "manifest_root_sha256": "b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+    "f01_manifest_path": "docs/0.3.3-bundled-agent-runtime/evidence/F01/claude-source-manifest.sha256",
+    "entrypoints": [
+      {
+        "path": "query.ts",
+        "sha256": "74e0ce0d86cfd453add8dc1d15ccb6311b02964b8321e3721b8e71fbd87252ce",
+        "decision": "ADAPT"
+      },
+      {
+        "path": "QueryEngine.ts",
+        "sha256": "7df34a6a6d106927403d49e3405dfaf70da37cae5b644b658ebaf0b877988af6",
+        "decision": "ADAPT"
+      },
+      {
+        "path": "Tool.ts",
+        "sha256": "29d555ab8e50de9fb005264b5334aba870f1da472198e14d0b3ab0bf86d7c49c",
+        "decision": "ADAPT",
+        "hash_note": "F01 manifest is authoritative; this entry is checked against F01 identity by the gate."
+      }
+    ]
+  },
+  "echo_binding": {
+    "product_version": "0.3.3",
+    "compatibility_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+    "effective_working_base_sha": "9fef66c83e6a06541c98cca3194e37ac5a6dd533",
+    "f04_pre_closeout_head": "87de108fab64b43688463976b95cc92472c41721",
+    "delta_classification": "test-only; no production runtime change",
+    "evidence": "docs/0.3.3-bundled-agent-runtime/evidence/F04/FUSION_COMPATIBILITY_BASELINE_V1.json"
+  },
+  "runtime_requirement": {
+    "electron": "43.1.0",
+    "node": "24.18.0",
+    "v8": "15.0.245.13-electron.0",
+    "modules_abi": "148",
+    "napi": "10",
+    "typescript": "5.9.3",
+    "bundler": "Vite 7.3.6 / esbuild 0.28.1",
+    "evidence": "docs/0.3.3-bundled-agent-runtime/evidence/F04/FUSION_COMPATIBILITY_BASELINE_V1.json"
+  },
+  "contract_versions": {
+    "kernel_api": 1,
+    "worker_ipc": 1,
+    "model_runtime": 1,
+    "grant_snapshot": 1,
+    "checkpoint": 1,
+    "event": 1
+  },
+  "module_decisions": [
+    {"path":"query.ts","kind":"entrypoint","decision":"ADAPT","reason":"保留 loop 语义的边界参考，不直接 vendoring。"},
+    {"path":"QueryEngine.ts","kind":"entrypoint","decision":"ADAPT","reason":"映射到 Echo kernel 的 task/model/event orchestration；F01 未给出逐边列表。"},
+    {"path":"Tool.ts","kind":"entrypoint","decision":"ADAPT","reason":"映射到 Echo grant/tool correlation port。"},
+    {"path":"hooks/useCanUseTool.tsx","kind":"query-direct-local","decision":"ADAPT","reason":"权限判断进入 Echo grant snapshot，不携带 Claude UI。"},
+    {"path":"services/api/withRetry.ts","kind":"query-direct-local","decision":"REWRITE","reason":"重试逻辑必须围绕 EchoModelPort，禁止沿用 provider I/O。"},
+    {"path":"services/compact/autoCompact.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"compact 不属于最小 one-tool loop。"},
+    {"path":"services/compact/compact.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"compact 不属于最小 one-tool loop。"},
+    {"path":"services/analytics/index.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"排除 Claude telemetry/analytics。"},
+    {"path":"utils/imageValidation.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"图像处理不属于 kernel source slice。"},
+    {"path":"utils/imageResizer.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"图像处理及 native optional path 排除。"},
+    {"path":"utils/systemPromptType.ts","kind":"query-direct-local","decision":"ADAPT","reason":"仅保留 Echo system prompt boundary 的类型语义。"},
+    {"path":"utils/log.ts","kind":"query-direct-local","decision":"REWRITE","reason":"改为 Echo structured event/log port，不带全局文件或 telemetry。"},
+    {"path":"services/api/errors.ts","kind":"query-direct-local","decision":"ADAPT","reason":"映射为 Echo typed model/tool failure。"},
+    {"path":"utils/debug.ts","kind":"query-direct-local","decision":"REWRITE","reason":"调试输出改为受控 kernel diagnostics，不读环境。"},
+    {"path":"utils/messages.ts","kind":"query-direct-local","decision":"ADAPT","reason":"Anthropic message blocks 在 adapter 边界映射到 Echo messages。"},
+    {"path":"services/toolUseSummary/toolUseSummaryGenerator.ts","kind":"query-direct-local","decision":"ADAPT","reason":"只保留 tool call/result 摘要语义。"},
+    {"path":"utils/api.ts","kind":"query-direct-local","decision":"REWRITE","reason":"provider API 由 EchoModelPort 接管。"},
+    {"path":"utils/attachments.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"文件/媒体附件 I/O 超出 kernel source slice。"},
+    {"path":"utils/messageQueueManager.ts","kind":"query-direct-local","decision":"ADAPT","reason":"保留有界 ordered message queue 语义。"},
+    {"path":"utils/commandLifecycle.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"排除 CLI command lifecycle。"},
+    {"path":"utils/headlessProfiler.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"排除 profiler/telemetry。"},
+    {"path":"utils/model/model.ts","kind":"query-direct-local","decision":"REWRITE","reason":"改为 Echo authoritative model runtime snapshot 与 model port。"},
+    {"path":"utils/tokens.ts","kind":"query-direct-local","decision":"ADAPT","reason":"仅保留 token accounting 的纯计算字段。"},
+    {"path":"utils/context.ts","kind":"query-direct-local","decision":"ADAPT","reason":"保留有界上下文装配，不引入 session/filesystem。"},
+    {"path":"services/analytics/growthbook.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"排除 feature analytics/telemetry。"},
+    {"path":"tools/SleepTool/prompt.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"Claude 专属工具及 terminal-facing prompt 排除。"},
+    {"path":"utils/hooks/postSamplingHooks.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"排除 Claude post-sampling hook side effects。"},
+    {"path":"utils/hooks.ts","kind":"query-direct-local","decision":"ADAPT","reason":"仅映射为 Echo lifecycle hook port。"},
+    {"path":"services/api/dumpPrompts.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"排除 prompt dump 与文件/隐私副作用。"},
+    {"path":"services/tools/StreamingToolExecutor.ts","kind":"query-direct-local","decision":"ADAPT","reason":"保留 bounded tool call/result streaming 与 toolUseId correlation。"},
+    {"path":"utils/queryProfiler.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"排除 query profiler/telemetry。"},
+    {"path":"services/tools/toolOrchestration.ts","kind":"query-direct-local","decision":"ADAPT","reason":"映射为 Echo tool registry/grant orchestration。"},
+    {"path":"utils/toolResultStorage.ts","kind":"query-direct-local","decision":"REWRITE","reason":"结果持久化改走 Echo checkpoint/event port。"},
+    {"path":"utils/sessionStorage.ts","kind":"query-direct-local","decision":"EXCLUDE","reason":"排除 Claude session/history 文件存储。"},
+    {"path":"query/stopHooks.ts","kind":"query-direct-local","decision":"ADAPT","reason":"映射为 cancel 与 first-terminal-wins 语义。"},
+    {"path":"query/config.ts","kind":"query-direct-local","decision":"REWRITE","reason":"改用 Echo immutable runtime snapshot；不读 HOME/PATH。"},
+    {"path":"query/deps.ts","kind":"query-direct-local","decision":"REWRITE","reason":"productionDeps 不进入 kernel；依赖改为最小 ports。"},
+    {"path":"bootstrap/state.ts","kind":"query-direct-local","decision":"REWRITE","reason":"去除 Claude global bootstrap/config；使用显式 task state。"},
+    {"path":"query/tokenBudget.ts","kind":"query-direct-local","decision":"ADAPT","reason":"保留 bounded budget accounting。"},
+    {"path":"utils/array.ts","kind":"query-direct-local","decision":"PORT_AS_IS","reason":"纯函数工具，无外部 I/O 或运行时副作用。"}
+  ],
+  "policy": {
+    "allowed_decisions": ["PORT_AS_IS", "ADAPT", "REWRITE", "EXCLUDE"],
+    "kernel_direct_import_allowlist": ["pure computation", "Echo-owned ports", "explicit immutable snapshots"],
+    "forbidden_surface": [
+      "CLI parser",
+      "terminal UI",
+      "AgentOS/proxy daemon",
+      "Claude global auth/config/history/update/telemetry",
+      "process side effects",
+      "network side effects",
+      "OS/filesystem side effects",
+      "native/optional ABI dependencies",
+      "real model credentials",
+      "localhost ports"
+    ],
+    "gate_policy": "Every listed module and edge/group must carry one allowed decision; unresolved aggregate evidence cannot be promoted to PORT_AS_IS."
+  }
+}
