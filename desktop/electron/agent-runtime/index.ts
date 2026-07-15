@@ -23,3 +23,14 @@ export { WorkerManager, WorkerRuntimeError, WorkerRuntimeSession } from "./pool/
 export type { WorkerManagerOptions, WorkerManagerState } from "./pool/worker-manager.ts";
 export { PooledWorkerRuntimeSession, WorkerPool } from "./pool/worker-pool.ts";
 export type { WorkerPoolOptions } from "./pool/worker-pool.ts";
+export {
+  decodeRuntimeFrame,
+  encodeRuntimeFrame,
+  FramedRuntimeError,
+  makeRuntimeMessage,
+  nonceProof,
+  RuntimeFrameDecoder,
+} from "./bridge/framed-runtime.ts";
+export type { FramedRuntimeMessage, RuntimeDuplex } from "./bridge/framed-runtime.ts";
+export { EmbeddedRuntimePortServer } from "./bridge/embedded-runtime-server.ts";
+export type { EmbeddedRuntimeCommandHandler } from "./bridge/embedded-runtime-server.ts";
