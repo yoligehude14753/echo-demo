@@ -1138,7 +1138,7 @@ test("action pin gate scans yaml and rejects quoted or flow-style mutable uses",
   }
 });
 
-test("raw pip-audit evidence permits only the explicit unpatched torch exception", () => {
+test("raw pip-audit evidence permits only the explicit dependency exceptions", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "echodesk-pip-audit-"));
   const report = path.join(root, "report.json");
   const exitCode = path.join(root, "report.exit-code");
@@ -1162,6 +1162,34 @@ test("raw pip-audit evidence permits only the explicit unpatched torch exception
     ],
     fixes: [],
   };
+  const setuptoolsFinding = {
+    dependencies: [
+      {
+        name: "setuptools",
+        version: "81.0.0",
+        vulns: [
+          {
+            id: "CVE-2026-59890",
+            aliases: ["PYSEC-2026-3447", "GHSA-h35f-9h28-mq5c"],
+            fix_versions: ["83.0.0"],
+          },
+        ],
+      },
+    ],
+    fixes: [],
+  };
+  const dualExceptionArgs = [
+    "--package",
+    "torch",
+    "--vulnerability",
+    "CVE-2025-3000",
+    "--package",
+    "setuptools",
+    "--vulnerability",
+    "CVE-2026-59890",
+  ];
+  const writeReport = (dependencies) =>
+    writeFileSync(report, JSON.stringify({ dependencies, fixes: [] }));
   const run = (mode, extra = []) =>
     spawnSync(
       python,
@@ -1178,43 +1206,41 @@ test("raw pip-audit evidence permits only the explicit unpatched torch exception
     );
 
   try {
-    writeFileSync(lock, "torch==2.11.0\n");
+    writeFileSync(lock, "torch==2.11.0\nsetuptools==81.0.0\n");
     writeFileSync(
       exception,
       "## CVE-2025-3000 / GHSA-rrmf-rvhw-rf47 — torch 2.11.0\n\n" +
-        "- Exception expires: 2999-12-31\n",
+        "- Exception expires: 2999-12-31\n\n" +
+        "## CVE-2026-59890 / GHSA-h35f-9h28-mq5c — setuptools 81.0.0\n\n" +
+        "- Exception expires: 2999-12-31\n" +
+        "- Compatible fixed release: setuptools>=83.0.0\n",
     );
-    writeFileSync(report, JSON.stringify(torchFinding));
+    writeReport([torchFinding.dependencies[0], setuptoolsFinding.dependencies[0]]);
     writeFileSync(exitCode, "1\n");
     const accepted = run("exception", [
       "--lock",
       lock,
       "--exception",
       exception,
-      "--package",
-      "torch",
-      "--vulnerability",
-      "CVE-2025-3000",
+      ...dualExceptionArgs,
     ]);
     assert.equal(accepted.status, 0, `${accepted.stdout}\n${accepted.stderr}`);
 
     writeFileSync(
       lock,
       "torch==2.11.0 ; sys_platform == 'darwin'\\\n" +
-        "torch==2.11.0+cpu ; sys_platform != 'darwin'\\\n",
+        "torch==2.11.0+cpu ; sys_platform != 'darwin'\\\n" +
+        "setuptools==81.0.0\n",
     );
     const cpuFinding = structuredClone(torchFinding);
     cpuFinding.dependencies[0].version = "2.11.0+cpu";
-    writeFileSync(report, JSON.stringify(cpuFinding));
+    writeReport([cpuFinding.dependencies[0], setuptoolsFinding.dependencies[0]]);
     const acceptedCpuBuild = run("exception", [
       "--lock",
       lock,
       "--exception",
       exception,
-      "--package",
-      "torch",
-      "--vulnerability",
-      "CVE-2025-3000",
+      ...dualExceptionArgs,
     ]);
     assert.equal(
       acceptedCpuBuild.status,
@@ -1240,21 +1266,25 @@ test("raw pip-audit evidence permits only the explicit unpatched torch exception
 
     const unpinnedLocalBuild = structuredClone(torchFinding);
     unpinnedLocalBuild.dependencies[0].version = "2.11.0+cuda";
-    writeFileSync(report, JSON.stringify(unpinnedLocalBuild));
+    writeReport([
+      unpinnedLocalBuild.dependencies[0],
+      setuptoolsFinding.dependencies[0],
+    ]);
     const rejectedLocalBuild = run("exception", [
       "--lock",
       lock,
       "--exception",
       exception,
-      "--package",
-      "torch",
-      "--vulnerability",
-      "CVE-2025-3000",
+      ...dualExceptionArgs,
     ]);
     assert.notEqual(rejectedLocalBuild.status, 0);
     assert.match(rejectedLocalBuild.stderr, /unexpected exception finding/);
 
-    writeFileSync(lock, "torch==2.11.0+cuda ; sys_platform != 'darwin'\\\n");
+    writeFileSync(
+      lock,
+      "torch==2.11.0+cuda ; sys_platform != 'darwin'\\\n" +
+        "setuptools==81.0.0\n",
+    );
     const rejectedAuditInput = spawnSync(
       python,
       [
@@ -1271,24 +1301,22 @@ test("raw pip-audit evidence permits only the explicit unpatched torch exception
     assert.match(rejectedAuditInput.stderr, /unreviewed local dependency build/);
 
     const extraFinding = structuredClone(torchFinding);
+    extraFinding.dependencies.push(setuptoolsFinding.dependencies[0]);
     extraFinding.dependencies.push({
       name: "requests",
       version: "0.0.1",
       vulns: [{ id: "CVE-2999-0001", aliases: [], fix_versions: ["1.0.0"] }],
     });
-    writeFileSync(report, JSON.stringify(extraFinding));
+    writeReport(extraFinding.dependencies);
     const rejected = run("exception", [
       "--lock",
       lock,
       "--exception",
       exception,
-      "--package",
-      "torch",
-      "--vulnerability",
-      "CVE-2025-3000",
+      ...dualExceptionArgs,
     ]);
     assert.notEqual(rejected.status, 0);
-    assert.match(rejected.stderr, /exactly one finding/);
+    assert.match(rejected.stderr, /exactly 2 findings/);
 
     writeFileSync(report, JSON.stringify({ dependencies: [], fixes: [] }));
     writeFileSync(exitCode, "0\n");
