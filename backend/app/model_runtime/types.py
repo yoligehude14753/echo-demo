@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-MODEL_RUNTIME_SCHEMA_VERSION = 1
+MODEL_RUNTIME_SCHEMA_VERSION: Literal[1] = 1
 
 ModelPurpose = Literal[
     "agent_main",

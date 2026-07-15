@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "revision": 7,
+  "activatedAt": "2026-07-15T08:00:00+00:00",
+  "routes": {
+    "agent_main": {
+      "routeId": "main",
+      "protocol": "openai_chat",
+      "baseUrl": "https://primary.example/v1/",
+      "credentialHandle": "credential://primary",
+      "model": "model-main",
+      "fallbackRouteIds": ["backup"],
+      "capabilities": {
+        "streaming": true,
+        "toolUse": true,
+        "parallelToolUse": true,
+        "toolChoice": true,
+        "systemMessages": true,
+        "usageInStream": true,
+        "promptCache": false,
+        "multimodalImages": false,
+        "multimodalDocuments": false
+      },
+      "limits": {
+        "contextWindow": 128000,
+        "maxOutputTokens": 8000,
+        "requestTimeoutS": 30,
+        "maxRetries": 1
+      },
+      "tokenizer": {
+        "kind": "conservative_estimate",
+        "identifier": "unit-tokenizer",
+        "estimated": true,
+        "safetyMarginTokens": 512
+      },
+      "reasoning": {
+        "mode": "none",
+        "stripThinkTags": true,
+        "tokenBudget": null
+      }
+    },
+    "agent_quality": {
+      "routeId": "backup",
+      "protocol": "openai_chat",
+      "baseUrl": "https://backup.example/v1",
+      "credentialHandle": "credential://backup",
+      "model": "model-backup",
+      "fallbackRouteIds": [],
+      "capabilities": {
+        "streaming": true,
+        "toolUse": true,
+        "parallelToolUse": true,
+        "toolChoice": true,
+        "systemMessages": true,
+        "usageInStream": true,
+        "promptCache": false,
+        "multimodalImages": false,
+        "multimodalDocuments": false
+      },
+      "limits": {
+        "contextWindow": 128000,
+        "maxOutputTokens": 8000,
+        "requestTimeoutS": 30,
+        "maxRetries": 1
+      },
+      "tokenizer": {
+        "kind": "conservative_estimate",
+        "identifier": "unit-tokenizer",
+        "estimated": true,
+        "safetyMarginTokens": 512
+      },
+      "reasoning": {
+        "mode": "none",
+        "stripThinkTags": true,
+        "tokenBudget": null
+      }
+    }
+  }
+}

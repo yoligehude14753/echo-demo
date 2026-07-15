@@ -387,6 +387,42 @@ def compile_snapshot(
     )
 
 
+def compile_route_snapshot(
+    value: ModelRuntimeConfig | Mapping[str, object],
+    purpose: ModelPurpose,
+    route_id: str,
+    *,
+    expected_revision: int | None = None,
+) -> ModelRuntimeSnapshot:
+    """Compile a named route without changing the task's pinned revision.
+
+    Fallback selection is allowed to change the route, but never to silently
+    select a route from a newer config revision.  The caller supplies the
+    expected revision captured when the task started.
+    """
+
+    config = normalize_model_runtime_config(value)
+    if expected_revision is not None and config.revision != expected_revision:
+        raise ModelRuntimeStaleRevisionError(MODEL_CONFIG_STALE_REVISION, field="revision")
+    route = next((candidate for candidate in config.routes.values() if candidate.route_id == route_id), None)
+    if route is None:
+        raise _config_error(MODEL_CONFIG_INVALID, field="route_id")
+    return ModelRuntimeSnapshot(
+        schemaVersion=1,
+        revision=config.revision,
+        configHash=config.config_hash or canonical_config_hash(config),
+        purpose=purpose,
+        routeId=route.route_id,
+        protocol=route.protocol,
+        model=route.model,
+        capabilities=route.capabilities,
+        limits=route.limits,
+        tokenizer=route.tokenizer,
+        reasoning=route.reasoning,
+        credentialHandle=route.credential_handle,
+    )
+
+
 compile_model_runtime_snapshot = compile_snapshot
 
 
@@ -394,6 +430,7 @@ __all__ = [
     "canonical_config_hash",
     "compile_model_runtime_config",
     "compile_model_runtime_snapshot",
+    "compile_route_snapshot",
     "compile_snapshot",
     "normalize_model_runtime_config",
 ]
