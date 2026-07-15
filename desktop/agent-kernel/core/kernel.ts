@@ -15,14 +15,6 @@ import type {
   CancelReason,
   CanonicalContentBlock,
   CanonicalMessage,
-  EchoAgentEventSink,
-  EchoAgentTelemetryPort,
-  EchoClock,
-  EchoContextPort,
-  EchoIdFactory,
-  EchoModelPort,
-  EchoTool,
-  EchoToolRegistry,
   GrantSnapshot,
   KernelAuditEntry,
   KernelBuildIdentity,
@@ -293,7 +285,7 @@ class KernelSessionImpl implements KernelSession {
     if (this.closed) throw new KernelError("KERNEL_SESSION_CLOSED", "kernel session is closed");
   }
 
-  private async emitEvent(turn: TurnState, type: KernelEventType, payload: Record<string, unknown>): Promise<KernelEventEnvelope> {
+  private async emitEvent(_turn: TurnState, type: KernelEventType, payload: Record<string, unknown>): Promise<KernelEventEnvelope> {
     const event: KernelEventEnvelope = {
       schemaVersion: 1,
       taskId: this.taskId,
