@@ -597,6 +597,32 @@ export function isNativeMobile(): boolean {
   return window.Capacitor?.isNativePlatform?.() === true;
 }
 
+function configuredMobilePcBackendBase(): string | null {
+  if (runtimeMode() === "release") return DEFAULT_ANDROID_BACKEND_BASE;
+  return envBackendBase() ?? storedBackendBase();
+}
+
+/**
+ * Native Android/TV 的业务流量只能发往 PC backend；不能使用 WebView 相对
+ * proxy，也不能把本机不存在的 local backend 当成 fallback。
+ */
+export function mobilePcBackendBase(): string {
+  if (!isNativeMobile()) {
+    throw new BackendBasePolicyError(
+      "mobile PC backend route is only available in a native mobile runtime",
+      "mobile_backend_route_invalid_runtime",
+    );
+  }
+  const base = configuredMobilePcBackendBase();
+  if (!base) {
+    throw new BackendBasePolicyError(
+      "explicit PC backend endpoint is required for mobile development",
+      "mobile_backend_route_unavailable",
+    );
+  }
+  return base;
+}
+
 export async function checkAppUpdate(): Promise<AppUpdateStatus> {
   if (typeof window !== "undefined" && window.echo?.checkForUpdates) {
     return window.echo.checkForUpdates();
@@ -677,6 +703,7 @@ export async function installAppUpdate(status?: AppUpdateStatus): Promise<void> 
 }
 
 export function configuredBackendBase(): string | null {
+  if (isNativeMobile()) return mobilePcBackendBase();
   if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
     return normalizedElectronBackendBase();
   }

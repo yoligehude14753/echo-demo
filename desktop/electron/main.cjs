@@ -143,8 +143,6 @@ const AUTO_UPDATE_DOWNLOAD_ENABLED =
 const PUBLIC_DEMO_MODE = BACKEND_ENDPOINT.mode === "public";
 const BACKEND_HOST = BACKEND_ENDPOINT.backendBase;
 const BACKEND_BIND_HOST = BACKEND_ENDPOINT.bindHost;
-const ALLOW_PACKAGED_SOURCE_BACKEND =
-  process.env.ECHO_ALLOW_PACKAGED_SOURCE_BACKEND === "1";
 
 // Packaged/release 的业务 endpoint 固定为 public service；local 只由显式
 // development/diagnostic runtime 选择。旧 ECHO_* 只在这两类显式模式中作为兼容输入。
@@ -171,15 +169,13 @@ let backendProc = null;
 let backendLifecycleGeneration = 0;
 let mainWindow = null;
 let healthTimer = null;
-let externalHealthTimer = null;
+let publicBackendHealthTimer = null;
 let healthStartedAt = 0;
 let healthFailures = 0;
 let backendWasReady = false;
 let restartAttempts = 0;
 let shuttingDown = false;
 let quittingForReal = false;
-let externalMode = false;
-let externalBackendReady = false;
 let expectedLocalBackendContractPromise = null;
 let backendHealthcheckPromise = null;
 let lastBackendContractFailure = null;
@@ -2075,7 +2071,7 @@ function shareBackendHost() {
   return resolveShareBackendBase(BACKEND_ENDPOINT, {
     shareBaseUrl: process.env.ECHO_SHARE_BASE_URL,
     lanAddress: firstLanAddress(),
-    allowLan: !externalMode,
+    allowLan: BACKEND_ENDPOINT.role !== "public_service",
   });
 }
 
@@ -2086,11 +2082,10 @@ function projectRoot() {
 
 // backend 工作目录解析。prod (asar) 下 __dirname 在 asar 虚拟路径，
 // 不能作 child_process.spawn 的 cwd（uvicorn 启动期会 chdir 失败）。
-// 候选顺序跟 pythonCandidates 对齐，找到第一个真实存在的目录即用。
+// 源码开发只允许显式工作目录或当前 checkout；安装包永不进入源码路径。
 function resolveBackendCwd() {
   const cands = [
     process.env.ECHO_BACKEND_CWD,
-    path.join(os.homedir(), ".echodesk", "source", "backend"),
     path.join(projectRoot(), "backend"),
   ].filter(Boolean);
   for (const c of cands) {
@@ -2122,7 +2117,7 @@ function bundledBackendExecutable() {
 }
 
 function refusePackagedSourceFallback() {
-  if (!app.isPackaged || ALLOW_PACKAGED_SOURCE_BACKEND) return false;
+  if (!app.isPackaged) return false;
   emitStatus({
     state: "bundled-backend-unavailable",
     reason: "packaged backend is missing or not executable",
@@ -2134,16 +2129,21 @@ function refusePackagedSourceFallback() {
 
 // ---------- Python 解析（P1.6） ----------
 
-// 候选顺序：env > 用户安装位置 (P1.7) > dev 仓库 venv > 系统 python3 > PATH
+// 源码开发只允许显式绝对路径或当前 checkout 的专属 venv；不扫描 HOME、系统
+// Python 或 PATH，安装包也不会进入该分支。
 function pythonCandidates() {
   const cands = [];
-  if (process.env.ECHO_PYTHON) cands.push(process.env.ECHO_PYTHON);
+  const explicit = String(process.env.ECHO_PYTHON || "").trim();
+  if (explicit && path.isAbsolute(explicit)) cands.push(explicit);
   cands.push(
-    path.join(os.homedir(), ".echodesk", "source", "backend", ".venv", "bin", "python"),
+    path.join(
+      projectRoot(),
+      "backend",
+      ".venv",
+      process.platform === "win32" ? "Scripts" : "bin",
+      process.platform === "win32" ? "python.exe" : "python",
+    ),
   );
-  cands.push(path.join(projectRoot(), "backend", ".venv", "bin", "python"));
-  cands.push("/usr/bin/python3");
-  cands.push("python3");
   return cands;
 }
 
@@ -2324,81 +2324,47 @@ function stopHealthWatcher() {
   }
 }
 
-function stopExternalHealthWatcher() {
-  if (externalHealthTimer) {
-    clearInterval(externalHealthTimer);
-    externalHealthTimer = null;
+function stopPublicBackendHealthWatcher() {
+  if (publicBackendHealthTimer) {
+    clearInterval(publicBackendHealthTimer);
+    publicBackendHealthTimer = null;
   }
-  externalBackendReady = false;
 }
 
-// External 模式：我们没拥有该 process，不重启；只观察存活情况
-function startExternalHealthWatcher() {
-  if (externalHealthTimer) return;
-  externalHealthTimer = setInterval(async () => {
+// Public service 是正式的远端业务路由；只观察健康状态，不接管本机 daemon。
+function startPublicBackendHealthWatcher() {
+  if (publicBackendHealthTimer) return;
+  publicBackendHealthTimer = setInterval(async () => {
     if (shuttingDown) return;
     const ok = await healthcheckOnce();
     if (ok) {
-      if (!externalBackendReady) {
-        externalBackendReady = true;
-        emitStatus({ state: "ready", port: BACKEND_PORT });
-      }
+      emitStatus({ state: "ready", mode: "public-service" });
       return;
     }
-    externalBackendReady = false;
-    if (PUBLIC_DEMO_MODE) {
+    emitStatus({
+      state: "degraded",
+      reason: "public backend unhealthy",
+      attempts: 0,
+      last_error: "healthz failed",
+    });
+  }, HEALTH_INTERVAL_MS);
+}
+
+function attachPublicBackend() {
+  emitStatus({ state: "connecting", mode: "public-service" });
+  void healthcheckOnce().then((ok) => {
+    if (shuttingDown || !PUBLIC_DEMO_MODE) return;
+    if (ok) {
+      emitStatus({ state: "ready", mode: "public-service" });
+    } else {
       emitStatus({
         state: "degraded",
         reason: "public backend unhealthy",
         attempts: 0,
         last_error: "healthz failed",
       });
-      return;
     }
-    if (!isPortListening(BACKEND_PORT)) {
-      // 外部 backend 进程退出 → 端口已空 → 我们接管
-      log("[backend] external backend exited, taking over");
-      stopExternalHealthWatcher();
-      externalMode = false;
-      restartAttempts = 0;
-      spawnBackendAndWatch();
-      return;
-    }
-    // 端口还占着但 healthz 失败 → 外部 backend 卡死了，标记 degraded 让 UI 提示
-    emitStatus({
-      state: "degraded",
-      reason: lastBackendContractFailure
-        ? "external backend contract mismatch"
-        : "external backend unhealthy",
-      attempts: 0,
-      last_error: lastBackendContractFailure || "healthz failed",
-    });
-  }, HEALTH_INTERVAL_MS);
-}
-
-function attachExternalBackend({ mode = "external" } = {}) {
-  externalMode = true;
-  externalBackendReady = false;
-  if (PUBLIC_DEMO_MODE) {
-    emitStatus({ state: "external", mode: "public-demo" });
-    startExternalHealthWatcher();
-    return;
-  }
-  emitStatus({ state: "starting" });
-  void healthcheckOnce().then((ok) => {
-    if (shuttingDown || !externalMode) return;
-    externalBackendReady = ok;
-    if (ok) {
-      emitStatus({ state: "external", port: BACKEND_PORT, mode });
-    } else {
-      emitStatus({
-        state: "degraded",
-        reason: "external backend contract mismatch",
-        attempts: 0,
-        last_error: lastBackendContractFailure || "contract probe failed",
-      });
-    }
-    startExternalHealthWatcher();
+    startPublicBackendHealthWatcher();
   });
 }
 
@@ -2467,15 +2433,23 @@ function spawnBackendAndWatch() {
   }
 
   if (!SPAWN_BACKEND) {
-    log("[backend] spawn request ignored because local backend spawn is disabled");
-    attachExternalBackend();
+    log("[backend] local backend spawn is disabled; refusing unmanaged backend fallback");
+    emitStatus({
+      state: "backend-spawn-disabled",
+      reason: "local backend must be supervised by the current EchoDesk process",
+      attempts: 0,
+    });
     return;
   }
 
-  // 端口已经被外部 backend 占着（dev 期 cursor 已经跑了 uvicorn）→ 不要 spawn 第二份
+  // 端口被其它进程占用时必须 fail closed，不能把未知 daemon 当作本应用 backend。
   if (isPortListening(BACKEND_PORT)) {
-    log(`[backend] port ${BACKEND_PORT} already in use, validating external backend`);
-    attachExternalBackend();
+    log(`[backend] port ${BACKEND_PORT} is already occupied; refusing unmanaged backend`);
+    emitStatus({
+      state: "backend-port-conflict",
+      reason: "backend port is occupied by an unmanaged process",
+      attempts: 0,
+    });
     return;
   }
 
@@ -2502,7 +2476,6 @@ function spawnBackendAndWatch() {
       state: "backend-source-not-found",
       searched: [
         process.env.ECHO_BACKEND_CWD,
-        path.join(os.homedir(), ".echodesk", "source", "backend"),
         path.join(projectRoot(), "backend"),
       ].filter(Boolean),
       help_url: "docs/INSTALL.md",
@@ -2603,10 +2576,17 @@ function spawnBackendAndWatch() {
 
 function startBackend() {
   if (!SPAWN_BACKEND) {
-    log(
-      `[backend] spawn disabled (${PUBLIC_DEMO_MODE ? "public demo" : "ECHO_SPAWN_BACKEND=0"}), using ${BACKEND_HOST}`,
-    );
-    attachExternalBackend();
+    if (PUBLIC_DEMO_MODE) {
+      log(`[backend] local spawn disabled; connecting to public service ${BACKEND_HOST}`);
+      attachPublicBackend();
+    } else {
+      log("[backend] local backend spawn disabled; refusing unmanaged backend fallback");
+      emitStatus({
+        state: "backend-spawn-disabled",
+        reason: "local backend must be supervised by the current EchoDesk process",
+        attempts: 0,
+      });
+    }
     return;
   }
 
@@ -3177,12 +3157,11 @@ const manualRestartBackend = createManualBackendRestart({
   resetRestartState: () => {
     backendLifecycleGeneration += 1;
     restartAttempts = 0;
-    externalMode = false;
     expectedLocalBackendContractPromise = null;
     lastBackendContractFailure = null;
   },
   stopHealthWatcher,
-  stopExternalHealthWatcher,
+  stopPublicBackendHealthWatcher,
   stopBackendProc: stopBackendProcForRestart,
   spawnBackendAndWatch,
   isShuttingDown: () => shuttingDown,
@@ -3257,7 +3236,7 @@ app.on("before-quit", (event) => {
   shuttingDown = true;
   emitStatus({ state: "shutting-down" });
   stopHealthWatcher();
-  stopExternalHealthWatcher();
+  stopPublicBackendHealthWatcher();
 
   if (!backendProc || backendProc.exitCode !== null) {
     quittingForReal = true;
