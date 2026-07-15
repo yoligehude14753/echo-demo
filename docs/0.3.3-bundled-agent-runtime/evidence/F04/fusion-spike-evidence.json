@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "experiment": "F04 minimal vertical fusion spike",
+  "scope": "task-owned non-production experiment only",
+  "identity": {
+    "compatibility_evidence_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+    "effective_working_base_sha": "9fef66c83e6a06541c98cca3194e37ac5a6dd533",
+    "f04_pre_closeout_head": "87de108fab64b43688463976b95cc92472c41721",
+    "claude_source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+    "claude_manifest_sha256": "b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+    "electron": "43.1.0",
+    "electron_node": "24.18.0",
+    "electron_v8": "15.0.245.13-electron.0",
+    "electron_modules": "148"
+  },
+  "vertical_flow": [
+    "Echo AgentTurnInput",
+    "bounded adapted Claude loop",
+    "deterministic fake model text + one tool call",
+    "Echo-shaped fake tool with correlated result",
+    "model continuation",
+    "KernelEvent stream + terminal"
+  ],
+  "commands": [
+    {
+      "command": "node --check experiments/fusion-compatibility/F04/loop/loop.mjs && node --check experiments/fusion-compatibility/F04/loop/trace.mjs && node experiments/fusion-compatibility/F04/loop/trace.mjs --all --verify",
+      "status": "passed",
+      "result": "F04_TRACE_OK cases=success,cancel,mismatch eventCounts=7,6,5 toolInvocations=1,0,0 terminalStates=succeeded,cancelled,failed"
+    },
+    {
+      "command": "node --experimental-strip-types --check experiments/fusion-compatibility/F04/adapter/adapter.ts && node --experimental-strip-types --test experiments/fusion-compatibility/F04/adapter/test.mjs",
+      "status": "passed",
+      "result": "5 tests passed; 0 failed; 0 skipped"
+    },
+    {
+      "command": "node --experimental-strip-types experiments/fusion-compatibility/F04/integration.mjs macos",
+      "status": "passed",
+      "result": "success=7 events/1 invocation/succeeded; cancel=2 events/0 invocation/cancelled; failClosed=call-id+source+runtime"
+    },
+    {
+      "command": "node --experimental-strip-types experiments/fusion-compatibility/F04/integration.mjs sunny",
+      "status": "passed",
+      "result": "same deterministic result under win32 Electron 43.1.0 fingerprint fixture"
+    },
+    {
+      "command": "env -i HOME=/tmp/echodesk-f04-macos/home PATH=/usr/bin:/bin /Users/yoligehude/Desktop/all/echo/desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron --no-sandbox --disable-gpu --user-data-dir=/tmp/echodesk-f04-macos/user-data electron-worker-harness.cjs",
+      "status": "passed",
+      "result": "darwin arm64 main/worker same PID 29452; threadId=1; Electron 43.1.0; fused assertions all true"
+    },
+    {
+      "command": "ssh win-sunny-friend powershell ... node.exe node_modules\\electron\\cli.js --no-sandbox --disable-gpu --user-data-dir=$TEMP\\echodesk-f03-electron-43\\user-data-f04 electron-worker-harness.cjs",
+      "status": "passed",
+      "result": "win32 x64 main/worker same PID 1076; threadId=1; Electron 43.1.0; fused assertions all true"
+    }
+  ],
+  "case_results": {
+    "success": {
+      "status": "passed",
+      "tool_use_id": "tool-1",
+      "result_tool_use_id": "tool-1",
+      "continuation": true,
+      "terminal": "succeeded",
+      "tool_invocations": 1
+    },
+    "one_tool_call": {
+      "status": "passed",
+      "tool_use_id": "tool-1",
+      "correlation": "exact toolUseId",
+      "terminal": "succeeded"
+    },
+    "cancel": {
+      "status": "passed",
+      "terminal": "cancelled",
+      "first_terminal_wins": true,
+      "late_terminal": "audit-only in loop trace",
+      "tool_invocations": 0
+    },
+    "call_id_mismatch": {
+      "status": "passed",
+      "code": "MODEL_TOOL_CORRELATION_MISMATCH",
+      "tool_invoked": false,
+      "terminal": "failed"
+    },
+    "model_event_schema_mismatch": {
+      "status": "passed",
+      "code": "MODEL_SCHEMA_VERSION_MISMATCH",
+      "terminal": "failed"
+    },
+    "source_snapshot_mismatch": {
+      "status": "passed",
+      "code": "SOURCE_SNAPSHOT_MISMATCH",
+      "startup": "rejected"
+    },
+    "runtime_fingerprint_mismatch": {
+      "status": "passed",
+      "code": "RUNTIME_FINGERPRINT_MISMATCH",
+      "startup": "rejected"
+    }
+  },
+  "platform_evidence": {
+    "macos": {
+      "f04_logic": "passed under deterministic host runner and real Electron worker",
+      "electron_worker": "passed; same PID/ABI; threadId=1; isMainThread=false",
+      "source": "macos-worker-trace.json",
+      "supporting_source": "../F03/macos-probe.json"
+    },
+    "sunny": {
+      "f04_logic": "passed under deterministic runner and real Sunny Electron worker",
+      "electron_worker": "passed; same PID/ABI; threadId=1; isMainThread=false",
+      "source": "sunny-worker-trace.json",
+      "supporting_source": "../F03/sunny-windows-probe.json",
+      "new_host_execution": true
+    }
+  },
+  "subagents": [
+    {
+      "role": "Loop slice integrator",
+      "agent_id": "019f64bf-0c06-7a50-8451-69d300de6a57",
+      "status": "completed",
+      "scope": "experiments/fusion-compatibility/F04/loop/**"
+    },
+    {
+      "role": "Adapter implementer",
+      "agent_id": "019f64bf-0cbc-7501-b991-ee48c76ba1c9",
+      "status": "errored_usage_limit_after_files_written",
+      "scope": "experiments/fusion-compatibility/F04/adapter/**"
+    },
+    {
+      "role": "Compatibility verifier",
+      "agent_id": "019f64ca-0092-7ea3-8f44-a41583f6cfca",
+      "status": "not_found_no_report_returned",
+      "scope": "docs/0.3.3-bundled-agent-runtime/evidence/F04/**"
+    }
+  ],
+  "limitations": [
+    "F04 worker traces prove the task-owned harness and frozen runtime boundary, not production package layout or signed installer behavior.",
+    "No production AgentTaskService, real model, package build, installer, full test suite, push, PR, or release was run."
+  ],
+  "verdict": "FUSION_COMPATIBLE"
+}
