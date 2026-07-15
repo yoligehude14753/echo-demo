@@ -69,6 +69,7 @@ async def test_multi_tenant_load_reports_raw_latency_percentiles_and_health_late
         asr_provider_concurrency={"firered": 1},
     )
     try:
+
         async def one(index: int) -> float:
             started = time.perf_counter()
             await asr.transcribe(
@@ -110,14 +111,15 @@ async def test_multi_tenant_load_reports_raw_latency_percentiles_and_health_late
             )
         )
         print(
-            "ASR_READINESS_RAW "
-            + json.dumps(readiness_report, sort_keys=True),
+            "ASR_READINESS_RAW " + json.dumps(readiness_report, sort_keys=True),
         )
         assert report["sample_count"] == 100
         assert provider.calls == 100
         assert provider.max_active <= 4
         assert report["p50_ms"] <= report["p95_ms"] <= report["p99_ms"]
         assert readiness_report["sample_count"] == 20
-        assert readiness_report["p50_ms"] <= readiness_report["p95_ms"] <= readiness_report["p99_ms"]
+        assert (
+            readiness_report["p50_ms"] <= readiness_report["p95_ms"] <= readiness_report["p99_ms"]
+        )
     finally:
         await asr.close(grace_period_s=0.5)

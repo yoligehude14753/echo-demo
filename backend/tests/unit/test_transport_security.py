@@ -366,9 +366,7 @@ def test_non_public_sync_gateway_uses_claimed_device_principal(
 
         devices = client.get("/hub/v1/devices", headers=sync_headers)
         assert devices.status_code == 200, devices.text
-        assert [item["device_id"] for item in devices.json()] == [
-            "non-public-paired-device"
-        ]
+        assert [item["device_id"] for item in devices.json()] == ["non-public-paired-device"]
 
         push = client.post(
             "/hub/v1/sync/push",

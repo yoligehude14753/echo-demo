@@ -458,9 +458,7 @@ class MemoryService:
                     timeout_s=timeout_s,
                 )
         except TimeoutError as error:
-            raise TimeoutError(
-                f"memory extraction timed out after {timeout_s:.1f}s"
-            ) from error
+            raise TimeoutError(f"memory extraction timed out after {timeout_s:.1f}s") from error
         parsed = _safe_json(response.content)
         raw = parsed.get("memories")
         if not isinstance(raw, list):

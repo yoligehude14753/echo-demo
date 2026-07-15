@@ -179,10 +179,7 @@ def get_session_store(settings: Settings = Depends(get_settings)) -> SessionStor
 def get_sync_hub_store(settings: Settings = Depends(get_settings)) -> SyncHubStore:
     global _sync_hub_store_singleton  # noqa: PLW0603
     configured_path = Path(settings.db_path).expanduser()
-    if (
-        _sync_hub_store_singleton is None
-        or _sync_hub_store_singleton.db_path != configured_path
-    ):
+    if _sync_hub_store_singleton is None or _sync_hub_store_singleton.db_path != configured_path:
         _sync_hub_store_singleton = SyncHubStore(configured_path)
     return _sync_hub_store_singleton
 

@@ -160,9 +160,7 @@ async def test_telemetry_db_is_independent_from_sync_outbox(tmp_path: Path) -> N
     try:
         tables = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
     finally:
         connection.close()

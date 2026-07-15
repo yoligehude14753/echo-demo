@@ -263,12 +263,8 @@ def test_sync_push_duplicate_conflict_changes_snapshot_and_repository_adapters(
     snapshot_body = snapshot.json()
     assert snapshot_body["cursor"] == 4
     assert snapshot_body["transcript_segments"][0]["payload"]["text"] == "updated transcript"
-    assert snapshot_body["meeting_summaries"][0]["payload"]["summary"] == (
-        "A synchronized summary"
-    )
-    assert snapshot_body["memories"][0]["payload"]["content"] == (
-        "The adapter test uses SQLite"
-    )
+    assert snapshot_body["meeting_summaries"][0]["payload"]["summary"] == ("A synchronized summary")
+    assert snapshot_body["memories"][0]["payload"]["content"] == ("The adapter test uses SQLite")
 
     async def read_business_rows() -> tuple[tuple[object, ...], tuple[object, ...]]:
         async with aiosqlite.connect(str(tmp_path / "sync.db")) as conn:

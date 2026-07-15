@@ -89,9 +89,7 @@ class Settings(BaseSettings):
     hub_base_url: str = ""
     hub_sync_interval_s: float = Field(default=15.0, gt=1.0, le=300.0)
     hub_request_timeout_s: float = Field(default=15.0, gt=1.0, le=120.0)
-    hub_state_file: Path = Field(
-        default_factory=lambda: user_config_dir() / "hub_state.json"
-    )
+    hub_state_file: Path = Field(default_factory=lambda: user_config_dir() / "hub_state.json")
 
     @field_validator("app_version", mode="after")
     @classmethod
@@ -292,7 +290,11 @@ class Settings(BaseSettings):
         names = tuple(value.strip() for value in values)
         if len(set(names)) != len(names) or any(not name for name in names):
             raise ValueError("ASR eligible providers must be unique and non-empty")
-        if any(len(name) > 64 or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in name) for name in names):
+        if any(
+            len(name) > 64
+            or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in name)
+            for name in names
+        ):
             raise ValueError("ASR provider names contain unsupported characters")
         return names
 

@@ -419,16 +419,20 @@ class SyncHubStore:
                 (int(entity_id), *scope),
             )
             if row is not None:
-                return 0, 0, {
-                    "meeting_id": str(row["meeting_id"]),
-                    "segment_id": int(row["id"]),
-                    "text": str(row["text"]),
-                    "start_ms": int(row["start_ms"]),
-                    "end_ms": int(row["end_ms"]),
-                    "speaker_id": row["speaker_id"],
-                    "speaker_label": row["speaker_label"],
-                    "captured_at": str(row["captured_at"]),
-                }
+                return (
+                    0,
+                    0,
+                    {
+                        "meeting_id": str(row["meeting_id"]),
+                        "segment_id": int(row["id"]),
+                        "text": str(row["text"]),
+                        "start_ms": int(row["start_ms"]),
+                        "end_ms": int(row["end_ms"]),
+                        "speaker_id": row["speaker_id"],
+                        "speaker_label": row["speaker_label"],
+                        "captured_at": str(row["captured_at"]),
+                    },
+                )
         if entity_type == "meeting_summary":
             row = await self._fetchone(
                 conn,
@@ -648,7 +652,9 @@ class SyncHubStore:
             confidence = float(payload.get("confidence", 1.0))
             salience = float(payload.get("salience", 0.5))
         except (TypeError, ValueError) as exc:
-            raise SyncEntityValidationError("memory confidence and salience must be numbers") from exc
+            raise SyncEntityValidationError(
+                "memory confidence and salience must be numbers"
+            ) from exc
         if not 0 <= confidence <= 1 or not 0 <= salience <= 1:
             raise SyncEntityValidationError("memory confidence and salience must be in [0, 1]")
         metadata = payload.get("metadata")
@@ -825,9 +831,7 @@ class SyncHubStore:
                         status="duplicate",
                         revision=int(operation["revision"]),
                         cursor=(
-                            int(operation["cursor"])
-                            if operation["cursor"] is not None
-                            else None
+                            int(operation["cursor"]) if operation["cursor"] is not None else None
                         ),
                         current=_json_load(operation["current_json"]),
                     )
@@ -1114,11 +1118,7 @@ class SyncHubStore:
         emitted_cursors: set[int] = set()
         records: list[SyncChangeRecord] = []
         for row in rows:
-            matching = [
-                event
-                for event in events
-                if cls._transcript_event_matches_row(event, row)
-            ]
+            matching = [event for event in events if cls._transcript_event_matches_row(event, row)]
             consumed_cursors.update(int(event["cursor"]) for event in matching)
             if not matching:
                 records.append(cls._snapshot_transcript(row, {}))
@@ -1200,9 +1200,7 @@ class SyncHubStore:
         return SyncChangeRecord(
             cursor=int(event["cursor"]) if event is not None else 0,
             source_device_id=(
-                str(event["source_device_id"])
-                if event is not None
-                else "sync-snapshot"
+                str(event["source_device_id"]) if event is not None else "sync-snapshot"
             ),
             entity_type="memory",
             entity_id=entity_id,
@@ -1236,9 +1234,7 @@ class SyncHubStore:
                 created_at=_parse_datetime(row["created_at"]),
                 last_seen_at=_parse_datetime(row["last_seen_at"]),
                 revoked_at=(
-                    _parse_datetime(row["revoked_at"])
-                    if row["revoked_at"] is not None
-                    else None
+                    _parse_datetime(row["revoked_at"]) if row["revoked_at"] is not None else None
                 ),
                 cursor=int(row["cursor"]),
             )

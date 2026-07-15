@@ -192,9 +192,7 @@ class ASRScheduler:
         self._dispatch_queue: asyncio.Queue[_QueuedJob] = asyncio.Queue(
             maxsize=config.max_concurrency
         )
-        self._queue: asyncio.Queue[_QueuedJob] = asyncio.Queue(
-            maxsize=max(1, config.queue_size)
-        )
+        self._queue: asyncio.Queue[_QueuedJob] = asyncio.Queue(maxsize=max(1, config.queue_size))
         self._dispatch_reserved = 0
         self._work_available = asyncio.Event()
         self._workers: list[asyncio.Task[None]] = []

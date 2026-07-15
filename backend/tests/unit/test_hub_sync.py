@@ -215,9 +215,7 @@ async def test_hub_sync_transcript_snapshot_upserts_by_entity_revision(tmp_path)
         "updated transcript",
         "second transcript",
     ]
-    assert [
-        (str(row["entity_id"]), str(row["source_device_id"])) for row in canonical_rows
-    ] == [
+    assert [(str(row["entity_id"]), str(row["source_device_id"])) for row in canonical_rows] == [
         ("m-1d9d8f6e:0:1200", "Android"),
         ("m-1d9d8f6e:1200:2400", "Android"),
     ]
@@ -286,8 +284,7 @@ async def test_hub_sync_remote_snapshot_promotes_local_alias_to_canonical(tmp_pa
         assert await store.reconcile_local_changes() == 1
         conn = store._require_conn()
         cursor = await conn.execute(
-            "SELECT entity_id FROM hub_sync_entities "
-            "WHERE entity_type = 'transcript_segment'",
+            "SELECT entity_id FROM hub_sync_entities WHERE entity_type = 'transcript_segment'",
         )
         alias = await cursor.fetchone()
         await cursor.close()
@@ -351,9 +348,7 @@ async def test_hub_sync_remote_snapshot_promotes_local_alias_to_canonical(tmp_pa
         "updated marker",
         "second marker",
     ]
-    assert [
-        (str(row["entity_id"]), str(row["source_device_id"])) for row in mappings
-    ] == [
+    assert [(str(row["entity_id"]), str(row["source_device_id"])) for row in mappings] == [
         ("m-1d9d8f6e:0:1200", "Android"),
         ("m-1d9d8f6e:1200:2400", "Android"),
     ]

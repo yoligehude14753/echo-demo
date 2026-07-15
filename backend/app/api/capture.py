@@ -67,9 +67,7 @@ def _capture_asr_context(request: Request, settings: Settings) -> ASRRequestCont
 
     principal = current_principal()
     idempotency_key = request.headers.get("Idempotency-Key", "").strip() or None
-    request_id = request.headers.get("X-Request-ID", "").strip() or (
-        f"capture-{uuid4().hex}"
-    )
+    request_id = request.headers.get("X-Request-ID", "").strip() or (f"capture-{uuid4().hex}")
     return ASRRequestContext(
         request_id=request_id,
         idempotency_key=idempotency_key,

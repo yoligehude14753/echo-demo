@@ -923,8 +923,10 @@ def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
 
 
 def _bootstrap_payload(settings: Settings) -> dict[str, object]:
-    transcription_readiness = get_asr_scheduler(settings).readiness().to_public(
-        ttl_s=settings.asr_readiness_stale_after_s
+    transcription_readiness = (
+        get_asr_scheduler(settings)
+        .readiness()
+        .to_public(ttl_s=settings.asr_readiness_stale_after_s)
     )
     capabilities: dict[str, object] = {
         "principal_sessions": True,

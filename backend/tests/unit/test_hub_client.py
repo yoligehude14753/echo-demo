@@ -170,16 +170,12 @@ async def test_hub_client_sync_push_changes_and_snapshot_contract():
         {"operation_id": "remote:memory"},
     ]
     assert snapshot_cursor == "0"
-    assert client._events_url("0") == (
-        "wss://hub.test/base/hub/v1/sync/events?cursor=0"
+    assert client._events_url("0") == ("wss://hub.test/base/hub/v1/sync/events?cursor=0")
+    changes_request = next(
+        request for request in requests if request.url.path.endswith("/sync/changes")
     )
-    changes_request = next(request for request in requests if request.url.path.endswith("/sync/changes"))
     assert "cursor" not in changes_request.url.params
-    sync_requests = [
-        request
-        for request in requests
-        if "/sync/" in request.url.path
-    ]
+    sync_requests = [request for request in requests if "/sync/" in request.url.path]
     assert sync_requests
     assert all(request.headers["X-Echo-Sync-Token"] == "sync-secret" for request in sync_requests)
     assert all("Authorization" not in request.headers for request in sync_requests)

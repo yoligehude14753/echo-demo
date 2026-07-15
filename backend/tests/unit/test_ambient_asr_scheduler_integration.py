@@ -26,7 +26,9 @@ SILENT_PCM = b"\x00" * 1600
 
 
 class FakeScheduler:
-    def __init__(self, result: list[TranscriptSegment] | None = None, error: Exception | None = None):
+    def __init__(
+        self, result: list[TranscriptSegment] | None = None, error: Exception | None = None
+    ):
         self.result = result or [TranscriptSegment(text="scheduler text", start_ms=0, end_ms=100)]
         self.error = error
         self.calls: list[tuple[bytes, int, ASRRequestContext]] = []
@@ -216,7 +218,8 @@ def test_stale_readiness_is_unknown_without_internal_scheduler_shape() -> None:
     try:
         scheduler.record_controlled_probe(
             True,
-            checked_at=datetime.now(UTC) - timedelta(seconds=settings.asr_readiness_stale_after_s + 1),
+            checked_at=datetime.now(UTC)
+            - timedelta(seconds=settings.asr_readiness_stale_after_s + 1),
         )
         readiness = scheduler.readiness().to_public(
             ttl_s=settings.asr_readiness_stale_after_s,
