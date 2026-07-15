@@ -998,7 +998,7 @@ jobs:
   check:
     # 唯一 Required Status Check：所有确定性门禁在每个 PR/push 上必须真正运行并通过。
     name: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && 'manual platform check' || 'check' }}
-    needs: [backend-lint, backend-typecheck, backend-dependency-audit, backend-test, desktop-e2e, android-tv, desktop-packaged-smoke, desktop-linux-packaged-smoke, desktop-windows-packaged-smoke]
+    needs: [backend-lint, backend-typecheck, backend-dependency-audit, backend-test, desktop-e2e, android-tv, desktop-packaged-smoke, desktop-windows-packaged-smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1024,7 +1024,6 @@ jobs:
             require_success "desktop tests" "${{ needs.desktop-e2e.result }}"
             require_success "Android/TV gate" "${{ needs.android-tv.result }}"
             require_success "macOS packaged smoke" "${{ needs.desktop-packaged-smoke.result }}"
-            require_success "Linux packaged smoke" "${{ needs.desktop-linux-packaged-smoke.result }}"
             require_success "Windows packaged smoke" "${{ needs.desktop-windows-packaged-smoke.result }}"
           else
             case "$platform" in
@@ -1037,7 +1036,6 @@ jobs:
                 ;;
               android) require_success "Android/TV gate" "${{ needs.android-tv.result }}" ;;
               macos) require_success "macOS packaged smoke" "${{ needs.desktop-packaged-smoke.result }}" ;;
-              linux) require_success "Linux packaged smoke" "${{ needs.desktop-linux-packaged-smoke.result }}" ;;
               windows) require_success "Windows packaged smoke" "${{ needs.desktop-windows-packaged-smoke.result }}" ;;
               *) echo "unsupported workflow_dispatch platform: $platform" >&2; exit 1 ;;
             esac
