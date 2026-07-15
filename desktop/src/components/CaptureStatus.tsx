@@ -13,13 +13,14 @@ import { useEffect, useState } from "react";
 import { Popover, Progress, Tag } from "antd";
 import { Loader2 } from "lucide-react";
 
+import type { CaptureStatsSnapshot } from "@/domain/session";
 import type {
-  CaptureStatsSnapshot,
-  CaptureStatus as CaptureStatusModel,
-} from "@/domain/session";
+  CaptureGateReason,
+  CaptureViewModel,
+} from "@/capture/captureOperationalState";
 
 interface Props {
-  status: CaptureStatusModel;
+  status: CaptureViewModel;
 }
 
 const INIT_DISPLAY_TIMEOUT_MS = 20_000;
@@ -92,6 +93,126 @@ function displayMicError(errorMessage: string | null | undefined): string {
     return "请接入 USB/蓝牙会议麦克风";
   }
   return "无法访问音频输入，请检查麦克风权限和输入设备";
+}
+
+function gateReasonLabel(reason: CaptureGateReason | null): string {
+  switch (reason) {
+    case "ok":
+      return "有效语音已通过";
+    case "rms_too_low":
+      return "输入音量偏低";
+    case "speech_ratio_too_low":
+      return "有效语音不足";
+    case "unknown":
+      return "暂无法判定";
+    default:
+      return "旧服务未提供";
+  }
+}
+
+function formatEpochRelative(epoch: number | null): string {
+  return epoch === null ? "—" : formatRelative(new Date(epoch).toISOString());
+}
+
+function primaryOperationalLabel(status: CaptureViewModel): string {
+  if (status.transport.warning === "upload_unavailable") {
+    return "上传暂时不可用";
+  }
+  if (status.transport.warning === "backpressure") {
+    return "待发送片段较多";
+  }
+  if (status.admission.warning === "rms_too_low") {
+    return "输入音量偏低";
+  }
+  if (status.admission.warning === "speech_ratio_too_low") {
+    return "有效语音不足";
+  }
+  if (status.freshness.warning === "stats_unavailable") {
+    return "诊断数据更新中断";
+  }
+  return "";
+}
+
+function OperationalBreakdown({ status }: { status: CaptureViewModel }): JSX.Element {
+  const { transport, freshness, admission } = status;
+  const ratio = admission.acceptedSpeechRatio;
+  const frameCount =
+    admission.acceptedSpeechFrames !== null &&
+    admission.observedAudioFrames !== null
+      ? `${admission.acceptedSpeechFrames}/${admission.observedAudioFrames}`
+      : "旧服务未提供";
+  const operationalLabel = primaryOperationalLabel(status);
+
+  return (
+    <div
+      className="space-y-2 border-t border-slate-200 pt-2 text-xs"
+      data-testid="capture-operational-breakdown"
+    >
+      <div className="font-medium text-slate-700">采集运行状态</div>
+      <div className="space-y-1 text-slate-600">
+        <div className="flex justify-between gap-3">
+          <span>上传轴</span>
+          <span data-testid="capture-transport-summary">
+            {transport.warning === "none" ? "正常" : operationalLabel}
+            · 待发送 {transport.queueDepth}/{transport.queueCapacity}
+          </span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span>上传确认</span>
+          <span className="tabular-nums">
+            {transport.acknowledged}/{transport.sent} · 最近成功 {formatEpochRelative(transport.lastSuccessfulUploadAt)}
+          </span>
+        </div>
+        {transport.droppedBackpressure > 0 && (
+          <div className="flex justify-between gap-3 text-amber-700">
+            <span>队列已满丢弃</span>
+            <span className="tabular-nums">{transport.droppedBackpressure}</span>
+          </div>
+        )}
+        <div className="flex justify-between gap-3">
+          <span>诊断刷新轴</span>
+          <span data-testid="capture-freshness-summary">
+            {freshness.warning === "none"
+              ? freshness.source === "legacy"
+                ? "旧服务兼容"
+                : "正常"
+              : "更新中断"}
+            {freshness.lastSequence !== null
+              ? ` · 游标 ${freshness.lastSequence}`
+              : ""}
+          </span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span>输入轴</span>
+          <span data-testid="capture-admission-summary">
+            {admission.warning === "none"
+              ? gateReasonLabel(admission.lastGateReason)
+              : gateReasonLabel(admission.warning)}
+            {ratio === null ? " · 比例旧服务未提供" : ` · 有效语音 ${Math.round(ratio * 100)}%`}
+          </span>
+        </div>
+        <div className="flex justify-between gap-3">
+          <span>有效帧（分子/分母）</span>
+          <span className="tabular-nums">{frameCount}</span>
+        </div>
+      </div>
+      {transport.warning === "upload_unavailable" && (
+        <div className="text-amber-700">正在等待真实片段确认恢复。</div>
+      )}
+      {transport.warning === "backpressure" && (
+        <div className="text-amber-700">发送队列已满，正在排空过期片段。</div>
+      )}
+      {admission.warning === "rms_too_low" && (
+        <div className="text-amber-700">请提高输入音量或检查当前麦克风。</div>
+      )}
+      {admission.warning === "speech_ratio_too_low" && (
+        <div className="text-amber-700">请靠近麦克风并减少背景噪声。</div>
+      )}
+      {freshness.warning === "stats_unavailable" && (
+        <div className="text-amber-700">诊断数据暂时没有更新，上传状态仍单独计算。</div>
+      )}
+    </div>
+  );
 }
 
 function DoorBreakdown({
@@ -186,6 +307,9 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
     sttCircuitOpenUntil,
     chunksDroppedCircuit,
     stats,
+    transport,
+    freshness,
+    admission,
   } = status;
   const [initializingTooLong, setInitializingTooLong] = useState(false);
 
@@ -244,9 +368,15 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
 
   const circuitOpen =
     sttCircuitOpenUntil !== null && sttCircuitOpenUntil > Date.now();
+  const operationalLabel = primaryOperationalLabel(status);
+  const statusLabel = operationalLabel || (circuitOpen ? "语音识别暂时不可用" : "正在转写");
   const ariaLabel = meetingOverlayId
-      ? `正在转写，已采集 ${ambientChunks} 段，已保存 ${ambientStored} 段，会议中已记录 ${meetingChunks} 段`
-      : `正在转写，已采集 ${ambientChunks} 段，已保存 ${ambientStored} 段，静音和底噪会自动过滤`;
+      ? `${statusLabel}，已采集 ${ambientChunks} 段，已保存 ${ambientStored} 段，会议中已记录 ${meetingChunks} 段`
+      : `${statusLabel}，已采集 ${ambientChunks} 段，已保存 ${ambientStored} 段，静音和底噪会自动过滤`;
+  const hasOperationalWarning =
+    transport.warning !== "none" ||
+    freshness.warning !== "none" ||
+    admission.warning !== "none";
 
   return (
     <Popover
@@ -283,6 +413,7 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
             stats={stats}
             chunksDroppedCircuit={chunksDroppedCircuit}
           />
+          <OperationalBreakdown status={status} />
         </div>
       }
       mouseEnterDelay={0.2}
@@ -290,25 +421,29 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
     >
       <Tag
         className={`!m-0 cursor-help ${
-          circuitOpen
+          circuitOpen || hasOperationalWarning
             ? "!border-amber-300/60 !bg-amber-50 !text-amber-700"
             : "!border-accent/25 !bg-accent/5 !text-accentDark"
         }`}
         data-testid="capture-status"
         data-circuit-open={circuitOpen ? "1" : "0"}
+        data-transport-warning={transport.warning}
+        data-freshness-warning={freshness.warning}
+        data-audio-warning={admission.warning}
+        data-queue-depth={transport.queueDepth}
         aria-label={ariaLabel}
         tabIndex={0}
       >
         <span className="inline-flex items-center gap-1.5">
           <span
             className={`h-1.5 w-1.5 rounded-full ${
-              circuitOpen ? "bg-amber-500" : "bg-accent"
+              circuitOpen || hasOperationalWarning ? "bg-amber-500" : "bg-accent"
             }`}
             aria-hidden="true"
           />
-          <span>{circuitOpen ? "语音识别暂时不可用" : "正在转写"}</span>
+          <span>{statusLabel}</span>
           <span className="sr-only">
-            正在转写 · 已采集 {ambientChunks} · 已保存 {ambientStored}
+            {statusLabel} · 已采集 {ambientChunks} · 已保存 {ambientStored}
             {meetingOverlayId
               ? ` · 会议中 · 段 ${meetingChunks}`
               : " · 静音/底噪自动过滤"}

@@ -94,7 +94,7 @@ export async function installEchoMock(
     const mockBuildContract = {
       schema_version: 1,
       product_id: "com.echodesk.app.backend",
-      product_version: "0.3.2",
+      product_version: "0.3.3",
       api_contract: "echodesk.desktop-backend/v1",
       build_id: `sha256:${"0".repeat(64)}`,
       schema_catalog_max: 39,
@@ -117,6 +117,26 @@ export async function installEchoMock(
           backend_origin: session.backend_origin ?? identityOrigin(),
         };
       };
+    }
+    if (isElectron && originBoundEcho.isPublicDemo === true) {
+      const publicSession = () => ({
+        token: "mock-public-session",
+        expires_at: "2099-01-01T00:00:00Z",
+        backend_origin: identityOrigin(),
+        principal: {
+          tenant_id: "mock-tenant",
+          device_id: "mock-device",
+          owner_id: "mock-owner",
+          session_id: "mock-session",
+          mode: "public",
+        },
+      });
+      if (typeof originBoundEcho.ensurePublicSession !== "function") {
+        originBoundEcho.ensurePublicSession = async () => publicSession();
+      }
+      if (typeof originBoundEcho.renewPublicSession !== "function") {
+        originBoundEcho.renewPublicSession = async () => publicSession();
+      }
     }
     (window as unknown as { echo: Record<string, unknown> }).echo = {
       ...originBoundEcho,
@@ -232,13 +252,31 @@ export async function installEchoMock(
       if (path === "/healthz" || path === "/api/healthz") {
         return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
+      if (path === "/hub/status" || path === "/api/hub/status") {
+        return new Response(
+          JSON.stringify({
+            enabled: true,
+            configured: true,
+            device_id: "mock-desktop-device",
+            paired: true,
+            connection: "connected",
+            pairing_code: null,
+            pairing_expires_at: null,
+            devices: [],
+            last_sync_at: null,
+            last_connected_at: "2026-07-14T12:00:00Z",
+            last_error: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (path === "/bootstrap" || path === "/api/bootstrap") {
         return new Response(
           JSON.stringify({
             schema_version: 1,
             api_version: "0.3",
-            backend_version: "0.3.2",
-            app_version: "0.3.2",
+            backend_version: "0.3.3",
+            app_version: "0.3.3",
             build_contract: mockBuildContract,
             session_required: false,
             capabilities: {

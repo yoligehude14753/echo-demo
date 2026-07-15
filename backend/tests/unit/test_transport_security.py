@@ -112,7 +112,7 @@ def test_cors_wraps_identity_policy_errors(
 
     upgrade = TestClient(app).get("/meetings", headers={"Origin": origin})
     assert upgrade.status_code == 426
-    assert upgrade.headers["x-echodesk-minimum-client-version"] == "0.3.1"
+    assert upgrade.headers["x-echodesk-minimum-client-version"] == MINIMUM_PUBLIC_CLIENT_VERSION
     exposed = upgrade.headers["access-control-expose-headers"].lower()
     assert "x-echodesk-minimum-client-version" in exposed
 
@@ -326,6 +326,82 @@ async def test_remote_lan_websocket_is_rejected_before_accept(
 
 
 @pytest.mark.unit
+def test_non_public_sync_gateway_uses_claimed_device_principal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "sync-principal.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        skill_executor_build_dir=tmp_path / "skills",
+        public_demo_mode=False,
+        workspace_scan_on_startup=False,
+        tts_enabled=False,
+        diarizer_enabled=False,
+        web_search_enabled=False,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    result = asyncio.run(run_migrations(settings.db_path))
+    assert result.errors == []
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    deps_mod.reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    with TestClient(app) as client:
+        pairing = client.post("/hub/v1/pairings")
+        assert pairing.status_code == 201, pairing.text
+        claim = client.post(
+            "/hub/v1/pairings/claim",
+            json={
+                "pairing_code": pairing.json()["pairing_code"],
+                "device_id": "non-public-paired-device",
+                "device_name": "Paired device",
+                "platform": "test",
+            },
+        )
+        assert claim.status_code == 200, claim.text
+        sync_headers = {"X-Echo-Sync-Token": claim.json()["sync_token"]}
+
+        devices = client.get("/hub/v1/devices", headers=sync_headers)
+        assert devices.status_code == 200, devices.text
+        assert [item["device_id"] for item in devices.json()] == ["non-public-paired-device"]
+
+        push = client.post(
+            "/hub/v1/sync/push",
+            headers=sync_headers,
+            json={
+                "operation_id": "sync:non-public:1",
+                "device_id": "non-public-paired-device",
+                "entity_type": "memory",
+                "entity_id": "memory-1",
+                "base_revision": 0,
+                "updated_at": "2026-07-14T10:00:00Z",
+                "payload": {"content": "paired identity"},
+            },
+        )
+        assert push.status_code == 200, push.text
+
+        invalid = client.get(
+            "/hub/v1/sync/changes",
+            headers={"X-Echo-Sync-Token": "sync_invalid"},
+        )
+        assert invalid.status_code == 401, invalid.text
+
+    local = AccessPolicy(settings, SessionStore(settings.db_path))
+    local_principal = asyncio.run(
+        local.resolve_http_principal(
+            method="GET",
+            path="/meetings",
+            client_host="127.0.0.1",
+        )
+    )
+    assert local_principal.device_id == "legacy-local"
+    deps_mod.reset_deps_for_test()
+
+
+@pytest.mark.unit
 def test_explicit_http_origin_requires_allowlist_while_missing_origin_remains_compatible(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -373,6 +449,43 @@ def test_explicit_http_origin_requires_allowlist_while_missing_origin_remains_co
         no_origin = client.post("/transport-origin-probe")
         assert no_origin.status_code == 200
         assert calls == 2
+    deps_mod.reset_deps_for_test()
+
+
+@pytest.mark.unit
+def test_default_local_renderer_origin_preflight_is_allowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        db_path=tmp_path / "default-origin.db",
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        skill_executor_build_dir=tmp_path / "skills",
+        public_demo_mode=False,
+        workspace_scan_on_startup=False,
+        tts_enabled=False,
+        diarizer_enabled=False,
+        web_search_enabled=False,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    deps_mod.reset_deps_for_test()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    origin = "http://127.0.0.1:5174"
+    with TestClient(app) as client:
+        response = client.options(
+            "/bootstrap",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
     deps_mod.reset_deps_for_test()
 
 
@@ -446,7 +559,7 @@ def test_official_electron_origin_keeps_public_session_boundary(
         )
 
         with client.websocket_connect("/ws/echo", headers=origin_headers) as websocket:
-            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.1"})
+            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.3"})
             with pytest.raises(WebSocketDisconnect) as unauthenticated_ws:
                 websocket.receive_json()
         assert unauthenticated_ws.value.code == 4401
@@ -477,7 +590,7 @@ def test_official_electron_origin_keeps_public_session_boundary(
                 {
                     "type": "client_hello",
                     "last_seq": 0,
-                    "client_version": "0.3.1",
+                    "client_version": "0.3.3",
                     "auth": {"type": "bearer", "token": enrolled.json()["token"]},
                 }
             )
@@ -1098,7 +1211,7 @@ def test_allowed_websocket_origin_connects_and_public_failures_are_rate_limited(
     public_app.dependency_overrides[get_settings] = lambda: public_settings
     with TestClient(public_app) as client:
         with client.websocket_connect("/ws/echo") as websocket:
-            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.1"})
+            websocket.send_json({"type": "client_hello", "last_seq": 0, "client_version": "0.3.3"})
             with pytest.raises(WebSocketDisconnect) as unauthorized:
                 websocket.receive_json()
         assert unauthorized.value.code == 4401

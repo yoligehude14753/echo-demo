@@ -27,9 +27,12 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
 from app.adapters.repo.migrator import run_migrations
+from app.adapters.stt import get_asr_scheduler, start_asr_scheduler, stop_asr_scheduler
+from app.adapters.stt.errors import ASRError, as_http_error
 from app.api.admin import router as admin_router
 from app.api.agents import router as agents_router
 from app.api.artifacts import router as artifacts_router
+from app.api.asr import router as asr_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
 from app.api.deps import (
@@ -37,6 +40,7 @@ from app.api.deps import (
     aclose_event_bus,
     aclose_llm_singleton,
     aclose_repository,
+    aclose_telemetry,
     aclose_workflow_service,
     configure_event_bus,
     get_access_policy,
@@ -46,6 +50,7 @@ from app.api.deps import (
     get_scope_runtime_registry,
     get_session_store,
     get_speaker_registry,
+    get_telemetry,
     require_admin_access,
     start_runtime_janitor,
     stop_runtime_janitor,
@@ -53,6 +58,7 @@ from app.api.deps import (
 from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
 from app.api.health import start_prober, stop_prober
+from app.api.hub import router as hub_router
 from app.api.intent import router as intent_router
 from app.api.meetings import get_meeting_pipeline_for_lifespan
 from app.api.meetings import router as meetings_router
@@ -68,6 +74,7 @@ from app.api.ws import router as ws_router
 from app.build_contract import backend_build_contract
 from app.config import Settings, get_settings
 from app.config_io import user_config_dir
+from app.hub.runtime import HubRuntime
 from app.memory import aclose_memory_service
 from app.ports.repository import RepositoryPort
 from app.runtime import RuntimeCapacityExceeded, RuntimeLease, ScopeRuntime
@@ -370,6 +377,7 @@ async def _stop_lifespan_tasks() -> None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0915
     global _meeting_state_for_shutdown  # noqa: PLW0603
     settings = get_settings()
+    hub_runtime: HubRuntime | None = None
     logger.info(
         "echodesk 启动: version=%s port=%d llm_main=%s llm_fast=%s stt=%s tts=%s",
         __version__,
@@ -393,6 +401,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
     # SQLite repository：连接 + hydrate 未结束的会议 + 加载已知说话人
     repo = get_repository(settings)
     await repo.init()
+    try:
+        hub_runtime = HubRuntime(settings)
+        await hub_runtime.start()
+        _app.state.hub_runtime = hub_runtime
+    except Exception:
+        # Hub is an optional development integration.  A Hub failure must not
+        # prevent the existing desktop backend and its local repositories from
+        # starting.
+        logger.warning("Hub lifecycle start failed")
+        _app.state.hub_runtime = None
     try:
         from app.api.deps import get_artifact_repository as _get_artifact_repo
         from app.artifacts.recovery import (
@@ -589,11 +607,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
             [str(d) for d in settings.workspace_dirs_list],
         )
 
+    # Telemetry configuration is a startup gate and must fail before any
+    # background probe is launched.
+    telemetry = get_telemetry(settings)
+
     # P1.4：启动远程依赖探针后台 task
     try:
         await start_prober()
     except Exception as e:
         logger.warning("health prober start failed: %s", e)
+
+    try:
+        await start_asr_scheduler(settings, telemetry=telemetry)
+    except Exception as e:
+        logger.warning("ASR scheduler start failed: type=%s", type(e).__name__)
 
     await start_runtime_janitor(settings)
     _app.state.ready = True
@@ -607,6 +634,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
         if callable(stop_watchdog):
             await stop_watchdog()
         _meeting_state_for_shutdown = None
+    try:
+        await stop_asr_scheduler(grace_period_s=min(5.0, settings.asr_job_deadline_s))
+    except Exception as e:
+        logger.warning("ASR scheduler stop failed: type=%s", type(e).__name__)
     await stop_prober()
     await stop_runtime_janitor()
     await _stop_lifespan_tasks()
@@ -614,7 +645,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0912, PLR0
     await aclose_workflow_service()
     await aclose_memory_service()
     await aclose_llm_singleton()
+    await aclose_telemetry()
     await aclose_event_bus()
+    if hub_runtime is not None:
+        await hub_runtime.close()
     await aclose_repository()
     logger.info("echodesk 关闭")
 
@@ -712,6 +746,7 @@ def _defer_sse_lifecycle(
 def _include_api_routers(app: FastAPI) -> None:
     for api_router in (
         health_router,
+        asr_router,
         sessions_router,
         capture_router,
         chat_router,
@@ -725,6 +760,7 @@ def _include_api_routers(app: FastAPI) -> None:
         intent_router,
         tts_router,
         agents_router,
+        hub_router,
         ws_router,
     ):
         app.include_router(api_router)
@@ -784,6 +820,12 @@ def _new_fastapi(settings: Settings) -> FastAPI:
 
 
 def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
+    @app.exception_handler(ASRError)
+    async def asr_error(_request: Request, exc: ASRError) -> JSONResponse:
+        status_code, payload, headers = as_http_error(exc)
+        headers.update(PRIVATE_NO_STORE_HEADERS)
+        return JSONResponse(payload, status_code=status_code, headers=headers)
+
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
         headers = dict(exc.headers or {})
@@ -881,6 +923,11 @@ def _install_error_handlers(app: FastAPI, settings: Settings) -> None:
 
 
 def _bootstrap_payload(settings: Settings) -> dict[str, object]:
+    transcription_readiness = (
+        get_asr_scheduler(settings)
+        .readiness()
+        .to_public(ttl_s=settings.asr_readiness_stale_after_s)
+    )
     capabilities: dict[str, object] = {
         "principal_sessions": True,
         "owner_isolation": True,
@@ -890,6 +937,7 @@ def _bootstrap_payload(settings: Settings) -> dict[str, object]:
         "ws_hello_bearer": settings.public_demo_mode,
         "server_resync_rehydrate_required": True,
         "host_runtime_requires_admin": settings.public_demo_mode,
+        "transcription_readiness": transcription_readiness.model_dump(mode="json"),
     }
     response: dict[str, object] = {
         "schema_version": 1,
@@ -951,6 +999,7 @@ async def _resolve_request_principal(
                 client_host=client_key,
                 authorization=request.headers.get("Authorization", ""),
                 x_echo_admin_token=request.headers.get("X-Echo-Admin-Token", ""),
+                sync_token=request.headers.get("X-Echo-Sync-Token", ""),
                 share_token=request.query_params.get("share", ""),
                 client_version=request.headers.get(PUBLIC_CLIENT_VERSION_HEADER, ""),
             )

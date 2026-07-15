@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import stat
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from app.adapters.audio_gate import (
 )
 from app.config import Settings
 from app.memory import MemoryScope, MemoryService
+from app.ports.asr import ASRErrorBase, ASRRequestContext, ASRSchedulerPort, ASRTelemetryPort
 from app.ports.diarizer import DiarizerPort
 from app.ports.event_bus import EventBusPort
 from app.ports.punctuator import TextPunctuatorPort
@@ -44,6 +46,25 @@ from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
 
 logger = logging.getLogger("echodesk.ambient")
+
+_ADMISSION_FRAME_SAMPLES = 16_000 * 20 // 1_000
+_STABLE_GATE_REASONS = frozenset(
+    {"ok", "rms_too_low", "speech_ratio_too_low", "unknown"},
+)
+
+
+def _complete_admission_frames(audio_bytes: bytes) -> int:
+    """Return complete 20ms/16kHz/int16 frames in the normalized PCM buffer."""
+    if _ADMISSION_FRAME_SAMPLES <= 0:
+        return 0
+    return max(0, len(audio_bytes) // 2 // _ADMISSION_FRAME_SAMPLES)
+
+
+def _stable_gate_reason(reason: str | None) -> str:
+    """Keep frontend admission labels on a small, additive allowlist."""
+    if reason in _STABLE_GATE_REASONS:
+        return reason
+    return "unknown"
 
 
 # ─── M_diag_brake：7 道门诊断 ────────────────────────────────────────────
@@ -97,6 +118,13 @@ class AmbientStats:
     last_rms: float = 0.0  # 最近 chunk 的整段 int16 RMS
     last_speech_ratio: float = 0.0  # 最近 chunk 的 20ms 活跃帧比例
     last_gate_reason: str | None = None  # 最近 chunk 的前置门控结果（ok/rms_too_low/...）
+    # Process-lifetime in-memory admission window; construction/restart resets it.
+    # The denominator is complete 20ms frames from every normalized chunk; the
+    # numerator is active frames from chunks that passed the pre-STT gate.
+    observed_audio_frames: int = 0
+    accepted_speech_frames: int = 0
+    accepted_speech_ratio: float = 0.0  # zero denominator is explicitly 0.0
+    stats_sequence: int = 0  # increments once for every normalized ingest
 
 
 class _STTCircuitOpenError(RuntimeError):
@@ -136,12 +164,16 @@ class AmbientCapturePipeline:
         meeting_state: MeetingState | None = None,
         event_bus: EventBusPort | None = None,
         punctuator: TextPunctuatorPort | None = None,
+        asr_scheduler: ASRSchedulerPort | None = None,
+        telemetry: ASRTelemetryPort | None = None,
         governor: PrincipalGovernor | None = None,
         principal: Principal | None = None,
         memory: MemoryService | None = None,
     ) -> None:
         self._settings = settings
         self._stt = stt
+        self._asr_scheduler = asr_scheduler
+        self._telemetry = telemetry
         self._rag = rag
         self._meeting = meeting
         self._repo = repository
@@ -651,6 +683,7 @@ class AmbientCapturePipeline:
         *,
         sample_rate: int = 16_000,
         meeting_id: str | None = None,
+        asr_context: ASRRequestContext | None = None,
     ) -> CaptureChunkResult:
         if self._state is not None and not self._settings.public_demo_mode:
             await self._state.hydrate()
@@ -664,6 +697,7 @@ class AmbientCapturePipeline:
         # M_diag_brake：每条 ingest_chunk 头部记一次（含所有末态），
         # 后端日志即使只看 chunks_total 也能粗略知道 firehose 多大。
         self._stats.chunks_total += 1
+        self._stats.stats_sequence += 1
         self._stats.last_chunk_at = captured_at
 
         # ── 前置音频门控（RMS + 帧级 VAD） ──
@@ -677,7 +711,24 @@ class AmbientCapturePipeline:
         )
         self._stats.last_rms = round(gate.rms, 2)
         self._stats.last_speech_ratio = round(gate.speech_ratio, 4)
-        self._stats.last_gate_reason = gate.reason
+        self._stats.last_gate_reason = _stable_gate_reason(gate.reason)
+        observed_frames = _complete_admission_frames(audio_bytes)
+        accepted_frames = 0
+        if gate.pass_ and observed_frames > 0:
+            accepted_frames = min(
+                observed_frames,
+                max(0, round(observed_frames * gate.speech_ratio)),
+            )
+        self._stats.observed_audio_frames += observed_frames
+        self._stats.accepted_speech_frames += accepted_frames
+        self._stats.accepted_speech_ratio = (
+            round(
+                self._stats.accepted_speech_frames / self._stats.observed_audio_frames,
+                4,
+            )
+            if self._stats.observed_audio_frames > 0
+            else 0.0
+        )
         audio_duration_ms = int(len(audio_bytes) / max(1, sample_rate * 2) * 1000)
         active_speech_ms = round(audio_duration_ms * gate.speech_ratio)
 
@@ -698,7 +749,11 @@ class AmbientCapturePipeline:
                 captured_dt,
             )
             try:
-                stt_segs = await self._safe_stt(audio_bytes, sample_rate)
+                stt_segs = await self._safe_stt(
+                    audio_bytes,
+                    sample_rate,
+                    context=asr_context,
+                )
             except _STTCircuitOpenError:
                 # firered 已熔断；不再发起请求 → 前端应进入指数退避
                 self._stats.stt_circuit_open += 1
@@ -972,7 +1027,13 @@ class AmbientCapturePipeline:
             stt_status=stt_status,
         )
 
-    async def _safe_stt(self, audio_bytes: bytes, sample_rate: int) -> list:  # type: ignore[type-arg]
+    async def _safe_stt(
+        self,
+        audio_bytes: bytes,
+        sample_rate: int,
+        *,
+        context: ASRRequestContext | None = None,
+    ) -> list:  # type: ignore[type-arg]
         """STT 调用 + typed exception 分流（M_diag_brake）。
 
         调用方需要区分"熔断（前端必须停止上传）"和"单次失败（前端可继续）"。
@@ -985,21 +1046,104 @@ class AmbientCapturePipeline:
         "circuit open" 的异常，就继续暴露为 circuit_open；FireRed adapter
         本身不再主动打开本地熔断器。
         """
+        if self._settings.asr_scheduler_enabled and self._asr_scheduler is not None:
+            request_context = self._server_asr_context(context)
+            return await self._asr_scheduler.transcribe(
+                audio_bytes,
+                sample_rate=sample_rate,
+                context=request_context,
+            )
+
         if self._stt_lock.locked():
             msg = "stt busy: previous request still running"
             logger.warning("ambient STT busy (audio saved): %s", msg)
             raise _STTCallFailedError(msg)
 
         async with self._stt_lock:
+            started_at = time.monotonic()
+            request_context = self._server_asr_context(context)
             try:
-                return await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
+                result = await self._stt.transcribe(audio_bytes, sample_rate=sample_rate)
             except Exception as e:
+                if isinstance(e, ASRErrorBase):
+                    await self._record_legacy_telemetry(
+                        request_context,
+                        audio_bytes=audio_bytes,
+                        sample_rate=sample_rate,
+                        started_at=started_at,
+                        error=e,
+                    )
+                    raise
                 msg = str(e)
                 if "circuit open" in msg.lower():
                     logger.warning("ambient STT circuit open (audio saved): %s", e)
-                    raise _STTCircuitOpenError(msg) from e
+                    error: RuntimeError = _STTCircuitOpenError(msg)
+                    await self._record_legacy_telemetry(
+                        request_context,
+                        audio_bytes=audio_bytes,
+                        sample_rate=sample_rate,
+                        started_at=started_at,
+                        error=error,
+                    )
+                    raise error from e
                 logger.warning("ambient STT failed (audio saved): %s", e)
-                raise _STTCallFailedError(msg) from e
+                error = _STTCallFailedError(msg)
+                await self._record_legacy_telemetry(
+                    request_context,
+                    audio_bytes=audio_bytes,
+                    sample_rate=sample_rate,
+                    started_at=started_at,
+                    error=error,
+                )
+                raise error from e
+            await self._record_legacy_telemetry(
+                request_context,
+                audio_bytes=audio_bytes,
+                sample_rate=sample_rate,
+                started_at=started_at,
+                error=None,
+            )
+            return result
+
+    def _server_asr_context(self, context: ASRRequestContext | None) -> ASRRequestContext:
+        principal = self._principal
+        incoming = context or ASRRequestContext(request_id=f"ambient-{uuid.uuid4().hex}")
+        return ASRRequestContext(
+            request_id=incoming.request_id,
+            idempotency_key=incoming.idempotency_key,
+            tenant_id=principal.tenant_id,
+            principal_id=principal.user_id,
+            device_id=principal.device_id,
+            deadline_s=min(
+                incoming.deadline_s or self._settings.asr_job_deadline_s,
+                self._settings.asr_job_deadline_s,
+            ),
+            capability=incoming.capability or "ambient_capture",
+            platform=incoming.platform,
+            app_version=incoming.app_version,
+            options=incoming.options,
+        )
+
+    async def _record_legacy_telemetry(
+        self,
+        context: ASRRequestContext,
+        *,
+        audio_bytes: bytes,
+        sample_rate: int,
+        started_at: float,
+        error: BaseException | None,
+    ) -> None:
+        if self._telemetry is None:
+            return
+        await self._telemetry.record_asr(
+            context=context,
+            provider=self._settings.stt_backend,
+            success=error is None,
+            error=error,
+            latency_ms=round((time.monotonic() - started_at) * 1000),
+            queue_wait_ms=0,
+            audio_duration_ms=round(len(audio_bytes) / 2 / max(1, sample_rate) * 1000),
+        )
 
     async def _safe_diarize(
         self,

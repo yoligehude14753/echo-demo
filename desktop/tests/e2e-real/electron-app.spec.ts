@@ -62,7 +62,8 @@ test.describe("EchoDesk 打包 App", () => {
     test.setTimeout(180_000);
     const env = {
       ...process.env,
-      ECHO_PUBLIC_DEMO: "1",
+      ECHO_RUNTIME_MODE: "diagnostic",
+      ECHO_PRINCIPAL_MODE: "public",
       ECHO_PUBLIC_BACKEND_BASE: PUBLIC_BACKEND_BASE,
     };
     delete env.ECHO_FORCE_LOCAL_BACKEND;

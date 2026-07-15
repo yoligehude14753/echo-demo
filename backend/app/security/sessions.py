@@ -1203,6 +1203,55 @@ class SessionStore:
             family_id=str(row["family_id"]),
         )
 
+    async def validate_sync_token(self, token: str) -> Principal:
+        """Resolve a durable hub token to the existing user/device scope."""
+
+        if not token or not token.strip():
+            raise InvalidDeviceCredentialError("sync token missing")
+        now = _as_utc(self._now()).isoformat()
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """SELECT sd.tenant_id, sd.owner_id, sd.device_id,
+                              sd.revoked_at AS sync_revoked_at,
+                              d.revoked_at AS device_revoked_at,
+                              u.status AS user_status,
+                              t.status AS tenant_status
+                       FROM sync_devices sd
+                       JOIN devices d
+                         ON d.tenant_id = sd.tenant_id
+                        AND d.user_id = sd.owner_id
+                        AND d.device_id = sd.device_id
+                       JOIN users u
+                         ON u.tenant_id = sd.tenant_id AND u.user_id = sd.owner_id
+                       JOIN tenants t ON t.tenant_id = sd.tenant_id
+                       WHERE sd.sync_token_hash = ?""",
+                    (_token_hash(token),),
+                )
+            ).fetchone()
+            if row is None:
+                raise InvalidDeviceCredentialError("sync token invalid")
+            if (
+                row["sync_revoked_at"] is not None
+                or row["device_revoked_at"] is not None
+                or row["user_status"] != "active"
+                or row["tenant_status"] != "active"
+            ):
+                raise RevokedDeviceCredentialError("sync token revoked")
+            await conn.execute(
+                """UPDATE sync_devices SET last_seen_at = ?
+                   WHERE tenant_id = ? AND owner_id = ? AND device_id = ?""",
+                (now, row["tenant_id"], row["owner_id"], row["device_id"]),
+            )
+            await conn.commit()
+        return Principal(
+            tenant_id=str(row["tenant_id"]),
+            device_id=str(row["device_id"]),
+            owner_id=str(row["owner_id"]),
+            session_id=f"sync:{row['device_id']}",
+            mode="public",
+        )
+
     async def assert_active_principal(self, principal: Principal) -> None:
         """Revalidate an already-bound public principal without retaining its bearer."""
 

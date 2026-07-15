@@ -219,14 +219,11 @@ export default function TranscriptStream(): JSX.Element {
     setAmbient([]);
   }, [backendOriginRevision]);
 
-  // 是否走"会议历史"分支：会议已选 + 已结束（ended/finalized 等）+ 有 segments
-  // 进行中会议仍走 ambient 分支保持实时性（ambient 是 chunk 写入的最近 100 条）
-  // 但 public/TV 模式会屏蔽共享 WS 和 /capture/recent，会议实时段只能来自本机
-  // /capture/chunk 回包，所以进行中会议也要优先显示 meeting.segments。
+  // 选中会议且已有 segment 时直接显示会议数据；进行中会议的 remote snapshot
+  // 也可能先于本地 ambient 到达，不能因为 state=in_meeting 丢掉已加载的转录。
   const showMeetingHistory =
     currentMeetingId !== null &&
     meeting !== undefined &&
-    (meeting.state === "ended" || localOnlyAmbient) &&
     meeting.segments.length > 0;
 
   const baseSegs: DisplaySegment[] = useMemo(() => {

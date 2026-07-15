@@ -13,9 +13,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -81,6 +82,15 @@ class Settings(BaseSettings):
     public_http_url: str = "http://localhost:8769"
     app_version: str = __version__
 
+    # Hub sync runs inside the existing backend lifecycle.  The development
+    # env template opts in explicitly; installed clients remain disconnected
+    # until Hub is enabled and a base URL is configured.
+    hub_enabled: bool = False
+    hub_base_url: str = ""
+    hub_sync_interval_s: float = Field(default=15.0, gt=1.0, le=300.0)
+    hub_request_timeout_s: float = Field(default=15.0, gt=1.0, le=120.0)
+    hub_state_file: Path = Field(default_factory=lambda: user_config_dir() / "hub_state.json")
+
     @field_validator("app_version", mode="after")
     @classmethod
     def _use_code_version(cls, _configured_version: str) -> str:
@@ -129,6 +139,9 @@ class Settings(BaseSettings):
     # 关联与抽取只允许快速模型短时参与；失败后使用确定性排序/静默跳过抽取，
     # 绝不让 memory 阻塞 Echo AI 主回答。
     memory_small_model_timeout_s: float = Field(default=2.0, ge=1.0, le=3.0)
+    # 抽取需要读取完整的结构化 JSON；与 recall 的短路预算分离，但仍保持
+    # 明确且有界的单次请求 deadline，避免完整抽取因 2s association deadline 被截断。
+    memory_extraction_timeout_s: float = Field(default=8.0, ge=3.0, le=30.0)
     memory_small_model_candidate_limit: int = Field(default=8, ge=4, le=36)
     memory_working_ttl_s: int = Field(default=30 * 60, ge=60, le=24 * 60 * 60)
     memory_working_max_items: int = Field(default=24, ge=4, le=200)
@@ -193,6 +206,130 @@ class Settings(BaseSettings):
     )
     stt_language: str = "zh"
     stt_llm_correct: bool = False
+
+    # ── ASR scheduler / capability routing ───────────────────────
+    # Rollout is explicitly off by default so existing FireRed call sites
+    # remain compatible until the ASR-owned integration candidate is enabled.
+    asr_scheduler_enabled: bool = False
+    asr_eligible_providers: tuple[str, ...] = ("firered",)
+    asr_provider_weights: dict[str, float] = Field(
+        default_factory=lambda: {"firered": 1.0},
+    )
+    asr_provider_concurrency: dict[str, int] = Field(
+        default_factory=lambda: {"firered": 1},
+    )
+    asr_scheduler_max_concurrency: int = Field(default=4, ge=1, le=64)
+    asr_scheduler_queue_size: int = Field(default=16, ge=0, le=4096)
+    asr_job_deadline_s: float = Field(default=30.0, gt=0.0, le=300.0)
+    asr_max_attempts: int = Field(default=2, ge=1, le=5)
+    asr_circuit_failure_threshold: int = Field(default=3, ge=1, le=20)
+    asr_circuit_cooldown_s: float = Field(default=15.0, gt=0.0, le=600.0)
+    asr_scope_max_concurrency: int = Field(default=2, ge=1, le=64)
+    asr_scope_rate_limit_per_minute: int = Field(default=60, ge=0, le=100_000)
+    asr_readiness_stale_after_s: float = Field(default=30.0, gt=0.0, le=3600.0)
+
+    asr_stepfun_enabled: bool = False
+    asr_stepfun_transport: Literal["sse_one_shot", "websocket_stream"] = "sse_one_shot"
+    asr_stepfun_api_key: str = Field(
+        default="",
+        repr=False,
+        validation_alias=AliasChoices(
+            "asr_stepfun_api_key",
+            "ASR_STEPFUN_API_KEY",
+            "stepfun_api_key",
+            "STEPFUN_API_KEY",
+        ),
+    )
+    asr_stepfun_sse_url: str = "https://api.stepfun.com/v1/audio/asr/sse"
+    asr_stepfun_ws_url: str = "wss://api.stepfun.com/v1/realtime/asr/stream"
+    asr_stepfun_sse_model: str = "stepaudio-2.5-asr"
+    asr_stepfun_ws_model: str = "stepaudio-2.5-asr-stream"
+    asr_stepfun_sse_concurrency: int = Field(default=4, ge=1, le=64)
+    asr_stepfun_ws_max_sessions: int = Field(default=4, ge=1, le=64)
+    asr_stepfun_ws_send_queue_size: int = Field(default=8, ge=1, le=256)
+    asr_stepfun_ws_idle_timeout_s: float = Field(default=10.0, gt=0.0, le=300.0)
+    asr_stepfun_ws_max_duration_s: float = Field(default=120.0, gt=0.0, le=1800.0)
+
+    asr_local_enabled: bool = False
+    asr_local_model_path: str = ""
+    asr_local_device: str = "cpu"
+    asr_local_compute_type: str = "int8"
+    asr_local_worker_count: int = Field(default=1, ge=1, le=1)
+
+    # ── Privacy-safe production telemetry ────────────────────────
+    # Disabled by default; when enabled the independent SQLite sink must be
+    # fully configured before application startup can succeed.
+    telemetry_enabled: bool = False
+    telemetry_db_path: Path | None = Field(
+        default_factory=lambda: user_config_dir() / "telemetry.sqlite3",
+        validation_alias=AliasChoices("telemetry_db_path", "TELEMETRY_DB_PATH"),
+    )
+    telemetry_hmac_key_ring: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices(
+            "telemetry_hmac_key_ring",
+            "TELEMETRY_HMAC_KEY_RING",
+        ),
+        repr=False,
+    )
+    telemetry_hmac_current_key_version: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "telemetry_hmac_current_key_version",
+            "TELEMETRY_HMAC_CURRENT_KEY_VERSION",
+        ),
+        repr=False,
+    )
+    telemetry_retention_s: int = Field(default=30 * 24 * 60 * 60, gt=0)
+    telemetry_k_threshold: int = Field(default=5, ge=1, le=100_000)
+    telemetry_rotation_period_s: int = Field(default=30 * 24 * 60 * 60, gt=0)
+
+    @field_validator("asr_eligible_providers")
+    @classmethod
+    def _validate_asr_provider_names(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        names = tuple(value.strip() for value in values)
+        if len(set(names)) != len(names) or any(not name for name in names):
+            raise ValueError("ASR eligible providers must be unique and non-empty")
+        if any(
+            len(name) > 64
+            or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in name)
+            for name in names
+        ):
+            raise ValueError("ASR provider names contain unsupported characters")
+        return names
+
+    @field_validator("asr_provider_weights")
+    @classmethod
+    def _validate_asr_provider_weights(cls, values: dict[str, float]) -> dict[str, float]:
+        if any(weight <= 0 or weight > 100 for weight in values.values()):
+            raise ValueError("ASR provider weights must be in (0, 100]")
+        return values
+
+    @field_validator("asr_provider_concurrency")
+    @classmethod
+    def _validate_asr_provider_concurrency(cls, values: dict[str, int]) -> dict[str, int]:
+        if any(limit < 1 or limit > 256 for limit in values.values()):
+            raise ValueError("ASR provider concurrency must be in [1, 256]")
+        return values
+
+    @model_validator(mode="after")
+    def _validate_asr_cross_fields(self) -> Settings:
+        eligible = set(self.asr_eligible_providers)
+        if self.asr_scheduler_enabled and not eligible:
+            raise ValueError("ASR scheduler requires an eligible provider set")
+        if not eligible.issubset(self.asr_provider_weights):
+            raise ValueError("ASR provider weights must cover every eligible provider")
+        if not eligible.issubset(self.asr_provider_concurrency):
+            raise ValueError("ASR provider concurrency must cover every eligible provider")
+        if self.asr_stepfun_enabled and not self.asr_stepfun_api_key.strip():
+            raise ValueError("enabled ASR capability is missing authentication readiness")
+        if self.asr_local_enabled and not self.asr_local_model_path.strip():
+            raise ValueError("enabled local ASR capability is missing model readiness")
+        if "stepfun" in eligible and not self.asr_stepfun_enabled:
+            raise ValueError("disabled ASR capability cannot be in the eligible set")
+        if "local" in eligible and not self.asr_local_enabled:
+            raise ValueError("disabled ASR capability cannot be in the eligible set")
+        return self
 
     # ── STT 后处理：LLM 补标点 + 分段 ──────────────────────────────
     # 用户痛点（2026-05-28）：FireRedASR2 :8090 OpenAPI 只接受
@@ -527,7 +664,9 @@ class Settings(BaseSettings):
     allowed_origins: str = (
         f"{OFFICIAL_ELECTRON_ORIGIN},app://.,capacitor://localhost,"
         "https://localhost,http://localhost,"
-        "http://localhost:5173,http://localhost:8769"
+        "http://localhost:5173,http://localhost:8769,"
+        "http://localhost:5174,http://127.0.0.1:5174,"
+        "https://localhost:5174,https://127.0.0.1:5174"
     )
     # 旧版 packaged renderer 会发送 ``Origin: file://``。仅保留为显式开启的
     # loopback-only 升级兼容；当前桌面包固定使用 OFFICIAL_ELECTRON_ORIGIN。

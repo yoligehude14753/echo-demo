@@ -17,12 +17,58 @@ test("packaged renderer prefers main-process backend authority over localStorage
     runtime.indexOf("export function isDefaultPublicBackend"),
   );
   assert.ok(
-    snapshot.indexOf("if (isPackagedElectronRenderer())") <
+    snapshot.indexOf("hasElectronBackendRouting()") <
       snapshot.indexOf("const configured = configuredBackendBase()"),
   );
+  assert.match(runtime, /setStoredBackendBase/);
+  assert.match(runtime, /hasElectronBackendRouting/);
+  assert.match(runtime, /window\.echo\?\.backendHost/);
+});
+
+test("artifact URL policy has no local fallback", () => {
+  const artifactApi = readFileSync(
+    path.resolve(__dirname, "../../src/api.ts"),
+    "utf8",
+  );
+  const artifactFunction = artifactApi
+    .split("export function artifactDownloadUrl", 2)[1]
+    .split("\n}\n", 2)[0];
+  assert.doesNotMatch(artifactFunction, /DEFAULT_LOCAL_BACKEND_BASE|localhost|127\.0\.0\.1/);
+  assert.match(artifactFunction, /backendBaseSnapshot\(\)/);
+  assert.match(artifactFunction, /artifact_backend_snapshot_missing/);
+});
+
+test("public endpoint absence cannot use the relative development proxy", () => {
+  assert.match(runtime, /function canUseRelativeBackendProxy\(\)/);
+  const wsFunction = runtime
+    .split("export async function backendWsUrl", 2)[1]
+    .split("export function apiPath", 2)[0];
+  const apiFunction = runtime
+    .split("export async function apiUrl", 2)[1]
+    .split("\n}", 2)[0];
+  const artifactApi = readFileSync(
+    path.resolve(__dirname, "../../src/api.ts"),
+    "utf8",
+  );
+  const artifactFunction = artifactApi
+    .split("export function artifactDownloadUrl", 2)[1]
+    .split("\n}\n", 2)[0];
+  assert.match(wsFunction, /canUseRelativeBackendProxy\(\)/);
+  assert.match(apiFunction, /canUseRelativeBackendProxy\(\)/);
+  assert.match(artifactFunction, /canUseRelativeBackendProxy\(\)/);
+});
+
+test("invalid transcription reason codes map to unknown", () => {
+  const session = readFileSync(
+    path.resolve(__dirname, "../../src/session.ts"),
+    "utf8",
+  );
+  const reasonValidation = session
+    .split('"reason_code" in value', 2)[1]
+    .split('if (\n    "retry_after_s"', 2)[0];
   assert.match(
-    runtime,
-    /setStoredBackendBase[\s\S]+?if \(isPackagedElectronRenderer\(\)\)[\s\S]+?window\.echo\?\.backendHost/,
+    reasonValidation,
+    /return \{ status: "unknown", diagnostic: "readiness_unknown_malformed" \}/,
   );
 });
 

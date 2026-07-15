@@ -49,6 +49,21 @@ def test_env_example_tracks_current_defaults_and_keeps_admin_disabled(
     assert loaded.debug_token == ""
 
 
+@pytest.mark.unit
+def test_default_origins_include_local_renderer_5174(
+    isolated_user_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ALLOWED_ORIGINS", raising=False)
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert {
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "https://localhost:5174",
+        "https://127.0.0.1:5174",
+    }.issubset(set(settings.allowed_origins_list))
+
+
 @pytest.fixture
 def isolated_user_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """每个测试用独立 ECHO_USER_DIR，互不污染、不影响真实 ~/.echodesk/。"""

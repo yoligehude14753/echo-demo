@@ -398,7 +398,7 @@ test("公共 HTML 预览与下载只使用 authenticated bounded blob URL", asyn
   expect(requests).toHaveLength(2);
   for (const request of requests) {
     expect(request.authorization).toBe("Bearer public-html-session");
-    expect(request.version).toBe("0.3.2");
+    expect(request.version).toBe("0.3.3");
   }
 });
 
@@ -677,7 +677,7 @@ test("公共 native 显式连接自建 backend 时保留服务器工作区能力
     .toBe(true);
 });
 
-test("公共演示启动会清理旧历史状态和非显式服务地址", async ({ page }) => {
+test("公共演示桌面启动不覆盖旧本机状态", async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as { echo?: Record<string, unknown> }).echo = {
       isElectron: true,
@@ -692,20 +692,19 @@ test("公共演示启动会清理旧历史状态和非显式服务地址", async
 
   await expect.poll(
     () => page.evaluate(() => window.localStorage.getItem("echodesk.mobileBackendBase")),
-  ).toBeNull();
+  ).toBe("http://10.10.12.32:8769");
   await expect.poll(
     () => page.evaluate(() => window.localStorage.getItem("echodesk.currentMeetingId")),
-  ).toBeNull();
+  ).toBe("m-old");
   await expect.poll(
     () => page.evaluate(() => window.localStorage.getItem("echodesk.capture.recent")),
-  ).toBeNull();
+  ).toBe('[{"text":"old"}]');
   await expect.poll(
     () => page.evaluate(() => window.localStorage.getItem("echodesk.publicDataBoundary.v2")),
-  ).toContain('"schema":3');
+  ).toBeNull();
 
+  // Public readiness may defer remote hydrate; startup must still preserve local state.
   const fetchLog = await mock.fetchLog();
-  // Public sessions are server-isolated in 0.3, so full REST hydrate is required.
-  expect(fetchLog.some((r) => /\/(api\/)?meetings\?/.test(r.url))).toBe(true);
   expect(fetchLog.some((r) => /\/(api\/)?capture\/recent/.test(r.url))).toBe(false);
 });
 
@@ -1048,7 +1047,7 @@ test("本机版本高于公开版本时不会提供降级下载或安装", async
         currentVersion: "0.2.0",
         latestVersion: "0.2.50",
         // 即使旧主进程上报的 currentVersion 落后、并错误标记 available，
-        // 目标版本低于当前 0.3.2 前端构建时仍必须阻止降级。
+        // 目标版本低于当前 0.3.3 前端构建时仍必须阻止降级。
         updateAvailable: true,
         canAutoInstall: true,
         assetName: "EchoDesk-0.2.50.dmg",

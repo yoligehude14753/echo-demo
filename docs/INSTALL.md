@@ -10,7 +10,7 @@
 
 | 模式 | 适用对象 | Backend | 启用方式 |
 |---|---|---|---|
-| Desktop Pro | macOS / Windows / Linux 桌面用户 | 安装包内本机 backend | 默认 |
+| Desktop Pro | macOS / Windows 桌面用户 | 安装包内本机 backend | 默认 |
 | Public demo | 明确发布的公共演示桌面入口 | HTTPS backend | `ECHO_PUBLIC_DEMO=1` |
 | 强制本机 | 兼容旧 public 启动方式 | 本机 backend | `ECHO_FORCE_LOCAL_BACKEND=1` |
 | Android / TV | 手机、平板、会议室电视 | HTTPS backend | 客户端配置 |
@@ -84,17 +84,6 @@ smoke，不能用 `win-unpacked` 原件的验签结果代替。
 `echodesk-windows-unsigned-test` artifact 不得上传或重命名为 GitHub Release 资产。正式链在
 `desktop-release-windows` environment、四项 Authenticode secret、签名/timestamp、完整六文件
 集合或任一 provenance 缺失时必须失败关闭。
-
-### Linux x64
-
-预期资产名：
-
-```text
-EchoDesk-0.3.2-linux-x86_64.AppImage
-EchoDesk-0.3.2-linux-amd64.deb
-```
-
-两种包都应携带 x64 backend binary。AppImage 需要先赋予执行权限；deb 使用系统包管理器安装。实际可用资产和支持发行版以 Release 说明为准。
 
 ### Android / TV
 
@@ -202,7 +191,6 @@ npm ci
 
 npm run app:dist:mac
 npm run app:dist:win
-npm run app:dist:linux
 npm run app:build:android:development
 ```
 

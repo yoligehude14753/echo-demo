@@ -41,10 +41,11 @@ def fake_llm() -> FakeLLM:
 
 
 @pytest.fixture
-def client_with_fake(fake_llm: FakeLLM) -> TestClient:
+def client_with_fake(fake_llm: FakeLLM) -> Iterator[TestClient]:
     app = create_app()
     app.dependency_overrides[get_llm] = lambda: fake_llm
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 
 @pytest.mark.unit

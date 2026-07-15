@@ -13,6 +13,7 @@ from app.adapters.audio import pcm_to_wav
 from app.api.capture import reset_ambient_pipeline
 from app.config import Settings, get_settings
 from app.main import create_app
+from app.schemas.capture import CaptureChunkResult
 from fastapi.testclient import TestClient
 
 _EXPECTED_FIELDS = {
@@ -44,6 +45,10 @@ _EXPECTED_FIELDS = {
     "last_rms",
     "last_speech_ratio",
     "last_gate_reason",
+    "observed_audio_frames",
+    "accepted_speech_frames",
+    "accepted_speech_ratio",
+    "stats_sequence",
 }
 
 
@@ -78,6 +83,7 @@ def test_get_stats_returns_expected_fields_on_fresh_pipeline(client: TestClient)
         "last_stored_at",
         "last_audio_stored_at",
         "last_gate_reason",
+        "accepted_speech_ratio",
     }
     for f in int_fields:
         assert body[f] == 0, f"expect {f}=0 on fresh pipeline, got {body[f]}"
@@ -85,6 +91,7 @@ def test_get_stats_returns_expected_fields_on_fresh_pipeline(client: TestClient)
     assert body["last_stored_at"] is None
     assert body["last_audio_stored_at"] is None
     assert body["last_gate_reason"] is None
+    assert body["accepted_speech_ratio"] == 0.0
 
 
 def test_get_stats_reflects_recent_ingests(client: TestClient) -> None:
@@ -109,6 +116,10 @@ def test_get_stats_reflects_recent_ingests(client: TestClient) -> None:
     assert body["last_chunk_at"] is not None
     assert body["last_stored_at"] is None  # 没 stored 过
     assert body["last_gate_reason"] == "rms_too_low"
+    assert body["observed_audio_frames"] == 2
+    assert body["accepted_speech_frames"] == 0
+    assert body["accepted_speech_ratio"] == 0.0
+    assert body["stats_sequence"] == 2
 
 
 def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:
@@ -123,6 +134,11 @@ def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:
     body = r.json()
     assert "stt_status" in body
     assert body["stt_status"] in ("ok", "empty", "failed", "circuit_open", "gated")
+
+
+def test_capture_result_missing_stt_status_is_unknown() -> None:
+    """schema 防御性默认不能把缺字段的旧响应伪装成 ready。"""
+    assert CaptureChunkResult().stt_status == "unknown"
 
 
 def test_post_chunk_accepts_frontend_silent_wav_without_persisting(

@@ -9,10 +9,12 @@ import {
   installTvRemoteClickBridge,
 } from "@/runtime";
 import { installLocalCapturePersistence } from "@/store";
+import { ensureSyncDeviceId } from "@/syncState";
 import "@/index.css";
 
 installPublicDemoStorageMigration();
 installLocalCapturePersistence();
+ensureSyncDeviceId();
 installRuntimeBodyClasses();
 installTvRemoteClickBridge();
 

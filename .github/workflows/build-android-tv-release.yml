@@ -341,7 +341,7 @@ jobs:
             desktop/release/SHA256SUMS-Android.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: echodesk-android-tv-signed-release-candidate
+          name: echodesk-android-tv-signed-release-candidate-${{ inputs.release_sha }}
           path: |
             desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android.apk
             desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-android-tv.apk

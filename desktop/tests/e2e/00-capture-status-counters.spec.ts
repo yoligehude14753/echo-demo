@@ -391,8 +391,8 @@ test("STT 熔断退避到期后 UI 自动清除红条", async ({ page }) => {
 
   await emitChunks(page, 3);
   await expect(cap).toContainText("语音识别暂时不可用", { timeout: 8_000 });
-  await expect(page.getByText(/语音识别暂时不可用/)).toBeVisible();
+  await expect(page.getByText("语音识别暂时不可用", { exact: true })).toBeVisible();
 
   await expect(cap).not.toContainText("语音识别暂时不可用", { timeout: 8_000 });
-  await expect(page.getByText(/语音识别暂时不可用/)).toHaveCount(0);
+  await expect(page.getByText("语音识别暂时不可用", { exact: true })).toHaveCount(0);
 });

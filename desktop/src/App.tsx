@@ -22,6 +22,8 @@ import MeetingStatusBar from "@/components/MeetingStatusBar";
 import WorkspaceBar from "@/components/WorkspaceBar";
 import StatusBar from "@/components/StatusBar";
 import IdentityStatus from "@/components/IdentityStatus";
+import SyncPanel from "@/components/SyncPanel";
+import { useSyncWorker } from "@/syncWorker";
 import SettingsPanel from "@/components/SettingsPanel";
 import OnboardingModal from "@/components/OnboardingModal";
 import AboutModal from "@/components/AboutModal";
@@ -46,6 +48,7 @@ type InspectorView = "minutes" | "artifacts";
 
 export default function App(): JSX.Element {
   useEchoWS();
+  useSyncWorker();
   useMeetingHistory();
   const appUpdateStatus = useAppUpdateStatus();
   const onboarding = useOnboarding();
@@ -128,6 +131,7 @@ export default function App(): JSX.Element {
         </div>
         <div className="app-header-status app-no-drag flex items-center gap-2 text-[11px] text-ink-500">
           <IdentityStatus />
+          <SyncPanel />
           <div className="app-diagnostics flex min-w-0 items-center gap-2">
             <StatusBar
               ttsHealth={tts.synthHealth}

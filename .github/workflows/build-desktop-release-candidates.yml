@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: formal-desktop-release-${{ github.sha }}
+  group: formal-desktop-release-${{ inputs.release_sha }}
   cancel-in-progress: false
 
 jobs:
@@ -453,7 +453,7 @@ jobs:
       - name: Upload signed macOS candidate without publishing
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: echodesk-macos-signed-candidate-${{ github.sha }}
+          name: echodesk-macos-signed-candidate-${{ inputs.release_sha }}
           path: |
             desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64.dmg
             desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64.dmg.blockmap
@@ -469,7 +469,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: echodesk-macos-signed-smoke-evidence-${{ github.sha }}
+          name: echodesk-macos-signed-smoke-evidence-${{ inputs.release_sha }}
           path: desktop/test-results
           if-no-files-found: warn
           retention-days: 14
@@ -769,7 +769,7 @@ jobs:
       - name: Upload signed Windows candidate without publishing
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: echodesk-windows-signed-candidate-${{ github.sha }}
+          name: echodesk-windows-signed-candidate-${{ inputs.release_sha }}
           path: |
             desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe
             desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe.blockmap
@@ -784,7 +784,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: echodesk-windows-signed-smoke-evidence-${{ github.sha }}
+          name: echodesk-windows-signed-smoke-evidence-${{ inputs.release_sha }}
           path: ${{ runner.temp }}/echodesk-windows-smoke-evidence
           if-no-files-found: warn
           retention-days: 14

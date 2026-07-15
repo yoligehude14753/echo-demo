@@ -17,6 +17,15 @@ import {
   type FailedArtifact,
 } from "@/lib/failedArtifact";
 import { shouldHideSharedPublicHistory } from "@/runtime";
+import {
+  enqueueSyncOperation,
+  ensureSyncDeviceId,
+  knownSyncEntityRevision,
+  makeOperationId,
+  rememberSyncEntityRevision,
+  SYNC_MEMORY_EVENT,
+  type SyncEntityType,
+} from "@/syncState";
 
 export interface LocalAmbientSegment {
   text: string;
@@ -116,6 +125,11 @@ interface Store {
     meetingId: string,
     segments: TranscriptSegment[],
     opts?: { startedAt?: string; select?: boolean },
+  ): void;
+  applyRemoteSyncEntity(
+    entityType: SyncEntityType,
+    payload: Record<string, unknown>,
+    revision?: number,
   ): void;
   /**
    * 清空全局 outputs 列表（顶栏「清空」按钮）。
@@ -323,6 +337,25 @@ function speakerSetFromSegments(
     if (seg.speaker_label) speakers.add(seg.speaker_label);
   }
   return speakers;
+}
+
+function queueLocalTranscriptSegments(
+  meetingId: string,
+  segments: TranscriptSegment[],
+): void {
+  for (const segment of segments) {
+    const entityId = `${meetingId}:${segment.start_ms}:${segment.end_ms}`;
+    const baseRevision = knownSyncEntityRevision("transcript_segment", entityId) ?? 0;
+    enqueueSyncOperation({
+      operation_id: makeOperationId("transcript_segment", entityId),
+      device_id: ensureSyncDeviceId(),
+      entity_type: "transcript_segment",
+      entity_id: entityId,
+      base_revision: Math.max(0, baseRevision),
+      updated_at: new Date().toISOString(),
+      payload: { meeting_id: meetingId, ...segment } as Record<string, unknown>,
+    });
+  }
 }
 
 function shouldPersistLocalCaptureState(): boolean {
@@ -685,34 +718,81 @@ export const useStore = create<Store>((set, get) => ({
       };
     }),
 
-  addMeetingSegments: (meetingId, segments, opts) =>
+  addMeetingSegments: (meetingId, segments, opts) => {
+    const cur = get().meetings[meetingId] ?? emptyMeeting(meetingId);
+    const existing = new Set(cur.segments.map(segmentKey));
+    const localSegments = segments.filter((segment) => !existing.has(segmentKey(segment)));
     set((s) => {
-      const cur = s.meetings[meetingId] ?? emptyMeeting(meetingId);
-      const mergedSegments = mergeSegments(cur.segments, segments);
-      const speakers = speakerSetFromSegments(cur.speakers, mergedSegments);
+      const current = s.meetings[meetingId] ?? emptyMeeting(meetingId);
+      const mergedSegments = mergeSegments(current.segments, segments);
+      const speakers = speakerSetFromSegments(current.speakers, mergedSegments);
       return {
         currentMeetingId: opts?.select ? meetingId : s.currentMeetingId,
         meetings: {
           ...s.meetings,
           [meetingId]: {
-            ...cur,
-            state: cur.state === "ended" ? "ended" : "in_meeting",
+            ...current,
+            state: current.state === "ended" ? "ended" : "in_meeting",
             started_at:
-              cur.started_at ?? opts?.startedAt ?? new Date().toISOString(),
+              current.started_at ?? opts?.startedAt ?? new Date().toISOString(),
             segments: mergedSegments,
             speakers,
             summary_segment_count: Math.max(
-              cur.summary_segment_count ?? 0,
+              current.summary_segment_count ?? 0,
               mergedSegments.length,
             ),
             summary_speaker_count: Math.max(
-              cur.summary_speaker_count ?? 0,
+              current.summary_speaker_count ?? 0,
               speakers.size,
             ),
           },
         },
       };
-    }),
+    });
+    queueLocalTranscriptSegments(meetingId, localSegments);
+  },
+
+  applyRemoteSyncEntity: (entityType, payload, revision) => {
+    if (entityType === "transcript_segment") {
+      const meetingId = typeof payload.meeting_id === "string" ? payload.meeting_id : null;
+      if (!meetingId) return;
+      const segment = payload as unknown as TranscriptSegment;
+      if (revision !== undefined) {
+        rememberSyncEntityRevision(
+          entityType,
+          `${meetingId}:${segment.start_ms}:${segment.end_ms}`,
+          revision,
+        );
+      }
+      const current = get().meetings[meetingId] ?? emptyMeeting(meetingId);
+      const segments = mergeSegments(current.segments, [segment]);
+      const speakers = speakerSetFromSegments(current.speakers, segments);
+      get().upsertMeeting(meetingId, {
+        segments,
+        speakers,
+        state: current.state === "ended" ? "ended" : "in_meeting",
+        summary_segment_count: Math.max(current.summary_segment_count ?? 0, segments.length),
+        summary_speaker_count: Math.max(current.summary_speaker_count ?? 0, speakers.size),
+      });
+      return;
+    }
+    if (entityType === "meeting_summary") {
+      const minutes = payload as unknown as MeetingMinutes;
+      if (!minutes.meeting_id) return;
+      get().upsertMeeting(minutes.meeting_id, {
+        title: minutes.title,
+        display_title: minutes.title,
+        minutes,
+        minutes_status: "ok",
+        minutes_error: null,
+        state: "ended",
+      });
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(SYNC_MEMORY_EVENT, { detail: payload }));
+    }
+  },
 
   clearArtifacts: () => set({ artifacts: [] }),
 
@@ -764,22 +844,7 @@ export const useStore = create<Store>((set, get) => ({
       case "meeting.segment": {
         if (!mid) break;
         const seg = e.payload as unknown as TranscriptSegment;
-        const cur = get().meetings[mid] ?? emptyMeeting(mid);
-        const mergedSegments = mergeSegments(cur.segments, [seg]);
-        const speakers = speakerSetFromSegments(cur.speakers, mergedSegments);
-        get().upsertMeeting(mid, {
-          segments: mergedSegments,
-          speakers,
-          summary_segment_count: Math.max(
-            cur.summary_segment_count ?? 0,
-            mergedSegments.length,
-          ),
-          summary_speaker_count: Math.max(
-            cur.summary_speaker_count ?? 0,
-            speakers.size,
-          ),
-          state: "in_meeting",
-        });
+        get().addMeetingSegments(mid, [seg], { startedAt: e.ts });
         break;
       }
       case "meeting.ended":

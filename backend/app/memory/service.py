@@ -441,21 +441,24 @@ class MemoryService:
                 if item.memory_id
             ],
         }
-        timeout_s = self.settings.memory_small_model_timeout_s
-        async with asyncio.timeout(timeout_s):
-            response = await self.llm.chat(
-                [
-                    ChatMessage(role="system", content=prompt),
-                    ChatMessage(
-                        role="user",
-                        content=json.dumps(payload, ensure_ascii=False),
-                    ),
-                ],
-                model=self.settings.llm_fast_model,
-                max_tokens=self.settings.llm_fast_max_tokens,
-                temperature=0.0,
-                timeout_s=timeout_s,
-            )
+        timeout_s = self.settings.memory_extraction_timeout_s
+        try:
+            async with asyncio.timeout(timeout_s):
+                response = await self.llm.chat(
+                    [
+                        ChatMessage(role="system", content=prompt),
+                        ChatMessage(
+                            role="user",
+                            content=json.dumps(payload, ensure_ascii=False),
+                        ),
+                    ],
+                    model=self.settings.llm_fast_model,
+                    max_tokens=self.settings.llm_fast_max_tokens,
+                    temperature=0.0,
+                    timeout_s=timeout_s,
+                )
+        except TimeoutError as error:
+            raise TimeoutError(f"memory extraction timed out after {timeout_s:.1f}s") from error
         parsed = _safe_json(response.content)
         raw = parsed.get("memories")
         if not isinstance(raw, list):

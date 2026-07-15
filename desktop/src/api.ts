@@ -12,19 +12,27 @@ import type {
 } from "@/types";
 import {
   BACKEND_ORIGIN_EVENT,
-  DEFAULT_LOCAL_BACKEND_BASE,
+  BackendBasePolicyError,
   type ElectronWorkspaceContext,
   apiPath,
   apiUrl,
   backendBase,
   backendBaseSnapshot,
+  backendRole,
+  canUseRelativeBackendProxy,
   configuredBackendBase,
   isDefaultPublicBackend,
   isNativeMobile,
   isPublicRuntime,
+  runtimeMode,
   shareBackendBase,
 } from "@/runtime";
 import { apiTransport } from "@/session";
+import {
+  enqueueSyncOperation,
+  ensureSyncDeviceId,
+  makeOperationId,
+} from "@/syncState";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
 const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
@@ -103,7 +111,13 @@ export async function startMeeting(meetingId: string): Promise<void> {
  * 7 道门处理结果分流标签（与 backend/app/schemas/capture.py:SttStatus 一一对应）。
  * captureChunkRouter 用 `circuit_open` 触发优雅止血（指数退避停止上传）。
  */
-export type SttStatus = "ok" | "empty" | "failed" | "circuit_open" | "gated";
+export type SttStatus =
+  | "ok"
+  | "empty"
+  | "failed"
+  | "circuit_open"
+  | "gated"
+  | "unknown";
 
 export interface CaptureChunkResponse {
   ambient_stored: boolean;
@@ -117,11 +131,71 @@ export interface CaptureChunkResponse {
   stt_status: SttStatus;
 }
 
+const CAPTURE_STT_STATUSES: readonly SttStatus[] = [
+  "ok",
+  "empty",
+  "failed",
+  "circuit_open",
+  "gated",
+  "unknown",
+];
+
+function captureRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function finiteNonNegative(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+function nullableFiniteNonNegative(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  return finiteNonNegative(value);
+}
+
+function normalizeSttStatus(value: unknown): SttStatus {
+  return CAPTURE_STT_STATUSES.includes(value as SttStatus)
+    ? (value as SttStatus)
+    : "unknown";
+}
+
+export function normalizeCaptureChunkResponse(
+  value: unknown,
+): CaptureChunkResponse {
+  const body = captureRecord(value);
+  return {
+    ambient_stored: body.ambient_stored === true,
+    ambient_text: nullableString(body.ambient_text),
+    audio_ref: nullableString(body.audio_ref),
+    speaker_id: nullableString(body.speaker_id),
+    speaker_label: nullableString(body.speaker_label),
+    meeting_id: nullableString(body.meeting_id),
+    // Older backends did not send this business array. Missing means no
+    // overlay segments, never a transport failure after a successful HTTP ack.
+    meeting_segments: Array.isArray(body.meeting_segments)
+      ? (body.meeting_segments as TranscriptSegment[])
+      : [],
+    stt_status: normalizeSttStatus(body.stt_status),
+  };
+}
+
 export async function uploadCaptureChunk(
   blob: Blob,
   sampleRate = 16000,
   meetingId?: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    idempotencyKey?: string;
+  } = {},
 ): Promise<CaptureChunkResponse> {
   const fd = new FormData();
   fd.append("audio", blob, "chunk.wav");
@@ -130,14 +204,18 @@ export async function uploadCaptureChunk(
   const u = await apiUrl("/capture/chunk");
   const r = await fetchWithAbortTimeout(
     u,
-    { method: "POST", body: fd },
+    {
+      method: "POST",
+      body: fd,
+      headers: options.idempotencyKey
+        ? { "Idempotency-Key": options.idempotencyKey }
+        : undefined,
+    },
     options.timeoutMs ?? CAPTURE_UPLOAD_TIMEOUT_MS,
     options.signal,
   );
-  // backend 在引入 stt_status 字段前的旧版本可能不返回；缺省视为 "ok"。
-  const parsed = await asJson<CaptureChunkResponse>(r);
-  if (!parsed.stt_status) parsed.stt_status = "ok";
-  return parsed;
+  const parsed = await asJson<unknown>(r);
+  return normalizeCaptureChunkResponse(parsed);
 }
 
 /**
@@ -165,6 +243,40 @@ export interface CaptureStats {
   last_rms: number;
   last_speech_ratio: number;
   last_gate_reason: string | null;
+  last_audio_stored_at?: string | null;
+  /** Process-lifetime admission observation fields; null means legacy backend. */
+  observed_audio_frames?: number | null;
+  accepted_speech_frames?: number | null;
+  accepted_speech_ratio?: number | null;
+  /** Monotonic stats cursor; null means legacy backend. */
+  stats_sequence?: number | null;
+}
+
+export function normalizeCaptureStats(value: unknown): CaptureStats {
+  const body = captureRecord(value);
+  return {
+    chunks_total: finiteNonNegative(body.chunks_total),
+    gated_rms: finiteNonNegative(body.gated_rms),
+    gated_low_speech: finiteNonNegative(body.gated_low_speech),
+    stt_circuit_open: finiteNonNegative(body.stt_circuit_open),
+    stt_failed: finiteNonNegative(body.stt_failed),
+    stt_empty: finiteNonNegative(body.stt_empty),
+    hallu_dropped: finiteNonNegative(body.hallu_dropped),
+    repeat_dropped: finiteNonNegative(body.repeat_dropped),
+    diarize_failed: finiteNonNegative(body.diarize_failed),
+    diarize_returned_none: finiteNonNegative(body.diarize_returned_none),
+    stored: finiteNonNegative(body.stored),
+    last_chunk_at: nullableString(body.last_chunk_at),
+    last_stored_at: nullableString(body.last_stored_at),
+    last_audio_stored_at: nullableString(body.last_audio_stored_at),
+    last_rms: finiteNonNegative(body.last_rms),
+    last_speech_ratio: finiteNonNegative(body.last_speech_ratio),
+    last_gate_reason: nullableString(body.last_gate_reason),
+    observed_audio_frames: nullableFiniteNonNegative(body.observed_audio_frames),
+    accepted_speech_frames: nullableFiniteNonNegative(body.accepted_speech_frames),
+    accepted_speech_ratio: nullableFiniteNonNegative(body.accepted_speech_ratio),
+    stats_sequence: nullableFiniteNonNegative(body.stats_sequence),
+  };
 }
 
 export async function getCaptureStats(
@@ -172,7 +284,8 @@ export async function getCaptureStats(
 ): Promise<CaptureStats> {
   const u = await apiUrl("/capture/stats");
   const r = await fetch(u, { cache: "no-store", signal: options.signal });
-  return asJson<CaptureStats>(r);
+  const parsed = await asJson<unknown>(r);
+  return normalizeCaptureStats(parsed);
 }
 
 export async function endMeeting(meetingId: string): Promise<void> {
@@ -212,7 +325,17 @@ export async function finalizeMeeting(
     MEETING_FINALIZE_TIMEOUT_MS,
     options.signal,
   );
-  return asJson<MeetingMinutes>(r);
+  const minutes = await asJson<MeetingMinutes>(r);
+  enqueueSyncOperation({
+    operation_id: makeOperationId("meeting_summary", meetingId),
+    device_id: ensureSyncDeviceId(),
+    entity_type: "meeting_summary",
+    entity_id: meetingId,
+    base_revision: 0,
+    updated_at: minutes.created_at || new Date().toISOString(),
+    payload: minutes as unknown as Record<string, unknown>,
+  });
+  return minutes;
 }
 
 /**
@@ -577,12 +700,78 @@ export async function grantAgentRunnerAndResume(
 }
 
 export function artifactDownloadUrl(artifactId: string): string {
-  const path = `/artifacts/${encodeURIComponent(artifactId)}/download`;
-  const base = backendBaseSnapshot();
-  if (base !== null) return base ? `${base}${path}` : `/api${path}`;
+  const value = String(artifactId ?? "").trim();
+  if (!value || /[\\/?#]/.test(value) || /^[a-z][a-z\d+.-]*:/i.test(value)) {
+    throw new BackendBasePolicyError(
+      "产物路径无效，已拒绝跨 origin 访问",
+      "artifact_path_invalid",
+    );
+  }
+  const path = `/artifacts/${encodeURIComponent(value)}/download`;
+  const role = backendRole();
+  if (role === "paired_hub_sync_gateway") {
+    throw new BackendBasePolicyError(
+      "paired Hub sync gateway 不能承载业务产物",
+      "artifact_hub_role_forbidden",
+    );
+  }
+  let base: string | null;
+  try {
+    base = backendBaseSnapshot();
+  } catch (error) {
+    if (
+      error instanceof BackendBasePolicyError &&
+      error.code === "backend_endpoint_unavailable"
+    ) {
+      throw new BackendBasePolicyError(
+        "后端路由快照不可用，已停止产物下载",
+        "artifact_backend_snapshot_missing",
+      );
+    }
+    throw error;
+  }
+  if (base === null) {
+    throw new BackendBasePolicyError(
+      "后端路由快照不可用，已停止产物下载",
+      "artifact_backend_snapshot_missing",
+    );
+  }
+  if (!base) {
+    if (!canUseRelativeBackendProxy()) {
+      throw new BackendBasePolicyError(
+        "后端路由快照不可用，已停止产物下载",
+        "artifact_backend_snapshot_missing",
+      );
+    }
+    return `/api${path}`;
+  }
+  if (role === "public_service" && !base.startsWith("https://")) {
+    throw new BackendBasePolicyError(
+      "public service 产物地址必须使用 HTTPS",
+      "artifact_public_endpoint_invalid",
+    );
+  }
+  if (role === "local_dev_diagnostic" && runtimeMode() === "release") {
+    throw new BackendBasePolicyError(
+      "release 不允许使用 local dev 产物地址",
+      "artifact_local_role_forbidden",
+    );
+  }
 
-  // 仅兼容旧 preload；当前 Electron 会在首个 Renderer 脚本前同步提供 backendHost。
-  return `${DEFAULT_LOCAL_BACKEND_BASE}${path}`;
+  let resolved: URL;
+  try {
+    const origin = new URL(base).origin;
+    resolved = new URL(path, base);
+    if (resolved.origin !== origin || resolved.pathname !== path) {
+      throw new Error("artifact path escaped backend origin");
+    }
+  } catch {
+    throw new BackendBasePolicyError(
+      "后端产物地址无效，已停止下载",
+      "artifact_backend_endpoint_invalid",
+    );
+  }
+  return resolved.toString();
 }
 
 export function artifactIdFromDownloadHref(href: string | undefined): string | null {
@@ -1313,6 +1502,70 @@ export async function workspaceRemoveDir(
     body: JSON.stringify({ path }),
   });
   return asJson(r);
+}
+
+// ── Desktop Hub pairing / device management ──────────────────────
+
+export interface HubDeviceDTO {
+  device_id: string;
+  name: string | null;
+  platform: string | null;
+  status: string | null;
+  is_current: boolean;
+  last_seen_at: string | null;
+}
+
+export interface HubStatusDTO {
+  enabled: boolean;
+  configured: boolean;
+  device_id: string;
+  paired: boolean;
+  connection:
+    | "disabled"
+    | "pairing_required"
+    | "connecting"
+    | "connected"
+    | "disconnected"
+    | "error";
+  pairing_code: string | null;
+  pairing_expires_at: string | null;
+  devices: HubDeviceDTO[];
+  last_sync_at: string | null;
+  last_connected_at: string | null;
+  last_error: string | null;
+}
+
+export interface HubPairingDTO {
+  pairing_code: string;
+  expires_at: string | null;
+}
+
+export async function hubStatus(): Promise<HubStatusDTO> {
+  const u = await apiUrl("/hub/status");
+  const r = await fetch(u, { cache: "no-store" });
+  return asJson<HubStatusDTO>(r);
+}
+
+export async function hubCreatePairing(): Promise<HubPairingDTO> {
+  const u = await apiUrl("/hub/pairings");
+  const r = await fetch(u, { method: "POST" });
+  return asJson<HubPairingDTO>(r);
+}
+
+export async function hubDevices(): Promise<HubDeviceDTO[]> {
+  const u = await apiUrl("/hub/devices");
+  const r = await fetch(u, { cache: "no-store" });
+  const payload = await asJson<{ items?: HubDeviceDTO[] }>(r);
+  return Array.isArray(payload.items) ? payload.items : [];
+}
+
+export async function hubRevokeDevice(deviceId: string): Promise<void> {
+  const u = await apiUrl(`/hub/devices/${encodeURIComponent(deviceId)}`);
+  const r = await fetch(u, { method: "DELETE" });
+  if (!r.ok) {
+    await r.body?.cancel().catch(() => undefined);
+    throw new Error(`EchoDesk Hub 请求失败（HTTP ${r.status}）`);
+  }
 }
 
 // ── TTS ─────────────────────────────────────────────────────
