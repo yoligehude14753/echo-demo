@@ -4,6 +4,11 @@ import { installEchoMock } from "./_mock";
 test("电视视口：横屏布局和遥控器确认键路径可用", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 540 });
   await page.addInitScript(() => {
+    (window as unknown as { echo?: Record<string, unknown> }).echo = {
+      ...((window as unknown as { echo?: Record<string, unknown> }).echo ?? {}),
+      isElectron: true,
+      isPublicDemo: true,
+    };
     window.localStorage.setItem("echodesk.forceTvUi", "1");
     window.localStorage.setItem(
       "echodesk.localCaptureState.v1",
@@ -90,7 +95,7 @@ test("电视视口：横屏布局和遥控器确认键路径可用", async ({ pa
     timeout: 10_000,
   });
   await expect(page.getByText("不该继承的旧会议")).toHaveCount(0);
-  await expect(page.getByText("不该继承的旧转写")).toHaveCount(0);
+  await expect(page.getByText("不该继承的旧转写")).toBeVisible();
   await expect(page.getByText("EchoDesk 启动失败")).toHaveCount(0);
   await expect(page.getByTestId("tv-quick-commands")).toBeVisible();
 

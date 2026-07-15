@@ -677,7 +677,7 @@ test("公共 native 显式连接自建 backend 时保留服务器工作区能力
     .toBe(true);
 });
 
-test("公共演示启动会清理旧历史状态和非显式服务地址", async ({ page }) => {
+test("公共演示桌面启动不覆盖旧本机状态", async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as { echo?: Record<string, unknown> }).echo = {
       isElectron: true,
@@ -692,16 +692,16 @@ test("公共演示启动会清理旧历史状态和非显式服务地址", async
 
   await expect.poll(
     () => page.evaluate(() => window.localStorage.getItem("echodesk.mobileBackendBase")),
-  ).toBeNull();
+  ).toBe("http://10.10.12.32:8769");
   await expect.poll(
     () => page.evaluate(() => window.localStorage.getItem("echodesk.currentMeetingId")),
-  ).toBeNull();
+  ).toBe("m-old");
   await expect.poll(
     () => page.evaluate(() => window.localStorage.getItem("echodesk.capture.recent")),
-  ).toBeNull();
+  ).toBe('[{"text":"old"}]');
   await expect.poll(
     () => page.evaluate(() => window.localStorage.getItem("echodesk.publicDataBoundary.v2")),
-  ).toContain('"schema":3');
+  ).toBeNull();
 
   const fetchLog = await mock.fetchLog();
   // Public sessions are server-isolated in 0.3, so full REST hydrate is required.

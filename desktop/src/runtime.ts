@@ -788,6 +788,12 @@ export function isPublicRuntime(): boolean {
     return window.echo.isPublicDemo;
   }
   if (isPublicDesktopDemo()) return true;
+  try {
+    const configured = configuredBackendBase();
+    if (configured !== null && isDefaultPublicBackend(configured)) return true;
+  } catch {
+    // Endpoint policy errors remain fail-closed; they must not be relabeled public.
+  }
   return principalMode() === "public";
 }
 

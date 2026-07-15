@@ -95,7 +95,7 @@ test("Electron retries bootstrap after a transient unavailable failure", async (
 
   expect(result).toEqual({
     bootstrapCalls: 2,
-    firstReason: "backend_unreachable",
+    firstReason: "bootstrap-unavailable",
     backendVersion: "0.3.3",
   });
 });

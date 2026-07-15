@@ -118,6 +118,26 @@ export async function installEchoMock(
         };
       };
     }
+    if (isElectron && originBoundEcho.isPublicDemo === true) {
+      const publicSession = () => ({
+        token: "mock-public-session",
+        expires_at: "2099-01-01T00:00:00Z",
+        backend_origin: identityOrigin(),
+        principal: {
+          tenant_id: "mock-tenant",
+          device_id: "mock-device",
+          owner_id: "mock-owner",
+          session_id: "mock-session",
+          mode: "public",
+        },
+      });
+      if (typeof originBoundEcho.ensurePublicSession !== "function") {
+        originBoundEcho.ensurePublicSession = async () => publicSession();
+      }
+      if (typeof originBoundEcho.renewPublicSession !== "function") {
+        originBoundEcho.renewPublicSession = async () => publicSession();
+      }
+    }
     (window as unknown as { echo: Record<string, unknown> }).echo = {
       ...originBoundEcho,
       isElectron,
