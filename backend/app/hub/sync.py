@@ -73,7 +73,9 @@ def _required_text(value: object, *, limit: int = 512) -> str:
 
 def _int(value: object, default: int = 0) -> int:
     try:
-        return int(value)
+        if isinstance(value, (str, bytes, bytearray, int, float)):
+            return int(value)
+        return default
     except (TypeError, ValueError):
         return default
 

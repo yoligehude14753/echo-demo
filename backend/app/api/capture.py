@@ -10,7 +10,7 @@ M_diag_brake 新增：GET /capture/stats 返回进程级 7 道门处理结果计
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -18,7 +18,6 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import OpenAICompatibleLLM
 from app.adapters.stt import get_asr_scheduler, make_stt
-from app.adapters.stt.contracts import ASRRequestContext
 from app.adapters.stt.llm_punctuator import LLMPunctuator
 from app.adapters.stt.scheduler import ASRScheduler
 from app.api.deps import (
@@ -39,6 +38,7 @@ from app.api.retrieval import get_rag
 from app.config import Settings, get_settings
 from app.memory import MemoryService
 from app.ports.diarizer import DiarizerPort
+from app.ports.asr import ASRRequestContext, ASRSchedulerPort, ASRTelemetryPort
 from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
 from app.schemas.capture import CaptureChunkResult
@@ -113,8 +113,8 @@ def get_ambient_pipeline(
             meeting_state=meeting_state,
             event_bus=event_bus,
             punctuator=punctuator,
-            asr_scheduler=asr_scheduler,
-            telemetry=telemetry,
+            asr_scheduler=cast(ASRSchedulerPort, asr_scheduler),
+            telemetry=cast(ASRTelemetryPort, telemetry),
             governor=governor,
             principal=current_principal(),
             memory=memory,

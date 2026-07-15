@@ -253,8 +253,6 @@ class _SafeTelemetryModel(BaseModel):
                 strict=strict,
                 from_attributes=from_attributes,
                 context=context,
-                by_alias=by_alias,
-                by_name=by_name,
             )
         except ValidationError as error:
             validation_error = error
@@ -278,8 +276,6 @@ class _SafeTelemetryModel(BaseModel):
                 json_data,
                 strict=strict,
                 context=context,
-                by_alias=by_alias,
-                by_name=by_name,
             )
         except ValidationError as error:
             validation_error = error
@@ -303,8 +299,6 @@ class _SafeTelemetryModel(BaseModel):
                 obj,
                 strict=strict,
                 context=context,
-                by_alias=by_alias,
-                by_name=by_name,
             )
         except ValidationError as error:
             validation_error = error

@@ -252,7 +252,7 @@ async def _seed_v37_unfinished_finalize(
         await conn.commit()
 
     upgraded = await run_migrations(db_path)
-    assert upgraded.errors == [] and upgraded.current_version == 40
+    assert upgraded.errors == [] and upgraded.current_version == 41
     return (
         Settings(
             db_path=db_path,

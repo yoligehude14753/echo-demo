@@ -24,11 +24,10 @@ from pydantic import BaseModel, Field
 from app.api.deps import (
     get_access_policy,
     get_request_principal,
-    get_settings,
     get_sync_hub_store,
     require_admin_access,
 )
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.hub.runtime import HubRuntime, HubRuntimeError
 from app.security import AccessPolicy, AccessPolicyError, SessionError, route_scope_path
 from app.security.context import bind_principal, reset_principal

@@ -358,7 +358,7 @@ class SyncHubStore:
         cursor = await conn.execute(query, args)
         rows = await cursor.fetchall()
         await cursor.close()
-        return rows
+        return list(rows)
 
     @staticmethod
     def _memory_payload(row: aiosqlite.Row) -> dict[str, Any]:
@@ -543,7 +543,10 @@ class SyncHubStore:
                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (meeting_id, *values),
             )
-            segment_id = int(cursor.lastrowid)
+            lastrowid = cursor.lastrowid
+            if lastrowid is None:
+                raise RuntimeError("SQLite did not return inserted segment id")
+            segment_id = int(lastrowid)
             await cursor.close()
         else:
             cursor = await conn.execute(
@@ -1177,13 +1180,11 @@ class SyncHubStore:
         occurred_at = row["finalized_at"] or row["ended_at"] or row["started_at"]
         payload["updated_at"] = str(occurred_at)
         return SyncChangeRecord(
-            cursor=int(event["cursor"]) if event is not None else 0,
-            source_device_id=(
-                str(event["source_device_id"]) if event is not None else str(row["device_id"])
-            ),
+            cursor=0,
+            source_device_id=str(row["device_id"]),
             entity_type="meeting_summary",
             entity_id=entity_id,
-            revision=int(event["revision"]) if event is not None else 0,
+            revision=0,
             updated_at=_parse_datetime(occurred_at),
             payload=payload,
         )
@@ -1198,13 +1199,11 @@ class SyncHubStore:
         if event is not None:
             return SyncHubStore._change_from_row(event)
         return SyncChangeRecord(
-            cursor=int(event["cursor"]) if event is not None else 0,
-            source_device_id=(
-                str(event["source_device_id"]) if event is not None else "sync-snapshot"
-            ),
+            cursor=0,
+            source_device_id="sync-snapshot",
             entity_type="memory",
             entity_id=entity_id,
-            revision=int(event["revision"]) if event is not None else int(row["revision"]),
+            revision=int(row["revision"]),
             updated_at=_parse_datetime(row["updated_at"]),
             payload=SyncHubStore._memory_payload(row),
         )

@@ -1077,7 +1077,7 @@ class AmbientCapturePipeline:
                 msg = str(e)
                 if "circuit open" in msg.lower():
                     logger.warning("ambient STT circuit open (audio saved): %s", e)
-                    error = _STTCircuitOpenError(msg)
+                    error: RuntimeError = _STTCircuitOpenError(msg)
                     await self._record_legacy_telemetry(
                         request_context,
                         audio_bytes=audio_bytes,
