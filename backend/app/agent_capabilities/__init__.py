@@ -9,6 +9,15 @@ from .catalog import (
     freeze_grant,
 )
 from .compiler import CompiledCapability, CompileResult, compile_grant, decide
+from .host_runtime import (
+    CancellationToken,
+    CancelReason,
+    CapabilityHostRegistry,
+    CapabilityInvocation,
+    HostOutcome,
+    OperationReceipt,
+    make_receipt,
+)
 from .redaction import REDACTED, redact_audit_event, redact_secret, redact_text
 from .types import (
     AgentResourceBudget,
@@ -36,8 +45,12 @@ __all__ = [
     "REDACTED",
     "AgentResourceBudget",
     "AuditEvent",
+    "CancelReason",
+    "CancellationToken",
     "CapabilityAuditEvent",
     "CapabilityDecision",
+    "CapabilityHostRegistry",
+    "CapabilityInvocation",
     "CapabilityName",
     "CapabilityRequest",
     "CommandCapability",
@@ -47,9 +60,11 @@ __all__ = [
     "DenyCode",
     "GrantInput",
     "GrantSnapshot",
+    "HostOutcome",
     "InvocationBinding",
     "NetworkCapability",
     "NetworkRequest",
+    "OperationReceipt",
     "PathRequest",
     "PermissionRight",
     "SkillCapability",
@@ -63,6 +78,7 @@ __all__ = [
     "decide",
     "evaluate_capability",
     "freeze_grant",
+    "make_receipt",
     "redact_audit_event",
     "redact_secret",
     "redact_text",
