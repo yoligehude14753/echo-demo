@@ -179,7 +179,9 @@ jobs:
               --lock "$lock" \
               --exception backend/SECURITY_DEPENDENCY_EXCEPTIONS.md \
               --package torch \
-              --vulnerability CVE-2025-3000
+              --vulnerability CVE-2025-3000 \
+              --package setuptools \
+              --vulnerability CVE-2026-59890
           done
 
           for label in lint typecheck audit-tool; do

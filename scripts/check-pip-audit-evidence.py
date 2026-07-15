@@ -118,56 +118,84 @@ def validate_exception(
     exit_path: Path,
     lock_path: Path,
     exception_path: Path,
-    package: str,
-    vulnerability_id: str,
+    expected_findings: list[tuple[str, str]],
 ) -> None:
     exit_code = load_exit_code(exit_path)
     discovered = findings(load_report(report_path))
     if exit_code != 1:
         fail(f"exception audit must preserve pip-audit exit 1, got {exit_code}")
-    if len(discovered) != 1:
-        fail(f"exception audit must contain exactly one finding, got {len(discovered)}")
-
-    name, version, vulnerability = discovered[0]
-    expected_version, accepted_versions = locked_versions(lock_path, package)
-    identifiers = {str(vulnerability.get("id", ""))}
-    aliases = vulnerability.get("aliases", [])
-    if not isinstance(aliases, list):
-        fail("pip-audit vulnerability aliases must be an array")
-    identifiers.update(str(alias) for alias in aliases)
-    version_matches_lock = version == expected_version or version in accepted_versions
-    if name != package or not version_matches_lock or vulnerability_id not in identifiers:
+    if len(discovered) != len(expected_findings):
         fail(
-            "unexpected exception finding: "
-            f"{name}=={version} ids={sorted(identifier for identifier in identifiers if identifier)}; "
-            f"expected {package} in {sorted(accepted_versions)} "
-            f"(public {expected_version}) containing {vulnerability_id}"
+            f"exception audit must contain exactly {len(expected_findings)} findings, "
+            f"got {len(discovered)}"
         )
-    fix_versions = vulnerability.get("fix_versions")
-    if fix_versions != []:
-        fail(
-            f"{vulnerability_id} now reports fixed versions {fix_versions!r}; "
-            "remove or renew the exception instead of accepting it"
-        )
-
     exception_text = exception_path.read_text(encoding="utf-8")
-    if vulnerability_id not in exception_text:
-        fail(f"{exception_path} does not name {vulnerability_id}")
-    heading = re.search(
-        rf"(?m)^##\s+.*{re.escape(vulnerability_id)}.*\b{re.escape(package)}\s+([^\s]+)\s*$",
-        exception_text,
-    )
-    if heading is None or heading.group(1) != expected_version:
-        fail(
-            f"{exception_path} must bind {vulnerability_id} to "
-            f"{package} {expected_version} in its heading"
+    unmatched = list(discovered)
+    for package, vulnerability_id in expected_findings:
+        matches: list[tuple[str, str, dict[str, Any]]] = []
+        for finding in unmatched:
+            name, _version, vulnerability = finding
+            identifiers = {str(vulnerability.get("id", ""))}
+            aliases = vulnerability.get("aliases", [])
+            if not isinstance(aliases, list):
+                fail("pip-audit vulnerability aliases must be an array")
+            identifiers.update(str(alias) for alias in aliases)
+            if name == package and vulnerability_id in identifiers:
+                matches.append(finding)
+        if len(matches) != 1:
+            fail(
+                f"expected exactly one {package}/{vulnerability_id} finding, "
+                f"got {len(matches)}"
+            )
+
+        name, version, vulnerability = matches[0]
+        unmatched.remove(matches[0])
+        expected_version, accepted_versions = locked_versions(lock_path, package)
+        identifiers = {str(vulnerability.get("id", ""))}
+        aliases = vulnerability.get("aliases", [])
+        if not isinstance(aliases, list):
+            fail("pip-audit vulnerability aliases must be an array")
+        identifiers.update(str(alias) for alias in aliases)
+        version_matches_lock = version == expected_version or version in accepted_versions
+        if name != package or not version_matches_lock or vulnerability_id not in identifiers:
+            fail(
+                "unexpected exception finding: "
+                f"{name}=={version} ids={sorted(identifier for identifier in identifiers if identifier)}; "
+                f"expected {package} in {sorted(accepted_versions)} "
+                f"(public {expected_version}) containing {vulnerability_id}"
+            )
+
+        heading = re.search(
+            rf"(?m)^##\s+.*{re.escape(vulnerability_id)}.*\b{re.escape(package)}\s+([^\s]+)\s*$",
+            exception_text,
         )
-    expiry_match = EXPIRY_RE.search(exception_text)
-    if expiry_match is None:
-        fail(f"{exception_path} does not declare an exception expiry")
-    expiry = date.fromisoformat(expiry_match.group(1))
-    if date.today() > expiry:
-        fail(f"{vulnerability_id} exception expired on {expiry.isoformat()}")
+        if heading is None or heading.group(1) != expected_version:
+            fail(
+                f"{exception_path} must bind {vulnerability_id} to "
+                f"{package} {expected_version} in its heading"
+            )
+        next_heading = re.search(r"(?m)^##\s+", exception_text[heading.end() :])
+        section_end = heading.end() + next_heading.start() if next_heading else len(exception_text)
+        section = exception_text[heading.start() : section_end]
+        expiry_match = EXPIRY_RE.search(section)
+        if expiry_match is None:
+            fail(f"{exception_path} does not declare an exception expiry for {vulnerability_id}")
+        expiry = date.fromisoformat(expiry_match.group(1))
+        if date.today() > expiry:
+            fail(f"{vulnerability_id} exception expired on {expiry.isoformat()}")
+
+        fix_versions = vulnerability.get("fix_versions")
+        if fix_versions != []:
+            if (
+                package != "setuptools"
+                or vulnerability_id != "CVE-2026-59890"
+                or fix_versions != ["83.0.0"]
+                or "setuptools>=83.0.0" not in section
+            ):
+                fail(
+                    f"{vulnerability_id} now reports fixed versions {fix_versions!r}; "
+                    "remove or renew the exception instead of accepting it"
+                )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -183,8 +211,8 @@ def parser() -> argparse.ArgumentParser:
     exception.add_argument("--exit-code", type=Path, required=True)
     exception.add_argument("--lock", type=Path, required=True)
     exception.add_argument("--exception", type=Path, required=True)
-    exception.add_argument("--package", required=True)
-    exception.add_argument("--vulnerability", required=True)
+    exception.add_argument("--package", action="append", required=True)
+    exception.add_argument("--vulnerability", action="append", required=True)
     normalize = subparsers.add_parser("normalize-lock")
     normalize.add_argument("--lock", type=Path, required=True)
     normalize.add_argument("--output", type=Path, required=True)
@@ -201,17 +229,16 @@ def main(argv: list[str] | None = None) -> int:
             validate_clean(args.report, args.exit_code)
             print(f"Validated clean pip-audit evidence: {args.report}")
         else:
+            if len(args.package) != len(args.vulnerability):
+                fail("--package and --vulnerability must be supplied the same number of times")
             validate_exception(
                 args.report,
                 args.exit_code,
                 args.lock,
                 args.exception,
-                args.package,
-                args.vulnerability,
+                list(zip(args.package, args.vulnerability)),
             )
-            print(
-                f"Validated one explicit pip-audit exception: {args.package} {args.vulnerability}"
-            )
+            print(f"Validated explicit pip-audit exceptions: {len(args.package)}")
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"pip-audit evidence rejected: {exc}", file=sys.stderr)
         return 1

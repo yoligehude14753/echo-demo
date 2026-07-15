@@ -1,5 +1,25 @@
 # Backend dependency security exceptions
 
+## PYSEC-2026-3447 / CVE-2026-59890 / GHSA-h35f-9h28-mq5c — setuptools 81.0.0
+
+- Status: temporary upstream-constraint exception. Raw dependency audits must
+  report this exact finding and exit non-zero; it must not be hidden or turned
+  into a zero-vulnerability result.
+- Owner: EchoDesk maintainers.
+- Exception expires: 2026-08-12; renewal requires a compatible upstream
+  dependency release and a fresh advisory audit.
+- Constraint: `torch==2.11.0` and `torch==2.11.0+cpu` require
+  `setuptools<82` on the Python 3.11 Linux, macOS, and Windows install paths.
+  The advisory reports `setuptools==81.0.0` fixed in `83.0.0`, so selecting the
+  fixed release makes all three locked install graphs unsatisfiable.
+- Audited locks: `requirements.lock`, `requirements-dev.lock`, and
+  `packaging/requirements-build.lock` each report exactly this advisory plus
+  the separate torch exception below. The lint, typecheck, and audit-tool locks
+  do not contain either package.
+- Removal trigger: upgrade the torch/torchaudio model pair or another reviewed
+  compatible dependency path so `setuptools>=83.0.0` installs on all three
+  platforms, then rerun the raw audit and remove this exception.
+
 ## CVE-2025-3000 / GHSA-rrmf-rvhw-rf47 — torch 2.11.0
 
 - Status: unresolved upstream finding with runtime mitigation. Raw dependency
