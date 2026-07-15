@@ -1,0 +1,44 @@
+{
+  "batch": "B13",
+  "record_type": "unified-source-verification",
+  "observed_date": "2026-07-16",
+  "worktree": "/Users/yoligehude/.codex/worktrees/1fd3/echo",
+  "lineage": {
+    "b10_required": "8d5bdb6fdaa0b0d8e2be8275f98b4f6f862ccab5",
+    "b11_input": "d2fae70a203510ea5ecbee4c8238da41a1608c79",
+    "b11_local_commit": "a5bf3308f58ae9958b27dce9b03f1a5b6d1d2c47",
+    "b12_input": "4742d9d4fd42e5bf90e0ba1be7babc4554d438a2",
+    "b12_local_commit": "6f22e75fc5c219ac9bce10635e0ce0fdbdb4ffbb",
+    "platforms_transport": "158844db23cc5884889233fb8bdd7d943f3002f9",
+    "platforms_detached_worktree": "/tmp/echodesk-b13-platforms"
+  },
+  "agents": [
+    {"role": "runtime-persistence-integration", "id": "019f66a0-d862-7272-b218-846162aedd57"},
+    {"role": "model-tool-provider-integration", "id": "019f66a0-d8d3-73c1-8463-3f18625516bd"},
+    {"role": "unified-source-verification", "id": "019f66a0-d94e-7750-a83c-e8657aeb8327"}
+  ],
+  "matrix": [
+    {"id": "durable-event-state", "status": "PASS_FOCUSED", "evidence": "B13 composition tests and B11 persistence tests"},
+    {"id": "duplicate-raw-event", "status": "PASS_IN_SOURCE_GROUP", "evidence": "agent runtime/backend source group"},
+    {"id": "first-terminal-wins", "status": "PASS_IN_SOURCE_GROUP", "evidence": "agent runtime/backend source group"},
+    {"id": "cancel-outbox-idempotency", "status": "PARTIAL", "evidence": "Electron cancel idempotency passed; one legacy HTTP race test failed"},
+    {"id": "timeout-crash-fail-closed", "status": "PASS_FOCUSED", "evidence": "8 Electron runtime tests and B13 fail-closed composition test"},
+    {"id": "production-real-handler-turn", "status": "REWORK_REQUIRED", "evidence": "worker factory module selector wired; concrete host-owned KernelDeps factory absent"},
+    {"id": "model-route-revision-identity", "status": "PASS_FOCUSED", "evidence": "B13 model/tool/provider 3 passed; B05M route/revision binding"},
+    {"id": "tool-grant-receipt-provenance", "status": "PASS_FOCUSED", "evidence": "B13 B06P FileReadHost receipt test and 69 capability tests"},
+    {"id": "checkpoint-restart-resume", "status": "PASS_FOCUSED", "evidence": "B13 composition 5 passed; B11+B12 focused 11 passed"},
+    {"id": "backend-source-tests", "status": "PARTIAL", "evidence": "17 agent-runtime, 37 model-runtime except stale fixture hash, 69 capabilities, 24 task service"},
+    {"id": "desktop-agent-runtime-tests", "status": "PARTIAL", "evidence": "8 runtime tests passed; tsc blocked because desktop/node_modules/.bin/tsc is absent"},
+    {"id": "short-real-provider-smoke", "status": "PASS", "evidence": "status=PASS code=PROVIDER_STREAM_OK model_events=7 EXIT_CODE:0"}
+  ],
+  "prohibited_commands": {
+    "package_build": false,
+    "signing_notarization_install": false,
+    "cross_platform": false,
+    "provider_stability_or_load": false,
+    "claude_cli_daemon_install_or_global_fallback": false,
+    "push_or_pull_request": false
+  },
+  "factstore_health": {"status": "ERROR", "exit_code": 2, "reason": "echo/_state/events is absent"},
+  "verdict": "REWORK_REQUIRED"
+}

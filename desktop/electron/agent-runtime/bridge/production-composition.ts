@@ -17,6 +17,15 @@ import type { RuntimeManifest } from "../worker/identity.ts";
 export type ProductionCompositionOptions = {
   manifest: RuntimeManifest;
   factoryModule?: URL | string;
+  /**
+   * Resolve the host-owned worker factory for this task binding.  The module
+   * is loaded inside the worker, where it must construct every concrete
+   * KernelDeps port; a missing binding remains fail-closed in production-factory.
+   */
+  resolveFactoryModule?: (
+    payload: Record<string, unknown>,
+    open: OpenSessionInput,
+  ) => Promise<URL | string>;
   resolveOpenInput: (
     payload: Record<string, unknown>,
   ) => Promise<OpenSessionInput>;
@@ -49,17 +58,18 @@ export function createProductionEmbeddedRuntimeCommandHandler(
   options: ProductionCompositionOptions,
 ): EmbeddedRuntimeCommandHandler {
   const active = new Map<string, ActiveRuntime>();
-  const factoryModule =
-    options.factoryModule ?? new URL("./production-factory.ts", import.meta.url);
 
   return {
     async submit({ taskId, operationKey, payload, emit }) {
       if (active.has(taskId)) throw new Error("PRODUCTION_TASK_ALREADY_ACTIVE");
       const open = await options.resolveOpenInput(payload);
       requireIdentity(open, taskId, operationKey);
+      const resolvedFactoryModule = options.resolveFactoryModule
+        ? await options.resolveFactoryModule(payload, open)
+        : options.factoryModule ?? new URL("./production-factory.ts", import.meta.url);
       const manager = new WorkerManager({
         manifest: options.manifest,
-        factoryModule,
+        factoryModule: resolvedFactoryModule,
       });
       const session = await manager.open(open);
       active.set(taskId, { manager, session });

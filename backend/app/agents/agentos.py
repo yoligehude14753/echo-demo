@@ -5,8 +5,14 @@ B13 production composition must inject ``EmbeddedRuntimeBackend`` directly;
 this module is not an HTTP fallback for the inherited-fd runtime path.
 """
 
-from app.agents.embedded_runtime import EmbeddedRuntimeBackend, EmbeddedRuntimeError
+import hashlib
+import json
+import logging
+
+import httpx
+
 from app.agents.base import AgentIntent, AgentSubmitResult
+from app.agents.embedded_runtime import EmbeddedRuntimeBackend, EmbeddedRuntimeError
 from app.config import Settings
 
 _log = logging.getLogger("echodesk.agents.agentos")
