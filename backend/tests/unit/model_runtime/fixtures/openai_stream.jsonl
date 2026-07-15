@@ -1,0 +1,13 @@
+data: {"id":"chatcmpl_redacted","object":"chat.completion.chunk","created":1700000000,"model":"openai-compatible-test","system_fingerprint":"extension-is-ignored","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello "},"finish_reason":null}]}
+
+data: {"id":"chatcmpl_redacted","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"from compatible model."},"finish_reason":null}],"x_provider_trace":"extension-is-ignored"}
+
+data: {"id":"chatcmpl_redacted","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_redacted_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"pa"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl_redacted","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ris\"}"}},{"index":1,"id":"call_redacted_2","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"tokyo\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl_redacted","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"chatcmpl_redacted","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":9,"total_tokens":21,"prompt_tokens_details":{"cached_tokens":3}}}
+
+data: [DONE]

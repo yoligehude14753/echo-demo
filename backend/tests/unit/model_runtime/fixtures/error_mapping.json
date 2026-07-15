@@ -1,0 +1,51 @@
+{
+  "fixture_schema": "b02-model-runtime-error-golden.v1",
+  "source": {
+    "kind": "official_wire_shape",
+    "redaction": "status and error-shape only; provider messages and credentials removed"
+  },
+  "cases": [
+    {
+      "name": "anthropic_unauthorized",
+      "protocol": "anthropic_messages",
+      "http_status": 401,
+      "wire_error": {"type": "error", "error": {"type": "authentication_error", "message": "[redacted]"}},
+      "expected": {"code": "MODEL_CREDENTIAL_MISSING", "retryable": false}
+    },
+    {
+      "name": "openai_forbidden",
+      "protocol": "openai_chat",
+      "http_status": 403,
+      "wire_error": {"error": {"message": "[redacted]", "type": "invalid_api_key", "code": "[redacted]"}},
+      "expected": {"code": "MODEL_CREDENTIAL_REVOKED", "retryable": false}
+    },
+    {
+      "name": "openai_rate_limited",
+      "protocol": "openai_chat",
+      "http_status": 429,
+      "wire_error": {"error": {"message": "[redacted]", "type": "rate_limit_error", "code": null}},
+      "expected": {"code": "MODEL_UPSTREAM_ERROR", "retryable": true}
+    },
+    {
+      "name": "provider_timeout",
+      "protocol": "openai_chat",
+      "http_status": 504,
+      "wire_error": {"error": {"message": "[redacted]", "type": "timeout", "code": null}},
+      "expected": {"code": "MODEL_TIMEOUT", "retryable": true}
+    },
+    {
+      "name": "invalid_provider_request",
+      "protocol": "anthropic_messages",
+      "http_status": 400,
+      "wire_error": {"type": "error", "error": {"type": "invalid_request_error", "message": "[redacted]"}},
+      "expected": {"code": "MODEL_UPSTREAM_ERROR", "retryable": false}
+    },
+    {
+      "name": "provider_server_error",
+      "protocol": "openai_chat",
+      "http_status": 500,
+      "wire_error": {"error": {"message": "[redacted]", "type": "server_error", "code": null}},
+      "expected": {"code": "MODEL_UPSTREAM_ERROR", "retryable": true}
+    }
+  ]
+}

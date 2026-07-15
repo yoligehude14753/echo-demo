@@ -1,0 +1,2 @@
+{"type":"message_start","message":{"id":"msg_redacted_error","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":4,"output_tokens":0}}}
+{"type":"error","error":{"type":"overloaded_error","message":"provider overloaded; api_key=sk-redacted"}}

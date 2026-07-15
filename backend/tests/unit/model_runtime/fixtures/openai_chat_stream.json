@@ -1,0 +1,103 @@
+{
+  "fixture_schema": "b02-model-runtime-golden.v1",
+  "source": {
+    "kind": "official_wire_shape",
+    "protocol": "openai_chat",
+    "redaction": "synthetic identifiers; no captured credentials or user content"
+  },
+  "request_identity": {
+    "request_id": "req-openai-golden",
+    "task_id": "task-contract-verifier",
+    "operation_key": "op-contract-verifier-openai",
+    "config_revision": 7,
+    "route_id": "openai-compatible-primary"
+  },
+  "stream": [
+    {
+      "id": "chatcmpl-redacted-openai",
+      "object": "chat.completion.chunk",
+      "created": 1700000000,
+      "model": "compatible-model-redacted",
+      "choices": [
+        {"index": 0, "delta": {"role": "assistant", "content": null}, "finish_reason": null}
+      ]
+    },
+    {
+      "id": "chatcmpl-redacted-openai",
+      "object": "chat.completion.chunk",
+      "created": 1700000001,
+      "model": "compatible-model-redacted",
+      "choices": [
+        {"index": 0, "delta": {"content": "I will inspect the workspace."}, "finish_reason": null}
+      ]
+    },
+    {
+      "id": "chatcmpl-redacted-openai",
+      "object": "chat.completion.chunk",
+      "created": 1700000002,
+      "model": "compatible-model-redacted",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {"index": 0, "id": "call-read-redacted", "type": "function", "function": {"name": "EchoRead", "arguments": "{\"path\":\"notes"}},
+              {"index": 1, "id": "call-glob-redacted", "type": "function", "function": {"name": "EchoGlob", "arguments": "{\"pattern\":\"*.md\"}"}}
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-redacted-openai",
+      "object": "chat.completion.chunk",
+      "created": 1700000003,
+      "model": "compatible-model-redacted",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {"index": 0, "function": {"arguments": ".md\"}"}}
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-redacted-openai",
+      "object": "chat.completion.chunk",
+      "created": 1700000004,
+      "model": "compatible-model-redacted",
+      "choices": [
+        {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+      ]
+    },
+    {
+      "id": "chatcmpl-redacted-openai",
+      "object": "chat.completion.chunk",
+      "created": 1700000005,
+      "model": "compatible-model-redacted",
+      "choices": [],
+      "usage": {"prompt_tokens": 21, "completion_tokens": 14, "total_tokens": 35}
+    }
+  ],
+  "expected": {
+    "tool_calls": [
+      {"index": 0, "tool_use_id": "call-read-redacted", "name": "EchoRead", "input": {"path": "notes.md"}},
+      {"index": 1, "tool_use_id": "call-glob-redacted", "name": "EchoGlob", "input": {"pattern": "*.md"}}
+    ],
+    "text": "I will inspect the workspace.",
+    "usage": {
+      "input_tokens": 21,
+      "output_tokens": 14,
+      "cache_read_tokens": 0,
+      "estimated": false
+    },
+    "finish_reason": "tool_calls",
+    "tool_invocations": 0,
+    "protocol_errors": []
+  }
+}
