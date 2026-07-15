@@ -20,6 +20,7 @@ from app.security.context import bind_principal, reset_principal
 
 class _EnabledBackend:
     enabled = True
+    is_embedded = True
     base_url = "http://127.0.0.1:9"
 
     async def get_task(self, _runner_task_id: str) -> dict[str, Any] | None:
@@ -340,7 +341,7 @@ async def test_two_service_instances_start_only_one_bridge_and_close_releases_le
                 raise
             return False
 
-    monkeypatch.setattr("app.agents.service.EchoTaskStreamBridge", _BlockingBridge)
+    monkeypatch.setattr("app.agents.service.EmbeddedTaskStreamBridge", _BlockingBridge)
     first.start_bridge_for_task(rec)
     second.start_bridge_for_task(rec)
     await asyncio.wait_for(entered.wait(), timeout=1.0)
@@ -391,7 +392,7 @@ async def test_heartbeat_loss_cancels_bridge_without_writing_a_terminal_state(
                 raise
             return False
 
-    monkeypatch.setattr("app.agents.service.EchoTaskStreamBridge", _BlockingBridge)
+    monkeypatch.setattr("app.agents.service.EmbeddedTaskStreamBridge", _BlockingBridge)
     service.start_bridge_for_task(rec)
     await asyncio.wait_for(entered.wait(), timeout=1.0)
 
@@ -479,7 +480,7 @@ async def test_transient_heartbeat_exception_is_rescheduled(
             completed.set()
             return True
 
-    monkeypatch.setattr("app.agents.service.EchoTaskStreamBridge", _RetryBridge)
+    monkeypatch.setattr("app.agents.service.EmbeddedTaskStreamBridge", _RetryBridge)
     original_renew = service._lease_store.renew
     renew_calls = 0
 
@@ -549,7 +550,7 @@ async def test_surviving_instance_reaps_expired_bridge_and_completes_projection(
         task_id=rec.task_id,
         runner_task_id=rec.runner_task_id,
     )
-    monkeypatch.setattr("app.agents.service.EchoTaskStreamBridge", harness.build)
+    monkeypatch.setattr("app.agents.service.EmbeddedTaskStreamBridge", harness.build)
     acquire_probe = _AgentTaskAcquireProbe()
     monkeypatch.setattr(
         first._lease_store,
@@ -1176,7 +1177,7 @@ async def test_durable_terminal_tail_completes_bridge_after_crash_before_marker(
         def __init__(self, **_kwargs: Any) -> None:
             raise AssertionError("durable terminal tail should complete without reconnect")
 
-    monkeypatch.setattr("app.agents.service.EchoTaskStreamBridge", _MustNotReconnectBridge)
+    monkeypatch.setattr("app.agents.service.EmbeddedTaskStreamBridge", _MustNotReconnectBridge)
     current = await service.get_task(rec.task_id)
     assert current is not None
     service.start_bridge_for_task(current)

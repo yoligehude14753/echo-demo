@@ -9,7 +9,14 @@
 - B12 输入：`4742d9d4fd42e5bf90e0ba1be7babc4554d438a2`，本地整合 commit：`6f22e75fc5c219ac9bce10635e0ce0fdbdb4ffbb`
 - 外部 `_platforms` 固定 transport：`158844db23cc5884889233fb8bdd7d943f3002f9`
 - 固定 SHA 的 detached 只读语义 worktree：`/tmp/echodesk-b13-platforms`
-- 候选 verdict：`REWORK_REQUIRED`
+- 当前 verdict：`REWORK_REQUIRED`
+
+## 本轮窄修与冲突裁定
+
+- B11→B12 机械 lineage 保持不变；B11 persistence 继续拥有 session/checkpoint durable state，B12 embedded backend 继续拥有 inherited-FD runtime 语义。
+- B10 identity 与 B11 的持久化 identity 冲突由新增 `make_b13_resume_identity` 裁定：`taskId + operationKey` 生成稳定 session id，并把 operation key 补入持久化 grant snapshot；原始 B10 grant 不变，错配 fail closed。
+- Electron 生产接线新增 `factoryData` 只读、secret-free descriptor，经 `resolveFactoryModule → WorkerManager → worker-entry` 进入可执行 `b13-worker-factory.ts`；缺少 deps module、provenance 或完整 `KernelDeps` 均 fail closed。
+- 未恢复任何 HTTP/WebSocket fallback。stale bridge/cancel tests 改为验证 `EmbeddedTaskStreamBridge` 与当前 local terminal/outbox 语义。
 
 ## 三个原 subagent
 
@@ -27,10 +34,13 @@
 | agent-runtime backend source | `pytest -q backend/tests/unit/agent_runtime` → `17 passed` |
 | B06P capability hosts | `pytest -q backend/tests/unit/agent_capabilities` → `69 passed` |
 | AgentTaskService | `pytest -q backend/tests/unit/test_agent_task_service.py` → `24 passed` |
+| Embedded bridge/cancel increment | `pytest -q backend/tests/unit/test_agent_bridge_recovery.py backend/tests/unit/test_agent_cancel_outbox.py::test_resume_submit_race_never_revives_cancelled_task backend/tests/integration/test_echo_task_stream_bridge.py` → `16 passed` |
+| Model-runtime increment | `pytest -q backend/tests/unit/model_runtime` → `38 passed`; authoritative `openai_error.jsonl` hash updated to `d82eee...6c8cd4` |
 | Electron agent-runtime | `node --experimental-strip-types --test desktop/electron/agent-runtime/test/*.test.ts` → `8 passed` |
+| TypeScript toolchain | existing lock-resolved workspace `desktop/node_modules/.bin/tsc`; `agent-kernel`, `desktop`, `electron/agent-runtime` `--noEmit` → pass |
 | Python quality | `ruff check` on B13 glue/tests and resolved `agentos.py` → pass；`compileall` → pass |
 
-这些结果证明了 source-level persistence identity、grant/receipt/provenance、cancel/crash/fail-closed focused contracts，以及 WorkerManager worker crash/restart/identity contracts；它们不等价于完整 fused production turn 的闭合证明。
+这些结果证明了 source-level persistence identity、grant/receipt/provenance、embedded cancel/crash/fail-closed focused contracts，以及 WorkerManager worker crash/restart/identity contracts；它们不等价于 B05M/B06P 真实绑定后的完整 fused production turn 闭合证明。
 
 ## 真实 provider/tool 证据
 
@@ -48,12 +58,10 @@ B06P controlled tool path 在 focused source test 中读取 task-owned 临时文
 
 ## 未闭合项与失败证据
 
-1. `desktop/node_modules/.bin/tsc` 不存在，agent-kernel 与 agent-runtime `tsc --noEmit` 均为 `BLOCKED_TOOLCHAIN`；未安装依赖。
-2. `backend/tests/unit/model_runtime/test_contract_verifier.py::test_fixture_manifest_hashes_and_redaction_are_stable` 失败：现有 fixture hash 与 manifest 不一致（`d82eee...` vs `34a0f7...`）。本 B13 未修改其 fixture。
-3. `backend/tests/unit/test_agent_bridge_recovery.py` 有 5 个旧测试仍 monkeypatch `EchoTaskStreamBridge`，而 B11 accepted source 已切换 `EmbeddedTaskStreamBridge`；未恢复旧 HTTP/WebSocket fallback。
-4. `backend/tests/unit/test_agent_cancel_outbox.py::test_resume_submit_race_never_revives_cancelled_task` 失败：旧测试期望 B12 HTTP backend cancel 调用；B13 production composition 最终必须使用 inherited-FD embedded backend。
-5. 当前 TS `production-factory.ts` 对缺失 `KernelDeps` fail-closed；本次最小接线已让 production composition 按 task 解析 host-owned `resolveFactoryModule` 并交给真实 `WorkerManager`，但仓库中没有可执行的 B05M/B06P worker-local factory module，因此完整 Electron fused turn 仍未闭合。
-6. FactStore health check 返回 exit 2：`echo/_state/events` 不存在；本任务冻结写集未越界修复该治理目录。
+1. `b13-worker-factory.ts` 已形成可执行 worker-local host-owned factory contract，但实际 host module 仍需把 Python B05M `AgentModelGateway`、B06P `CapabilityHostRegistry/receipts`、B11 session port 转成 worker 可用的 TypeScript ports；当前不存在 Python→worker IPC/serialization adapter，因此不能把 deterministic Electron fixture 记为真实 fused production PASS。
+2. `backend/tests/unit/model_runtime/fixtures/fixture_manifest.json` 已按实际 `openai_error.jsonl` 更新为 `d82eee...6c8cd4`，model-runtime 增量 gate 已 `38 passed`。
+3. stale `EchoTaskStreamBridge`/WebSocket 夹具已改为 `EmbeddedTaskStreamBridge` typed events；cancel race 断言已按当前 embedded local terminal/outbox 语义收口，增量 gate `16 passed`。
+4. FactStore health check 返回 exit 2：`echo/_state/events` 不存在；本任务冻结写集未越界修复该治理目录。
 
 ## 禁止项审计
 
@@ -61,4 +69,4 @@ B06P controlled tool path 在 focused source test 中读取 task-owned 临时文
 
 ## Verdict
 
-`REWORK_REQUIRED`：B10→B11→B12 本地整合、B11 persistence identity、B06P receipt、固定 transport 的真实 provider smoke 和大部分源码 focused gates 已有证据；但完整 Electron WorkerManager→production KernelDeps→B05M/B06P fused production turn 仍因 host-owned worker factory/toolchain/stale baseline failures 未闭合。不得据此启动 B14/B15。
+`REWORK_REQUIRED`：B10→B11→B12 本地整合、B11 persistence identity、B06P receipt、固定 transport 的真实 provider smoke、embedded/cancel 增量 gates 与三套 TypeScript `--noEmit` 已有证据；但完整 Electron WorkerManager→worker-local `KernelDeps`→B05M/B06P/B11 fused production turn 仍因缺少真实 Python-to-worker host adapter 未闭合。不得据此启动 B14/B15。

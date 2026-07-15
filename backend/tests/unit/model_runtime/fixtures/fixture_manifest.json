@@ -45,7 +45,7 @@
     },
     {
       "path": "openai_error.jsonl",
-      "sha256": "34a0f7faed8345f3d165a918f0269a1f0a748ed6997ce09c4dffd1aaa25ca01b",
+      "sha256": "d82eee99e53e46993e47db41cf0609e1b05c4518cb6dcd07e3271278596c8cd4",
       "protocol": "openai_chat",
       "source_kind": "official_wire_shape"
     }

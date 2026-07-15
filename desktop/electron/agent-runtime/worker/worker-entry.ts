@@ -13,6 +13,7 @@ type WorkerBootstrapData = {
   manifest: RuntimeManifest;
   factoryModule: string;
   factoryExport: string;
+  factoryData?: import("../../../agent-kernel/core/index.ts").JsonObject;
 };
 
 const bootstrap = workerData as WorkerBootstrapData;
@@ -87,7 +88,11 @@ async function handleOpen(requestId: string, payload: JsonObject, frameIdentity:
   if (!open.taskId || !open.operationKey) throw new Error("open identity is invalid");
   taskId = open.taskId;
   operationKey = open.operationKey;
-  runtime = await factory({ open, identity: bootstrap.manifest.buildIdentity });
+  runtime = await factory({
+    open,
+    identity: bootstrap.manifest.buildIdentity,
+    factoryData: bootstrap.factoryData,
+  });
   channel.send({
     type: "opened",
     requestId,

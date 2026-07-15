@@ -23,6 +23,8 @@ export type WorkerManagerOptions = {
   manifest: RuntimeManifest;
   factoryModule: URL | string;
   factoryExport?: string;
+  /** Task-owned, secret-free data for the worker-local host factory. */
+  factoryData?: JsonObject;
   workerEntry?: URL | string;
   startupTimeoutMs?: number;
 };
@@ -191,6 +193,7 @@ export class WorkerManager {
         manifest: this.options.manifest,
         factoryModule: String(this.options.factoryModule),
         factoryExport: this.options.factoryExport ?? "createWorkerRuntime",
+        factoryData: this.options.factoryData,
       },
     });
     this.worker = worker;

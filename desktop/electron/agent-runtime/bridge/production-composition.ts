@@ -1,6 +1,7 @@
 import type {
   AgentTurnInput,
   KernelEventEnvelope,
+  JsonObject,
   OpenSessionInput,
 } from "../../../agent-kernel/core/index.ts";
 import {
@@ -26,6 +27,11 @@ export type ProductionCompositionOptions = {
     payload: Record<string, unknown>,
     open: OpenSessionInput,
   ) => Promise<URL | string>;
+  /** Resolve only secret-free task binding metadata; secrets stay in the host. */
+  resolveFactoryData?: (
+    payload: Record<string, unknown>,
+    open: OpenSessionInput,
+  ) => Promise<JsonObject>;
   resolveOpenInput: (
     payload: Record<string, unknown>,
   ) => Promise<OpenSessionInput>;
@@ -66,10 +72,14 @@ export function createProductionEmbeddedRuntimeCommandHandler(
       requireIdentity(open, taskId, operationKey);
       const resolvedFactoryModule = options.resolveFactoryModule
         ? await options.resolveFactoryModule(payload, open)
-        : options.factoryModule ?? new URL("./production-factory.ts", import.meta.url);
+        : options.factoryModule ?? new URL("./b13-worker-factory.ts", import.meta.url);
+      const factoryData = options.resolveFactoryData
+        ? await options.resolveFactoryData(payload, open)
+        : undefined;
       const manager = new WorkerManager({
         manifest: options.manifest,
         factoryModule: resolvedFactoryModule,
+        factoryData,
       });
       const session = await manager.open(open);
       active.set(taskId, { manager, session });

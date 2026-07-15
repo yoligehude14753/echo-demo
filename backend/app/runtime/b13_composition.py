@@ -9,6 +9,7 @@ session port per ``OpenSessionInput`` identity.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -39,6 +40,55 @@ from app.runtime.session_checkpoint_persistence import (
 from app.workflows.service import WorkflowService
 
 B13_RUNTIME_FD_ENV = "ECHODESK_RUNTIME_FD"
+
+
+def _b13_session_id(task_id: str, operation_key: str) -> str:
+    if not isinstance(task_id, str) or not task_id:
+        raise PersistenceError("PERSISTENCE_INVALID_INPUT", "task id is required")
+    if not isinstance(operation_key, str) or not operation_key:
+        raise PersistenceError("PERSISTENCE_INVALID_INPUT", "operation key is required")
+    material = f"b13-session-v1\0{task_id}\0{operation_key}".encode("utf-8")
+    return f"session-b13-{hashlib.sha256(material).hexdigest()}"
+
+
+def make_b13_resume_identity(
+    *,
+    task_id: str,
+    operation_key: str,
+    model_config_revision: int,
+    grant_snapshot: Mapping[str, Any],
+    kernel_build_identity: Mapping[str, Any],
+    session_id: str | None = None,
+) -> ResumeIdentity:
+    """Adapt the B10 open identity to the stricter B11 persistence identity.
+
+    B10 carries task identity in ``grant`` but deliberately keeps the
+    operation key at the open-session envelope.  B11 persists both together,
+    so this adapter copies the grant and adds the operation key without
+    mutating the B10 input.  The generated session id is deterministic across
+    worker restart for the same task/operation pair.
+    """
+
+    if not isinstance(grant_snapshot, Mapping):
+        raise PersistenceError("PERSISTENCE_INVALID_INPUT", "grant snapshot is required")
+    grant = dict(grant_snapshot)
+    if grant.get("taskId", grant.get("task_id")) != task_id:
+        raise PersistenceError("CHECKPOINT_TASK_MISMATCH", "grant snapshot is not bound to the task")
+    existing_operation = grant.get("operationKey", grant.get("operation_key"))
+    if existing_operation not in (None, operation_key):
+        raise PersistenceError(
+            "CHECKPOINT_OPERATION_MISMATCH",
+            "grant snapshot is not bound to the operation",
+        )
+    grant["operationKey"] = operation_key
+    return ResumeIdentity(
+        session_id=session_id or _b13_session_id(task_id, operation_key),
+        task_id=task_id,
+        operation_key=operation_key,
+        model_config_revision=model_config_revision,
+        grant_snapshot=grant,
+        kernel_build_identity=dict(kernel_build_identity),
+    )
 
 
 class B13CompositionError(RuntimeError):
@@ -167,6 +217,27 @@ class B13RuntimeComposition:
     def bind_session(self, identity: ResumeIdentity) -> B13SessionCheckpointPort:
         return B13SessionCheckpointPort(self.repositories.session_checkpoints, identity)
 
+    def bind_session_from_runtime(
+        self,
+        *,
+        task_id: str,
+        operation_key: str,
+        model_config_revision: int,
+        grant_snapshot: Mapping[str, Any],
+        kernel_build_identity: Mapping[str, Any],
+        session_id: str | None = None,
+    ) -> B13SessionCheckpointPort:
+        return self.bind_session(
+            make_b13_resume_identity(
+                task_id=task_id,
+                operation_key=operation_key,
+                model_config_revision=model_config_revision,
+                grant_snapshot=grant_snapshot,
+                kernel_build_identity=kernel_build_identity,
+                session_id=session_id,
+            )
+        )
+
 
 async def create_b13_runtime_composition(
     settings: Settings,
@@ -235,4 +306,5 @@ __all__ = [
     "B13RuntimeRepositories",
     "B13SessionCheckpointPort",
     "create_b13_runtime_composition",
+    "make_b13_resume_identity",
 ]

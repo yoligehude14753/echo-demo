@@ -48,6 +48,18 @@ export {
   ProductionDependencyError,
   PRODUCTION_DEPENDENCIES_UNBOUND,
 } from "./bridge/production-factory.ts";
+export {
+  B13_FACTORY_DATA_SCHEMA,
+  B13_HOST_BINDING_UNBOUND,
+  B13HostBindingError,
+  createWorkerRuntime as createB13WorkerRuntime,
+} from "./bridge/b13-worker-factory.ts";
+export type {
+  B13HostBindingProvenance,
+  B13KernelDepsFactoryInput,
+  B13KernelDepsFactoryModule,
+  B13WorkerFactoryData,
+} from "./bridge/b13-worker-factory.ts";
 export type {
   ProductionKernelDependencies,
   ProductionWorkerRuntimeInput,

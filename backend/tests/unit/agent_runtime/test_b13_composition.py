@@ -13,6 +13,7 @@ from app.runtime.b13_composition import (
     B13CompositionError,
     B13SessionCheckpointPort,
     create_b13_runtime_composition,
+    make_b13_resume_identity,
 )
 from app.runtime.session_checkpoint_persistence import (
     PersistenceError,
@@ -234,3 +235,29 @@ async def test_b13_session_port_rejects_build_and_identity_mismatch(tmp_path: Pa
             now=RESUME_NOW,
         )
     assert identity_error.value.code == "CHECKPOINT_IDENTITY_MISMATCH"
+
+
+@pytest.mark.unit
+def test_b13_runtime_identity_adapter_binds_b10_grant_and_stabilizes_session_id() -> None:
+    b10_grant = dict(make_identity().grant_snapshot)
+    b10_grant.pop("operationKey")
+    build = make_identity().kernel_build_identity
+
+    first = make_b13_resume_identity(
+        task_id="task-b13",
+        operation_key="operation-b13",
+        model_config_revision=7,
+        grant_snapshot=b10_grant,
+        kernel_build_identity=build,
+    )
+    second = make_b13_resume_identity(
+        task_id="task-b13",
+        operation_key="operation-b13",
+        model_config_revision=7,
+        grant_snapshot=b10_grant,
+        kernel_build_identity=build,
+    )
+
+    assert first.session_id == second.session_id
+    assert first.grant_snapshot["operationKey"] == "operation-b13"
+    assert "operationKey" not in b10_grant

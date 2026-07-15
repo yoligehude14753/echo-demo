@@ -20,6 +20,8 @@ export interface KernelWorkerRuntime {
 export type KernelWorkerRuntimeFactoryInput = {
   open: OpenSessionInput;
   identity: KernelBuildIdentity;
+  /** JSON-only descriptor resolved by the host-owned factory module. */
+  factoryData?: import("../../../agent-kernel/core/index.ts").JsonObject;
 };
 
 export type KernelWorkerRuntimeFactory = (
