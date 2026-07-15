@@ -37,8 +37,8 @@ from app.api.memory import get_memory_dependency
 from app.api.retrieval import get_rag
 from app.config import Settings, get_settings
 from app.memory import MemoryService
-from app.ports.diarizer import DiarizerPort
 from app.ports.asr import ASRRequestContext, ASRSchedulerPort, ASRTelemetryPort
+from app.ports.diarizer import DiarizerPort
 from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
 from app.schemas.capture import CaptureChunkResult
