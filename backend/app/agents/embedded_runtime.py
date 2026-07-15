@@ -14,7 +14,7 @@ import json
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, TypedDict
@@ -42,6 +42,9 @@ class RuntimeTransport(Protocol):
     async def receive(self) -> RuntimeFrame: ...
 
     async def close(self) -> None: ...
+
+
+HostRequestHandler = Callable[[str, str, str, Mapping[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class EmbeddedRuntimeError(RuntimeError):
@@ -209,7 +212,12 @@ class EmbeddedRuntimeBackend:
     name = "embedded"
     base_url = ""
 
-    def __init__(self, transport: RuntimeTransport | object | None = None) -> None:
+    def __init__(
+        self,
+        transport: RuntimeTransport | object | None = None,
+        *,
+        host_handler: HostRequestHandler | None = None,
+    ) -> None:
         # AgentTaskService historically passed Settings to the runner
         # constructor.  Consume that private compatibility shape only to select
         # the inherited runtime handle; never derive a URL or executable from it.
@@ -224,15 +232,17 @@ class EmbeddedRuntimeBackend:
         self._reader_task: asyncio.Task[None] | None = None
         self._pending: dict[str, asyncio.Future[RuntimeFrame]] = {}
         self._events: dict[str, asyncio.Queue[RuntimeFrame | None]] = {}
+        self._host_handler = host_handler
+        self._host_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
 
     @classmethod
-    def from_environment(cls) -> EmbeddedRuntimeBackend:
+    def from_environment(cls, *, host_handler: HostRequestHandler | None = None) -> EmbeddedRuntimeBackend:
         try:
             transport: RuntimeTransport | None = InheritedDuplexTransport.from_environment()
         except EmbeddedRuntimeError:
             transport = None
-        return cls(transport)
+        return cls(transport, host_handler=host_handler)
 
     @property
     def enabled(self) -> bool:
@@ -273,6 +283,11 @@ class EmbeddedRuntimeBackend:
             while not self._closed:
                 frame = await self._transport.receive()
                 task_id = str(frame.get("taskId") or "")
+                if frame.get("type") == "runtime.host.request":
+                    task = asyncio.create_task(self._handle_host_request(frame), name="embedded-runtime-host-request")
+                    self._host_tasks.add(task)
+                    task.add_done_callback(self._host_tasks.discard)
+                    continue
                 if frame.get("type") == "task.event" and task_id:
                     await self._events.setdefault(task_id, asyncio.Queue()).put(frame)
                     continue
@@ -289,6 +304,55 @@ class EmbeddedRuntimeBackend:
                     future.set_exception(error)
             for queue in self._events.values():
                 await queue.put(None)
+
+    async def _handle_host_request(self, frame: RuntimeFrame) -> None:
+        task_id = str(frame.get("taskId") or "")
+        operation_key = str(frame.get("operationKey") or "")
+        payload = frame.get("payload") or {}
+        request = payload.get("request") if isinstance(payload, dict) else None
+        request = request if isinstance(request, dict) else {}
+        request_id = str(request.get("requestId") or "")
+        response: dict[str, Any] = {
+            "schemaVersion": 1,
+            "type": "b13.host.response",
+            "requestId": request_id,
+            "taskId": task_id,
+            "operationKey": operation_key,
+            "ok": False,
+            "payload": {},
+        }
+        try:
+            if not self._host_handler:
+                raise EmbeddedRuntimeError("B13_HOST_IPC_UNBOUND", "B13 host adapter is not bound")
+            if (
+                request.get("schemaVersion") != 1
+                or request.get("type") != "b13.host.request"
+                or request.get("taskId") != task_id
+                or request.get("operationKey") != operation_key
+                or not isinstance(request.get("method"), str)
+                or not isinstance(request.get("payload"), dict)
+                or not request_id
+            ):
+                raise EmbeddedRuntimeError("B13_HOST_PROTOCOL_INVALID", "host request identity or schema is invalid")
+            response["payload"] = await self._host_handler(
+                task_id,
+                operation_key,
+                str(request["method"]),
+                request["payload"],
+            )
+            response["ok"] = True
+        except Exception as exc:
+            response["errorCode"] = str(getattr(exc, "code", "B13_HOST_REQUEST_FAILED"))
+            response["message"] = str(exc)[:512]
+        if self._transport is not None and self.enabled:
+            await self._transport.send(
+                _frame(
+                    "runtime.host.response",
+                    task_id=task_id,
+                    operation_key=operation_key,
+                    payload={"response": response},
+                )
+            )
 
     async def _request(
         self,
@@ -397,6 +461,11 @@ class EmbeddedRuntimeBackend:
 
     async def aclose(self) -> None:
         self._closed = True
+        for task in tuple(self._host_tasks):
+            task.cancel()
+        if self._host_tasks:
+            await asyncio.gather(*self._host_tasks, return_exceptions=True)
+        self._host_tasks.clear()
         if self._reader_task is not None:
             self._reader_task.cancel()
             await asyncio.gather(self._reader_task, return_exceptions=True)

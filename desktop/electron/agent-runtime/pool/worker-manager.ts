@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Worker } from "node:worker_threads";
+import { MessageChannel, Worker } from "node:worker_threads";
 import { MessagePortChannel, type RuntimeMessagePort } from "../message-port/channel.ts";
 import type { RuntimeFrame, RuntimeFrameType } from "../message-port/envelope.ts";
 import type {
@@ -16,6 +16,14 @@ import {
   type RuntimeManifest,
   validateRuntimeManifest,
 } from "../worker/identity.ts";
+import {
+  B13_HOST_PROTOCOL_VERSION,
+  B13_HOST_RESPONSE_TYPE,
+  validateB13HostRequest,
+  type B13HostRequest,
+  type B13HostRequestHandler,
+  type B13HostPort,
+} from "../bridge/b13-host-ipc.ts";
 
 export type WorkerManagerState = "new" | "starting" | "ready" | "open" | "crashed" | "closed";
 
@@ -25,6 +33,8 @@ export type WorkerManagerOptions = {
   factoryExport?: string;
   /** Task-owned, secret-free data for the worker-local host factory. */
   factoryData?: JsonObject;
+  /** Parent-side bridge to the inherited-FD Python host; absent means fail closed. */
+  hostRequest?: B13HostRequestHandler;
   workerEntry?: URL | string;
   startupTimeoutMs?: number;
 };
@@ -171,6 +181,7 @@ export class WorkerManager {
   private ready: Deferred<RuntimeFrame> | undefined;
   private activeTurn: ActiveTurn | undefined;
   private readonly pending = new Map<string, PendingRequest>();
+  private hostPort: B13HostPort | undefined;
   private openInput: OpenSessionInput | undefined;
   private closing = false;
 
@@ -187,6 +198,10 @@ export class WorkerManager {
     if (this.state === "ready" || this.state === "open") return;
     if (this.state === "closed") throw new WorkerRuntimeError("RUNTIME_UNAVAILABLE", "worker manager is closed");
     this.state = "starting";
+    const hostChannel = new MessageChannel();
+    this.hostPort = hostChannel.port1;
+    hostChannel.port1.on("message", (value) => void this.handleHostRequest(value, hostChannel.port1));
+    hostChannel.port1.on("messageerror", (error) => this.handleCrash(error));
     const worker = new Worker(this.options.workerEntry ?? new URL("../worker/worker-entry.ts", import.meta.url), {
       execArgv: process.execArgv.filter((arg) => arg !== "--input-type=module" && arg !== "--input-type=commonjs"),
       workerData: {
@@ -194,7 +209,9 @@ export class WorkerManager {
         factoryModule: String(this.options.factoryModule),
         factoryExport: this.options.factoryExport ?? "createWorkerRuntime",
         factoryData: this.options.factoryData,
+        hostPort: hostChannel.port2,
       },
+      transferList: [hostChannel.port2],
     });
     this.worker = worker;
     this.channel = new MessagePortChannel(
@@ -353,6 +370,45 @@ export class WorkerManager {
     if (pending) pending.resolve(frame);
   }
 
+  private async handleHostRequest(value: unknown, port: B13HostPort): Promise<void> {
+    let request: B13HostRequest;
+    try {
+      request = validateB13HostRequest(value);
+    } catch (error) {
+      this.handleCrash(error);
+      return;
+    }
+    const response: Record<string, unknown> = {
+      schemaVersion: B13_HOST_PROTOCOL_VERSION,
+      type: B13_HOST_RESPONSE_TYPE,
+      requestId: request.requestId,
+      taskId: request.taskId,
+      operationKey: request.operationKey,
+      ok: false,
+      payload: {},
+    };
+    if (request.taskId !== this.openInput?.taskId || request.operationKey !== this.openInput?.operationKey) {
+      response.errorCode = "B13_HOST_IDENTITY_MISMATCH";
+      response.message = "host request identity does not match the open worker session";
+    } else if (!this.options.hostRequest) {
+      response.errorCode = "B13_HOST_IPC_UNBOUND";
+      response.message = "parent host request bridge is not bound";
+    } else {
+      try {
+        response.payload = await this.options.hostRequest(request);
+        response.ok = true;
+      } catch (error) {
+        response.errorCode = typeof (error as { code?: unknown })?.code === "string" ? String((error as { code: string }).code) : "B13_HOST_REQUEST_FAILED";
+        response.message = error instanceof Error ? error.message : "host request failed";
+      }
+    }
+    try {
+      port.postMessage(response);
+    } catch (error) {
+      this.handleCrash(error);
+    }
+  }
+
   private handleCrash(error: unknown): void {
     if (this.closing || this.state === "closed") return;
     const failure = error instanceof WorkerRuntimeError ? error : new WorkerRuntimeError("RUNTIME_WORKER_CRASHED", error instanceof Error ? error.message : "worker crashed");
@@ -368,8 +424,10 @@ export class WorkerManager {
     this.closing = true;
     const worker = this.worker;
     this.channel?.close();
+    this.hostPort?.close();
     this.worker = undefined;
     this.channel = undefined;
+    this.hostPort = undefined;
     this.ready = undefined;
     this.activeTurn?.queue.fail(new WorkerRuntimeError("RUNTIME_WORKER_CRASHED", "worker stopped"));
     this.activeTurn = undefined;

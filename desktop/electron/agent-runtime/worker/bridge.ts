@@ -9,6 +9,7 @@ import {
   type KernelBuildIdentity,
   type OpenSessionInput,
 } from "../../../agent-kernel/core/index.ts";
+import type { B13HostPort } from "../bridge/b13-host-ipc.ts";
 
 export interface KernelWorkerRuntime {
   runTurn(input: AgentTurnInput): AsyncIterable<KernelEventEnvelope>;
@@ -22,6 +23,7 @@ export type KernelWorkerRuntimeFactoryInput = {
   identity: KernelBuildIdentity;
   /** JSON-only descriptor resolved by the host-owned factory module. */
   factoryData?: import("../../../agent-kernel/core/index.ts").JsonObject;
+  hostPort?: B13HostPort;
 };
 
 export type KernelWorkerRuntimeFactory = (

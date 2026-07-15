@@ -8,12 +8,14 @@ import {
   type RuntimeManifest,
 } from "./identity.ts";
 import type { KernelWorkerRuntime, KernelWorkerRuntimeFactory } from "./bridge.ts";
+import type { B13HostPort } from "../bridge/b13-host-ipc.ts";
 
 type WorkerBootstrapData = {
   manifest: RuntimeManifest;
   factoryModule: string;
   factoryExport: string;
   factoryData?: import("../../../agent-kernel/core/index.ts").JsonObject;
+  hostPort?: B13HostPort;
 };
 
 const bootstrap = workerData as WorkerBootstrapData;
@@ -92,6 +94,7 @@ async function handleOpen(requestId: string, payload: JsonObject, frameIdentity:
     open,
     identity: bootstrap.manifest.buildIdentity,
     factoryData: bootstrap.factoryData,
+    hostPort: bootstrap.hostPort,
   });
   channel.send({
     type: "opened",

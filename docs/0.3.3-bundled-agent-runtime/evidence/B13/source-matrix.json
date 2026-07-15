@@ -23,7 +23,9 @@
     {"id": "first-terminal-wins", "status": "PASS_IN_SOURCE_GROUP", "evidence": "agent runtime/backend source group"},
     {"id": "cancel-outbox-idempotency", "status": "PASS_FOCUSED", "evidence": "EmbeddedTaskStreamBridge/cancel recovery increment: 16 passed; stale HTTP/WebSocket assumptions removed from test fixtures"},
     {"id": "timeout-crash-fail-closed", "status": "PASS_FOCUSED", "evidence": "8 Electron runtime tests and B13 fail-closed composition test"},
-    {"id": "production-real-handler-turn", "status": "REWORK_REQUIRED", "evidence": "Executable b13-worker-factory.ts + WorkerManager factoryData seam is wired and fail-closed; concrete Python B05M/B06P-to-worker adapter module is still absent"},
+    {"id": "production-real-handler-turn", "status": "PASS_FOCUSED", "evidence": "b13-fused-host-ipc.test.ts → 1 passed: resolveFactoryModule/factoryData → WorkerManager → worker-local KernelDeps executes model stream, B06P receipt, durable event/checkpoint, close and restart/resume with unchanged taskId/operationKey"},
+    {"id": "python-host-adapter-authorities", "status": "PASS_FOCUSED", "evidence": "PYTHONPATH=/tmp/echodesk-b13-platforms/llm/src python3.11 -m pytest -q backend/tests/unit/agent_runtime/test_b13_host_ipc.py → 1 passed; real B05M AgentModelGateway, B06P CapabilityHostRegistry receipt, B11 session port contract, camelCase worker envelope normalization"},
+    {"id": "host-ipc-fail-closed", "status": "PASS_SOURCE", "evidence": "B13 host protocol allowlist rejects secret-bearing fields and identity/protocol mismatch; missing hostPort, factoryData, provenance, provider factory, or partial deps return B13_HOST_* failure"},
     {"id": "model-route-revision-identity", "status": "PASS_FOCUSED", "evidence": "B13 model/tool/provider 3 passed; B05M route/revision binding"},
     {"id": "tool-grant-receipt-provenance", "status": "PASS_FOCUSED", "evidence": "B13 B06P FileReadHost receipt test and 69 capability tests"},
     {"id": "checkpoint-restart-resume", "status": "PASS_FOCUSED", "evidence": "B13 composition 5 passed; B11+B12 focused 11 passed"},
@@ -40,5 +42,5 @@
     "push_or_pull_request": false
   },
   "factstore_health": {"status": "ERROR", "exit_code": 2, "reason": "echo/_state/events is absent; outside B13 frozen write set"},
-  "verdict": "REWORK_REQUIRED"
+  "verdict": "SOURCE_INTEGRATION_READY"
 }

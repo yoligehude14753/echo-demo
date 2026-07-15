@@ -9,13 +9,14 @@
 - B12 输入：`4742d9d4fd42e5bf90e0ba1be7babc4554d438a2`，本地整合 commit：`6f22e75fc5c219ac9bce10635e0ce0fdbdb4ffbb`
 - 外部 `_platforms` 固定 transport：`158844db23cc5884889233fb8bdd7d943f3002f9`
 - 固定 SHA 的 detached 只读语义 worktree：`/tmp/echodesk-b13-platforms`
-- 当前 verdict：`REWORK_REQUIRED`
+- 当前 verdict：`SOURCE_INTEGRATION_READY`
 
 ## 本轮窄修与冲突裁定
 
 - B11→B12 机械 lineage 保持不变；B11 persistence 继续拥有 session/checkpoint durable state，B12 embedded backend 继续拥有 inherited-FD runtime 语义。
 - B10 identity 与 B11 的持久化 identity 冲突由新增 `make_b13_resume_identity` 裁定：`taskId + operationKey` 生成稳定 session id，并把 operation key 补入持久化 grant snapshot；原始 B10 grant 不变，错配 fail closed。
 - Electron 生产接线新增 `factoryData` 只读、secret-free descriptor，经 `resolveFactoryModule → WorkerManager → worker-entry` 进入可执行 `b13-worker-factory.ts`；缺少 deps module、provenance 或完整 `KernelDeps` 均 fail closed。
+- 本轮补齐 `b13-host-ipc.ts`、`b13-host-kernel-deps.ts` 与 Python `b13_host_ipc.py`：worker 只持有 `MessagePort` 与 value envelope，Python 侧保留 B05M `AgentModelGateway`、B06P `CapabilityHostRegistry/receipt`、B11 session/checkpoint port；credential handle 只在 host resolver 内使用，不进入 IPC payload。
 - 未恢复任何 HTTP/WebSocket fallback。stale bridge/cancel tests 改为验证 `EmbeddedTaskStreamBridge` 与当前 local terminal/outbox 语义。
 
 ## 三个原 subagent
@@ -39,8 +40,11 @@
 | Electron agent-runtime | `node --experimental-strip-types --test desktop/electron/agent-runtime/test/*.test.ts` → `8 passed` |
 | TypeScript toolchain | existing lock-resolved workspace `desktop/node_modules/.bin/tsc`; `agent-kernel`, `desktop`, `electron/agent-runtime` `--noEmit` → pass |
 | Python quality | `ruff check` on B13 glue/tests and resolved `agentos.py` → pass；`compileall` → pass |
+| B13 Python host adapter | `PYTHONPATH=/tmp/echodesk-b13-platforms/llm/src /opt/homebrew/opt/python@3.11/bin/python3.11 -m pytest -q backend/tests/unit/agent_runtime/test_b13_host_ipc.py` → `1 passed`；覆盖 camelCase worker envelope→B05M request、B06P receipt、B11 session event |
+| B13 Electron fused host IPC | `node --experimental-strip-types --test desktop/electron/agent-runtime/test/b13-fused-host-ipc.test.ts` → `1 passed`；覆盖 worker-local factory、model tool-call、receipt、durable event/checkpoint、restart/resume identity |
+| B13 incremental TypeScript | `desktop/node_modules/.bin/tsc --project desktop/agent-kernel/tsconfig.json --noEmit` 与 `desktop/node_modules/.bin/tsc --project desktop/electron/agent-runtime/tsconfig.json --noEmit` → pass |
 
-这些结果证明了 source-level persistence identity、grant/receipt/provenance、embedded cancel/crash/fail-closed focused contracts，以及 WorkerManager worker crash/restart/identity contracts；它们不等价于 B05M/B06P 真实绑定后的完整 fused production turn 闭合证明。
+既有结果证明了 source-level persistence identity、grant/receipt/provenance、embedded cancel/crash/fail-closed focused contracts，以及 WorkerManager worker crash/restart/identity contracts；本轮新增的 Python host adapter gate 与 Electron fused host IPC gate 才共同闭合了 B05M/B06P/B11 到 worker-local KernelDeps 的 source-level production seam。
 
 ## 真实 provider/tool 证据
 
@@ -56,12 +60,13 @@ PYTHONPATH=/tmp/echodesk-b13-platforms/llm/src \
 
 B06P controlled tool path 在 focused source test 中读取 task-owned 临时文件并产生成功 receipt，覆盖 grant binding、toolUseId、revision 和 receipt result；该路径不是 provider 稳定性测试。
 
-## 未闭合项与失败证据
+## 本轮闭合证据与边界
 
-1. `b13-worker-factory.ts` 已形成可执行 worker-local host-owned factory contract，但实际 host module 仍需把 Python B05M `AgentModelGateway`、B06P `CapabilityHostRegistry/receipts`、B11 session port 转成 worker 可用的 TypeScript ports；当前不存在 Python→worker IPC/serialization adapter，因此不能把 deterministic Electron fixture 记为真实 fused production PASS。
-2. `backend/tests/unit/model_runtime/fixtures/fixture_manifest.json` 已按实际 `openai_error.jsonl` 更新为 `d82eee...6c8cd4`，model-runtime 增量 gate 已 `38 passed`。
-3. stale `EchoTaskStreamBridge`/WebSocket 夹具已改为 `EmbeddedTaskStreamBridge` typed events；cancel race 断言已按当前 embedded local terminal/outbox 语义收口，增量 gate `16 passed`。
-4. FactStore health check 返回 exit 2：`echo/_state/events` 不存在；本任务冻结写集未越界修复该治理目录。
+1. `b13-fused-host-ipc.test.ts` 是真实 EchoAgentKernel/WorkerManager/worker-local KernelDeps 的 deterministic fused turn；它使用同一 B13 host IPC contract 的 bounded parent handler，不能被表述为 live provider 成功。
+2. `test_b13_host_ipc.py` 直接实例化真实 B05M `AgentModelGateway` 与 B06P `CapabilityHostRegistry`，验证 Python authority 对 worker camelCase envelope 的实际适配；生产 `create_b13_runtime_composition(..., provider_factory=...)` 只接受显式 config-store/credential-resolver factory，缺省时保持 `B13_HOST_IPC_UNBOUND` fail closed。
+3. `backend/tests/unit/model_runtime/fixtures/fixture_manifest.json` 已按实际 `openai_error.jsonl` 更新为 `d82eee...6c8cd4`，model-runtime 增量 gate 已 `38 passed`。
+4. stale `EchoTaskStreamBridge`/WebSocket 夹具已改为 `EmbeddedTaskStreamBridge` typed events；cancel race 断言已按当前 embedded local terminal/outbox 语义收口，增量 gate `16 passed`。
+5. FactStore health check 返回 exit 2：`echo/_state/events` 不存在；本任务冻结写集未越界修复该治理目录。
 
 ## 禁止项审计
 
@@ -69,4 +74,4 @@ B06P controlled tool path 在 focused source test 中读取 task-owned 临时文
 
 ## Verdict
 
-`REWORK_REQUIRED`：B10→B11→B12 本地整合、B11 persistence identity、B06P receipt、固定 transport 的真实 provider smoke、embedded/cancel 增量 gates 与三套 TypeScript `--noEmit` 已有证据；但完整 Electron WorkerManager→worker-local `KernelDeps`→B05M/B06P/B11 fused production turn 仍因缺少真实 Python-to-worker host adapter 未闭合。不得据此启动 B14/B15。
+`SOURCE_INTEGRATION_READY`：B10→B11→B12 本地整合、B11 persistence identity、真实 Python B05M/B06P host adapter、同协议 Electron WorkerManager→worker-local `KernelDeps` fused turn、receipt/durable checkpoint/restart-resume、embedded/cancel 增量 gates、固定 transport 的 bounded live provider smoke 与三套 TypeScript `--noEmit` 均有证据。仍不包含 package/sign/notarize/install/cross-platform acceptance；不得把本轮 deterministic fused turn 当作 provider stability 或 live provider fused PASS。

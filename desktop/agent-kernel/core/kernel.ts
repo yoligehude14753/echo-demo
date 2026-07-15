@@ -503,7 +503,12 @@ class KernelSessionImpl implements KernelSession {
                 const result = tool.toModelResult(output);
                 if (utf8Bytes(result.content) > this.budget.maxToolOutputBytes) throw new KernelError("TOOL_OUTPUT_LIMIT", "tool output budget exceeded");
                 toolResults.push({ toolUseId: toolState.toolUseId, result });
-                yield await this.emitEvent(turn, "agent.tool.completed", { toolUseId: toolState.toolUseId, isError: result.isError, output: result.content });
+                yield await this.emitEvent(turn, "agent.tool.completed", {
+                  toolUseId: toolState.toolUseId,
+                  isError: result.isError,
+                  output: result.content,
+                  ...(result.receipt ? { receipt: result.receipt } : {}),
+                });
               } catch (error) {
                 if (turn.cancelReason || isAbortError(error)) throw error;
                 const normalized = normalizeKernelError(error, "TOOL_EXECUTION_FAILED", "tool execution failed");

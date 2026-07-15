@@ -31,6 +31,7 @@ from app.agents.embedded_runtime import (
 from app.agents.service import AgentTaskService
 from app.config import Settings
 from app.runtime.artifact_skill_projection import ArtifactSkillProjection
+from app.runtime.b13_host_ipc import B13HostAdapter, ProviderFactory
 from app.runtime.session_checkpoint_persistence import (
     JsonObject,
     PersistenceError,
@@ -47,7 +48,7 @@ def _b13_session_id(task_id: str, operation_key: str) -> str:
         raise PersistenceError("PERSISTENCE_INVALID_INPUT", "task id is required")
     if not isinstance(operation_key, str) or not operation_key:
         raise PersistenceError("PERSISTENCE_INVALID_INPUT", "operation key is required")
-    material = f"b13-session-v1\0{task_id}\0{operation_key}".encode("utf-8")
+    material = f"b13-session-v1\0{task_id}\0{operation_key}".encode()
     return f"session-b13-{hashlib.sha256(material).hexdigest()}"
 
 
@@ -148,6 +149,24 @@ class B13SessionCheckpointPort:
             raise PersistenceError("SESSION_NOT_FOUND", "session does not exist")
         return int(row[0])
 
+    async def append_durable_event(
+        self,
+        *,
+        event_type: str,
+        payload: Mapping[str, Any],
+        occurred_at: str,
+    ) -> int:
+        current = await self.current_durable_event_seq()
+        persisted = await self.repository.append_event(
+            self.identity.session_id,
+            event_seq=current + 1,
+            event_type=event_type,
+            payload=payload,
+            durable_event_seq=current + 1,
+            occurred_at=occurred_at,
+        )
+        return persisted.durable_event_seq
+
     async def save_checkpoint(self, checkpoint: Mapping[str, Any]) -> str:
         return await self.repository.save_checkpoint(self.identity.session_id, checkpoint)
 
@@ -246,6 +265,7 @@ async def create_b13_runtime_composition(
     workflow: WorkflowService | None = None,
     holder_id: str | None = None,
     transport: RuntimeTransport | None = None,
+    provider_factory: ProviderFactory | None = None,
 ) -> B13RuntimeComposition:
     """Build the concrete B13 runtime composition.
 
@@ -263,34 +283,50 @@ async def create_b13_runtime_composition(
             f"{B13_RUNTIME_FD_ENV} is required for the production runtime",
         )
 
-    if transport is None:
-        # B13 owns the production runtime choice explicitly.  The historical
-        # service constructor is compatibility glue only and must not select a
-        # configured HTTP backend for this path.
-        backend = EmbeddedRuntimeBackend.from_environment()
-    else:
-        backend = EmbeddedRuntimeBackend(transport)
-    if not backend.enabled:
-        raise B13CompositionError(
-            "EMBEDDED_RUNTIME_UNAVAILABLE",
-            "inherited embedded runtime transport is unavailable",
-        )
-
     service = AgentTaskService(
         settings,
         event_bus,
         workflow=workflow,
         holder_id=holder_id,
     )
+    repositories = B13RuntimeRepositories(
+        session_checkpoints=SessionCheckpointRepository(settings.db_path),
+        artifact_skill_projection=ArtifactSkillProjection(settings),
+    )
+
+    def session_factory(identity_data: Mapping[str, Any], _kernel_identity: Mapping[str, Any]) -> B13SessionCheckpointPort:
+        return B13SessionCheckpointPort(
+            repositories.session_checkpoints,
+            make_b13_resume_identity(
+                task_id=str(identity_data["taskId"]),
+                operation_key=str(identity_data["operationKey"]),
+                model_config_revision=int(identity_data["modelConfigRevision"]),
+                grant_snapshot=dict(identity_data["grantSnapshot"]),
+                kernel_build_identity=dict(identity_data["kernelBuildIdentity"]),
+            ),
+        )
+
+    host_handler = None
+    if provider_factory is not None:
+        host_handler = B13HostAdapter(provider_factory, session_factory).handle
+    if transport is None:
+        # B13 owns the production runtime choice explicitly.  The historical
+        # service constructor is compatibility glue only and must not select a
+        # configured HTTP backend for this path.
+        backend = EmbeddedRuntimeBackend.from_environment(host_handler=host_handler)
+    else:
+        backend = EmbeddedRuntimeBackend(transport, host_handler=host_handler)
+    if not backend.enabled:
+        raise B13CompositionError(
+            "EMBEDDED_RUNTIME_UNAVAILABLE",
+            "inherited embedded runtime transport is unavailable",
+        )
+
     original_backend = service.backend
     service.backend = backend
     if original_backend is not backend and isinstance(original_backend, EmbeddedRuntimeBackend):
         await original_backend.aclose()
 
-    repositories = B13RuntimeRepositories(
-        session_checkpoints=SessionCheckpointRepository(settings.db_path),
-        artifact_skill_projection=ArtifactSkillProjection(settings),
-    )
     service.start_recovery_loop()
     return B13RuntimeComposition(
         service=service,

@@ -16,6 +16,7 @@ export type ModelPurpose =
 export type CanonicalToolResult = {
   content: string;
   isError: boolean;
+  receipt?: JsonObject;
 };
 
 export type CanonicalContentBlock =

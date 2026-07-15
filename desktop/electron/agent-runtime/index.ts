@@ -60,6 +60,21 @@ export type {
   B13KernelDepsFactoryModule,
   B13WorkerFactoryData,
 } from "./bridge/b13-worker-factory.ts";
+export {
+  B13HostClient,
+  B13_HOST_PROTOCOL_VERSION,
+  B13_HOST_REQUEST_TYPE,
+  B13_HOST_RESPONSE_TYPE,
+  validateB13HostRequest,
+  validateB13HostResponse,
+} from "./bridge/b13-host-ipc.ts";
+export type {
+  B13HostMethod,
+  B13HostPort,
+  B13HostRequest,
+  B13HostRequestHandler,
+  B13HostResponse,
+} from "./bridge/b13-host-ipc.ts";
 export type {
   ProductionKernelDependencies,
   ProductionWorkerRuntimeInput,

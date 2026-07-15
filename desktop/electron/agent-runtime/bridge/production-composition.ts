@@ -14,6 +14,7 @@ import {
   type WorkerRuntimeSession,
 } from "../pool/worker-manager.ts";
 import type { RuntimeManifest } from "../worker/identity.ts";
+import type { B13HostRequest } from "./b13-host-ipc.ts";
 
 export type ProductionCompositionOptions = {
   manifest: RuntimeManifest;
@@ -62,6 +63,7 @@ function requireIdentity(
 
 export function createProductionEmbeddedRuntimeCommandHandler(
   options: ProductionCompositionOptions,
+  hostRequest?: (request: B13HostRequest) => Promise<JsonObject>,
 ): EmbeddedRuntimeCommandHandler {
   const active = new Map<string, ActiveRuntime>();
 
@@ -75,11 +77,15 @@ export function createProductionEmbeddedRuntimeCommandHandler(
         : options.factoryModule ?? new URL("./b13-worker-factory.ts", import.meta.url);
       const factoryData = options.resolveFactoryData
         ? await options.resolveFactoryData(payload, open)
-        : undefined;
+        : {
+            schemaVersion: 1,
+            depsModule: new URL("./b13-host-kernel-deps.ts", import.meta.url).toString(),
+          };
       const manager = new WorkerManager({
         manifest: options.manifest,
         factoryModule: resolvedFactoryModule,
         factoryData,
+        hostRequest,
       });
       const session = await manager.open(open);
       active.set(taskId, { manager, session });
@@ -125,10 +131,14 @@ export function createProductionEmbeddedRuntimePort(
   options: ProductionCompositionOptions,
 ): EmbeddedRuntimePortServer {
   if (!nonce) throw new Error("PRODUCTION_RUNTIME_NONCE_REQUIRED");
-  const server = new EmbeddedRuntimePortServer(
+  let server: EmbeddedRuntimePortServer | undefined;
+  server = new EmbeddedRuntimePortServer(
     duplex,
     nonce,
-    createProductionEmbeddedRuntimeCommandHandler(options),
+    createProductionEmbeddedRuntimeCommandHandler(options, (request) => {
+      if (!server) return Promise.reject(new Error("B13_HOST_IPC_UNAVAILABLE"));
+      return server.requestHost(request);
+    }),
   );
   server.start();
   return server;

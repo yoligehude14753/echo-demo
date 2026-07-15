@@ -9,6 +9,7 @@ import {
   type ProductionKernelDependencies,
 } from "./production-factory.ts";
 import type { KernelWorkerRuntime } from "../worker/bridge.ts";
+import type { B13HostPort } from "./b13-host-ipc.ts";
 
 export const B13_FACTORY_DATA_SCHEMA = 1 as const;
 export const B13_HOST_BINDING_UNBOUND = "B13_HOST_BINDING_UNBOUND" as const;
@@ -23,6 +24,7 @@ export type B13HostBindingProvenance = {
 export type B13KernelDepsFactoryInput = {
   open: OpenSessionInput;
   identity: KernelBuildIdentity;
+  hostPort?: B13HostPort;
 };
 
 export type B13KernelDepsFactoryModule = {
@@ -78,13 +80,14 @@ export async function createWorkerRuntime(input: {
   open: OpenSessionInput;
   identity: KernelBuildIdentity;
   factoryData?: JsonObject;
+  hostPort?: B13HostPort;
 }): Promise<KernelWorkerRuntime> {
   const data = requireFactoryData(input.factoryData);
   const loaded = await import(data.depsModule) as Partial<B13KernelDepsFactoryModule>;
   if (typeof loaded.createKernelDeps !== "function") {
     throw new B13HostBindingError("B13_HOST_BINDING_UNBOUND: createKernelDeps");
   }
-  const result = await loaded.createKernelDeps({ open: input.open, identity: input.identity });
+  const result = await loaded.createKernelDeps({ open: input.open, identity: input.identity, hostPort: input.hostPort });
   if (!result || typeof result !== "object" || !result.deps) {
     throw new B13HostBindingError("B13_HOST_BINDING_UNBOUND: deps");
   }
