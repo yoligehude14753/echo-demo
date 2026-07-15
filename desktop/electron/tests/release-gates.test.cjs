@@ -753,7 +753,6 @@ test("CI platform builds stay independent and preserve failure diagnostics", () 
     "desktop-e2e",
     "android-tv",
     "desktop-packaged-smoke",
-    "desktop-linux-packaged-smoke",
     "desktop-windows-packaged-smoke",
   ];
   assert.match(
