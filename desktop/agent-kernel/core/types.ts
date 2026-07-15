@@ -383,6 +383,7 @@ export type KernelCheckpoint = {
   operationKey: string;
   modelConfigRevision: number;
   grantRevision: number;
+  grantSnapshot: GrantSnapshot;
   lastDurableEventSeq: number;
   messages: CanonicalMessage[];
   compactState: CompactState;

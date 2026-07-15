@@ -32,6 +32,7 @@ export async function verifyCheckpointChecksum(checkpoint: KernelCheckpoint): Pr
     operationKey: checkpoint.operationKey,
     modelConfigRevision: checkpoint.modelConfigRevision,
     grantRevision: checkpoint.grantRevision,
+    grantSnapshot: checkpoint.grantSnapshot,
     lastDurableEventSeq: checkpoint.lastDurableEventSeq,
     messages: checkpoint.messages,
     compactState: checkpoint.compactState,

@@ -263,6 +263,7 @@ class KernelSessionImpl implements KernelSession {
       operationKey: this.operationKey,
       modelConfigRevision: this.modelSnapshot.revision,
       grantRevision: this.grant.revision,
+      grantSnapshot: structuredClone(this.grant),
       lastDurableEventSeq: await this.deps.session.currentDurableEventSeq(),
       messages: this.history.map((message) => ({ ...message, content: message.content.map((block) => ({ ...block })) })),
       compactState: {
@@ -593,6 +594,7 @@ export class EchoAgentKernel {
       if (input.resume.operationKey !== input.operationKey) throw new KernelError("CHECKPOINT_OPERATION_MISMATCH", "checkpoint operation identity does not match");
       if (input.resume.modelConfigRevision !== input.model.revision) throw new KernelError("CHECKPOINT_MODEL_REVISION_MISSING", "checkpoint model revision does not match");
       if (input.resume.grantRevision !== input.grant.revision) throw new KernelError("GRANT_REVISION_MISMATCH", "checkpoint grant revision does not match");
+      if (!sameValue(input.resume.grantSnapshot, input.grant)) throw new KernelError("GRANT_REVISION_MISMATCH", "checkpoint grant snapshot does not match");
       if (input.resume.lastDurableEventSeq > await deps.session.currentDurableEventSeq()) throw new KernelError("CHECKPOINT_EVENT_SEQ_AHEAD", "checkpoint durable sequence is ahead of the session");
       await verifyCheckpointChecksum(input.resume);
     }
