@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     # 关联与抽取只允许快速模型短时参与；失败后使用确定性排序/静默跳过抽取，
     # 绝不让 memory 阻塞 Echo AI 主回答。
     memory_small_model_timeout_s: float = Field(default=2.0, ge=1.0, le=3.0)
+    # 抽取需要读取完整的结构化 JSON；与 recall 的短路预算分离，但仍保持
+    # 明确且有界的单次请求 deadline，避免完整抽取因 2s association deadline 被截断。
+    memory_extraction_timeout_s: float = Field(default=8.0, ge=3.0, le=30.0)
     memory_small_model_candidate_limit: int = Field(default=8, ge=4, le=36)
     memory_working_ttl_s: int = Field(default=30 * 60, ge=60, le=24 * 60 * 60)
     memory_working_max_items: int = Field(default=24, ge=4, le=200)
