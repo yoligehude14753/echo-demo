@@ -6,6 +6,11 @@ const path = require("node:path");
 const test = require("node:test");
 
 const main = readFileSync(path.resolve(__dirname, "../main.cjs"), "utf8");
+const preload = readFileSync(path.resolve(__dirname, "../preload.cjs"), "utf8");
+const modelRuntimeContract = readFileSync(
+  path.resolve(__dirname, "../model-runtime-contract.cjs"),
+  "utf8",
+);
 const preview = readFileSync(
   path.resolve(__dirname, "../../src/components/ArtifactPreviewModal.tsx"),
   "utf8",
@@ -64,6 +69,17 @@ test("every renderer-callable IPC channel starts with a trusted-origin guard", (
     const guard = body.indexOf("assertTrustedIpcOrigin(event)");
     assert.ok(guard >= 0 && guard < 300, `${channel} must guard before work`);
   }
+});
+
+test("model runtime identity/fallback bridges are read-only subscriptions", () => {
+  assert.match(preload, /getModelRuntimeIdentity:\s*\(\) => ipcRenderer\.invoke\("model-runtime:get-identity"\)/);
+  assert.match(preload, /onModelRuntimeIdentity:[\s\S]*model-runtime:identity/);
+  assert.match(preload, /onModelRuntimeFallback:[\s\S]*model-runtime:fallback/);
+  assert.doesNotMatch(preload, /publishModelRuntimeIdentity/);
+  assert.doesNotMatch(preload, /setModelRuntimeIdentity/);
+  assert.match(main, /modelRuntimeIpc\.register\(\)/);
+  assert.match(modelRuntimeContract, /ipcMain\.handle\("model-runtime:get-identity"/);
+  assert.match(modelRuntimeContract, /assertTrustedIpcOrigin\(event\)/);
 });
 
 test("workspace picker exposes local paths only outside public mode", () => {

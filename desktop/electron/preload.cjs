@@ -9,6 +9,17 @@ contextBridge.exposeInMainWorld("echo", {
   getBackendHost: () => ipcRenderer.invoke("echo:backend-host"),
   getBackendRouting: () => ipcRenderer.invoke("echo:backend-routing"),
   getBackendContract: () => ipcRenderer.invoke("echo:backend-contract"),
+  getModelRuntimeIdentity: () => ipcRenderer.invoke("model-runtime:get-identity"),
+  onModelRuntimeIdentity: (cb) => {
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on("model-runtime:identity", handler);
+    return () => ipcRenderer.removeListener("model-runtime:identity", handler);
+  },
+  onModelRuntimeFallback: (cb) => {
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on("model-runtime:fallback", handler);
+    return () => ipcRenderer.removeListener("model-runtime:fallback", handler);
+  },
   getShareBackendHost: () => ipcRenderer.invoke("echo:share-backend-host"),
   loadLocalLegacyHistory: () =>
     ipcRenderer.invoke("echo:load-local-legacy-history"),

@@ -97,6 +97,7 @@ const {
   expectedBackendContract,
   probeBackendContract,
 } = require("./backend-contract.cjs");
+const { createModelRuntimeIpcSurface } = require("./model-runtime-contract.cjs");
 
 // Electron 要求 privileged scheme 在 app ready 前完成声明。打包态只从该
 // secure/standard origin 加载静态资源，不再使用具有 opaque Origin 的 file://。
@@ -2757,6 +2758,20 @@ ipcMain.handle("echo:backend-host", (event) => {
   assertTrustedIpcOrigin(event);
   return BACKEND_HOST;
 });
+
+// B05M model identity is published by the kernel/gateway owner and projected
+// read-only to Settings. Renderer input can never become model identity.
+const modelRuntimeIpc = createModelRuntimeIpcSurface({
+  ipcMain,
+  assertTrustedIpcOrigin,
+  sendToRenderers(channel, payload) {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send(channel, payload);
+    }
+  },
+});
+modelRuntimeIpc.register();
+
 ipcMain.handle("echo:backend-routing", (event) => {
   assertTrustedIpcOrigin(event);
   return backendRoutingSnapshot();

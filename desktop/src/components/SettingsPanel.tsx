@@ -61,6 +61,12 @@ import {
 } from "@/runtime";
 import { apiTransport } from "@/session";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
+import {
+  parseModelRuntimeFallback,
+  parseModelRuntimeIdentity,
+  type ModelRuntimeFallback,
+  type ModelRuntimeIdentity,
+} from "@/modelRuntimeContract";
 
 interface DataDirBreakdown {
   db: number;
@@ -301,6 +307,8 @@ export default function SettingsPanel({
   const [resetBusy, setResetBusy] = useState(false);
   const [remote, setRemote] = useState<RemoteSettingsResponse | null>(null);
   const [remoteBusy, setRemoteBusy] = useState(false);
+  const [modelIdentity, setModelIdentity] = useState<ModelRuntimeIdentity | null>(null);
+  const [modelFallback, setModelFallback] = useState<ModelRuntimeFallback | null>(null);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const [adminUnavailable, setAdminUnavailable] = useState(false);
@@ -329,6 +337,7 @@ export default function SettingsPanel({
   const workspaceAddDirRef = useRef<HTMLAnchorElement | HTMLButtonElement | null>(null);
   const dataDirGenerationRef = useRef<number | null>(null);
   const remoteGenerationRef = useRef<number | null>(null);
+  const modelIdentityGenerationRef = useRef<number | null>(null);
   const workspaceGenerationRef = useRef<number | null>(null);
   const hubGenerationRef = useRef<number | null>(null);
   const backendBaseDraftGenerationRef = useRef<number | null>(null);
@@ -351,6 +360,7 @@ export default function SettingsPanel({
     settingsConfirmDestroyersRef.current.clear();
     dataDirGenerationRef.current = null;
     remoteGenerationRef.current = null;
+    modelIdentityGenerationRef.current = null;
     workspaceGenerationRef.current = null;
     hubGenerationRef.current = null;
     pendingPrivateBackendGenerationRef.current = null;
@@ -362,6 +372,8 @@ export default function SettingsPanel({
     setDiagBusy(false);
     setResetBusy(false);
     setRemote(null);
+    setModelIdentity(null);
+    setModelFallback(null);
     setRemoteBusy(false);
     setNeedsRestart(false);
     setRestartBusy(false);
@@ -472,6 +484,28 @@ export default function SettingsPanel({
     }
   }, [form, hostAdminAvailable, isCurrent, renderedOriginGeneration]);
 
+  const refreshModelRuntimeIdentity = useCallback(async () => {
+    const generation = renderedOriginGeneration;
+    if (!isCurrent(generation)) return;
+    modelIdentityGenerationRef.current = null;
+    setModelIdentity(null);
+    if (!window.echo?.getModelRuntimeIdentity) return;
+    try {
+      const raw = await window.echo.getModelRuntimeIdentity();
+      if (!isCurrent(generation)) return;
+      if (raw === null) return;
+      const identity = parseModelRuntimeIdentity(raw);
+      if (!isCurrent(generation)) return;
+      modelIdentityGenerationRef.current = generation;
+      setModelIdentity(identity);
+    } catch (error) {
+      if (!isCurrent(generation)) return;
+      console.error("[settings] model runtime identity rejected", error);
+      modelIdentityGenerationRef.current = null;
+      setModelIdentity(null);
+    }
+  }, [isCurrent, renderedOriginGeneration]);
+
   const refreshWorkspace = useCallback(async () => {
     const generation = renderedOriginGeneration;
     if (!isCurrent(generation)) return;
@@ -560,6 +594,7 @@ export default function SettingsPanel({
         setRemote(null);
         setBackendVersion(null);
       }
+      void refreshModelRuntimeIdentity();
       if (workspaceDirectoryAvailable) void refreshWorkspace();
       void refreshHub();
       const nextBackendBase =
@@ -576,6 +611,7 @@ export default function SettingsPanel({
     renderedOriginGeneration,
     refreshDataDir,
     refreshRemote,
+    refreshModelRuntimeIdentity,
     refreshWorkspace,
     refreshHub,
     refreshBackendVersion,
@@ -613,6 +649,36 @@ export default function SettingsPanel({
       unsubscribe();
     };
   }, [backendOriginRevision, isCurrent, open, renderedOriginGeneration]);
+
+  useEffect(() => {
+    if (!open || !window.echo) return undefined;
+    const generation = renderedOriginGeneration;
+    let alive = true;
+    const unsubscribeIdentity = window.echo.onModelRuntimeIdentity?.((raw) => {
+      if (!alive || !isCurrent(generation)) return;
+      try {
+        setModelIdentity(parseModelRuntimeIdentity(raw));
+        modelIdentityGenerationRef.current = generation;
+      } catch (error) {
+        console.error("[settings] pushed model runtime identity rejected", error);
+        modelIdentityGenerationRef.current = null;
+        setModelIdentity(null);
+      }
+    });
+    const unsubscribeFallback = window.echo.onModelRuntimeFallback?.((raw) => {
+      if (!alive || !isCurrent(generation)) return;
+      try {
+        setModelFallback(parseModelRuntimeFallback(raw));
+      } catch (error) {
+        console.error("[settings] pushed model runtime fallback rejected", error);
+      }
+    });
+    return () => {
+      alive = false;
+      unsubscribeIdentity?.();
+      unsubscribeFallback?.();
+    };
+  }, [isCurrent, open, renderedOriginGeneration]);
 
   useEffect(() => {
     if (!open) {
@@ -1326,6 +1392,49 @@ export default function SettingsPanel({
           <div className="flex items-center gap-2 mb-2 text-ink-700 font-medium">
             <Server className="w-4 h-4" />
             <span>模型服务配置</span>
+          </div>
+          <div
+            className="bg-paper-150 rounded-md p-3 mb-3 space-y-2"
+            data-testid="model-runtime-identity"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-[12px]">Kernel 模型身份</span>
+              {modelIdentity ? (
+                <Tag color="green" className="mr-0">已绑定</Tag>
+              ) : (
+                <Tag color="orange" className="mr-0">不可验证</Tag>
+              )}
+            </div>
+            {modelIdentity ? (
+              <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+                <span className="text-ink-400">模型</span>
+                <span className="font-mono text-ink-700 break-all" data-testid="model-runtime-model">
+                  {modelIdentity.model}
+                </span>
+                <span className="text-ink-400">路由</span>
+                <span className="font-mono text-ink-700" data-testid="model-runtime-route">
+                  {modelIdentity.routeId}
+                </span>
+                <span className="text-ink-400">Revision</span>
+                <span className="font-mono text-ink-700" data-testid="model-runtime-revision">
+                  {modelIdentity.revision}
+                </span>
+                <span className="text-ink-400">协议</span>
+                <span className="font-mono text-ink-700">{modelIdentity.protocol}</span>
+              </div>
+            ) : (
+              <div className="text-[11px] text-ink-500 leading-relaxed">
+                Kernel identity 尚未提供或合同校验失败；不会从设置字段猜测当前模型。
+              </div>
+            )}
+            {modelFallback && (
+              <div
+                className="border-t border-paper-300 pt-2 text-[11px] text-orange-700"
+                data-testid="model-runtime-fallback"
+              >
+                已发生显式 fallback：{modelFallback.fromRouteId} → {modelFallback.toRouteId}（{modelFallback.reason}）
+              </div>
+            )}
           </div>
           <Form
             form={form}

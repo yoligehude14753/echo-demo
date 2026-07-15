@@ -7,6 +7,10 @@
 
 import backendConfig from "../backend.config.json";
 import desktopReleaseAssetPatterns from "../electron/release-asset-patterns.json";
+import type {
+  ModelRuntimeFallback,
+  ModelRuntimeIdentity,
+} from "./modelRuntimeContract";
 
 // SupervisorStatus 的具体形状定义在 hooks/useBackendHealth.ts；
 // 这里用宽松 unknown 让 runtime.ts 不强耦合 health hook，且 hook 内做窄化
@@ -110,6 +114,9 @@ interface ElectronEchoBridge {
   getBackendHost?: () => Promise<string>;
   getBackendRouting?: () => Promise<ElectronBackendRouting>;
   getBackendContract?: () => Promise<ElectronBackendBuildContract | null>;
+  getModelRuntimeIdentity?: () => Promise<ModelRuntimeIdentity | null>;
+  onModelRuntimeIdentity?: (cb: (identity: ModelRuntimeIdentity) => void) => () => void;
+  onModelRuntimeFallback?: (cb: (fallback: ModelRuntimeFallback) => void) => () => void;
   getShareBackendHost?: () => Promise<string>;
   loadLocalLegacyHistory?: () => Promise<unknown | null>;
   ensurePublicSession?: () => Promise<ElectronPublicSession | null>;

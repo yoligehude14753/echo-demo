@@ -1,0 +1,61 @@
+{
+  "schema": "b05m-c-settings-contract-evidence.v1",
+  "batch": "B05M",
+  "subagent": "settings-and-contract-verification",
+  "subagents_total": 3,
+  "base_sha": "b5d6943163481762f824bc169dab639a473a3ef7",
+  "compatibility_evidence_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "f04_evidence_sha": "db57ddefc95c494c3785659db89befe6d8cf9c94",
+  "scope": [
+    "desktop/electron/model-runtime-contract.cjs",
+    "desktop/electron/main.cjs IPC registration glue",
+    "desktop/electron/preload.cjs read-only bridge",
+    "desktop/src/modelRuntimeContract.ts",
+    "desktop/src/components/SettingsPanel.tsx identity/fallback projection",
+    "B05M contract/fixture tests"
+  ],
+  "contract": {
+    "public_agent_model_request_event_v1_unchanged": true,
+    "private_envelope_fields": [
+      "schemaVersion",
+      "taskId",
+      "operationKey",
+      "requestId",
+      "configRevision",
+      "routeId"
+    ],
+    "unknown_missing_mismatched_fail_closed": true,
+    "credential_handle_or_base_url_in_ui_projection": false
+  },
+  "proof": {
+    "settings_kernel_identity": "snapshot public identity projection is round-tripped and compared field-for-field in test_b05m_settings_contract.py; renderer consumes the trusted IPC projection only",
+    "fallback_visibility": "agent.model.fallback is strictly validated and rendered with fromRouteId, toRouteId, and reason",
+    "secret_redaction": "identity projection excludes credentialHandle/baseUrl; fixture and IPC tests assert no secret-bearing fields",
+    "ipc_origin": "model-runtime:get-identity is guarded by assertTrustedIpcOrigin; renderer has no publish/set bridge"
+  },
+  "focused_commands": [
+    {
+      "command": "node --test desktop/electron/tests/model-runtime-contract.test.cjs desktop/electron/tests/ipc-security-policy.test.cjs",
+      "result": "13 passed"
+    },
+    {
+      "command": "/opt/homebrew/bin/pytest -q backend/tests/unit/model_runtime/test_b05m_settings_contract.py",
+      "result": "4 passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "BLOCKED_TOOLCHAIN: tsc not found; no dependency installation performed"
+    }
+  ],
+  "fixture_sha256": {
+    "backend/tests/unit/model_runtime/fixtures/b05m_settings_contract.json": "a6461d973c652ed009f7006d1432a0c9d9e21055a49c63bafca60cc97eeddec6",
+    "desktop/electron/model-runtime-contract.cjs": "88267fddcc26def7c521631a137e9850107566ae0136dde56aac0275ec5bd6af",
+    "desktop/src/modelRuntimeContract.ts": "52d9f890cec6af10bcd6b0e4ecb7d85a9a960e19aa88f9cd051169b6b7d0e70c"
+  },
+  "external_state": {
+    "provider_credentials": "EXTERNAL_CREDENTIAL_PENDING",
+    "provider_probe": "NOT_RUN: no usable credential supplied",
+    "risk": "real provider source certification remains B13-owned; local contract gate is green"
+  },
+  "verdict": "ACCEPTED_CANDIDATE"
+}
