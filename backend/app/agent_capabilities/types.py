@@ -141,6 +141,20 @@ class WorkspaceCapability(FrozenModel):
     _validate_values = field_validator("root_id", "canonical_path", "identity")(_non_blank)
 
 
+class VerifiedWorkspaceRoot(FrozenModel):
+    """Host-produced, value-only proof for one grant workspace root."""
+
+    root_id: str = Field(min_length=1, max_length=256)
+    canonical_path: str = Field(min_length=1, max_length=4096)
+    observed_identity: str = Field(min_length=1, max_length=256)
+    reparse_identity: str = Field(min_length=1, max_length=256)
+    reparse_safe: bool = True
+
+    _validate_values = field_validator(
+        "root_id", "canonical_path", "observed_identity", "reparse_identity"
+    )(_non_blank)
+
+
 class CommandCapability(FrozenModel):
     mode: Literal["deny", "workspace", "explicit"] = "deny"
     allowed_executables: tuple[str, ...] = ()
@@ -243,6 +257,16 @@ class GrantSnapshot(GrantInput):
     @classmethod
     def from_input(cls, value: GrantInput) -> GrantSnapshot:
         return cls.model_validate(value.model_dump())
+
+
+class VerifiedWorkspaceBinding(FrozenModel):
+    """Pure host evidence used to bind an unbound grant to real roots."""
+
+    workspace_id: str = Field(min_length=1, max_length=256)
+    workspace_identity: str = Field(min_length=1, max_length=256)
+    roots: tuple[VerifiedWorkspaceRoot, ...] = ()
+
+    _validate_values = field_validator("workspace_id", "workspace_identity")(_non_blank)
 
 
 class InvocationBinding(FrozenModel):
@@ -379,6 +403,8 @@ __all__ = [
     "SkillCapability",
     "SkillRequest",
     "SkillScope",
+    "VerifiedWorkspaceBinding",
+    "VerifiedWorkspaceRoot",
     "WorkspaceCapability",
     "WorkspaceIdentity",
 ]

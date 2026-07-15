@@ -1,6 +1,6 @@
 # B06P main-task evidence
 
-状态：`BLOCKED_CONTRACT_CHANGE_REQUESTED`
+状态：`ACCEPTED_CANDIDATE`
 
 ## 基线、边界与 subagent
 
@@ -29,8 +29,17 @@
 - shared glue：未知 host、binding mismatch、revision mismatch、取消幂等和 revoke token 均 fail closed；receipt 只保存 identity、revision、code、digest/counter 和 redacted metadata。
 - unsupported scan：P0 hooks、global config、HOME/PATH discovery、runtime npm/pnpm/yarn/pip install 均只返回 `UNSUPPORTED_P0_FAIL_CLOSED`；没有运行时安装、PATH/HOME 搜索或任意 hook 执行。
 
-## 阻塞与裁定
+## 窄范围 rework 与最终裁定
 
-A 发现 B03 compiler 生成的 workspace identity 为 `host-verification-required` placeholder，无法安全匹配真实 root `dev:ino` identity。A 没有修改 B03 事实源，也没有猜测放行；真实 file allow path 保持 fail closed。因此本批只能裁定 `BLOCKED_CONTRACT_CHANGE_REQUESTED`，不能升级为 `ACCEPTED_CANDIDATE`，直到 B03 提供 host-bound identity/revalidation 合同。
+A 初始实现发现 B03 compiler 生成的 workspace identity 为 `host-verification-required` placeholder，无法安全匹配真实 root `dev:ino` identity；该初始结论为 `BLOCKED_CONTRACT_CHANGE_REQUESTED`。
+
+总控随后裁定不升级 public GrantSnapshot v1，并允许本 B06P 做窄范围 rework。新增：
+
+- `VerifiedWorkspaceRoot` / `VerifiedWorkspaceBinding`：只承载 host 已观测的 workspace/root identity 与 reparse proof；
+- `bind_verified_workspace()`：纯函数，精确匹配 workspace_id、完整 root_id/canonical_path 集、observed/reparse identity，拒绝 placeholder、缺失、多余、重复、错配和已绑定 grant；
+- 新 snapshot 保留 task/operation/revision/policy rights，grantId 绑定原 grantId 与完整 verified identity digest；
+- `test_workspace_binding.py`：7 passed，包含 binder contract matrix 与一个真实 file allow/outside deny affected case。
+
+本次 rework 未做 OS I/O、未引入第二权限事实源，未重跑 command/network/skill suites；最终裁定为 `ACCEPTED_CANDIDATE`。
 
 未运行全量回归、F04 replay、安装态矩阵或正式 package；未 push、PR 或发布。

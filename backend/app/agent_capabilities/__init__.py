@@ -3,6 +3,7 @@
 from .audit import AuditEvent, CapabilityAuditEvent, audit_event_from_decision
 from .catalog import (
     CAPABILITY_CATALOG,
+    bind_verified_workspace,
     capability_spec,
     catalog,
     evaluate_capability,
@@ -36,6 +37,8 @@ from .types import (
     PermissionRight,
     SkillCapability,
     SkillRequest,
+    VerifiedWorkspaceBinding,
+    VerifiedWorkspaceRoot,
     WorkspaceCapability,
     WorkspaceIdentity,
 )
@@ -69,9 +72,12 @@ __all__ = [
     "PermissionRight",
     "SkillCapability",
     "SkillRequest",
+    "VerifiedWorkspaceBinding",
+    "VerifiedWorkspaceRoot",
     "WorkspaceCapability",
     "WorkspaceIdentity",
     "audit_event_from_decision",
+    "bind_verified_workspace",
     "capability_spec",
     "catalog",
     "compile_grant",

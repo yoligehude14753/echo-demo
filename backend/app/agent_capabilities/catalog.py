@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import ipaddress
+import json
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -22,6 +24,8 @@ from .types import (
     GrantSnapshot,
     PermissionRight,
     SkillRequest,
+    VerifiedWorkspaceBinding,
+    WorkspaceCapability,
 )
 
 
@@ -131,6 +135,87 @@ def freeze_grant(value: GrantInput) -> GrantSnapshot:
     """Freeze authority once; later policy changes require a new snapshot."""
 
     return GrantSnapshot.from_input(value)
+
+
+_UNBOUND_WORKSPACE_IDENTITIES = frozenset({"policy-facts", "host-verification-required"})
+_UNBOUND_ROOT_IDENTITY = "host-verification-required"
+
+
+def bind_verified_workspace(
+    grant: GrantSnapshot,
+    evidence: VerifiedWorkspaceBinding,
+) -> GrantSnapshot:
+    """Bind an unbound B03 snapshot to exact host-observed workspace evidence.
+
+    This function is deliberately pure.  A file/process host obtains the
+    evidence; this boundary only checks that it exactly matches the grant's
+    root set and that no placeholder or ambiguous identity is accepted.
+    """
+
+    if grant.workspace_identity.identity not in _UNBOUND_WORKSPACE_IDENTITIES:
+        raise ValueError("grant is already host-bound")
+    if evidence.workspace_id != grant.workspace_identity.workspace_id:
+        raise ValueError("workspace_id does not match grant")
+    if not evidence.workspace_identity or evidence.workspace_identity in _UNBOUND_WORKSPACE_IDENTITIES:
+        raise ValueError("workspace identity is missing or still a placeholder")
+
+    expected = {(root.root_id, root.canonical_path): root for root in grant.workspace_roots}
+    observed = {(root.root_id, root.canonical_path): root for root in evidence.roots}
+    if len(observed) != len(evidence.roots) or expected.keys() != observed.keys():
+        raise ValueError("verified root set does not exactly match grant")
+    if any(root.identity != _UNBOUND_ROOT_IDENTITY for root in grant.workspace_roots):
+        raise ValueError("grant root identity is not an unbound placeholder")
+
+    bound_roots: list[WorkspaceCapability] = []
+    for key, original in expected.items():
+        verified = observed[key]
+        if not verified.reparse_safe:
+            raise ValueError("workspace root reparse proof is unsafe")
+        if verified.observed_identity != verified.reparse_identity:
+            raise ValueError("workspace root identity changed across reparse verification")
+        if not verified.observed_identity or verified.observed_identity in _UNBOUND_WORKSPACE_IDENTITIES:
+            raise ValueError("workspace root identity is missing or a placeholder")
+        bound_roots.append(
+            WorkspaceCapability(
+                root_id=original.root_id,
+                canonical_path=original.canonical_path,
+                identity=verified.observed_identity,
+                rights=original.rights,
+            )
+        )
+
+    digest_payload = {
+        "grant_id": grant.grant_id,
+        "workspace_id": evidence.workspace_id,
+        "workspace_identity": evidence.workspace_identity,
+        "roots": [
+            {
+                "root_id": item.root_id,
+                "canonical_path": item.canonical_path,
+                "observed_identity": item.observed_identity,
+                "reparse_identity": item.reparse_identity,
+            }
+            for item in evidence.roots
+        ],
+    }
+    identity_digest = hashlib.sha256(
+        json.dumps(digest_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    suffix = f":verified:{identity_digest}"
+    grant_id = f"{grant.grant_id[: 256 - len(suffix)]}{suffix}"
+    return GrantSnapshot.model_validate(
+        {
+            **grant.model_dump(),
+            "grant_id": grant_id,
+            "workspace_identity": {
+                "workspace_id": evidence.workspace_id,
+                "identity": evidence.workspace_identity,
+            },
+            "workspace_roots": tuple(bound_roots),
+        }
+    )
 
 
 def evaluate_capability(  # noqa: PLR0911
