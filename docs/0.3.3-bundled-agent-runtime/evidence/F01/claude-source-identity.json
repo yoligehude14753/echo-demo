@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "source_root": "/Users/yoligehude/Downloads/src",
+  "declared_version": "unknown",
+  "claude_code_version": "unknown",
+  "source_revision": "unknown",
+  "source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "manifest_sha256": "b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "manifest_path": "docs/0.3.3-bundled-agent-runtime/evidence/F01/claude-source-manifest.sha256",
+  "identity_method": {
+    "file_count": 1913,
+    "regular_files_only": true,
+    "symlink_count": 0,
+    "ordering": "bytewise sorted absolute paths, emitted as relative paths",
+    "file_digest": "SHA-256",
+    "root_digest": "SHA-256 of manifest bytes"
+  },
+  "file_types": {
+    "ts": 1332,
+    "tsx": 552,
+    "js": 18,
+    "ds_store": 11
+  },
+  "entrypoints": [
+    {
+      "path": "query.ts",
+      "sha256": "74e0ce0d86cfd453add8dc1d15ccb6311b02964b8321e3721b8e71fbd87252ce"
+    },
+    {
+      "path": "QueryEngine.ts",
+      "sha256": "7df34a6a6d106927403d49e3405dfaf70da37cae5b644b658ebaf0b877988af6"
+    },
+    {
+      "path": "Tool.ts",
+      "sha256": "29d555ab8e50de9fb005264b5334aba870f1da472198e14d0b3ab0bf86d7c49c"
+    }
+  ],
+  "provenance_checks": {
+    "git_directory": "absent",
+    "package_json": "absent",
+    "package_lock": "absent",
+    "pnpm_lock": "absent",
+    "yarn_lock": "absent",
+    "bun_lock": "absent",
+    "tsconfig": "absent",
+    "bundler_manifest": "absent",
+    "macro_version": "unresolved",
+    "macro_declaration": "utils/permissions/filesystem.ts:51 declares MACRO.VERSION but does not assign it"
+  },
+  "version_policy": "unknown is intentional: no verifiable release version or commit was found; do not infer from directory dates, source comments, or API header dates",
+  "observed_at": "2026-07-15T14:30:00+08:00"
+}
