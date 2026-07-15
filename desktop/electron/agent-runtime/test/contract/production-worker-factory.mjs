@@ -12,7 +12,7 @@ const modelSnapshot = {
   model: "b04k-test-model",
   capabilities: {
     streaming: true,
-    toolUse: false,
+    toolUse: true,
     parallelToolUse: false,
     toolChoice: false,
     systemMessages: true,
@@ -41,6 +41,28 @@ const ids = {
 };
 
 function makeDeps() {
+  const compactContextMessages = [
+    {
+      messageId: "fixture-tool-assistant-old",
+      role: "assistant",
+      content: [{ type: "tool_use", toolUseId: "fixture-tool-old", name: "Read", input: {} }],
+    },
+    {
+      messageId: "fixture-tool-result-old",
+      role: "user",
+      content: [{ type: "tool_result", toolUseId: "fixture-tool-old", result: { content: "old tool result".repeat(20), isError: false } }],
+    },
+    {
+      messageId: "fixture-tool-assistant-recent",
+      role: "assistant",
+      content: [{ type: "tool_use", toolUseId: "fixture-tool-recent", name: "Read", input: {} }],
+    },
+    {
+      messageId: "fixture-tool-result-recent",
+      role: "user",
+      content: [{ type: "tool_result", toolUseId: "fixture-tool-recent", result: { content: "recent tool result", isError: false } }],
+    },
+  ];
   const model = {
     snapshot: () => modelSnapshot,
     async countTokens() {
@@ -69,7 +91,7 @@ function makeDeps() {
   };
   const context = {
     async buildModelContext(_input, history) {
-      return { system: [{ type: "text", text: "test" }], messages: [...history], tools: [] };
+      return { system: [{ type: "text", text: "test" }], messages: [...compactContextMessages, ...history], tools: [] };
     },
   };
   return {

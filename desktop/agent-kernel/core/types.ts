@@ -310,6 +310,11 @@ export type KernelEventType =
   | "agent.turn.started"
   | "agent.message.delta"
   | "agent.message.completed"
+  | "agent.summary.updated"
+  | "agent.compaction.started"
+  | "agent.compaction.completed"
+  | "agent.compaction.failed"
+  | "agent.checkpoint.saved"
   | "agent.tool.requested"
   | "agent.tool.started"
   | "agent.tool.completed"
@@ -358,9 +363,10 @@ export type CancelReason = "user" | "timeout" | "provider_error" | "grant_revoke
 
 export type CompactState = {
   schemaVersion: 1;
-  strategy: "none";
+  strategy: "none" | "microcompact";
   summaryHash: string | null;
   messageCountAtBoundary: number;
+  clearedToolUseIds?: string[];
 };
 
 export type BudgetState = {

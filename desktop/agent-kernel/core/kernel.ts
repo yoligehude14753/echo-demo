@@ -6,6 +6,7 @@ import {
   normalizeKernelError,
 } from "./errors.ts";
 import { assertSameBuildIdentity, validateBuildIdentity } from "./identity.ts";
+import { runContextTurn } from "../src/context/turn.ts";
 import type {
   AgentModelEvent,
   AgentModelRequest,
@@ -207,6 +208,7 @@ class KernelSessionImpl implements KernelSession {
   private readonly deps: KernelDeps;
   private readonly modelSnapshot: ModelRuntimeSnapshot;
   private readonly grant: GrantSnapshot;
+  private compactState: import("./types.ts").CompactState;
 
   constructor(
     taskId: string,
@@ -224,6 +226,18 @@ class KernelSessionImpl implements KernelSession {
     this.budget = Object.freeze({ ...budget });
     this.deps = deps;
     this.history = resume?.messages.map((message) => ({ ...message, content: message.content.map((block) => ({ ...block })) })) ?? [];
+    this.compactState = resume?.compactState
+      ? {
+          ...resume.compactState,
+          clearedToolUseIds: [...(resume.compactState.clearedToolUseIds ?? [])],
+        }
+      : {
+          schemaVersion: 1,
+          strategy: "none",
+          summaryHash: null,
+          messageCountAtBoundary: this.history.length,
+          clearedToolUseIds: [],
+        };
   }
 
   runTurn(input: AgentTurnInput): AsyncIterable<KernelEventEnvelope> {
@@ -251,7 +265,11 @@ class KernelSessionImpl implements KernelSession {
       grantRevision: this.grant.revision,
       lastDurableEventSeq: await this.deps.session.currentDurableEventSeq(),
       messages: this.history.map((message) => ({ ...message, content: message.content.map((block) => ({ ...block })) })),
-      compactState: { schemaVersion: 1 as const, strategy: "none" as const, summaryHash: null, messageCountAtBoundary: this.history.length },
+      compactState: {
+        ...this.compactState,
+        clearedToolUseIds: [...(this.compactState.clearedToolUseIds ?? [])],
+        messageCountAtBoundary: this.history.length,
+      },
       budgetState: this.activeTurn?.budget ?? { turnsUsed: 0, toolCallsUsed: 0, modelInputTokens: 0, modelOutputTokens: 0 },
       createdAt: this.deps.clock.now(),
     };
@@ -310,6 +328,58 @@ class KernelSessionImpl implements KernelSession {
     };
     await this.deps.events.audit(entry);
     await this.deps.telemetry.record("kernel.audit", { kind, turnId: turn?.turnId ?? "session" });
+  }
+
+  private async applyContextPipeline(
+    turn: TurnState,
+    modelContextMessages: readonly CanonicalMessage[],
+    summaryText: string,
+  ): Promise<KernelEventEnvelope[]> {
+    const started = await this.emitEvent(turn, "agent.compaction.started", {
+      messageCount: modelContextMessages.length,
+    });
+    try {
+      const knownMessageIds = new Set(modelContextMessages.map((message) => message.messageId));
+      const appendedMessages = this.history.filter((message) => !knownMessageIds.has(message.messageId));
+      const result = await runContextTurn({
+        messages: [...modelContextMessages, ...appendedMessages],
+        keepRecentToolResults: 1,
+        rawSummary: `<summary>${summaryText || "Turn completed."}</summary>`,
+        recentMessagesPreserved: true,
+        checkpointId: this.deps.ids.next("checkpoint"),
+        taskId: this.taskId,
+        operationKey: this.operationKey,
+        modelConfigRevision: this.modelSnapshot.revision,
+        grantRevision: this.grant.revision,
+        lastDurableEventSeq: await this.deps.session.currentDurableEventSeq(),
+        budgetState: { ...turn.budget },
+        createdAt: this.deps.clock.now(),
+      });
+      this.history.splice(0, this.history.length, ...result.messages);
+      this.compactState = {
+        schemaVersion: 1,
+        strategy: result.checkpoint.compactState.strategy,
+        summaryHash: result.summary.summaryHash,
+        messageCountAtBoundary: result.checkpoint.compactState.messageCountAtBoundary,
+        clearedToolUseIds: [...result.checkpoint.compactState.clearedToolUseIds],
+      };
+      const completed = await this.emitEvent(turn, "agent.compaction.completed", {
+        strategy: this.compactState.strategy,
+        clearedToolUseIds: this.compactState.clearedToolUseIds,
+        summaryHash: this.compactState.summaryHash,
+      });
+      const summary = await this.emitEvent(turn, "agent.summary.updated", {
+        summary: result.summary.summary,
+        summaryHash: result.summary.summaryHash,
+        recentMessagesPreserved: result.summary.recentMessagesPreserved,
+      });
+      return [started, completed, summary];
+    } catch (error) {
+      await this.emitEvent(turn, "agent.compaction.failed", {
+        reason: error instanceof Error ? error.message : "context pipeline failed",
+      });
+      throw error;
+    }
   }
 
   private async terminalEvent(
@@ -467,9 +537,11 @@ class KernelSessionImpl implements KernelSession {
             });
           }
           if (text) yield await this.emitEvent(turn, "agent.message.completed", { text });
+          for (const event of await this.applyContextPipeline(turn, context.messages, text)) yield event;
           continue;
         }
         if (text) yield await this.emitEvent(turn, "agent.message.completed", { text });
+        for (const event of await this.applyContextPipeline(turn, context.messages, text)) yield event;
         const completed = await this.terminalEvent(turn, "succeeded", "agent.turn.completed", "END_TURN", { stopReason: "end_turn" });
         if (completed) yield completed;
         return;

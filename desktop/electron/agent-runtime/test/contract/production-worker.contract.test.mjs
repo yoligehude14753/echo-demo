@@ -92,7 +92,7 @@ test("production worker executes compact-summary-checkpoint and same-PID restart
     limits: {
       wallSeconds: 60,
       maxTurns: 4,
-      maxToolCalls: 0,
+      maxToolCalls: 1,
       maxModelInputTokens: 4096,
       maxModelOutputTokens: 128,
       maxToolOutputBytes: 1024,
