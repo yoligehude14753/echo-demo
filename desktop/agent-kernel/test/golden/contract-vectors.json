@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "contract": "echo-agent-kernel/v1",
+  "compatibility_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "f04_evidence_commit": "db57ddefc95c494c3785659db89befe6d8cf9c94",
+  "input_base_sha": "1904cb8c49502d64c53ff163d6e04b88d396c751",
+  "source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "manifest_root_sha256": "b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "contract_versions": {
+    "kernel_api": 1,
+    "worker_ipc": 1,
+    "model_runtime": 1,
+    "grant_snapshot": 1,
+    "checkpoint": 1,
+    "event": 1
+  },
+  "excluded_source_gaps": [
+    "services/compact/reactiveCompact.js",
+    "services/contextCollapse/index.js",
+    "services/compact/snipCompact.js",
+    "utils/taskSummary.js"
+  ],
+  "golden_vectors": [
+    {
+      "id": "budget-continuation",
+      "operation": "budget",
+      "input": {
+        "budget": 100,
+        "globalTurnTokens": 50,
+        "now": 1000
+      },
+      "expected": {
+        "action": "continue",
+        "continuationCount": 1,
+        "pct": 50,
+        "turnTokens": 50
+      }
+    },
+    {
+      "id": "budget-threshold-stop",
+      "operation": "budget",
+      "input": {
+        "budget": 100,
+        "globalTurnTokens": 90,
+        "now": 1000
+      },
+      "expected": {
+        "action": "stop",
+        "completionEvent": null
+      }
+    },
+    {
+      "id": "micro-compact-preserves-tool-correlation",
+      "operation": "micro_compact",
+      "input": {
+        "messages": [
+          {
+            "messageId": "m-tool-use-1",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "toolUseId": "tool-1",
+                "name": "Read",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "messageId": "m-tool-result",
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "toolUseId": "tool-1",
+                "result": {
+                  "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                  "isError": false
+                }
+              }
+            ]
+          },
+          {
+            "messageId": "m-tool-use-2",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "toolUseId": "tool-2",
+                "name": "Read",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "messageId": "m-tool-result-2",
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "toolUseId": "tool-2",
+                "result": {
+                  "content": "recent",
+                  "isError": false
+                }
+              }
+            ]
+          }
+        ],
+        "keepRecent": 1
+      },
+      "expected": {
+        "decision": "compact",
+        "changed": true,
+        "clearedToolUseIds": ["tool-1"],
+        "clearedContent": "[Old tool result content cleared]",
+        "tokensSaved": 22
+      }
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "status": "EXCLUDED_SOURCE_GAP",
+  "sourceSnapshotId": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "entries": [
+    {
+      "name": "reactiveCompact",
+      "status": "EXCLUDED_SOURCE_GAP",
+      "decision": "exclude",
+      "reason": "Explicit task constraint; no production implementation guessed or imported."
+    },
+    {
+      "name": "contextCollapse",
+      "status": "EXCLUDED_SOURCE_GAP",
+      "decision": "exclude",
+      "reason": "Explicit task constraint; no production implementation guessed or imported."
+    },
+    {
+      "name": "snipCompact",
+      "status": "EXCLUDED_SOURCE_GAP",
+      "decision": "exclude",
+      "reason": "Explicit task constraint; no production implementation guessed or imported."
+    },
+    {
+      "name": "taskSummary",
+      "status": "EXCLUDED_SOURCE_GAP",
+      "decision": "exclude",
+      "reason": "Explicit task constraint; no production implementation guessed or imported."
+    }
+  ],
+  "not_claimed": [
+    "cached microcompact cache-editing path",
+    "real provider summary generation",
+    "durable checkpoint repository",
+    "Electron worker lifecycle or same-PID runtime proof"
+  ]
+}
