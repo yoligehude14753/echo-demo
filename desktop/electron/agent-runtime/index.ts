@@ -34,3 +34,21 @@ export {
 export type { FramedRuntimeMessage, RuntimeDuplex } from "./bridge/framed-runtime.ts";
 export { EmbeddedRuntimePortServer } from "./bridge/embedded-runtime-server.ts";
 export type { EmbeddedRuntimeCommandHandler } from "./bridge/embedded-runtime-server.ts";
+export {
+  createProductionEmbeddedRuntimeCommandHandler,
+  createProductionEmbeddedRuntimePort,
+} from "./bridge/production-composition.ts";
+export type {
+  ProductionCompositionOptions,
+  ProductionRuntimeEvent,
+} from "./bridge/production-composition.ts";
+export {
+  createProductionWorkerRuntime,
+  createWorkerRuntime,
+  ProductionDependencyError,
+  PRODUCTION_DEPENDENCIES_UNBOUND,
+} from "./bridge/production-factory.ts";
+export type {
+  ProductionKernelDependencies,
+  ProductionWorkerRuntimeInput,
+} from "./bridge/production-factory.ts";
