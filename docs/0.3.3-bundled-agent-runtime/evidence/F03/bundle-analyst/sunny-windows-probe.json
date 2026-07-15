@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "platform": "windows",
+  "target": "Sunny",
+  "status": "RUNTIME_BLOCKED",
+  "host_fingerprint": null,
+  "reason": "本轮用户禁止派生 subagent，且当前会话没有 Sunny Windows 连接/执行入口；不能伪造真实 Windows probe。",
+  "checkout_head": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "static_path_model": {
+    "drive_with_space_and_cjk": "PASS_WITHOUT_WINDOWS_RUNTIME",
+    "unc_path": "PASS_WITHOUT_WINDOWS_RUNTIME",
+    "long_path": "BLOCKED_UNVERIFIED",
+    "nsis_program_files_layout": "BLOCKED_UNVERIFIED"
+  },
+  "required_but_unexecuted": [
+    "Electron embedded process.versions and worker fingerprint",
+    "worker ESM/.mjs/.js specifier load",
+    "asar/unpacked resource readback",
+    "native addon ABI/load",
+    "optional dependency closure",
+    "WASM/binary/resource readback",
+    "HOME/PATH/global Claude/global Node isolation",
+    "Program Files/NSIS installed path",
+    "UNC and Windows long path behavior"
+  ],
+  "formal_install": "NOT_RUN",
+  "verdict": "RUNTIME_BLOCKED"
+}

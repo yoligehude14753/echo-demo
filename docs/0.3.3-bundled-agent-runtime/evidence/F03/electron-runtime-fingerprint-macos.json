@@ -1,0 +1,60 @@
+{
+  "schema": "f03-electron-runtime-fingerprint.v1",
+  "capturedAt": "2026-07-15T06:30:14.759Z",
+  "runtimeScope": "electron_embedded_main_and_worker_threads",
+  "source": {
+    "electron": "43.1.0",
+    "probe": "experiments/fusion-compatibility/F03/runtime-profiler/electron-runtime-probe.cjs",
+    "command": "env -i HOME=<task-owned> PATH=/usr/bin:/bin Electron.app/Contents/MacOS/Electron --no-sandbox --disable-gpu --user-data-dir=<task-owned> electron-runtime-probe.cjs",
+    "repoHead": "492053c53441793c220f3b8e1dd231f1faea6e42"
+  },
+  "environment": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "homeIsolation": "task-owned",
+    "path": "/usr/bin:/bin"
+  },
+  "main": {
+    "pid": 55998,
+    "ppid": 55977,
+    "type": "browser",
+    "execPathBasename": "Electron",
+    "isMainThread": true,
+    "threadId": 0,
+    "versions": {
+      "electron": "43.1.0",
+      "node": "24.18.0",
+      "v8": "15.0.245.13-electron.0",
+      "modules": "148",
+      "napi": "10",
+      "chrome": "150.0.7871.47"
+    },
+    "nodeModuleVersion": 148
+  },
+  "worker": {
+    "pid": 55998,
+    "ppid": 55977,
+    "type": null,
+    "execPathBasename": "Electron",
+    "isMainThread": false,
+    "threadId": 1,
+    "versions": {
+      "electron": "43.1.0",
+      "node": "24.18.0",
+      "v8": "15.0.245.13-electron.0",
+      "modules": "148",
+      "napi": "10",
+      "chrome": "150.0.7871.47"
+    },
+    "nodeModuleVersion": 148
+  },
+  "checks": {
+    "electronVersion": true,
+    "workerSamePid": true,
+    "workerIsWorker": true,
+    "workerThreadId": true,
+    "workerSameExecPath": true,
+    "mainWorkerAbiEqual": true
+  },
+  "status": "passed"
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "platform": "macos",
+  "host": {
+    "kernel": "Darwin 25.5.0 arm64",
+    "product": "macOS 26.5.1",
+    "arch": "arm64"
+  },
+  "checkout_head": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "electron_embedded_runtime": {
+    "status": "unobserved",
+    "reason": "desktop/node_modules 不存在，未安装 Electron binary；未用 shell Node 代替。"
+  },
+  "probe_results": {
+    "package_config_readonly": "PASS",
+    "package_lock_resolution_readonly": "PASS",
+    "asar_layout_dry_run": "PASS_WITHOUT_ARTIFACT",
+    "space_and_cjk_path_model": "PASS_WITHOUT_ARTIFACT",
+    "home_path_isolation_model": "PASS_WITHOUT_WORKER",
+    "worker_load": "BLOCKED",
+    "native_addon_readback": "BLOCKED",
+    "wasm_resource_readback": "BLOCKED",
+    "signed_app_resource_readback": "BLOCKED",
+    "formal_build": "NOT_RUN",
+    "formal_install": "NOT_RUN"
+  },
+  "observations": [
+    "当前 electron-builder files 不包含 agent-runtime worker/manifest。",
+    "当前 extraResources 只定义 backend executable。",
+    "当前未定义 asarUnpack。"
+  ],
+  "verdict": "RUNTIME_BLOCKED"
+}

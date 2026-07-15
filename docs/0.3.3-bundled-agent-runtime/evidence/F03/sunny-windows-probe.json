@@ -1,0 +1,25 @@
+{
+  "schema": "f03-sunny-windows-probe.v2",
+  "target": "win-sunny-friend",
+  "host": {"platform": "win32", "arch": "x64", "nodeShell": "24.16.0"},
+  "embeddedElectron": {
+    "version": "43.1.0",
+    "node": "24.18.0",
+    "v8": "15.0.245.13-electron.0",
+    "modules": "148",
+    "napi": "10",
+    "workerThreads": {"samePid": true, "isMainThread": false, "threadId": 1, "abiEqual": true},
+    "evidence": "electron-runtime-fingerprint-sunny-windows.json"
+  },
+  "isolation": {"home": "passed", "path": "passed", "globalClaudeAndNodeHints": "passed"},
+  "paths": {
+    "driveShape": "passed",
+    "uncShape": {"status": "passed", "filesystemReadback": "not_configured"},
+    "longPathShape": {"status": "passed", "length": 342, "filesystemReadback": "not_run"},
+    "macosPosix": "not_run_host_mismatch"
+  },
+  "transport": {"ssh": "win-sunny-friend", "probeUpload": "task-owned-temp-only", "macNodeModulesOrCacheShared": false},
+  "formalBuildOrInstall": false,
+  "productStarted": false,
+  "status": "embedded_runtime_passed_layout_and_filesystem_gates_incomplete"
+}

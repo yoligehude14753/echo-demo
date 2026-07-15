@@ -1,0 +1,23 @@
+{
+  "schema": "f03-macos-probe.v2",
+  "host": {"platform": "darwin", "arch": "arm64", "nodeShell": "24.3.0"},
+  "embeddedElectron": {
+    "version": "43.1.0",
+    "node": "24.18.0",
+    "v8": "15.0.245.13-electron.0",
+    "modules": "148",
+    "napi": "10",
+    "workerThreads": {"samePid": true, "isMainThread": false, "threadId": 1, "abiEqual": true},
+    "evidence": "electron-runtime-fingerprint-macos.json"
+  },
+  "isolation": {"home": "passed", "path": "passed", "globalClaudeAndNodeHints": "passed"},
+  "paths": {
+    "spacesAndChinese": "passed",
+    "longPathShape": {"status": "passed", "length": 334, "filesystemReadback": "not_run"},
+    "windowsDrive": "not_run_host_mismatch",
+    "windowsUNC": "not_run_host_mismatch"
+  },
+  "formalBuildOrInstall": false,
+  "productStarted": false,
+  "status": "embedded_runtime_passed_layout_and_filesystem_gates_incomplete"
+}

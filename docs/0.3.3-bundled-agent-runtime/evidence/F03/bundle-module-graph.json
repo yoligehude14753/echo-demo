@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "f03-static-module-graph-plus-runtime-probe",
+  "complete_closure": false,
+  "repo_head": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "planned_parent": "705c7392c6475bcb2036eee4636c6ee1b5ddb8cd",
+  "echo_entry": "desktop/electron/main.cjs",
+  "claude_source": {
+    "root": "/Users/yoligehude/Downloads/src",
+    "entry": "QueryEngine.ts",
+    "manifest": null,
+    "lockfile": null,
+    "observed_edges": [
+      "bun:bundle",
+      "@anthropic-ai/sdk/resources/messages.mjs",
+      "src/bootstrap/state.js",
+      "./query.js",
+      "dynamic require('src/components/MessageSelector.js')",
+      "feature-gated require/import"
+    ],
+    "unknown_critical": [
+      "production import closure",
+      "exact SDK/optional versions",
+      "macro values/generated files",
+      "native/WASM/resource list and hashes"
+    ]
+  },
+  "echo_packaging": {
+    "files": ["dist/**", "electron/**", "!electron/tests/**", "backend.config.json", "package.json"],
+    "extra_resources": ["backend/echodesk-backend", "backend/echodesk-backend.exe"],
+    "agent_runtime_manifest": false,
+    "asar_unpack_rules": []
+  },
+  "runtime_probe": {
+    "electron": "43.1.0",
+    "darwin_arm64": "passed",
+    "win32_x64": "passed",
+    "evidence": "electron-runtime-fingerprint.json"
+  },
+  "verdict": "BUNDLE_ADAPTER_REQUIRED"
+}

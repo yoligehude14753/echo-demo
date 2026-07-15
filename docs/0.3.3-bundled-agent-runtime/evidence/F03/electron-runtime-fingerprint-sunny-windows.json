@@ -1,0 +1,61 @@
+{
+  "schema": "f03-electron-runtime-fingerprint.v1",
+  "capturedAt": "2026-07-15T06:39:30.598Z",
+  "runtimeScope": "electron_embedded_main_and_worker_threads",
+  "source": {
+    "electron": "43.1.0",
+    "probe": "experiments/fusion-compatibility/F03/runtime-profiler/electron-runtime-probe.cjs",
+    "launcher": "C:\\Program Files\\nodejs\\node.exe node_modules\\electron\\cli.js",
+    "remoteHost": "win-sunny-friend",
+    "remoteTaskRoot": "%TEMP%\\echodesk-f03-electron-43"
+  },
+  "environment": {
+    "platform": "win32",
+    "arch": "x64",
+    "homeIsolation": "task-owned",
+    "path": "C:\\\\Windows\\\\System32"
+  },
+  "main": {
+    "pid": 22588,
+    "ppid": 18932,
+    "type": "browser",
+    "execPathBasename": "electron.exe",
+    "isMainThread": true,
+    "threadId": 0,
+    "versions": {
+      "electron": "43.1.0",
+      "node": "24.18.0",
+      "v8": "15.0.245.13-electron.0",
+      "modules": "148",
+      "napi": "10",
+      "chrome": "150.0.7871.47"
+    },
+    "nodeModuleVersion": 148
+  },
+  "worker": {
+    "pid": 22588,
+    "ppid": 18932,
+    "type": null,
+    "execPathBasename": "electron.exe",
+    "isMainThread": false,
+    "threadId": 1,
+    "versions": {
+      "electron": "43.1.0",
+      "node": "24.18.0",
+      "v8": "15.0.245.13-electron.0",
+      "modules": "148",
+      "napi": "10",
+      "chrome": "150.0.7871.47"
+    },
+    "nodeModuleVersion": 148
+  },
+  "checks": {
+    "electronVersion": true,
+    "workerSamePid": true,
+    "workerIsWorker": true,
+    "workerThreadId": true,
+    "workerSameExecPath": true,
+    "mainWorkerAbiEqual": true
+  },
+  "status": "passed"
+}

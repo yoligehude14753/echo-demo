@@ -1,0 +1,102 @@
+{
+  "schema": "f03-cross-platform-probe.v1",
+  "startedAt": "2026-07-15T06:23:12.682Z",
+  "finishedAt": "2026-07-15T06:23:13.705Z",
+  "host": {
+    "platform": "darwin",
+    "platformRelease": "25.5.0",
+    "arch": "arm64",
+    "node": "24.3.0",
+    "electron": null,
+    "execPathBasename": "node",
+    "cwdIsAbsolute": true
+  },
+  "runtimeScope": "shell_node_boundary_only",
+  "dependencyBoundary": {
+    "nodeModulesRead": false,
+    "npmOrElectronCacheRead": false,
+    "externalRuntimeRead": false,
+    "networkActions": [],
+    "productOrDaemonStarted": false
+  },
+  "worker": {
+    "status": "passed",
+    "node": "24.3.0",
+    "electron": null,
+    "execPathBasename": "node",
+    "cwdIsAbsolute": true
+  },
+  "isolation": {
+    "status": "passed",
+    "childExitCode": 0,
+    "stderrPresent": false,
+    "checks": [
+      {
+        "id": "isolated-home",
+        "status": "passed",
+        "evidence": "child process received task-owned synthetic home value"
+      },
+      {
+        "id": "isolated-path",
+        "status": "passed",
+        "evidence": "child process received scrubbed PATH"
+      },
+      {
+        "id": "no-global-agent-or-node-hints",
+        "status": "passed",
+        "evidence": "global Claude/Node override variables were absent in child env",
+        "details": {
+          "present": []
+        }
+      }
+    ]
+  },
+  "paths": {
+    "host": "macOS",
+    "filesystemWrites": "none",
+    "checks": [
+      {
+        "id": "macos-posix-absolute-space-unicode",
+        "status": "passed",
+        "evidence": "POSIX path semantics exercised on the actual macOS host",
+        "details": {
+          "pathLength": 334
+        }
+      },
+      {
+        "id": "macos-long-path-shape",
+        "status": "passed",
+        "evidence": "long path shape constructed in memory; no filesystem write",
+        "details": {
+          "pathLength": 334,
+          "filesystemAccess": "not_run"
+        }
+      },
+      {
+        "id": "windows-drive",
+        "status": "not_run_host_mismatch",
+        "evidence": "Windows drive semantics are never simulated on macOS"
+      },
+      {
+        "id": "windows-unc",
+        "status": "not_run_host_mismatch",
+        "evidence": "Windows UNC semantics are never simulated on macOS"
+      },
+      {
+        "id": "windows-long-path",
+        "status": "not_run_host_mismatch",
+        "evidence": "Windows long-path filesystem behavior requires the real Windows host"
+      }
+    ]
+  },
+  "verdictHints": {
+    "embeddedElectronProof": "blocked_shell_node_only",
+    "crossPlatformComparison": "requires_same_harness_on_actual_other_host",
+    "uncFilesystemProof": "not_run_host_mismatch"
+  },
+  "evidenceMetadata": {
+    "harnessSha256": "90af163b334d87d1c4294bd90bb65743212be4fc7cc654ed93826e26656ea767",
+    "repoHead": "492053c53441793c220f3b8e1dd231f1faea6e42",
+    "command": "node --check experiments/fusion-compatibility/F03/cross-platform/harness.cjs && node experiments/fusion-compatibility/F03/cross-platform/harness.cjs"
+  }
+}
