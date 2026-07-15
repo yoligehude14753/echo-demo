@@ -50,7 +50,7 @@
   "fixture_sha256": {
     "backend/tests/unit/model_runtime/fixtures/b05m_settings_contract.json": "a6461d973c652ed009f7006d1432a0c9d9e21055a49c63bafca60cc97eeddec6",
     "desktop/electron/model-runtime-contract.cjs": "88267fddcc26def7c521631a137e9850107566ae0136dde56aac0275ec5bd6af",
-    "desktop/src/modelRuntimeContract.ts": "52d9f890cec6af10bcd6b0e4ecb7d85a9a960e19aa88f9cd051169b6b7d0e70c"
+    "desktop/src/modelRuntimeContract.ts": "f068eaed7c70b23a4ab6396f285764f425a4d0a359f275fddd73ac4678de0a85"
   },
   "external_state": {
     "provider_credentials": "EXTERNAL_CREDENTIAL_PENDING",
