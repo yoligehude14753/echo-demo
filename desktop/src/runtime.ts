@@ -300,8 +300,8 @@ export function runtimeMode(): EchoRuntimeMode {
   if (isPackagedElectronRenderer()) return "release";
   const configured = runtimeEnv().VITE_ECHODESK_RUNTIME_MODE;
   if (isEchoRuntimeMode(configured)) return configured;
-  const dev = runtimeEnv().DEV;
-  return dev === true || dev === "true" ? "development" : "release";
+  const dev = String(runtimeEnv().DEV ?? "").toLowerCase();
+  return dev === "true" ? "development" : "release";
 }
 
 export function principalMode(): EchoPrincipalMode {
