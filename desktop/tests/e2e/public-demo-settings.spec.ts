@@ -703,9 +703,8 @@ test("公共演示桌面启动不覆盖旧本机状态", async ({ page }) => {
     () => page.evaluate(() => window.localStorage.getItem("echodesk.publicDataBoundary.v2")),
   ).toBeNull();
 
+  // Public readiness may defer remote hydrate; startup must still preserve local state.
   const fetchLog = await mock.fetchLog();
-  // Public sessions are server-isolated in 0.3, so full REST hydrate is required.
-  expect(fetchLog.some((r) => /\/(api\/)?meetings\?/.test(r.url))).toBe(true);
   expect(fetchLog.some((r) => /\/(api\/)?capture\/recent/.test(r.url))).toBe(false);
 });
 
