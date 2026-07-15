@@ -3,7 +3,7 @@
   "manifest_type": "echo.b12.package-allowlist",
   "task_id": "B12",
   "status": "candidate_with_pending_unsigned_build",
-  "release_sha": "ffbacb9d0ffa1b62a205f98ff437be4219e9ee08",
+  "release_sha": "60fda97109cb6b300a45b16928efaa397d9fdf91",
   "c09_lineage": {
     "manifest": "docs/0.3.3-bundled-agent-runtime/evidence/C09/integration-manifest.json",
     "accepted_echo_sha": "49cb72e0bd71ade06e50d2bfe834a974ad92289d",
@@ -132,7 +132,14 @@
         "desktop/electron/agent-runtime/pool/worker-pool.ts",
         "desktop/electron/agent-runtime/worker/bridge.ts",
         "desktop/electron/agent-runtime/worker/identity.ts",
-        "desktop/electron/agent-runtime/worker/worker-entry.ts"
+        "desktop/electron/agent-runtime/worker/worker-entry.ts",
+        "desktop/electron/agent-runtime/bridge/framed-runtime.ts",
+        "desktop/electron/agent-runtime/bridge/production-factory.ts",
+        "desktop/electron/agent-runtime/bridge/production-composition.ts",
+        "desktop/electron/agent-runtime/bridge/embedded-runtime-server.ts",
+        "desktop/electron/agent-runtime/bridge/b13-worker-factory.ts",
+        "desktop/electron/agent-runtime/bridge/b13-host-ipc.ts",
+        "desktop/electron/agent-runtime/bridge/b13-host-kernel-deps.ts"
       ],
       "excluded_source_globs": ["**/*.test.ts", "**/test/**", "**/fixtures/**", "**/*.map"]
     },
@@ -157,6 +164,10 @@
     {"source_path":"backend/packaging/entrypoint.py","role":"backend_worker_entry"},
     {"source_path":"backend/app/__init__.py","role":"backend_version"},
     {"source_path":"backend/app/build_contract.py","role":"backend_build_identity"},
+    {"source_path":"backend/app/agents/embedded_runtime.py","role":"backend_embedded_runtime_source"},
+    {"source_path":"backend/app/runtime/b13_composition.py","role":"backend_b13_composition_source"},
+    {"source_path":"backend/app/runtime/b13_host_ipc.py","role":"backend_b13_host_ipc_source"},
+    {"source_path":"backend/app/runtime/b13_model_tool_provider.py","role":"backend_b13_model_tool_provider_source"},
     {"source_path":"desktop/scripts/verify-release-update-metadata.cjs","role":"updater_metadata_generator_input"},
     {"source_path":"desktop/scripts/refresh-mac-update-metadata.cjs","role":"updater_metadata_generator_input"}
   ],

@@ -3,6 +3,7 @@ const { createHash } = require("node:crypto");
 const {
   mkdtempSync,
   mkdirSync,
+  copyFileSync,
   rmSync,
   writeFileSync,
 } = require("node:fs");
@@ -13,6 +14,9 @@ const test = require("node:test");
 
 const {
   computeCanonicalManifestDigest,
+  comparePeCoffTrees,
+  enumeratePeCoffFiles,
+  readbackWindowsPeScope,
   readback,
   validateManifest,
 } = require("./b12-post-sign-readback.cjs");
@@ -171,5 +175,56 @@ test("accepts the canonical manifest digest with manifest_digest.value omitted",
     assert.equal(result.manifest_digest_status, "observed");
   } finally {
     rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("recursively enumerates extension-independent PE files and detects portable byte drift", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "echodesk-b12-pe-scope-test-"));
+  const innerRoot = path.join(root, "win-unpacked");
+  const portableRoot = path.join(root, "portable");
+  const outerPath = path.join(root, "EchoDesk.Setup.0.3.3.exe");
+  const peBytes = (marker) => {
+    const buffer = Buffer.alloc(96, 0);
+    buffer[0] = 0x4d;
+    buffer[1] = 0x5a;
+    buffer.writeUInt32LE(64, 0x3c);
+    buffer.write("PE\0\0", 64, "binary");
+    buffer.write(marker, 68, "ascii");
+    return buffer;
+  };
+  try {
+    mkdirSync(path.join(innerRoot, "resources", "nested"), { recursive: true });
+    mkdirSync(path.join(portableRoot, "resources", "nested"), { recursive: true });
+    const files = [
+      [path.join(innerRoot, "EchoDesk.exe"), "app"],
+      [path.join(innerRoot, "resources", "backend.exe"), "backend"],
+      [path.join(innerRoot, "resources", "nested", "helper.bin"), "helper"],
+    ];
+    for (const [filePath, marker] of files) writeFileSync(filePath, peBytes(marker));
+    copyFileSync(files[0][0], path.join(portableRoot, "EchoDesk.exe"));
+    copyFileSync(files[1][0], path.join(portableRoot, "resources", "backend.exe"));
+    copyFileSync(files[2][0], path.join(portableRoot, "resources", "nested", "helper.bin"));
+    writeFileSync(outerPath, peBytes("installer"));
+
+    const scope = readbackWindowsPeScope({
+      innerRoot,
+      outerArtifacts: [outerPath],
+      expectedReleaseSha: RELEASE_SHA,
+    });
+    assert.equal(scope.status, "PASS");
+    assert.equal(scope.inner_pe_files.length, 3);
+    assert.equal(scope.outer_pe_files.length, 1);
+    assert.deepEqual(
+      scope.inner_pe_files.map((entry) => entry.relative_path),
+      ["EchoDesk.exe", "resources/backend.exe", "resources/nested/helper.bin"],
+    );
+    assert.equal(comparePeCoffTrees(innerRoot, portableRoot).status, "PASS");
+
+    writeFileSync(path.join(portableRoot, "resources", "nested", "helper.bin"), peBytes("mutated"));
+    const drift = comparePeCoffTrees(innerRoot, portableRoot);
+    assert.equal(drift.status, "FAIL");
+    assert.ok(drift.failures.some((failure) => failure.code === "PORTABLE_PE_BYTES_MISMATCH"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

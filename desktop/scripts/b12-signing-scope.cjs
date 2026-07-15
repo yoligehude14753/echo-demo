@@ -4,7 +4,7 @@ const path = require("node:path");
 
 const SCHEMA_VERSION = 1;
 const CONTRACT_ID = "echodesk.b12.signing-scope";
-const STARTING_SHA = "ffbacb9d0ffa1b62a205f98ff437be4219e9ee08";
+const STARTING_SHA = "60fda97109cb6b300a45b16928efaa397d9fdf91";
 const DEFAULT_APP_ID = "com.echodesk.app";
 const DEFAULT_ELECTRON_VERSION = "43.1.0";
 
@@ -188,16 +188,29 @@ function createSigningScope({
       ),
       pe_scope: {
         inner: [
-          "win-unpacked/EchoDesk.exe",
-          "win-unpacked/resources/backend/echodesk-backend.exe",
-          "win-unpacked/resources/**/*.dll",
-          "win-unpacked/resources/**/*.node",
-          "win-unpacked/resources/**/helper*.exe",
-          "win-unpacked/resources/**/updater*.exe",
-          "win-unpacked/resources/**/uninstaller*.exe",
+          "win-unpacked/** (recursive content-detected PE/COFF files; extension is non-authoritative)",
         ],
         outer: ["EchoDesk.Setup.<version>.exe"],
         portable_container: "EchoDesk-<version>-win-x64.zip contains only already-signed PE bytes",
+        enumeration: {
+          detector: "DOS MZ header plus PE\\0\\0 signature at e_lfanew",
+          root: "desktop/release/win-unpacked",
+          recursive: true,
+          extension_allowlist: [".exe", ".dll", ".node"],
+          extension_allowlist_is_authoritative: false,
+          empty_inner_scope_is_failure: true,
+          record_fields: [
+            "scope",
+            "relative_path",
+            "size_bytes",
+            "sha256",
+            "authenticode_status",
+            "thumbprint",
+            "publisher",
+            "digest_algorithm",
+            "timestamp_status",
+          ],
+        },
       },
       order: [
         "freeze logical content and fusion-content-manifest",

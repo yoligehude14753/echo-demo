@@ -636,6 +636,12 @@ test("formal Windows build enforces Authenticode chain and timestamp verificatio
     ).length,
     3,
   );
+  assert.equal(
+    calls.filter(
+      (call) => call.command === "pwsh" && call.args.includes("VerifyZip"),
+    ).length,
+    1,
+  );
 });
 
 test("PowerShell verifier and CI encode an honest signing contract", () => {
@@ -667,6 +673,8 @@ test("PowerShell verifier and CI encode an honest signing contract", () => {
   assert.match(verifier, /X509Chain/);
   assert.match(verifier, /X509RevocationMode\]::Online/);
   assert.match(verifier, /TimeStamperCertificate/);
+  assert.match(verifier, /VerifyTree/);
+  assert.match(verifier, /VerifyZip/);
   assert.match(verifier, /OrdinalIgnoreCase\.Equals/);
   assert.equal(
     pkg.scripts["app:dist:mac"],
@@ -734,6 +742,8 @@ test("PowerShell verifier and CI encode an honest signing contract", () => {
 
   const formalWindows = formalWorkflow.jobs["windows-signed-candidate"];
   assert.equal(formalWindows.environment, "desktop-release-windows");
+  assert.match(formalDesktop, /signed-artifact-manifest\.json/);
+  assert.match(formalDesktop, /signing-evidence\.json/);
   const formalSteps = formalWindows.steps;
   const credentialIndex = formalSteps.findIndex(
     (step) => step.name === "Require protected Windows release credentials",
