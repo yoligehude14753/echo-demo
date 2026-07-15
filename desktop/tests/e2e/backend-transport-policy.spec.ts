@@ -96,7 +96,7 @@ test("Electron retries bootstrap after a transient unavailable failure", async (
   expect(result).toEqual({
     bootstrapCalls: 2,
     firstReason: "backend_unreachable",
-    backendVersion: "0.3.2",
+    backendVersion: "0.3.3",
   });
 });
 
@@ -998,7 +998,7 @@ test("Request signal and headers survive transport while caller authorization is
     business: "preserved",
     fromInit: "preserved-too",
     contentType: "text/plain",
-    clientVersion: "0.3.2",
+    clientVersion: "0.3.3",
     redirect: "error",
     method: "POST",
   });

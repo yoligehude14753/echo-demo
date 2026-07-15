@@ -94,7 +94,7 @@ export async function installEchoMock(
     const mockBuildContract = {
       schema_version: 1,
       product_id: "com.echodesk.app.backend",
-      product_version: "0.3.2",
+      product_version: "0.3.3",
       api_contract: "echodesk.desktop-backend/v1",
       build_id: `sha256:${"0".repeat(64)}`,
       schema_catalog_max: 39,
@@ -255,8 +255,8 @@ export async function installEchoMock(
           JSON.stringify({
             schema_version: 1,
             api_version: "0.3",
-            backend_version: "0.3.2",
-            app_version: "0.3.2",
+            backend_version: "0.3.3",
+            app_version: "0.3.3",
             build_contract: mockBuildContract,
             session_required: false,
             capabilities: {

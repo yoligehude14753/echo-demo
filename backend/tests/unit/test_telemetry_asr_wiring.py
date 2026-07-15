@@ -52,7 +52,7 @@ def context(request_id: str) -> ASRRequestContext:
         principal_id="user-server",
         device_id="device-server",
         platform="desktop",
-        app_version="0.3.2",
+        app_version="0.3.3",
     )
 
 

@@ -398,7 +398,7 @@ test("公共 HTML 预览与下载只使用 authenticated bounded blob URL", asyn
   expect(requests).toHaveLength(2);
   for (const request of requests) {
     expect(request.authorization).toBe("Bearer public-html-session");
-    expect(request.version).toBe("0.3.2");
+    expect(request.version).toBe("0.3.3");
   }
 });
 
@@ -1048,7 +1048,7 @@ test("本机版本高于公开版本时不会提供降级下载或安装", async
         currentVersion: "0.2.0",
         latestVersion: "0.2.50",
         // 即使旧主进程上报的 currentVersion 落后、并错误标记 available，
-        // 目标版本低于当前 0.3.2 前端构建时仍必须阻止降级。
+        // 目标版本低于当前 0.3.3 前端构建时仍必须阻止降级。
         updateAvailable: true,
         canAutoInstall: true,
         assetName: "EchoDesk-0.2.50.dmg",

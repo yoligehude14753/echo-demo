@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-MINIMUM_PUBLIC_CLIENT_VERSION = "0.3.2"
+MINIMUM_PUBLIC_CLIENT_VERSION = "0.3.3"
 PUBLIC_CLIENT_VERSION_HEADER = "X-EchoDesk-Client-Version"
 PUBLIC_MINIMUM_CLIENT_VERSION_HEADER = "X-EchoDesk-Minimum-Client-Version"
 PUBLIC_CLIENT_UPGRADE_URL = "https://github.com/yoligehude14753/echo-demo/releases"

@@ -1332,7 +1332,7 @@ test("release SBOMs are deterministic and bind their serials to locked inputs", 
       assert.equal(document.bomFormat, "CycloneDX");
       assert.equal(document.specVersion, "1.5");
       assert.match(document.serialNumber, /^urn:uuid:[0-9a-f-]{36}$/);
-      assert.equal(document.metadata.component.version, "0.3.2");
+      assert.equal(document.metadata.component.version, "0.3.3");
       assert.ok(document.components.length > 0);
       const references = document.components.map((item) => item["bom-ref"]);
       assert.deepEqual(references, [...references].sort());

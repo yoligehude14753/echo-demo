@@ -9,4 +9,4 @@ import os
 # TorchScript, so disable it before any adapter can import torch/SpeechBrain.
 os.environ["PYTORCH_JIT"] = "0"
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"

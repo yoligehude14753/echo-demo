@@ -63,7 +63,7 @@ def _observation(
         "success": success,
         "operation": "request",
         "platform": "desktop",
-        "app_version": "0.3.2",
+        "app_version": "0.3.3",
         "provider": "local",
     }
     payload.update(overrides)
