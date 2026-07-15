@@ -13,6 +13,8 @@ ambient_capture + diarizer 链路问题，跟 STT 模型无关。
 
 from __future__ import annotations
 
+import asyncio
+
 from app.adapters.stt.firered import FireRedSTT, STTError
 from app.adapters.stt.local import LocalSTT
 from app.adapters.stt.scheduler import ASRProviderBinding, ASRScheduler, ASRSchedulerConfig
@@ -25,6 +27,12 @@ from app.config import Settings
 from app.ports.stt import STTPort
 
 _scheduler: ASRScheduler | None = None
+_startup_probe_task: asyncio.Task[None] | None = None
+
+# A short, deterministic non-silent PCM16 sample.  The probe only verifies that
+# the configured scheduler/provider path can accept and complete one bounded
+# request; its transcript is intentionally ignored.
+_STARTUP_PROBE_AUDIO = b"\x01\x00" * 1600
 
 
 def make_stt(settings: Settings) -> STTPort:
@@ -145,13 +153,78 @@ async def start_asr_scheduler(
     *,
     telemetry: object | None = None,
 ) -> ASRScheduler:
+    global _startup_probe_task  # noqa: PLW0603
     scheduler = get_asr_scheduler(settings, telemetry=telemetry)
     await scheduler.start()
+    readiness = scheduler.readiness()
+    if (
+        settings.asr_scheduler_enabled
+        and readiness.scheduler_accepting
+        and readiness.eligible_provider_count > 0
+        and (_startup_probe_task is None or _startup_probe_task.done())
+    ):
+        timeout_s = min(settings.asr_job_deadline_s, settings.asr_readiness_stale_after_s)
+        _startup_probe_task = asyncio.create_task(
+            _run_controlled_probe_loop(
+                scheduler,
+                timeout_s=timeout_s,
+                interval_s=settings.asr_readiness_stale_after_s / 2,
+            ),
+            name="asr-controlled-probe-loop",
+        )
+        _startup_probe_task.add_done_callback(_consume_startup_probe_task)
     return scheduler
 
 
+async def _run_controlled_probe_loop(
+    scheduler: ASRScheduler,
+    *,
+    timeout_s: float,
+    interval_s: float,
+) -> None:
+    while True:
+        await _run_controlled_probe(scheduler, timeout_s=timeout_s)
+        await asyncio.sleep(interval_s)
+
+
+async def _run_controlled_probe(
+    scheduler: ASRScheduler,
+    *,
+    timeout_s: float,
+) -> None:
+    try:
+        await asyncio.wait_for(
+            scheduler.transcribe(
+                _STARTUP_PROBE_AUDIO,
+                sample_rate=16_000,
+                language="zh",
+                capability="startup_readiness",
+            ),
+            timeout=timeout_s,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        scheduler.record_controlled_probe(False)
+    else:
+        scheduler.record_controlled_probe(True)
+
+
+def _consume_startup_probe_task(task: asyncio.Task[None]) -> None:
+    global _startup_probe_task  # noqa: PLW0603
+    if not task.cancelled():
+        task.exception()
+    if _startup_probe_task is task:
+        _startup_probe_task = None
+
+
 async def stop_asr_scheduler(*, grace_period_s: float = 5.0) -> None:
-    global _scheduler  # noqa: PLW0603
+    global _scheduler, _startup_probe_task  # noqa: PLW0603
+    probe_task = _startup_probe_task
+    _startup_probe_task = None
+    if probe_task is not None and not probe_task.done():
+        probe_task.cancel()
+        await asyncio.gather(probe_task, return_exceptions=True)
     if _scheduler is None:
         return
     scheduler = _scheduler
@@ -162,7 +235,10 @@ async def stop_asr_scheduler(*, grace_period_s: float = 5.0) -> None:
 def reset_asr_scheduler_for_test() -> None:
     """Reset only the ASR-owned process-wide lifecycle registry."""
 
-    global _scheduler  # noqa: PLW0603
+    global _scheduler, _startup_probe_task  # noqa: PLW0603
+    if _startup_probe_task is not None and not _startup_probe_task.done():
+        _startup_probe_task.cancel()
+    _startup_probe_task = None
     _scheduler = None
 
 
