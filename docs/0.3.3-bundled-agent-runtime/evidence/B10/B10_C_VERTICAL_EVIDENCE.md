@@ -1,57 +1,75 @@
-# B10 C — Vertical Contract Evidence
+# B10 C — Blocked Vertical Contract Evidence
 
 - Batch: `B10 AgentTask Durable Cutover`
 - Role: `vertical-contract-verification`
-- Baseline: `ffbacb9d0ffa1b62a205f98ff437be4219e9ee08`
+- C write set: only this evidence file and
+  `backend/tests/unit/test_b10_vertical_contract.py`
+- Current B10 head inspected: `353573049073e99f9e026b3b6377c34b1e6a172e`
 - Contract: v1; no contract/version change
-- C status: `EVIDENCE_READY`
+- C status: `BLOCKED_HANDLER_CONTRACT`
 - Batch verdict: not decided by subagent C
 
-## C-owned write set
+## Exact production gap
 
-- `backend/tests/unit/test_b10_vertical_contract.py`
-- `docs/0.3.3-bundled-agent-runtime/evidence/B10/B10_C_VERTICAL_EVIDENCE.md`
+The current source contains the framed-port surface but not a production
+handler call chain:
 
-No production implementation file was changed by C. The test enters the
-authoritative `AgentTaskService.record_task_event` sink and uses a deterministic
-test-owned worker trace to make raw identity, durable sequence, terminal
-arbitration, and workflow projection observable.
+- `desktop/electron/agent-runtime/bridge/embedded-runtime-server.ts` contains
+  the `EmbeddedRuntimePortServer` class definition.
+- `desktop/electron/agent-runtime/index.ts` re-exports that class and the
+  `EmbeddedRuntimeCommandHandler` type.
+- There is no production `new EmbeddedRuntimePortServer(...)` instantiation.
+- The B04K `createWorkerRuntime` concrete implementations are test-owned:
+  `desktop/electron/agent-runtime/test/contract/production-worker-factory.mjs`
+  and the test fixture
+  `desktop/electron/agent-runtime/test/fixtures/kernel-runtime-fixture.ts`.
+  `desktop/electron/agent-runtime/pool/worker-manager.ts` only carries the
+  configurable string default `"createWorkerRuntime"`; it does not provide a
+  production factory export or call chain.
+- `backend/app/agents/agentos.py` explicitly aliases
+  `AgentOSBackend = EmbeddedRuntimeBackend`; this is a compatibility name for
+  the inherited-fd embedded adapter, not an external AgentOS fallback and not
+  a C blocker.
+- The remaining production gaps are the missing `new
+  EmbeddedRuntimePortServer(...)` instance, missing production
+  `createWorkerRuntime`/`factoryModule` binding, and missing complete
+  `OpenSessionInput`/`KernelDeps` injection into a production worker factory.
 
-## Focused verification
+Therefore C cannot honestly execute a production vertical turn. The prior
+mock-only worker/handler harness was removed and is not evidence of closure.
+
+## Blocked gate
+
+The C test is fail-closed and performs only source-level production wiring
+checks. It does not inject a fake handler. The expected result is:
+
+```text
+BLOCKED_HANDLER_CONTRACT:
+production EmbeddedRuntimePortServer instantiation;
+production createWorkerRuntime/factoryModule binding;
+production OpenSessionInput/KernelDeps injection
+```
+
+Focused commands:
 
 | Command | Result |
 |---|---|
-| `/Users/yoligehude/Desktop/all/echo/backend/.venv/bin/python -m pytest tests/unit/test_b10_vertical_contract.py -q` (cwd: `backend/`) | `PASS`, `2 passed in 0.57s` |
-| `python3 -m py_compile backend/tests/unit/test_b10_vertical_contract.py` | `PASS` |
-| `/Users/yoligehude/Desktop/all/echo/backend/.venv/bin/ruff check tests/unit/test_b10_vertical_contract.py` (cwd: `backend/`) | `PASS` |
-| `git diff --check` | `PASS` |
+| `/Users/yoligehude/Desktop/all/echo/backend/.venv/bin/ruff check backend/tests/unit/test_b10_vertical_contract.py` | `PASS`; output: `All checks passed!` |
+| `/Users/yoligehude/Desktop/all/echo/backend/.venv/bin/python -m pytest backend/tests/unit/test_b10_vertical_contract.py -q` | `BLOCKED`; exit 1, `1 failed in 0.23s`; failure: `BLOCKED_HANDLER_CONTRACT: production EmbeddedRuntimePortServer instantiation; production createWorkerRuntime/factoryModule binding; production OpenSessionInput/KernelDeps injection` |
+| `python3 -m py_compile backend/tests/unit/test_b10_vertical_contract.py` | `PASS`; exit 0, no output |
+| `git diff --check` | `PASS`; exit 0, no output |
 
-## Deterministic evidence
+The earlier source-scan `UnicodeDecodeError` is resolved: the test reads every
+production source snapshot with `errors="replace"`, and the final gate reaches
+the intended blocked result above.
 
-- A worker event with the same raw identity is accepted once and does not
-  allocate a second durable Echo `seq`.
-- Durable sequence values remain contiguous across the accepted event stream.
-- A terminal success is authoritative; a later cancellation becomes
-  `task.terminal_ignored` with `visibility=debug` and does not change either
-  the Agent task or its Workflow state.
-- Repeated cancellation observes one completed outbox row and one remote
-  cancel call; the stable `agent-cancel-*` operation key is reused.
-- Agent task and Workflow terminal state remain `succeeded`/`succeeded` for the
-  success-first trace and `cancelled`/`cancelled` for the cancel trace.
+## Scope audit
 
-## Scope and limitations
-
-- C did not modify `backend/app/**`, `desktop/electron/agent-runtime/**`,
-  worker pool, manifest, transport, migrations, packaging, or installation
-  files.
-- The deterministic worker in this evidence is a test-owned trace producer;
-  it is not a substitute for the A-owned production AgentTaskService to
-  embedded Electron worker wiring. That production-path proof remains for the
-  B10 integration owner after A/B deltas are integrated.
-- The checkout contains concurrent uncommitted changes outside C's write set:
-  `backend/app/agents/command_outbox.py` and
-  `backend/app/agents/durable_state.py`, plus
-  `backend/tests/unit/test_agent_durable_state.py`. C preserved them and did
-  not include them in the focused command scope.
-- C did not run full regression, provider smoke, packaging, signing,
-  installation-state, or cross-platform verification.
+- Modified C paths only:
+  - `backend/tests/unit/test_b10_vertical_contract.py`
+  - `docs/0.3.3-bundled-agent-runtime/evidence/B10/B10_C_VERTICAL_EVIDENCE.md`
+- No production implementation, worker pool, manifest, framed transport,
+  migration, packaging, installation, or cross-platform file was modified by
+  C.
+- No mock-only handler is used to claim production closure.
+- No commit was created by C.
