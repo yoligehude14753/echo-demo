@@ -36,6 +36,7 @@
     "app:dist:win:unsigned-test": "npm run backend:build:win && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis zip --x64 --publish never",
     "app:dist:linux": "npm run backend:build:linux && npm run build && electron-builder --linux AppImage deb --x64 --publish never",
     "app:build:android:development": "node scripts/build-android-debug.cjs",
+    "app:build:android:preview": "node scripts/build-android-preview.cjs",
     "app:dist:android": "node scripts/build-android-release.cjs",
     "app:package:tv": "node scripts/package-tv-installer.cjs",
     "tv:smoke": "node scripts/tv-adb-smoke.cjs",

@@ -14,9 +14,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, Modal, Steps } from "antd";
 import { CheckCircle2, FolderOpen, Mic, Sparkles } from "lucide-react";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
-import { apiUrl } from "@/runtime";
+import {
+  apiUrl,
+  DEFAULT_ANDROID_BACKEND_BASE,
+  isNativeMobile,
+} from "@/runtime";
 import { apiTransport } from "@/session";
-import { isNativeMobile } from "@/runtime";
 
 type StepKey = "welcome" | "mic" | "done";
 
@@ -28,6 +31,7 @@ interface Props {
 }
 
 export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
+  const nativeMobile = isNativeMobile();
   const {
     revision: backendOriginRevision,
     captureGeneration,
@@ -66,7 +70,7 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
 
   // 拉数据目录路径（让用户知道数据存在哪）
   useEffect(() => {
-    if (!open) return;
+    if (!open || nativeMobile) return;
     let alive = true;
     const originGeneration = captureGeneration();
     const controller = new AbortController();
@@ -92,7 +96,13 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
       alive = false;
       unregisterController();
     };
-  }, [captureGeneration, isCurrent, open, registerAbortController]);
+  }, [
+    captureGeneration,
+    isCurrent,
+    nativeMobile,
+    open,
+    registerAbortController,
+  ]);
 
   // 拉麦克风权限初值（mic 步骤进入时再查一次以拿最新值）
   useEffect(() => {
@@ -174,7 +184,7 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
 
         <div className="mt-5 min-h-[200px]">
           {stepKey === "welcome" && (
-            <WelcomeStep dataDirPath={dataDirPath} />
+            <WelcomeStep dataDirPath={dataDirPath} nativeMobile={nativeMobile} />
           )}
           {stepKey === "mic" && (
             <MicStep
@@ -182,9 +192,10 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
               requesting={requesting}
               onRequest={onRequestMic}
               onOpenSysPrefs={onOpenSysPrefs}
+              nativeMobile={nativeMobile}
             />
           )}
-          {stepKey === "done" && <DoneStep />}
+          {stepKey === "done" && <DoneStep nativeMobile={nativeMobile} />}
         </div>
 
         <div className="mt-4 flex items-center justify-between">
@@ -217,30 +228,64 @@ export default function OnboardingModal({ open, onClose }: Props): JSX.Element {
   );
 }
 
-function WelcomeStep({ dataDirPath }: { dataDirPath: string | null }): JSX.Element {
+function WelcomeStep({
+  dataDirPath,
+  nativeMobile,
+}: {
+  dataDirPath: string | null;
+  nativeMobile: boolean;
+}): JSX.Element {
   return (
     <div className="space-y-3 text-[13px] text-ink-700">
       <div className="flex items-center gap-2 text-base font-medium text-ink-900">
         <Sparkles className="w-4 h-4 text-accent" />
         欢迎来到 EchoDesk
       </div>
-      <div className="text-ink-600">
-        EchoDesk 是一个本地优先的会议与办公助理：环境音转写、会议纪要、
-        基于工作区的检索问答、文档/PPT/Excel 生成都跑在你自己的电脑上。
-      </div>
-      <div className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]">
-        <div className="flex items-center gap-1.5 font-medium mb-1">
-          <FolderOpen className="w-3.5 h-3.5 text-ink-500" />
-          数据存放位置
-        </div>
-        <div className="text-ink-500 font-mono text-[11px] break-all">
-          {dataDirPath ?? "~/.echodesk/"}
-        </div>
-        <div className="text-ink-400 mt-1.5">
-          会议数据库、录音、知识库索引、日志全部都在这里。可在「设置 → 数据」
-          里查看占用、导出诊断信息或卸载。
-        </div>
-      </div>
+      {nativeMobile ? (
+        <>
+          <div className="text-ink-600" data-testid="onboarding-native-runtime-copy">
+            EchoDesk Android 是远程移动端。会议转写、纪要与 AI 工作流由你明确连接的
+            EchoDesk 服务执行；手机内不会启动桌面 backend 或 bundled worker。
+          </div>
+          <div
+            className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]"
+            data-testid="onboarding-native-runtime-contract"
+          >
+            <div className="flex items-center gap-1.5 font-medium mb-1">
+              <FolderOpen className="w-3.5 h-3.5 text-ink-500" />
+              移动端连接边界
+            </div>
+            <div className="text-ink-500 font-mono text-[11px] break-all">
+              默认公共服务：{DEFAULT_ANDROID_BACKEND_BASE}
+            </div>
+            <div className="text-ink-400 mt-1.5">
+              本 Preview 构建固定连接该公共服务，不能在设置中改写业务 endpoint。
+              多端同步是另一条已配对 Hub 通道，必须另行填写 Hub 地址并使用配对码；
+              未配对时不会冒充本机桌面服务。
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="text-ink-600" data-testid="onboarding-local-runtime-copy">
+            EchoDesk 是一个本地优先的会议与办公助理：环境音转写、会议纪要、
+            基于工作区的检索问答、文档/PPT/Excel 生成都跑在你自己的电脑上。
+          </div>
+          <div className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]">
+            <div className="flex items-center gap-1.5 font-medium mb-1">
+              <FolderOpen className="w-3.5 h-3.5 text-ink-500" />
+              数据存放位置
+            </div>
+            <div className="text-ink-500 font-mono text-[11px] break-all">
+              {dataDirPath ?? "~/.echodesk/"}
+            </div>
+            <div className="text-ink-400 mt-1.5">
+              会议数据库、录音、知识库索引、日志全部都在这里。可在「设置 → 数据」
+              里查看占用、导出诊断信息或卸载。
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -250,11 +295,13 @@ function MicStep({
   requesting,
   onRequest,
   onOpenSysPrefs,
+  nativeMobile,
 }: {
   state: "unknown" | "granted" | "denied" | "prompt";
   requesting: boolean;
   onRequest: () => void;
   onOpenSysPrefs: () => void;
+  nativeMobile: boolean;
 }): JSX.Element {
   return (
     <div className="space-y-3 text-[13px] text-ink-700">
@@ -263,8 +310,9 @@ function MicStep({
         授权麦克风
       </div>
       <div className="text-ink-600">
-        EchoDesk 需要麦克风权限才能转写会议。所有音频只发送给你配置的
-        语音识别服务。
+        {nativeMobile
+          ? `EchoDesk Android 需要麦克风权限采集会议音频。音频会发送到本 Preview 固定的公共服务 ${DEFAULT_ANDROID_BACKEND_BASE}；手机内没有本地 ASR 或桌面 bundled backend。`
+          : "EchoDesk 需要麦克风权限才能转写会议。所有音频只发送给你配置的语音识别服务。"}
       </div>
 
       <div className="rounded border border-paper-300 bg-paper-100 p-3 text-[12px]">
@@ -331,8 +379,7 @@ function MicStep({
   );
 }
 
-function DoneStep(): JSX.Element {
-  const android = isNativeMobile();
+function DoneStep({ nativeMobile }: { nativeMobile: boolean }): JSX.Element {
   return (
     <div className="space-y-3 text-[13px] text-ink-700">
       <div className="flex items-center gap-2 text-base font-medium text-ink-900">
@@ -340,17 +387,24 @@ function DoneStep(): JSX.Element {
         准备就绪
       </div>
       <div className="text-ink-600">三个关键交互点：</div>
-      <ul className="list-disc pl-5 space-y-1.5 text-[12px] text-ink-600">
+      <ul
+        className="list-disc pl-5 space-y-1.5 text-[12px] text-ink-600"
+        data-testid={nativeMobile ? "onboarding-native-done-copy" : undefined}
+      >
         <li>
-          在底部输入问题，或直接描述要生成的文档、表格和演示文稿
+          {nativeMobile
+            ? "底部问题与生成请求会发送到本 Preview 固定的公共服务"
+            : "在底部输入问题，或直接描述要生成的文档、表格和演示文稿"}
         </li>
         <li>
-          {android
-            ? "点击「开始会议」后选择单端或多端收音；确认前不会启用麦克风"
+          {nativeMobile
+            ? "点击「开始会议」后选择单端或多端收音；确认前不会启用麦克风，转写与纪要依赖远程服务可用"
             : "点击「开始会议」保存本次记录；不开始会议时也会持续显示实时转写"}
         </li>
         <li>
-          右上「设置」可管理知识库、数据占用、诊断包和说话人
+          {nativeMobile
+            ? "右上「设置」管理移动端连接；多端同步需要另行配对 Hub"
+            : "右上「设置」可管理知识库、数据占用、诊断包和说话人"}
         </li>
       </ul>
       <div className="text-ink-400 text-[11px]">
