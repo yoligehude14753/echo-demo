@@ -8,9 +8,20 @@
 import { useEffect, useRef, useState } from "react";
 import { message } from "antd";
 
-import { getCaptureStats, type CaptureStats } from "@/api";
+import {
+  authorizeCaptureControl,
+  getCaptureControl,
+  getCaptureStats,
+  type CaptureStats,
+} from "@/api";
 import { audioCapture } from "@/capture/audioCapture";
 import { attachCaptureChunkRouter } from "@/capture/captureChunkRouter";
+import {
+  CAPTURE_CONTROL_EVENT,
+  isDeviceSelected,
+  normalizeCaptureControl,
+  type CaptureControl,
+} from "@/capture/captureControl";
 import {
   createCaptureAdmissionState,
   createCaptureFreshnessState,
@@ -24,6 +35,7 @@ import type {
   CaptureState,
   CaptureStatsSnapshot,
 } from "@/domain/session";
+import { ensureSyncDeviceId } from "@/syncState";
 import { useStore } from "@/store";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import {
@@ -33,6 +45,7 @@ import {
 import { isNativeMobile } from "@/runtime";
 
 const STATS_POLL_MS = 5_000;
+const CONTROL_POLL_MS = 3_000;
 const CAPTURE_INIT_WATCHDOG_MS = 18_000;
 const CIRCUIT_TOAST_KEY = "stt-circuit-open";
 const MIC_INIT_TIMEOUT_MESSAGE =
@@ -67,7 +80,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
     s.currentMeetingId ? s.meetings[s.currentMeetingId]?.state : undefined,
   );
 
-  const [captureState, setCaptureState] = useState<CaptureState>("initializing");
+  const [captureState, setCaptureState] = useState<CaptureState>("standby");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [ambientChunks, setAmbientChunks] = useState(0);
   const [ambientStored, setAmbientStored] = useState(0);
@@ -130,7 +143,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
   useEffect(() => {
     if (!captureEnabled) {
       audioCapture.stop();
-      setCaptureState("initializing");
+      setCaptureState("standby");
       setErrorMessage(null);
       setStats(null);
       setTransport(createCaptureTransportState());
@@ -152,8 +165,6 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
     setMeetingChunks(0);
     setChunksDroppedCircuit(0);
     setSttCircuitOpenUntil(null);
-    audioCapture.start();
-
     const offStatus = audioCapture.onStatus((state, err) => {
       setCaptureState(state);
       setErrorMessage(err ?? null);
@@ -165,6 +176,78 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
         });
       }
     });
+
+    // 首次读取只建立 revision 基线，防止 App 打开后沿用旧选择自动启麦。
+    // 后续更高 revision（来自本机点击或其它设备）才驱动 capturing/standby。
+    let controlBaseline: number | null = null;
+    let activeControl: CaptureControl | null = null;
+    const applyControl = async (
+      control: CaptureControl,
+      allowActivation: boolean,
+    ) => {
+      if (controlBaseline === null) {
+        controlBaseline = control.revision;
+        setCaptureState("standby");
+        audioCapture.stop();
+        return;
+      }
+      if (control.revision < controlBaseline) return;
+      if (
+        activeControl &&
+        control.revision === activeControl.revision &&
+        control.mode === activeControl.mode &&
+        control.selectedDeviceIds.join("\u0000") ===
+          activeControl.selectedDeviceIds.join("\u0000")
+      ) {
+        return;
+      }
+      activeControl = control;
+      controlBaseline = Math.max(controlBaseline, control.revision);
+      if (allowActivation && isDeviceSelected(control)) {
+        try {
+          const authorization = await authorizeCaptureControl({
+            deviceId: ensureSyncDeviceId(),
+            revision: control.revision,
+          });
+          if (
+            !cancelled &&
+            authorization.allowed &&
+            authorization.revision === control.revision
+          ) {
+            audioCapture.start();
+            return;
+          }
+        } catch {
+          // 权威授权失败时 fail closed。
+        }
+        audioCapture.stop();
+        setCaptureState("standby");
+      } else {
+        audioCapture.stop();
+        setCaptureState("standby");
+        setErrorMessage(null);
+      }
+    };
+    const onControlChange = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      void applyControl(normalizeCaptureControl(detail), true);
+    };
+    window.addEventListener(CAPTURE_CONTROL_EVENT, onControlChange);
+    const fetchControl = async () => {
+      try {
+        const control = await getCaptureControl({ signal: statsController.signal });
+        if (!cancelled && isCurrent(originGeneration)) {
+          void applyControl(control, controlBaseline !== null);
+        }
+      } catch {
+        // 控制 API 暂不可用时保持当前安全状态；绝不因此启麦。
+      }
+    };
+    void fetchControl();
+    const controlTimer = window.setInterval(
+      () => void fetchControl(),
+      CONTROL_POLL_MS,
+    );
 
     const offRouter = attachCaptureChunkRouter({
       onChunkPosted: () => setAmbientChunks((n) => n + 1),
@@ -228,6 +311,8 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
       statsRequestSeq += 1;
       unregisterController();
       window.clearInterval(statsTimer);
+      window.clearInterval(controlTimer);
+      window.removeEventListener(CAPTURE_CONTROL_EVENT, onControlChange);
       offStatus();
       offRouter();
       audioCapture.stop();
