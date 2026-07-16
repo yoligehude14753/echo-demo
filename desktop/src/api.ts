@@ -213,8 +213,8 @@ export async function uploadCaptureChunk(
   const fd = new FormData();
   fd.append("audio", blob, "chunk.wav");
   fd.append("sample_rate", String(sampleRate));
-  fd.append("device_id", deviceId);
-  fd.append("segment_id", segmentId);
+  fd.append("deviceId", deviceId);
+  fd.append("segmentId", segmentId);
   if (meetingId) fd.append("meeting_id", meetingId);
   const u = await apiUrl("/capture/chunk");
   const r = await fetchWithAbortTimeout(
@@ -252,18 +252,19 @@ export async function getCaptureControl(
 export async function getCaptureDevices(
   options: ApiReadOptions = {},
 ): Promise<CaptureControlSnapshot> {
+  const [devicesUrl, control] = await Promise.all([
+    apiUrl("/capture/devices"),
+    getCaptureControl(options),
+  ]);
   const response = await fetchWithAbortTimeout(
-    await apiUrl("/capture/devices"),
+    devicesUrl,
     { method: "GET" },
     DEFAULT_PROBE_TIMEOUT_MS,
     options.signal,
   );
   const body = await asJson<unknown>(response);
-  const record = body !== null && typeof body === "object"
-    ? body as Record<string, unknown>
-    : {};
   return {
-    control: normalizeCaptureControl(record.control ?? body),
+    control,
     devices: normalizeCaptureDevices(body),
   };
 }

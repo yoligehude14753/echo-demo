@@ -371,7 +371,7 @@ export default function MeetingStatusBar(): JSX.Element {
   void tick; // 强制 elapsed / minutes 重渲染
 
   const tooltipTitle = !isMeeting
-    ? "点击手动开始会议；未点击时环境音也会持续采集并自动识别会议"
+    ? "点击开始会议并选择收音设备；未开始时麦克风保持待机"
     : isAuto
       ? `已自动识别为会议并开始记录；点击可主动结束并生成纪要（已持续 ${elapsedMinutes(snap.started_at)} 分钟）`
       : "点击结束会议（手动开始，将生成纪要）";
