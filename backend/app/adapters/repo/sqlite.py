@@ -789,7 +789,7 @@ class SQLiteRepository(RepositoryPort):
         async with self._lock:
             conn = self._require_conn()
             cur = await conn.execute(
-                "SELECT id, audio_ref, text, speaker_id, speaker_label, duration_ms, captured_at, "
+                "SELECT id, audio_ref, text, speaker_id, speaker_label, duration_ms, captured_at, device_id, "
                 "rag_projection_state, rag_projection_error, rag_projected_at, "
                 "rag_projection_attempts, rag_projection_next_retry_at "
                 f"FROM ambient_segments {where} ORDER BY captured_at DESC LIMIT ?",
@@ -806,11 +806,12 @@ class SQLiteRepository(RepositoryPort):
                 speaker_label=r[4],
                 duration_ms=r[5],
                 captured_at=_from_iso(r[6]) or datetime.fromtimestamp(0),
-                rag_projection_state=r[7],
-                rag_projection_error=r[8],
-                rag_projected_at=_from_iso(r[9]),
-                rag_projection_attempts=int(r[10]),
-                rag_projection_next_retry_at=_from_iso(r[11]),
+                device_id=r[7],
+                rag_projection_state=r[8],
+                rag_projection_error=r[9],
+                rag_projected_at=_from_iso(r[10]),
+                rag_projection_attempts=int(r[11]),
+                rag_projection_next_retry_at=_from_iso(r[12]),
             )
             for r in rows
         ]

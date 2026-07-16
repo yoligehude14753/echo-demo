@@ -32,3 +32,15 @@ class CaptureChunkResult(BaseModel):
     meeting_segments: list[TranscriptSegment] = Field(default_factory=list)
     # 7 道门处理结果分流标签；前端对 circuit_open 去抖后才触发短退避。
     stt_status: SttStatus = "unknown"
+    device_id: str | None = None
+
+
+class CaptureControlUpdate(BaseModel):
+    mode: Literal["single", "multi"]
+    selectedDeviceIds: list[str] = Field(min_length=1)
+    expectedRevision: int = Field(ge=0)
+
+
+class CaptureAuthorizeRequest(BaseModel):
+    deviceId: str = Field(min_length=1)
+    revision: int = Field(ge=0)

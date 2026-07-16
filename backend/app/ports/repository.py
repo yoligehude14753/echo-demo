@@ -76,6 +76,7 @@ class AmbientSegmentRecord(BaseModel):
     speaker_label: str | None = None
     duration_ms: int = 0
     captured_at: datetime
+    device_id: str | None = None
     rag_projection_state: RagProjectionState | None = None
     rag_projection_error: str | None = None
     rag_projected_at: datetime | None = None
