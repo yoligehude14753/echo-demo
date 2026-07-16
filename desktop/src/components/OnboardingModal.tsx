@@ -373,7 +373,7 @@ function MicStep({
       </div>
 
       <div className="text-ink-400 text-[11px]">
-        提示：跳过也没关系，第一次按下录音键时系统还会再弹一次。
+        提示：完成引导后会进入自由收音设备选择；系统麦克风权限仍需由你明确允许。
       </div>
     </div>
   );
@@ -398,8 +398,8 @@ function DoneStep({ nativeMobile }: { nativeMobile: boolean }): JSX.Element {
         </li>
         <li>
           {nativeMobile
-            ? "点击「开始会议」后选择单端或多端收音；确认前不会启用麦克风，转写与纪要依赖远程服务可用"
-            : "点击「开始会议」保存本次记录；不开始会议时也会持续显示实时转写"}
+            ? "完成引导后选择单端或多端收音并授权麦克风；之后自由模式持续收音，正式会议只划定纪要边界"
+            : "完成引导后自由模式持续收音；点击「开始正式会议」只划定本次会议的起止边界"}
         </li>
         <li>
           {nativeMobile

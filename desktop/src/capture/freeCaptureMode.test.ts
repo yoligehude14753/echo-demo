@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 // @ts-expect-error Node strip-types requires the explicit source extension.
-import { deriveCaptureRuntimeState } from "./freeCaptureMode.ts";
+import { deriveCaptureRuntimeState, resolveFreeCapturePreference } from "./freeCaptureMode.ts";
 
 const base = {
   freeModeEnabled: true,
@@ -46,4 +46,19 @@ test("pause, selection and offline states are explicit", () => {
     deriveCaptureRuntimeState({ ...base, uploadUnavailable: true }),
     "offline_buffering",
   );
+});
+
+test("missing preference defaults on without erasing an explicit pause", () => {
+  assert.deepEqual(resolveFreeCapturePreference(null), {
+    configured: false,
+    enabled: true,
+  });
+  assert.deepEqual(resolveFreeCapturePreference("1"), {
+    configured: true,
+    enabled: true,
+  });
+  assert.deepEqual(resolveFreeCapturePreference("0"), {
+    configured: true,
+    enabled: false,
+  });
 });

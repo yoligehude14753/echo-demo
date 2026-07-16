@@ -29,6 +29,10 @@ import OnboardingModal from "@/components/OnboardingModal";
 import AboutModal from "@/components/AboutModal";
 import { useEchoCapture } from "@/capture/useEchoCapture";
 import AndroidCaptureSelector from "@/capture/AndroidCaptureSelector";
+import {
+  isFreeCapturePreferenceConfigured,
+  requestFreeCaptureSetup,
+} from "@/capture/freeCaptureMode";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
@@ -68,6 +72,20 @@ export default function App(): JSX.Element {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
+  const initialFreeCaptureSetupRequested = useRef(false);
+
+  useEffect(() => {
+    if (onboarding.shouldShow) return;
+    if (initialFreeCaptureSetupRequested.current) return;
+    if (isFreeCapturePreferenceConfigured()) return;
+    // Child selectors subscribe during the same commit. Defer one task so both
+    // Desktop and Android can receive the first-run setup request.
+    const timer = window.setTimeout(() => {
+      initialFreeCaptureSetupRequested.current = true;
+      requestFreeCaptureSetup("first_run");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [onboarding.shouldShow]);
 
   useEffect(() => {
     const eventType = events[events.length - 1]?.type;

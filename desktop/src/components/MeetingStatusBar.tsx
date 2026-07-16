@@ -26,6 +26,8 @@ import { requestAndroidCaptureStart } from "@/capture/AndroidCaptureSelector";
 import { isNativeMobile } from "@/runtime";
 import { audioCapture } from "@/capture/audioCapture";
 import {
+  currentCaptureRuntimeSnapshot,
+  onFreeCaptureSetupRequest,
   setFormalMeetingOverlay,
   setFreeCaptureEnabled,
 } from "@/capture/freeCaptureMode";
@@ -92,6 +94,8 @@ export default function MeetingStatusBar(): JSX.Element {
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);
   const [captureRevision, setCaptureRevision] = useState(0);
   const [captureSaving, setCaptureSaving] = useState(false);
+  const [captureSelectionStartsFormal, setCaptureSelectionStartsFormal] =
+    useState(false);
   const events = useStore((s) => s.events);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const currentMeetingState = useStore((s) =>
@@ -199,39 +203,54 @@ export default function MeetingStatusBar(): JSX.Element {
     }
   }, [events, refresh]);
 
-  const prepareCapture = useCallback(async (): Promise<boolean> => {
-    const snapshot = await getCaptureDevices();
-    const onlineDevices = snapshot.devices.filter((device) => device.online);
-    const localDeviceId = captureDeviceId();
-    if (onlineDevices.length > 1) {
-      const initialSelection = snapshot.control.selectedDeviceIds.filter((id) =>
-        onlineDevices.some((device) => device.deviceId === id),
-      );
-      setCaptureDevices(onlineDevices);
-      setCaptureRevision(snapshot.control.revision);
-      setCaptureMode(snapshot.control.mode);
-      setSelectedDeviceIds(
-        initialSelection.length > 0
-          ? initialSelection
-          : [
-              onlineDevices.some((device) => device.deviceId === localDeviceId)
-                ? localDeviceId
-                : onlineDevices[0].deviceId,
-            ],
-      );
-      setCapturePickerOpen(true);
-      return false;
-    }
-    const targetDeviceId = onlineDevices[0]?.deviceId ?? localDeviceId;
-    const control = await updateCaptureControl({
-      mode: "single",
-      selectedDeviceIds: [targetDeviceId],
-      expectedRevision: snapshot.control.revision,
-    });
-    announceCaptureControl(control);
-    setFreeCaptureEnabled(true);
-    return true;
-  }, []);
+  const prepareCapture = useCallback(
+    async (startFormalAfterSelection: boolean): Promise<boolean> => {
+      const snapshot = await getCaptureDevices();
+      const onlineDevices = snapshot.devices.filter((device) => device.online);
+      const localDeviceId = captureDeviceId();
+      if (onlineDevices.length > 1) {
+        const initialSelection = snapshot.control.selectedDeviceIds.filter((id) =>
+          onlineDevices.some((device) => device.deviceId === id),
+        );
+        setCaptureDevices(onlineDevices);
+        setCaptureRevision(snapshot.control.revision);
+        setCaptureMode(snapshot.control.mode);
+        setSelectedDeviceIds(
+          initialSelection.length > 0
+            ? initialSelection
+            : [
+                onlineDevices.some((device) => device.deviceId === localDeviceId)
+                  ? localDeviceId
+                  : onlineDevices[0].deviceId,
+              ],
+        );
+        setCaptureSelectionStartsFormal(startFormalAfterSelection);
+        setCapturePickerOpen(true);
+        return false;
+      }
+      const control = await updateCaptureControl({
+        mode: "single",
+        selectedDeviceIds: [localDeviceId],
+        expectedRevision: snapshot.control.revision,
+      });
+      announceCaptureControl(control);
+      setFreeCaptureEnabled(true);
+      return true;
+    },
+    [],
+  );
+
+  useEffect(
+    () =>
+      onFreeCaptureSetupRequest((reason) => {
+        if (isNativeMobile()) return;
+        void prepareCapture(reason === "formal_meeting").catch((error) => {
+          console.error("[capture-control] automatic setup failed", error);
+          message.error("无法准备自由收音，请检查服务连接");
+        });
+      }),
+    [prepareCapture],
+  );
 
   const onClick = useCallback(async (captureReady = false) => {
     if (busy) return;
@@ -239,10 +258,21 @@ export default function MeetingStatusBar(): JSX.Element {
     setBusy(true);
     try {
       if (snap.mode === "idle" || snap.started_by === "auto") {
+        const runtime = currentCaptureRuntimeSnapshot();
+        const captureAlreadySelected =
+          runtime?.freeModeEnabled === true && runtime.selected;
         if (isNativeMobile()) {
-          if (!(await requestAndroidCaptureStart())) return;
-        } else if (!captureReady && !(await prepareCapture())) {
-          return;
+          if (!captureAlreadySelected && !(await requestAndroidCaptureStart())) {
+            return;
+          }
+        } else if (!captureReady && !captureAlreadySelected) {
+          if (runtime?.selected) {
+            // An explicit pause is respected during normal operation. A formal
+            // meeting is the user's explicit request to resume this device.
+            setFreeCaptureEnabled(true);
+          } else if (!(await prepareCapture(true))) {
+            return;
+          }
         }
         await audioCapture.waitForFirstFrame();
         if (hideSharedPublicHistory) {
@@ -349,6 +379,7 @@ export default function MeetingStatusBar(): JSX.Element {
     prepareCapture,
     snap.meeting_id,
     snap.mode,
+    snap.started_by,
     upsertMeeting,
   ]);
 
@@ -362,7 +393,11 @@ export default function MeetingStatusBar(): JSX.Element {
       return;
     }
     if (!selected.includes(captureDeviceId())) {
-      message.warning("要从本设备开始正式会议，请先把本设备选为收音端");
+      message.warning(
+        captureSelectionStartsFormal
+          ? "要从本设备开始正式会议，请先把本设备选为收音端"
+          : "要在本设备自由收音，请先把本设备选为收音端",
+      );
       return;
     }
     setCaptureSaving(true);
@@ -375,7 +410,9 @@ export default function MeetingStatusBar(): JSX.Element {
       announceCaptureControl(control);
       setFreeCaptureEnabled(true);
       setCapturePickerOpen(false);
-      await onClick(true);
+      if (captureSelectionStartsFormal) {
+        await onClick(true);
+      }
     } catch (error) {
       console.error("[capture-control] selection failed", error);
       if (error instanceof CaptureControlConflictError) {
@@ -403,6 +440,7 @@ export default function MeetingStatusBar(): JSX.Element {
   }, [
     captureMode,
     captureRevision,
+    captureSelectionStartsFormal,
     onClick,
     selectedDeviceIds,
   ]);
@@ -436,10 +474,17 @@ export default function MeetingStatusBar(): JSX.Element {
       title="选择收音设备"
       open={capturePickerOpen}
       confirmLoading={captureSaving}
-      okText="开启自由收音并开始正式会议"
+      okText={
+        captureSelectionStartsFormal
+          ? "开启自由收音并开始正式会议"
+          : "开启自由收音"
+      }
       cancelText="取消"
       onOk={() => void confirmCaptureSelection()}
-      onCancel={() => setCapturePickerOpen(false)}
+      onCancel={() => {
+        if (!captureSelectionStartsFormal) setFreeCaptureEnabled(false);
+        setCapturePickerOpen(false);
+      }}
       destroyOnClose
     >
       <Radio.Group

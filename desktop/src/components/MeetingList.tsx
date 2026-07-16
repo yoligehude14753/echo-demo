@@ -100,7 +100,7 @@ export default function MeetingList({
         {captureState === "capturing"
           ? "正在转写"
           : captureState === "standby"
-            ? "待机，点击开始会议后启用"
+            ? "自由收音等待授权或设备选择"
           : captureState === "initializing"
             ? "正在准备麦克风"
             : "麦克风不可用"}

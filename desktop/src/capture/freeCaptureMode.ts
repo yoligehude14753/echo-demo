@@ -2,6 +2,8 @@ export const FREE_CAPTURE_ENABLED_KEY = "echodesk.capture.freeModeEnabled.v1";
 export const FREE_CAPTURE_CHANGE_EVENT = "echodesk:free-capture-change";
 export const FREE_CAPTURE_RUNTIME_EVENT = "echodesk:capture-runtime-state";
 export const FREE_CAPTURE_COMMAND_EVENT = "echodesk:free-capture-command";
+export const FREE_CAPTURE_SETUP_REQUEST_EVENT =
+  "echodesk:free-capture-setup-request";
 
 export type CaptureRuntimeState =
   | "off"
@@ -24,6 +26,20 @@ export interface CaptureRuntimeSnapshot {
 }
 
 export type FreeCaptureCommand = "pause" | "resume";
+export type FreeCaptureSetupReason = "first_run" | "formal_meeting";
+
+export interface FreeCapturePreference {
+  configured: boolean;
+  enabled: boolean;
+}
+
+export function resolveFreeCapturePreference(
+  value: string | null | undefined,
+): FreeCapturePreference {
+  if (value === "0") return { configured: true, enabled: false };
+  if (value === "1") return { configured: true, enabled: true };
+  return { configured: false, enabled: true };
+}
 
 export interface CaptureRuntimeInputs {
   freeModeEnabled: boolean;
@@ -55,6 +71,7 @@ export function deriveCaptureRuntimeState(
 }
 
 let formalMeetingId: string | null = null;
+let latestRuntimeSnapshot: CaptureRuntimeSnapshot | null = null;
 
 function storage(): Storage | null {
   try {
@@ -64,8 +81,19 @@ function storage(): Storage | null {
   }
 }
 
+export function readFreeCapturePreference(): FreeCapturePreference {
+  const value = storage()?.getItem(FREE_CAPTURE_ENABLED_KEY);
+  // First-run and upgraded installs default to the product's always-listening
+  // intent. This does not bypass device selection or the OS microphone prompt.
+  return resolveFreeCapturePreference(value);
+}
+
 export function isFreeCaptureEnabled(): boolean {
-  return storage()?.getItem(FREE_CAPTURE_ENABLED_KEY) === "1";
+  return readFreeCapturePreference().enabled;
+}
+
+export function isFreeCapturePreferenceConfigured(): boolean {
+  return readFreeCapturePreference().configured;
 }
 
 export function setFreeCaptureEnabled(enabled: boolean): void {
@@ -91,6 +119,7 @@ export function currentFormalMeetingOverlay(): string | null {
 }
 
 export function publishCaptureRuntime(snapshot: CaptureRuntimeSnapshot): void {
+  latestRuntimeSnapshot = snapshot;
   document.documentElement.dataset.captureRuntimeState = snapshot.state;
   window.dispatchEvent(
     new CustomEvent<CaptureRuntimeSnapshot>(FREE_CAPTURE_RUNTIME_EVENT, {
@@ -98,6 +127,32 @@ export function publishCaptureRuntime(snapshot: CaptureRuntimeSnapshot): void {
     }),
   );
   window.echo?.notifyCaptureState?.(snapshot);
+}
+
+export function currentCaptureRuntimeSnapshot(): CaptureRuntimeSnapshot | null {
+  return latestRuntimeSnapshot;
+}
+
+export function requestFreeCaptureSetup(
+  reason: FreeCaptureSetupReason = "first_run",
+): void {
+  window.dispatchEvent(
+    new CustomEvent<FreeCaptureSetupReason>(FREE_CAPTURE_SETUP_REQUEST_EVENT, {
+      detail: reason,
+    }),
+  );
+}
+
+export function onFreeCaptureSetupRequest(
+  listener: (reason: FreeCaptureSetupReason) => void,
+): () => void {
+  const handler = (event: Event) => {
+    const reason = (event as CustomEvent<FreeCaptureSetupReason>).detail;
+    listener(reason === "formal_meeting" ? reason : "first_run");
+  };
+  window.addEventListener(FREE_CAPTURE_SETUP_REQUEST_EVENT, handler);
+  return () =>
+    window.removeEventListener(FREE_CAPTURE_SETUP_REQUEST_EVENT, handler);
 }
 
 export function installFreeCaptureCommandBridge(): () => void {

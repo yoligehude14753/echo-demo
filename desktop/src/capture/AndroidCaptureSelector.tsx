@@ -18,6 +18,8 @@ import {
 import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 import {
   isFreeCaptureEnabled,
+  isFreeCapturePreferenceConfigured,
+  onFreeCaptureSetupRequest,
   setFreeCaptureEnabled,
 } from "@/capture/freeCaptureMode";
 
@@ -27,12 +29,15 @@ let pendingRequest: PendingRequest | null = null;
 
 export function isAndroidCaptureAuthorized(): boolean {
   if (!isNativeMobile()) return true;
-  return isFreeCaptureEnabled();
+  return (
+    isFreeCapturePreferenceConfigured() &&
+    isFreeCaptureEnabled()
+  );
 }
 
 export function requestAndroidCaptureStart(): Promise<boolean> {
   if (!isNativeMobile()) return Promise.resolve(true);
-  if (isFreeCaptureEnabled()) return Promise.resolve(true);
+  if (isAndroidCaptureAuthorized()) return Promise.resolve(true);
   if (pendingRequest) return Promise.resolve(false);
   return new Promise((resolve) => {
     pendingRequest = { resolve };
@@ -96,7 +101,11 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
         .finally(() => setLoading(false));
     };
     window.addEventListener("echodesk:android-capture-request", request);
-    return () => window.removeEventListener("echodesk:android-capture-request", request);
+    const offSetupRequest = onFreeCaptureSetupRequest(() => request());
+    return () => {
+      window.removeEventListener("echodesk:android-capture-request", request);
+      offSetupRequest();
+    };
   }, [applyAuthoritativeSnapshot]);
 
   if (!isNativeMobile()) return null;
