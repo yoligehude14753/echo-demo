@@ -2,6 +2,8 @@
 const {
   app,
   BrowserWindow,
+  Menu,
+  Tray,
   dialog,
   shell,
   ipcMain,
@@ -10,6 +12,7 @@ const {
   safeStorage,
   protocol,
   net,
+  nativeImage,
 } = require("electron");
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
@@ -97,6 +100,12 @@ const { createModelRuntimeIpcSurface } = require("./model-runtime-contract.cjs")
 const {
   startPackagedFusedWorkerBridge,
 } = require("./packaged-fused-worker-bridge.cjs");
+const {
+  DEFAULT_BACKGROUND_STATUS,
+  normalizeBackgroundStatus,
+  formalMeetingStatusLabel,
+  captureStatusLabel,
+} = require("./background-residency.cjs");
 
 // Electron 要求 privileged scheme 在 app ready 前完成声明。打包态只从该
 // secure/standard origin 加载静态资源，不再使用具有 opaque Origin 的 file://。
@@ -154,6 +163,8 @@ let fusedWorkerBridge = null;
 let fusedWorkerNonce = null;
 let backendLifecycleGeneration = 0;
 let mainWindow = null;
+let tray = null;
+let backgroundStatus = DEFAULT_BACKGROUND_STATUS;
 let healthTimer = null;
 let publicBackendHealthTimer = null;
 let healthStartedAt = 0;
@@ -178,6 +189,12 @@ let updateCheckTimer = null;
 let updateCheckInFlight = false;
 let appUpdateManager = null;
 const activeArtifactDownloadSenders = new WeakSet();
+const START_HIDDEN = process.argv.includes("--hidden");
+
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+}
 
 // 主进程未捕获异常不弹 fatal dialog；UI 应该自己感知 backend 状态
 process.on("uncaughtException", (err) => {
@@ -2518,7 +2535,148 @@ function openExternalHttps(rawUrl) {
   return shell.openExternal(validatedExternalHttpsUrl(rawUrl));
 }
 
-async function createWindow() {
+function sendBackgroundCommand(command) {
+  if (!mainWindow || mainWindow.isDestroyed() || !rendererReady) return false;
+  try {
+    mainWindow.webContents.send("background:command", command);
+    return true;
+  } catch (error) {
+    log(`[background] command failed [${safeFailureCode(error)}]`);
+    return false;
+  }
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    void createWindow({ showOnReady: true }).catch((error) => {
+      console.error("[app] failed to recreate the main window:", error);
+    });
+    return;
+  }
+  if (process.platform === "darwin") {
+    void app.dock?.show?.();
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function hideMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.hide();
+  if (process.platform === "darwin") {
+    app.dock?.hide?.();
+  }
+}
+
+function loginItemSettings() {
+  if (process.platform !== "darwin" && process.platform !== "win32") {
+    return { supported: false, openAtLogin: false };
+  }
+  const settings = app.getLoginItemSettings();
+  return {
+    supported: true,
+    openAtLogin: settings.openAtLogin === true,
+  };
+}
+
+function setOpenAtLogin(openAtLogin) {
+  if (process.platform !== "darwin" && process.platform !== "win32") {
+    return loginItemSettings();
+  }
+  const options = { openAtLogin: openAtLogin === true };
+  if (process.platform === "win32") {
+    options.path = process.execPath;
+    options.args = ["--hidden"];
+  } else {
+    options.openAsHidden = true;
+  }
+  app.setLoginItemSettings(options);
+  rebuildTrayMenu();
+  return loginItemSettings();
+}
+
+function requestExplicitQuit() {
+  if (shuttingDown || quittingForReal) return;
+  app.quit();
+}
+
+function trayIcon() {
+  const source = nativeImage.createFromPath(
+    path.join(__dirname, "icons", "echodesk.png"),
+  );
+  if (source.isEmpty()) return source;
+  const icon = source.resize({ width: 18, height: 18 });
+  if (process.platform === "darwin") icon.setTemplateImage(true);
+  return icon;
+}
+
+function rebuildTrayMenu() {
+  if (!tray || tray.isDestroyed()) return;
+  const login = loginItemSettings();
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "显示 EchoDesk",
+        click: showMainWindow,
+      },
+      { type: "separator" },
+      {
+        label: formalMeetingStatusLabel(backgroundStatus),
+        enabled: false,
+      },
+      {
+        label: captureStatusLabel(backgroundStatus),
+        enabled: false,
+      },
+      {
+        label: backgroundStatus.freeModeEnabled
+          ? "暂停自由收音"
+          : "恢复自由收音",
+        click: () =>
+          sendBackgroundCommand(
+            backgroundStatus.freeModeEnabled ? "pause" : "resume",
+          ),
+      },
+      { type: "separator" },
+      {
+        label: "检查更新",
+        click: () => {
+          void runScheduledUpdateCheck("tray");
+        },
+      },
+      {
+        label: "登录时启动",
+        type: "checkbox",
+        visible: login.supported,
+        checked: login.openAtLogin,
+        click: (item) => {
+          setOpenAtLogin(item.checked);
+        },
+      },
+      { type: "separator" },
+      {
+        label: "退出 EchoDesk",
+        click: requestExplicitQuit,
+      },
+    ]),
+  );
+  tray.setToolTip(
+    `${formalMeetingStatusLabel(backgroundStatus)} · ${captureStatusLabel(backgroundStatus)}`,
+  );
+}
+
+function ensureTray() {
+  if (tray && !tray.isDestroyed()) return tray;
+  tray = new Tray(trayIcon());
+  tray.setTitle("");
+  tray.on("click", showMainWindow);
+  tray.on("double-click", showMainWindow);
+  rebuildTrayMenu();
+  return tray;
+}
+
+async function createWindow({ showOnReady = true } = {}) {
   mainWindow = new BrowserWindow({
     title: IS_DEV ? "EchoDesk (dev)" : "EchoDesk",
     width: 1280,
@@ -2536,7 +2694,13 @@ async function createWindow() {
     },
   });
 
-  mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.once("ready-to-show", () => {
+    if (showOnReady) {
+      showMainWindow();
+    } else {
+      hideMainWindow();
+    }
+  });
 
   // renderer 启动早于 backend ready；did-finish-load 之后才能 send IPC
   // 这里 replay 最近一条 status，让 renderer 立刻拿到当前状态
@@ -2556,6 +2720,12 @@ async function createWindow() {
         log(`[updates] replay failed: ${safeFailureCode(e)}`);
       }
     }
+  });
+
+  mainWindow.on("close", (event) => {
+    if (shuttingDown || quittingForReal) return;
+    event.preventDefault();
+    hideMainWindow();
   });
 
   mainWindow.on("closed", () => {
@@ -3044,9 +3214,26 @@ ipcMain.handle("backend:manual-restart", async (event) => {
   return manualRestartBackend();
 });
 
+ipcMain.handle("background:set-status", async (event, rawStatus) => {
+  assertTrustedIpcOrigin(event);
+  backgroundStatus = normalizeBackgroundStatus(rawStatus);
+  rebuildTrayMenu();
+  return backgroundStatus;
+});
+
+ipcMain.handle("background:get-login-item", async (event) => {
+  assertTrustedIpcOrigin(event);
+  return loginItemSettings();
+});
+
+ipcMain.handle("background:set-login-item", async (event, openAtLogin) => {
+  assertTrustedIpcOrigin(event);
+  return setOpenAtLogin(openAtLogin === true);
+});
+
 // ---------- app 生命周期 ----------
 
-app.whenReady()
+if (singleInstanceLock) app.whenReady()
   .then(async () => {
     let protectedDirectories = [];
     let workspaceSweepSafe = true;
@@ -3076,16 +3263,22 @@ app.whenReady()
       isTrustedRendererOrigin: isTrustedAppRendererOrigin,
     });
     // 主窗口先起，让用户看到 UI；backend 状态由 renderer 自己渲染（degraded UI 等）
-    await createWindow();
+    ensureTray();
+    const openedAtLogin =
+      loginItemSettings().openAtLogin &&
+      app.getLoginItemSettings().wasOpenedAtLogin === true;
+    await createWindow({ showOnReady: !START_HIDDEN && !openedAtLogin });
     startBackend();
     scheduleStartupUpdateCheck();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        void createWindow().catch((error) => {
+        void createWindow({ showOnReady: true }).catch((error) => {
           console.error("[app] failed to recreate the main window:", error);
           app.quit();
         });
+      } else {
+        showMainWindow();
       }
     });
   })
@@ -3094,8 +3287,13 @@ app.whenReady()
     app.quit();
   });
 
+app.on("second-instance", () => {
+  showMainWindow();
+});
+
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  // The supervised backend, agent runtime, public session and sync worker are
+  // app-scoped. Keep them alive while the user has merely hidden every window.
 });
 
 // 优雅退出：先通知 renderer（避免它弹"断开"红条），再停止完整 backend
@@ -3110,6 +3308,7 @@ app.on("before-quit", (event) => {
   stopPublicBackendHealthWatcher();
 
   if (!backendProc || backendProc.exitCode !== null) {
+    stopFusedWorkerBridge();
     quittingForReal = true;
     return;
   }
@@ -3127,6 +3326,7 @@ app.on("before-quit", (event) => {
   const finalize = () => {
     if (finished) return;
     finished = true;
+    stopFusedWorkerBridge();
     quittingForReal = true;
     app.quit();
   };

@@ -55,6 +55,20 @@ contextBridge.exposeInMainWorld("echo", {
     return () => ipcRenderer.removeListener("updates:status", handler);
   },
 
+  // Desktop background residency. Renderer reports only a compact,
+  // fail-closed projection; the main process owns tray/menu lifecycle.
+  notifyCaptureState: (status) =>
+    ipcRenderer.invoke("background:set-status", status),
+  onCaptureCommand: (cb) => {
+    const handler = (_event, command) => cb(command);
+    ipcRenderer.on("background:command", handler);
+    return () => ipcRenderer.removeListener("background:command", handler);
+  },
+  getLoginItemSettings: () =>
+    ipcRenderer.invoke("background:get-login-item"),
+  setOpenAtLogin: (openAtLogin) =>
+    ipcRenderer.invoke("background:set-login-item", openAtLogin === true),
+
   // 麦克风权限（P3.5）
   // - getMicStatus: macOS systemPreferences.getMediaAccessStatus("microphone")
   //   返回 'not-determined'|'granted'|'denied'|'restricted'|'unknown'（非 mac → 'unknown'）
