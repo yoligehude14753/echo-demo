@@ -869,11 +869,28 @@ def test_public_capture_and_rag_docs_redact_server_file_references(
     public_client.app.dependency_overrides[capture_api.get_ambient_pipeline] = _AmbientPathProbe
     public_client.app.dependency_overrides[retrieval_api.get_rag] = _RagPathProbe
     headers = {"Authorization": f"Bearer {session['token']}"}
+    device_id = str(session["principal"]["device_id"])
     try:
+        control = public_client.get("/capture/control", headers=headers)
+        assert control.status_code == 200, control.text
+        selected = public_client.put(
+            "/capture/control",
+            headers=headers,
+            json={
+                "mode": "single",
+                "selectedDeviceIds": [device_id],
+                "expectedRevision": control.json()["revision"],
+            },
+        )
+        assert selected.status_code == 200, selected.text
         capture = public_client.post(
             "/capture/chunk",
             headers=headers,
             files={"audio": ("probe.wav", b"safe-audio-probe", "audio/wav")},
+            data={
+                "deviceId": device_id,
+                "segmentId": "path-projection-probe",
+            },
         )
         rag_docs = public_client.get("/rag/docs", headers=headers)
     finally:
