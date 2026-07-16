@@ -6,6 +6,7 @@ import type {
   CaptureDevice,
   CaptureMode,
 } from "@/capture/captureModePolicy";
+import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 
 async function json<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(`capture control HTTP ${response.status}`);
@@ -44,7 +45,8 @@ export async function putCaptureControl(
     { timeoutMs: 10_000, throwHttpErrors: false },
   );
   if (response.status === 409) {
-    throw new Error("收音选择已被其他设备更新，请重试");
+    await response.body?.cancel().catch(() => undefined);
+    throw new CaptureControlConflictError();
   }
   return json<CaptureControl>(response);
 }

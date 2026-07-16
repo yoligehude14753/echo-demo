@@ -1,5 +1,5 @@
 import { Button, Checkbox, Modal, Radio, message } from "antd";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { isNativeMobile } from "@/runtime";
 import { ensureSyncDeviceId } from "@/syncState";
 import {
@@ -15,6 +15,7 @@ import {
   getCaptureDevices,
   putCaptureControl,
 } from "@/capture/mobileCaptureApi";
+import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 
 const CAPTURE_AUTH_EVENT = "echodesk:android-capture-authorized";
 type PendingRequest = { resolve: (allowed: boolean) => void };
@@ -53,6 +54,24 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
   const [selected, setSelected] = useState<string[]>([]);
   const localDeviceId = ensureSyncDeviceId();
 
+  const applyAuthoritativeSnapshot = useCallback((
+    nextDevices: CaptureDevice[],
+    nextControl: CaptureControl,
+  ) => {
+    const online = onlineCaptureDevices(nextDevices);
+    const authoritativeSelection = nextControl.selectedDeviceIds.filter((id) =>
+      online.some((device) => device.deviceId === id),
+    );
+    setDevices(online);
+    setControl(nextControl);
+    setMode(online.length > 1 ? nextControl.mode : "single");
+    setSelected(
+      online.length > 1
+        ? authoritativeSelection
+        : [localDeviceId],
+    );
+  }, [localDeviceId]);
+
   useEffect(() => {
     if (!isNativeMobile()) return;
     setAuthorized(false);
@@ -61,15 +80,7 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
       setLoading(true);
       void Promise.all([getCaptureDevices(), getCaptureControl()])
         .then(([nextDevices, nextControl]) => {
-          const online = onlineCaptureDevices(nextDevices);
-          setDevices(online);
-          setControl(nextControl);
-          setMode(online.length > 1 ? nextControl.mode : "single");
-          setSelected(
-            online.length > 1
-              ? nextControl.selectedDeviceIds
-              : [localDeviceId],
-          );
+          applyAuthoritativeSnapshot(nextDevices, nextControl);
         })
         .catch(() => {
           message.error("无法读取在线设备，请检查服务连接");
@@ -81,7 +92,7 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
     };
     window.addEventListener("echodesk:android-capture-request", request);
     return () => window.removeEventListener("echodesk:android-capture-request", request);
-  }, [localDeviceId]);
+  }, [applyAuthoritativeSnapshot]);
 
   if (!isNativeMobile()) return null;
 
@@ -104,7 +115,21 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
       }
       finish(auth.allowed);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "保存收音选择失败");
+      if (error instanceof CaptureControlConflictError) {
+        try {
+          const [nextDevices, nextControl] = await Promise.all([
+            getCaptureDevices(),
+            getCaptureControl(),
+          ]);
+          applyAuthoritativeSnapshot(nextDevices, nextControl);
+          message.warning("收音选择已更新，请确认最新选择后重试");
+        } catch {
+          setControl(null);
+          message.error("无法刷新最新收音选择，请取消后重新打开");
+        }
+      } else {
+        message.error(error instanceof Error ? error.message : "保存收音选择失败");
+      }
     } finally {
       setLoading(false);
     }
@@ -118,7 +143,13 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
       maskClosable={false}
       footer={[
         <Button key="cancel" onClick={() => finish(false)}>取消</Button>,
-        <Button key="confirm" type="primary" loading={loading} onClick={confirm}>
+        <Button
+          key="confirm"
+          type="primary"
+          loading={loading}
+          disabled={!control}
+          onClick={confirm}
+        >
           确认并开始
         </Button>,
       ]}

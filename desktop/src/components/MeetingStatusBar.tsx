@@ -16,6 +16,7 @@ import {
   type CaptureDevice,
   type CaptureMode,
 } from "@/capture/captureControl";
+import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 import { ensureSyncDeviceId } from "@/syncState";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
@@ -353,13 +354,24 @@ export default function MeetingStatusBar(): JSX.Element {
       await onClick(true);
     } catch (error) {
       console.error("[capture-control] selection failed", error);
-      message.error("收音设备选择已被其它设备更新，请重新选择");
-      try {
-        const refreshed = await getCaptureDevices();
-        setCaptureDevices(refreshed.devices.filter((device) => device.online));
-        setCaptureRevision(refreshed.control.revision);
-      } catch {
-        // 保留当前选择，让用户稍后重试。
+      if (error instanceof CaptureControlConflictError) {
+        try {
+          const refreshed = await getCaptureDevices();
+          const onlineDevices = refreshed.devices.filter((device) => device.online);
+          const authoritativeSelection = refreshed.control.selectedDeviceIds.filter(
+            (id) => onlineDevices.some((device) => device.deviceId === id),
+          );
+          setCaptureDevices(onlineDevices);
+          setCaptureRevision(refreshed.control.revision);
+          setCaptureMode(refreshed.control.mode);
+          setSelectedDeviceIds(authoritativeSelection);
+          message.warning("收音选择已更新，请确认最新选择后重试");
+        } catch {
+          setCapturePickerOpen(false);
+          message.error("无法刷新最新收音选择，请重新打开");
+        }
+      } else {
+        message.error("收音设备选择保存失败，请重试");
       }
     } finally {
       setCaptureSaving(false);

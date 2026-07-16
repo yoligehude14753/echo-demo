@@ -41,6 +41,7 @@ import {
   type CaptureControlSnapshot,
   type CaptureMode,
 } from "@/capture/captureControl";
+import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
 const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
@@ -284,6 +285,10 @@ export async function updateCaptureControl(input: {
     },
     DEFAULT_PROBE_TIMEOUT_MS,
   );
+  if (response.status === 409) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new CaptureControlConflictError();
+  }
   return normalizeCaptureControl(await asJson<unknown>(response));
 }
 
