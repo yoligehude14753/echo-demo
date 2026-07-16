@@ -29,6 +29,7 @@ import {
 import { useStore } from "@/store";
 import type { AgentTaskCard, GeneratedArtifact } from "@/types";
 import { formatRelativeTime, type FailedArtifact } from "@/lib/failedArtifact";
+import { artifactDownloadName } from "@/lib/artifactDownloadName";
 import ArtifactPreviewModal from "@/components/ArtifactPreviewModal";
 import AuthenticatedDownloadLink from "@/components/AuthenticatedDownloadLink";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
@@ -286,6 +287,7 @@ export default function ArtifactPanel(): JSX.Element {
           <ArtifactSection title="已生成文件" count={artifacts.length}>
             {artifacts.map((a) => {
               const displayName = a.title?.trim() || artifactFallbackTitle(a.artifact_type);
+              const downloadName = artifactDownloadName(a);
               return (
                 <div
                   key={a.artifact_id}
@@ -324,7 +326,7 @@ export default function ArtifactPanel(): JSX.Element {
                     <span className="flex items-center gap-1 shrink-0 opacity-70 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                       <AuthenticatedDownloadLink
                         url={artifactDownloadUrl(a.artifact_id)}
-                        downloadName={displayName}
+                        downloadName={downloadName}
                         ariaLabel={`下载${displayName}`}
                         stopPropagation
                         className="p-1 rounded hover:bg-paper-200 focus-visible:bg-paper-200"
