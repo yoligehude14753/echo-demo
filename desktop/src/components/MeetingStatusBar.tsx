@@ -1,27 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
-import { Checkbox, Modal, Radio, Tooltip, message } from "antd";
+import { Tooltip, message } from "antd";
 import { Mic, Square } from "lucide-react";
 import {
   endMeeting,
   finalizeMeeting,
-  getCaptureDevices,
   getCurrentMeeting,
   manualEndMeeting,
   manualStartMeeting,
   startMeeting,
-  updateCaptureControl,
 } from "@/api";
-import {
-  announceCaptureControl,
-  type CaptureDevice,
-  type CaptureMode,
-} from "@/capture/captureControl";
-import { ensureSyncDeviceId } from "@/syncState";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { EchoEvent, MeetingStateSnapshot } from "@/types";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
-import { requestAndroidCaptureStart } from "@/capture/mobileCaptureApi";
+import { requestAndroidCaptureStart } from "@/capture/AndroidCaptureSelector";
 import { isNativeMobile } from "@/runtime";
 
 /**
@@ -80,12 +72,6 @@ export default function MeetingStatusBar(): JSX.Element {
   });
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
-  const [capturePickerOpen, setCapturePickerOpen] = useState(false);
-  const [captureDevices, setCaptureDevices] = useState<CaptureDevice[]>([]);
-  const [captureMode, setCaptureMode] = useState<CaptureMode>("single");
-  const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);
-  const [captureRevision, setCaptureRevision] = useState(0);
-  const [captureSaving, setCaptureSaving] = useState(false);
   const events = useStore((s) => s.events);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const currentMeetingState = useStore((s) =>
@@ -185,47 +171,15 @@ export default function MeetingStatusBar(): JSX.Element {
     }
   }, [events, refresh]);
 
-  const prepareCapture = useCallback(async (): Promise<boolean> => {
-    const snapshot = await getCaptureDevices();
-    const onlineDevices = snapshot.devices.filter((device) => device.online);
-    const localDeviceId = ensureSyncDeviceId();
-    if (onlineDevices.length > 1) {
-      const initialSelection = snapshot.control.selectedDeviceIds.filter((id) =>
-        onlineDevices.some((device) => device.deviceId === id),
-      );
-      setCaptureDevices(onlineDevices);
-      setCaptureRevision(snapshot.control.revision);
-      setCaptureMode(snapshot.control.mode);
-      setSelectedDeviceIds(
-        initialSelection.length > 0
-          ? initialSelection
-          : [
-              onlineDevices.some((device) => device.deviceId === localDeviceId)
-                ? localDeviceId
-                : onlineDevices[0].deviceId,
-            ],
-      );
-      setCapturePickerOpen(true);
-      return false;
-    }
-    const targetDeviceId = onlineDevices[0]?.deviceId ?? localDeviceId;
-    const control = await updateCaptureControl({
-      mode: "single",
-      selectedDeviceIds: [targetDeviceId],
-      expectedRevision: snapshot.control.revision,
-    });
-    announceCaptureControl(control);
-    return true;
-  }, []);
-
-  const onClick = useCallback(async (captureReady = false) => {
+  const onClick = useCallback(async () => {
     if (busy) return;
     const originGeneration = captureGeneration();
     setBusy(true);
     try {
       if (snap.mode === "idle") {
-        if (!captureReady && !(await prepareCapture())) return;
-        if (isNativeMobile() && !(await requestAndroidCaptureStart())) return;
+        if (isNativeMobile() && !(await requestAndroidCaptureStart())) {
+          return;
+        }
         if (hideSharedPublicHistory) {
           const meetingId = newLocalMeetingId();
           await startMeeting(meetingId);
@@ -323,49 +277,9 @@ export default function MeetingStatusBar(): JSX.Element {
     isCurrent,
     markMeetingActive,
     markMeetingEnded,
-    prepareCapture,
     snap.meeting_id,
     snap.mode,
     upsertMeeting,
-  ]);
-
-  const confirmCaptureSelection = useCallback(async () => {
-    const selected =
-      captureMode === "single"
-        ? selectedDeviceIds.slice(0, 1)
-        : selectedDeviceIds;
-    if (selected.length === 0) {
-      message.warning("请至少选择一台收音设备");
-      return;
-    }
-    setCaptureSaving(true);
-    try {
-      const control = await updateCaptureControl({
-        mode: captureMode,
-        selectedDeviceIds: selected,
-        expectedRevision: captureRevision,
-      });
-      announceCaptureControl(control);
-      setCapturePickerOpen(false);
-      await onClick(true);
-    } catch (error) {
-      console.error("[capture-control] selection failed", error);
-      message.error("收音设备选择已被其它设备更新，请重新选择");
-      try {
-        const refreshed = await getCaptureDevices();
-        setCaptureDevices(refreshed.devices.filter((device) => device.online));
-        setCaptureRevision(refreshed.control.revision);
-      } catch {
-        // 保留当前选择，让用户稍后重试。
-      }
-    } finally {
-      setCaptureSaving(false);
-    }
-  }, [
-    captureMode,
-    captureRevision,
-    onClick,
-    selectedDeviceIds,
   ]);
 
   const isMeeting = snap.mode === "in_meeting";
@@ -374,7 +288,7 @@ export default function MeetingStatusBar(): JSX.Element {
   void tick; // 强制 elapsed / minutes 重渲染
 
   const tooltipTitle = !isMeeting
-    ? "点击后选择收音设备并开始；未点击时麦克风保持待机"
+    ? "点击手动开始会议；未点击时环境音也会持续采集并自动识别会议"
     : isAuto
       ? `已自动识别为会议并开始记录；点击可主动结束并生成纪要（已持续 ${elapsedMinutes(snap.started_at)} 分钟）`
       : "点击结束会议（手动开始，将生成纪要）";
@@ -392,56 +306,10 @@ export default function MeetingStatusBar(): JSX.Element {
   }
 
   return (
-    <>
-    <Modal
-      title="选择收音设备"
-      open={capturePickerOpen}
-      confirmLoading={captureSaving}
-      okText="开始会议"
-      cancelText="取消"
-      onOk={() => void confirmCaptureSelection()}
-      onCancel={() => setCapturePickerOpen(false)}
-      destroyOnClose
-    >
-      <Radio.Group
-        value={captureMode}
-        onChange={(event) => {
-          const mode = event.target.value as CaptureMode;
-          setCaptureMode(mode);
-          if (mode === "single") {
-            setSelectedDeviceIds((current) => current.slice(0, 1));
-          }
-        }}
-      >
-        <Radio value="single">仅一台设备</Radio>
-        <Radio value="multi">多台设备同时收音</Radio>
-      </Radio.Group>
-      <div className="mt-4 flex flex-col gap-2">
-        {captureDevices.map((device) => (
-          <Checkbox
-            key={device.deviceId}
-            checked={selectedDeviceIds.includes(device.deviceId)}
-            onChange={(event) => {
-              setSelectedDeviceIds((current) => {
-                if (captureMode === "single") {
-                  return event.target.checked ? [device.deviceId] : [];
-                }
-                return event.target.checked
-                  ? Array.from(new Set([...current, device.deviceId]))
-                  : current.filter((id) => id !== device.deviceId);
-              });
-            }}
-          >
-            {device.deviceName}
-            <span className="ml-2 text-xs text-ink-400">{device.platform}</span>
-          </Checkbox>
-        ))}
-      </div>
-    </Modal>
     <Tooltip title={tooltipTitle}>
       <button
         type="button"
-        onClick={() => void onClick(false)}
+        onClick={onClick}
         disabled={busy}
         className={`app-no-drag inline-flex h-8 min-w-[104px] items-center justify-center gap-1.5 rounded-md px-3 text-[12px] font-semibold transition ${buttonClass} disabled:opacity-50`}
         data-testid="meeting-status-bar"
@@ -470,6 +338,5 @@ export default function MeetingStatusBar(): JSX.Element {
         )}
       </button>
     </Tooltip>
-    </>
   );
 }

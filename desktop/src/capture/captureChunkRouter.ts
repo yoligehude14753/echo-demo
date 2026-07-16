@@ -144,8 +144,6 @@ export function attachCaptureChunkRouter(
       : undefined;
 
     const seq = ++requestSeq;
-    const deviceId = ensureSyncDeviceId();
-    const segmentId = `${deviceId}:${generation}:${seq}`;
     const controller = new AbortController();
     activeAbort = controller;
     emitTransport({
@@ -157,8 +155,7 @@ export function attachCaptureChunkRouter(
       const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId, {
         signal: controller.signal,
         idempotencyKey: `capture:${generation}:${seq}`,
-        deviceId,
-        segmentId,
+        deviceId: ensureSyncDeviceId(),
       });
       if (
         disposed ||
