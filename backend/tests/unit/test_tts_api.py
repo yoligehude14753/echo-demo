@@ -248,15 +248,15 @@ def test_diag_upstream_error(
 
 
 @pytest.mark.unit
-def test_diag_disabled_state(
+def test_diag_not_configured_state(
     make_client: Callable[..., TestClient],
 ) -> None:
     client = make_client(settings=_make_tts_settings(tts_enabled=False))
     r = client.get("/tts/diag")
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] is False
-    assert body["state"] == "disabled"
+    assert body["ok"] is None
+    assert body["state"] == "not_configured"
 
 
 @pytest.mark.unit

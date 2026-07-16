@@ -473,12 +473,18 @@ function TtsTopBarButton({
 }: {
   tts: ReturnType<typeof useTtsPlayer>;
 }): JSX.Element {
+  const notConfigured =
+    tts.synthHealth?.state === "not_configured" ||
+    tts.synthHealth?.state === "disabled";
   const unhealthy =
     tts.enabled &&
+    !notConfigured &&
     (tts.lastError !== null ||
-      (tts.synthHealth !== null && tts.synthHealth.ok === false));
+      tts.synthHealth?.ok === false);
   const tooltip = !tts.enabled
     ? "语音播报已关闭"
+    : notConfigured
+      ? "语音播报未配置（可选），不影响会议、转写或 AI"
     : unhealthy
       ? "语音播报暂时不可用，可在 AI 状态中重新测试"
       : tts.synthHealth?.ok
@@ -488,15 +494,22 @@ function TtsTopBarButton({
     ? "播报中"
     : !tts.enabled
       ? "已静音"
+      : notConfigured
+        ? "播报未配置"
       : unhealthy
         ? "播报异常"
         : "语音播报";
-  const color = !tts.enabled
+  const color = !tts.enabled || notConfigured
     ? "text-ink-400 hover:bg-paper-200"
     : unhealthy
       ? "text-amber-600 hover:bg-paper-200"
       : "text-accent hover:bg-paper-200";
-  const Icon = !tts.enabled ? VolumeX : unhealthy ? AlertTriangle : Volume2;
+  const Icon =
+    !tts.enabled || notConfigured
+      ? VolumeX
+      : unhealthy
+        ? AlertTriangle
+        : Volume2;
   return (
     <Tooltip title={tooltip}>
       <button
@@ -507,6 +520,8 @@ function TtsTopBarButton({
         data-tts-state={
           !tts.enabled
             ? "disabled"
+            : notConfigured
+              ? "not_configured"
             : unhealthy
               ? "unhealthy"
               : tts.isSpeaking

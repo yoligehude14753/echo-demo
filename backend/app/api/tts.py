@@ -166,9 +166,18 @@ async def tts_suggest(
 class DiagResult(BaseModel):
     """TTS 子系统健康快照。前端 StatusBar 直接渲染这套字段。"""
 
-    ok: bool = Field(description="True 才表示合成 + 解码 + 非静音三件套通过")
-    state: Literal["ok", "disabled", "upstream_error", "silent_output", "empty"] = Field(
-        description="UI 取 state 走分支：ok 显绿、disabled 灰、其它红/橙"
+    ok: bool | None = Field(
+        description="True 表示可用，False 表示故障，None 表示可选能力未配置"
+    )
+    state: Literal[
+        "ok",
+        "not_configured",
+        "disabled",
+        "upstream_error",
+        "silent_output",
+        "empty",
+    ] = Field(
+        description="UI 取 state 走分支：ok 显绿、not_configured/disabled 灰、其它红/橙"
     )
     detail: str | None = Field(default=None, description="人类可读说明；用于 Popover tooltip")
     latency_ms: float | None = None
@@ -182,6 +191,7 @@ class DiagResult(BaseModel):
 
 _PUBLIC_DIAG_DETAIL: dict[str, str | None] = {
     "ok": None,
+    "not_configured": "语音播报未配置（可选）",
     "disabled": "语音播报已关闭",
     "upstream_error": "语音合成服务暂时不可用",
     "silent_output": "语音合成结果不可播放",
@@ -204,8 +214,8 @@ async def _run_diag_uncached(tts: Qwen3TTS, settings: Settings) -> DiagResult:
     """跑一次实际合成 probe。结果总是返回 DiagResult，绝不抛——失败编码进 state。"""
     if not settings.tts_enabled:
         return DiagResult(
-            ok=False,
-            state="disabled",
+            ok=None,
+            state="not_configured",
             detail="tts_enabled=false in settings",
             voice=tts.default_voice,
             base_url=tts.base_url,

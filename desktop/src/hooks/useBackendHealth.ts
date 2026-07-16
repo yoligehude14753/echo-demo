@@ -46,6 +46,7 @@ export interface SupervisorStatus {
 
 export interface ProbeResultDTO {
   ok: boolean | null;
+  required?: boolean;
   latency_ms?: number;
   error?: string;
   reason?: string;

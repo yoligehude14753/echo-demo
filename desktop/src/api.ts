@@ -1756,8 +1756,14 @@ export async function ttsSpeak(
  * 与 backend /tts/diag 一一对应。
  */
 export interface TtsDiagResult {
-  ok: boolean;
-  state: "ok" | "disabled" | "upstream_error" | "silent_output" | "empty";
+  ok: boolean | null;
+  state:
+    | "ok"
+    | "not_configured"
+    | "disabled"
+    | "upstream_error"
+    | "silent_output"
+    | "empty";
   detail: string | null;
   latency_ms: number | null;
   pcm_bytes: number | null;

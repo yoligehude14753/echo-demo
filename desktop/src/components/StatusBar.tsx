@@ -97,6 +97,14 @@ function levelFromProbes(probes: ProbeResultDTO[]): Level {
   return "warn";
 }
 
+function levelFromRequiredProbes(
+  probes: Array<ProbeResultDTO | undefined>,
+): Level {
+  if (probes.every((candidate) => candidate === undefined)) return "unknown";
+  if (probes.some((candidate) => candidate === undefined)) return "warn";
+  return levelFromProbes(probes.filter(isProbeResult));
+}
+
 // 多个 level 合并取最差（unknown < ok 仅在两者都不为 fail/warn 时退到 unknown）。
 // 用于模型服务 pill 同时反映 TCP probe 与 /tts/diag 合成回环两条线索。
 const LEVEL_ORDER: Record<Level, number> = { ok: 0, warn: 1, fail: 2, unknown: 3 };
@@ -184,9 +192,11 @@ function probeFailureLabel(p: ProbeResultDTO): string {
 function ProbeRow({
   name,
   probe,
+  optional = false,
 }: {
   name: string;
   probe: ProbeResultDTO | undefined;
+  optional?: boolean;
 }): JSX.Element {
   if (!probe) {
     return (
@@ -196,10 +206,24 @@ function ProbeRow({
       </div>
     );
   }
-  const color =
-    probe.ok === true ? "text-accent" : probe.ok === false ? "text-err" : "text-amber-500";
+  const neutral =
+    optional &&
+    (probe.required === false ||
+      probe.reason === "not_configured" ||
+      probe.reason === "tts_disabled");
+  const color = neutral
+    ? "text-ink-500"
+    : probe.ok === true
+      ? "text-accent"
+      : probe.ok === false
+        ? "text-err"
+        : "text-amber-500";
   const status =
-    probe.ok === true
+    neutral && probe.ok !== true
+      ? probe.reason === "not_configured" || probe.reason === "tts_disabled"
+        ? "未配置（可选）"
+        : `${probeFailureLabel(probe)}（可选）`
+      : probe.ok === true
       ? `正常 · ${fmtLatency(probe)}`
       : probe.ok === false
         ? probeFailureLabel(probe)
@@ -348,6 +372,7 @@ function AiEnginePopover({
   const stt = probe(remote, "speech_recognition") ?? probe(remote, "heyi_stt_firered");
   const tts = probe(remote, "speech_synthesis") ?? probe(remote, "heyi_tts_qwen3");
   const mainModel = probe(remote, "main_model") ?? probe(remote, "yunwu_llm_main");
+  const fastModel = probe(remote, "fast_model") ?? probe(remote, "yunwu_llm_fast");
   const webSearch = probe(remote, "web_search") ?? probe(remote, "tavily");
   const [refreshing, setRefreshing] = useState(false);
   const refresh = async () => {
@@ -363,9 +388,13 @@ function AiEnginePopover({
   // 真实合成状态：以 ttsHealth 为准，TCP probe 仅当作辅助信息。
   const synthState = ttsHealth?.state;
   const synthOk = ttsHealth?.ok === true;
+  const synthNotConfigured =
+    synthState === "not_configured" || synthState === "disabled";
   const synthText =
     ttsEnabled === false
       ? "已关闭"
+      : synthNotConfigured
+        ? "未配置（可选）"
       : ttsLastError
         ? "最近一次播报失败"
         : !ttsHealth
@@ -376,9 +405,9 @@ function AiEnginePopover({
               ? "未检测到可播放的声音"
               : "暂不可用";
   const synthColor =
-    ttsEnabled === false
+    ttsEnabled === false || synthNotConfigured
       ? "text-ink-500"
-      : ttsLastError || (ttsHealth && !synthOk)
+      : ttsLastError || (ttsHealth && ttsHealth.ok === false)
         ? "text-err"
         : synthOk
           ? "text-accent"
@@ -391,11 +420,13 @@ function AiEnginePopover({
         AI 引擎
       </div>
       <ProbeMetaRow name="主模型" probe={mainModel} fallback="deepseek-v4-flash" />
-      <ProbeRow name="模型连接" probe={mainModel} />
+      <ProbeRow name="主模型连接" probe={mainModel} />
+      <ProbeMetaRow name="快速模型" probe={fastModel} fallback="gpt-5.4-nano" />
+      <ProbeRow name="快速模型连接" probe={fastModel} />
       <ProbeRow name="联网检索" probe={webSearch} />
       <div className="my-2 h-px bg-paper-300" />
       <ProbeRow name="语音识别" probe={stt} />
-      <ProbeRow name="语音合成连接" probe={tts} />
+      <ProbeRow name="语音合成连接（可选）" probe={tts} optional />
       <div className="flex items-start justify-between text-[11px] mt-0.5">
         <span className="text-ink-700 shrink-0 mr-2">语音播报</span>
         <span
@@ -424,7 +455,7 @@ function AiEnginePopover({
           </Button>
         )}
       </div>
-      {ttsLastError && (
+      {ttsLastError && !synthNotConfigured && (
         <div className="mt-1.5 flex items-start gap-1.5 break-words text-[10px] text-err">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
           <span>最近一次语音播报失败，可重新测试或在设置中暂时关闭播报。</span>
@@ -522,16 +553,18 @@ export default function StatusBar({
   const backendLevel = backendVersionBehind
     ? mergeLevels(backendBaseLevel, "warn")
     : backendBaseLevel;
-  // AI 引擎 pill 只表达 LLM / RAG / Web 能力。
-  // STT/TTS 的失败不应把这里拖红，否则会误导用户以为主模型不可用；
-  // 语音问题单独在「麦克风」和 popover 明细里呈现。
+  // AI 引擎 pill 的必需能力是主模型、快速模型和语音识别。
+  // TTS 与联网检索是可选能力，未配置或不可用都不能拖垮整体状态。
   const aiEngineLevel = useMemo(() => {
     const mainModel = probe(healthz?.remote, "main_model") ?? probe(healthz?.remote, "yunwu_llm_main");
-    const webSearch = probe(healthz?.remote, "web_search") ?? probe(healthz?.remote, "tavily");
+    const fastModel =
+      probe(healthz?.remote, "fast_model") ??
+      probe(healthz?.remote, "yunwu_llm_fast");
+    const speechRecognition =
+      probe(healthz?.remote, "speech_recognition") ??
+      probe(healthz?.remote, "heyi_stt_firered");
     return healthz?.remote
-      ? levelFromProbes(
-          [mainModel, webSearch].filter(isProbeResult),
-        )
+      ? levelFromRequiredProbes([mainModel, fastModel, speechRecognition])
       : ("unknown" as Level);
   }, [healthz?.remote]);
   const micLevel = levelFromMic(mic);
