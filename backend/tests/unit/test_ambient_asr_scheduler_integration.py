@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from app.adapters.stt import build_asr_scheduler
-from app.adapters.stt.contracts import ASRRequestContext
 from app.adapters.stt.errors import (
     ASRDeadlineExceeded,
     ASRIdempotencyConflict,
@@ -18,6 +17,7 @@ from app.adapters.stt.errors import (
 )
 from app.config import Settings
 from app.main import _bootstrap_payload
+from app.ports.asr import ASRRequestContext
 from app.schemas.meeting import TranscriptSegment
 from app.use_cases.ambient_capture import AmbientCapturePipeline
 
@@ -124,6 +124,7 @@ async def test_enabled_scheduler_success_uses_authenticated_scope_and_bounded_de
     assert context.principal_id == "legacy-local"
     assert context.device_id == "legacy-local"
     assert context.deadline_s == 0.4
+    assert context.scope_key == ("legacy-local", "legacy-local", "legacy-local")
 
 
 @pytest.mark.unit
