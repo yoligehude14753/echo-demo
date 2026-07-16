@@ -1,7 +1,7 @@
 import { Button, Checkbox, Modal, Radio, message } from "antd";
 import { useCallback, useEffect, useState } from "react";
 import { isNativeMobile } from "@/runtime";
-import { ensureSyncDeviceId } from "@/syncState";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 import {
   buildCaptureControlUpdate,
   onlineCaptureDevices,
@@ -52,7 +52,7 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
   const [control, setControl] = useState<CaptureControl | null>(null);
   const [mode, setMode] = useState<CaptureMode>("single");
   const [selected, setSelected] = useState<string[]>([]);
-  const localDeviceId = ensureSyncDeviceId();
+  const localDeviceId = captureDeviceId();
 
   const applyAuthoritativeSnapshot = useCallback((
     nextDevices: CaptureDevice[],

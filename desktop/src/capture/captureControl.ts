@@ -1,4 +1,4 @@
-import { ensureSyncDeviceId } from "@/syncState";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 
 export type CaptureMode = "single" | "multi";
 
@@ -85,7 +85,7 @@ export function normalizeCaptureDevices(value: unknown): CaptureDevice[] {
 
 export function isDeviceSelected(
   control: CaptureControl,
-  deviceId = ensureSyncDeviceId(),
+  deviceId = captureDeviceId(),
 ): boolean {
   if (control.mode === "single") {
     return control.selectedDeviceIds[0] === deviceId;

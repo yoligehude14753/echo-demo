@@ -199,6 +199,7 @@ let currentSession: {
   token: string;
   expiresAt: string | null;
   scopeKey: string;
+  deviceId: string | null;
   origin: string;
 } | null = null;
 let activeBackendOrigin: string | null = null;
@@ -949,6 +950,11 @@ function acceptSession(
   }
   const tenantId = body?.principal?.tenant_id;
   const ownerId = body?.principal?.owner_id;
+  const principalDeviceId =
+    typeof body?.principal?.device_id === "string" &&
+    body.principal.device_id.trim().length > 0
+      ? body.principal.device_id.trim()
+      : null;
   const scopeKey =
     typeof tenantId === "string" && typeof ownerId === "string"
       ? `${tenantId}:${ownerId}`
@@ -958,6 +964,7 @@ function acceptSession(
       token,
       expiresAt: body?.expires_at ?? null,
       scopeKey,
+      deviceId: principalDeviceId,
       origin,
     };
     publishBackendReadiness(
@@ -968,6 +975,14 @@ function acceptSession(
     publishIdentityStatus("ready");
   }
   return token;
+}
+
+/**
+ * The public backend assigns the capture-authoritative device id during
+ * enrollment. It is intentionally distinct from the optional Hub sync id.
+ */
+export function currentSessionDeviceId(): string | null {
+  return currentSession?.deviceId ?? null;
 }
 
 function readMemoryToken(origin: string): string | null {

@@ -17,7 +17,7 @@ import {
   type CaptureMode,
 } from "@/capture/captureControl";
 import { CaptureControlConflictError } from "@/capture/captureControlConflict";
-import { ensureSyncDeviceId } from "@/syncState";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { EchoEvent, MeetingStateSnapshot } from "@/types";
@@ -189,7 +189,7 @@ export default function MeetingStatusBar(): JSX.Element {
   const prepareCapture = useCallback(async (): Promise<boolean> => {
     const snapshot = await getCaptureDevices();
     const onlineDevices = snapshot.devices.filter((device) => device.online);
-    const localDeviceId = ensureSyncDeviceId();
+    const localDeviceId = captureDeviceId();
     if (onlineDevices.length > 1) {
       const initialSelection = snapshot.control.selectedDeviceIds.filter((id) =>
         onlineDevices.some((device) => device.deviceId === id),

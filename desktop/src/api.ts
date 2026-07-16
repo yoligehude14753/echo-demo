@@ -29,6 +29,7 @@ import {
   shareBackendBase,
 } from "@/runtime";
 import { apiTransport } from "@/session";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 import {
   enqueueSyncOperation,
   ensureSyncDeviceId,
@@ -208,7 +209,7 @@ export async function uploadCaptureChunk(
     segmentId?: string;
   } = {},
 ): Promise<CaptureChunkResponse> {
-  const deviceId = options.deviceId ?? ensureSyncDeviceId();
+  const deviceId = options.deviceId ?? captureDeviceId();
   const segmentId =
     options.segmentId ??
     `${deviceId}:${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;

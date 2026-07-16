@@ -35,7 +35,6 @@ import type {
   CaptureState,
   CaptureStatsSnapshot,
 } from "@/domain/session";
-import { ensureSyncDeviceId } from "@/syncState";
 import { useStore } from "@/store";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import {
@@ -43,6 +42,7 @@ import {
   onAndroidCaptureAuthorizationChange,
 } from "@/capture/AndroidCaptureSelector";
 import { isNativeMobile } from "@/runtime";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 
 const STATS_POLL_MS = 5_000;
 const CONTROL_POLL_MS = 3_000;
@@ -206,7 +206,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
       if (allowActivation && isDeviceSelected(control)) {
         try {
           const authorization = await authorizeCaptureControl({
-            deviceId: ensureSyncDeviceId(),
+            deviceId: captureDeviceId(),
             revision: control.revision,
           });
           if (
