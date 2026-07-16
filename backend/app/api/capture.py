@@ -209,6 +209,7 @@ async def capture_chunk(
     sample_rate: int = Form(16_000),
     meeting_id: str | None = Form(None),
     device_id: str = Form(..., alias="deviceId"),
+    segment_id: str = Form(..., alias="segmentId"),
     settings: Settings = Depends(get_settings),
     governor: PrincipalGovernor = Depends(get_quota_governor),
     selection_store: CaptureSelectionStore = Depends(get_capture_selection_store),
@@ -216,6 +217,8 @@ async def capture_chunk(
     principal = current_principal()
     if device_id != principal.device_id:
         raise HTTPException(status_code=403, detail="device identity mismatch")
+    if not segment_id.strip():
+        raise HTTPException(status_code=422, detail="segmentId is required")
     selection = await selection_store.get(principal.tenant_id, principal.owner_id)
     if not selection.allows(principal.device_id):
         raise HTTPException(status_code=409, detail="capture is not selected for this device")
