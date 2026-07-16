@@ -325,6 +325,18 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
     return () => window.clearTimeout(t);
   }, [state]);
 
+  if (state === "standby") {
+    return (
+      <Tag
+        className="!border-paper-300 !bg-paper-100 !text-ink-500"
+        data-testid="capture-status"
+        tabIndex={-1}
+      >
+        麦克风待机
+      </Tag>
+    );
+  }
+
   if (state === "initializing") {
     if (initializingTooLong) {
       return (

@@ -17,7 +17,7 @@
  */
 
 /** 麦克风采集域 — 与会议无关，永不手动关闭 */
-export type CaptureState = "initializing" | "capturing" | "error";
+export type CaptureState = "standby" | "initializing" | "capturing" | "error";
 
 /** 会议域 — 用户手动开关 */
 export type MeetingState = "idle" | "in_meeting" | "ended";

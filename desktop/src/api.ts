@@ -33,6 +33,13 @@ import {
   ensureSyncDeviceId,
   makeOperationId,
 } from "@/syncState";
+import {
+  normalizeCaptureControl,
+  normalizeCaptureDevices,
+  type CaptureControl,
+  type CaptureControlSnapshot,
+  type CaptureMode,
+} from "@/capture/captureControl";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
 const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
@@ -196,13 +203,19 @@ export async function uploadCaptureChunk(
     timeoutMs?: number;
     idempotencyKey?: string;
     deviceId?: string;
+    segmentId?: string;
   } = {},
 ): Promise<CaptureChunkResponse> {
+  const deviceId = options.deviceId ?? ensureSyncDeviceId();
+  const segmentId =
+    options.segmentId ??
+    `${deviceId}:${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
   const fd = new FormData();
   fd.append("audio", blob, "chunk.wav");
   fd.append("sample_rate", String(sampleRate));
+  fd.append("device_id", deviceId);
+  fd.append("segment_id", segmentId);
   if (meetingId) fd.append("meeting_id", meetingId);
-  if (options.deviceId) fd.append("deviceId", options.deviceId);
   const u = await apiUrl("/capture/chunk");
   const r = await fetchWithAbortTimeout(
     u,
@@ -213,7 +226,8 @@ export async function uploadCaptureChunk(
         ...(options.idempotencyKey
           ? { "Idempotency-Key": options.idempotencyKey }
           : {}),
-        ...(options.deviceId ? { "X-Capture-Device-Id": options.deviceId } : {}),
+        "X-Capture-Device-Id": deviceId,
+        "X-Capture-Segment-Id": segmentId,
       },
     },
     options.timeoutMs ?? CAPTURE_UPLOAD_TIMEOUT_MS,
@@ -221,6 +235,76 @@ export async function uploadCaptureChunk(
   );
   const parsed = await asJson<unknown>(r);
   return normalizeCaptureChunkResponse(parsed);
+}
+
+export async function getCaptureControl(
+  options: ApiReadOptions = {},
+): Promise<CaptureControl> {
+  const response = await fetchWithAbortTimeout(
+    await apiUrl("/capture/control"),
+    { method: "GET" },
+    DEFAULT_PROBE_TIMEOUT_MS,
+    options.signal,
+  );
+  return normalizeCaptureControl(await asJson<unknown>(response));
+}
+
+export async function getCaptureDevices(
+  options: ApiReadOptions = {},
+): Promise<CaptureControlSnapshot> {
+  const response = await fetchWithAbortTimeout(
+    await apiUrl("/capture/devices"),
+    { method: "GET" },
+    DEFAULT_PROBE_TIMEOUT_MS,
+    options.signal,
+  );
+  const body = await asJson<unknown>(response);
+  const record = body !== null && typeof body === "object"
+    ? body as Record<string, unknown>
+    : {};
+  return {
+    control: normalizeCaptureControl(record.control ?? body),
+    devices: normalizeCaptureDevices(body),
+  };
+}
+
+export async function updateCaptureControl(input: {
+  mode: CaptureMode;
+  selectedDeviceIds: string[];
+  expectedRevision: number;
+}): Promise<CaptureControl> {
+  const response = await fetchWithAbortTimeout(
+    await apiUrl("/capture/control"),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    DEFAULT_PROBE_TIMEOUT_MS,
+  );
+  return normalizeCaptureControl(await asJson<unknown>(response));
+}
+
+export async function authorizeCaptureControl(input: {
+  deviceId: string;
+  revision: number;
+}): Promise<{ allowed: boolean; mode: CaptureMode; revision: number }> {
+  const response = await fetchWithAbortTimeout(
+    await apiUrl("/capture/control/authorize"),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    DEFAULT_PROBE_TIMEOUT_MS,
+  );
+  const body = await asJson<Record<string, unknown>>(response);
+  return {
+    allowed: body.allowed === true,
+    mode: body.mode === "multi" ? "multi" : "single",
+    revision:
+      typeof body.revision === "number" ? body.revision : input.revision,
+  };
 }
 
 /**

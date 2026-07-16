@@ -99,6 +99,8 @@ export default function MeetingList({
       <div className="mt-1 min-w-0 overflow-hidden whitespace-nowrap pl-[18px] text-[11px] text-ink-400">
         {captureState === "capturing"
           ? "正在转写"
+          : captureState === "standby"
+            ? "待机，点击开始会议后启用"
           : captureState === "initializing"
             ? "正在准备麦克风"
             : "麦克风不可用"}
