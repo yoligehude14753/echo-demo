@@ -11,6 +11,14 @@
 - 固定 SHA 的 detached 只读语义 worktree：`/tmp/echodesk-b13-platforms`
 - 当前 verdict：`SOURCE_INTEGRATION_READY`
 
+## B14R 窄返工回收
+
+- B14R 观察到的固定 release SHA：`28caaade04cdb2038c2950017cbf702f126252c1`。
+- 观察缺口：安装后的 Preview 默认由 `backend-endpoint.cjs` 选择 `public_service`，因此绕过 bundled local runtime；renderer release fallback 也把无 authority snapshot 解释为 public。
+- 本轮只修 runtime selection：release 默认 `local_dev_diagnostic`，`main.cjs` 因此走 bundled-first supervisor；`ECHO_PRINCIPAL_MODE=public` 保留为显式远端模式；renderer 允许 release 下的 supervised local endpoint。未修改 bootstrap、签名或发布逻辑。
+- focused selection/renderer/route gate：`26 passed`；desktop `tsc --project desktop/tsconfig.json --noEmit`：通过。
+- 该 source candidate 尚未安装或重新打包。必须先由 B12R 对当前 candidate SHA 做 current-SHA rebind，再由 B14R/B15R 重建验收资产并重跑 quarantined bootstrap/安装态 turn-tool-cancel-checkpoint-restart-resume 证据；旧 `28caaade...` artifact 不可复用。
+
 ## 本轮窄修与冲突裁定
 
 - B11→B12 机械 lineage 保持不变；B11 persistence 继续拥有 session/checkpoint durable state，B12 embedded backend 继续拥有 inherited-FD runtime 语义。
@@ -75,3 +83,5 @@ B06P controlled tool path 在 focused source test 中读取 task-owned 临时文
 ## Verdict
 
 `SOURCE_INTEGRATION_READY`：B10→B11→B12 本地整合、B11 persistence identity、真实 Python B05M/B06P host adapter、同协议 Electron WorkerManager→worker-local `KernelDeps` fused turn、receipt/durable checkpoint/restart-resume、embedded/cancel 增量 gates、固定 transport 的 bounded live provider smoke 与三套 TypeScript `--noEmit` 均有证据。仍不包含 package/sign/notarize/install/cross-platform acceptance；不得把本轮 deterministic fused turn 当作 provider stability 或 live provider fused PASS。
+
+本轮 B14R 窄返工的最终 verdict 仍为 `SOURCE_INTEGRATION_READY`；它只表示 source/runtime selection 修复已完成。后续 B12R current-SHA rebind 与 B14R/B15R 安装态重建是强制前置条件，不能把旧 `28caaade04cdb2038c2950017cbf702f126252c1` artifact 当作修复后资产。

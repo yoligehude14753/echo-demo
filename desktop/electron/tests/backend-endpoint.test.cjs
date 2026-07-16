@@ -110,32 +110,46 @@ test("public mode and its custom host are authoritative for every URL", () => {
   );
 });
 
-test("packaged release is public and ignores stale local/public env overrides", () => {
+test("packaged release defaults to the bundled local backend and ignores stale public env overrides", () => {
   const runtime = resolveBackendEndpoint(config, {
     ECHO_PUBLIC_DEMO: "1",
-    ECHO_FORCE_LOCAL_BACKEND: "1",
     ECHO_BACKEND_PORT: "19001",
     ECHO_PUBLIC_BACKEND_BASE: "https://stale.example.test",
   });
 
   assert.equal(runtime.runtimeMode, "release");
+  assert.equal(runtime.mode, "local");
+  assert.equal(runtime.role, "local_dev_diagnostic");
+  assert.equal(runtime.source, "release-default-local");
+  assert.equal(runtime.backendBase, "http://127.0.0.1:8769");
+  assert.equal(runtime.spawnBackend, true);
+  assert.equal(runtime.localDevDiagnosticEndpoint, "http://127.0.0.1:8769");
+});
+
+test("packaged release keeps remote service as an explicit opt-in", () => {
+  const runtime = resolveBackendEndpoint(config, {
+    ECHO_PRINCIPAL_MODE: "public",
+  });
+
+  assert.equal(runtime.runtimeMode, "release");
   assert.equal(runtime.mode, "public");
   assert.equal(runtime.role, "public_service");
-  assert.equal(runtime.source, "release-config");
+  assert.equal(runtime.source, "explicit-principal-mode");
   assert.equal(runtime.backendBase, "https://echodesk.yoliyoli.uk");
   assert.equal(runtime.spawnBackend, false);
   assert.equal(runtime.localDevDiagnosticEndpoint, null);
 });
 
-test("legacy v1 packaged config maps only public service", () => {
+test("legacy v1 packaged config defaults to its bundled local backend", () => {
   const runtime = resolveBackendEndpoint(legacyConfig, {});
 
   assert.equal(runtime.schemaVersion, 1);
   assert.equal(runtime.runtimeMode, "release");
-  assert.equal(runtime.role, "public_service");
-  assert.equal(runtime.source, "release-legacy-public");
-  assert.equal(runtime.backendBase, "https://legacy.example.test");
-  assert.equal(runtime.localDevDiagnosticEndpoint, null);
+  assert.equal(runtime.role, "local_dev_diagnostic");
+  assert.equal(runtime.source, "release-default-local");
+  assert.equal(runtime.backendBase, "http://127.0.0.1:8769");
+  assert.equal(runtime.spawnBackend, true);
+  assert.equal(runtime.localDevDiagnosticEndpoint, "http://127.0.0.1:8769");
 });
 
 test("legacy v1 local config is available only in explicit development", () => {
@@ -171,14 +185,15 @@ test("unknown config versions and enabled Hub roles fail closed", () => {
   );
 });
 
-test("explicit local mode is rejected in packaged release", () => {
-  assert.throws(
-    () =>
-      resolveBackendEndpoint(config, {
-        ECHO_PRINCIPAL_MODE: "local",
-      }),
-    (error) => error?.code === "local_mode_forbidden_in_release",
-  );
+test("explicit local mode remains the packaged bundled-worker contract", () => {
+  const runtime = resolveBackendEndpoint(config, {
+    ECHO_PRINCIPAL_MODE: "local",
+  });
+
+  assert.equal(runtime.mode, "local");
+  assert.equal(runtime.role, "local_dev_diagnostic");
+  assert.equal(runtime.source, "explicit-principal-mode");
+  assert.equal(runtime.spawnBackend, true);
 });
 
 test("paired Hub gateway is never selected as a public service fallback", () => {

@@ -25,6 +25,22 @@ test("packaged renderer prefers main-process backend authority over localStorage
   assert.match(runtime, /window\.echo\?\.backendHost/);
 });
 
+test("renderer fallback remains local-first when the main-process snapshot is absent", () => {
+  const principalFallback = runtime
+    .split("export function principalMode()", 2)[1]
+    .split("export function backendRole()", 2)[0];
+  assert.match(principalFallback, /return "local";/);
+  assert.doesNotMatch(principalFallback, /runtimeMode\(\) === "release" \? "public"/);
+});
+
+test("packaged local routing accepts the supervised bundled endpoint in release", () => {
+  assert.doesNotMatch(
+    runtime,
+    /runtimeMode\(\) === "release" \|\| routing\.localDevDiagnosticEndpoint === null/,
+  );
+  assert.match(runtime, /local bundled backend endpoint is unavailable/);
+});
+
 test("artifact URL policy has no local fallback", () => {
   const artifactApi = readFileSync(
     path.resolve(__dirname, "../../src/api.ts"),

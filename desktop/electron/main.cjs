@@ -144,8 +144,8 @@ const PUBLIC_DEMO_MODE = BACKEND_ENDPOINT.mode === "public";
 const BACKEND_HOST = BACKEND_ENDPOINT.backendBase;
 const BACKEND_BIND_HOST = BACKEND_ENDPOINT.bindHost;
 
-// Packaged/release 的业务 endpoint 固定为 public service；local 只由显式
-// development/diagnostic runtime 选择。旧 ECHO_* 只在这两类显式模式中作为兼容输入。
+// Installed Preview defaults to the supervised bundled local backend/fused
+// worker. Remote public service is an explicit ECHO_PRINCIPAL_MODE=public opt-in.
 const SPAWN_BACKEND = BACKEND_ENDPOINT.spawnBackend;
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的

@@ -319,7 +319,9 @@ export function principalMode(): EchoPrincipalMode {
   }
   const configured = runtimeEnv().VITE_ECHODESK_PRINCIPAL_MODE;
   if (isEchoPrincipalMode(configured)) return configured;
-  return runtimeMode() === "release" ? "public" : "local";
+  // Installed Preview is local-first; remote public service is selected only
+  // by the authoritative main-process routing snapshot or an explicit mode.
+  return "local";
 }
 
 export function backendRole(): EchoBackendRole {
@@ -366,8 +368,8 @@ function normalizedElectronBackendBase(): string | null {
     return normalized;
   }
   if (routing?.role === "local_dev_diagnostic") {
-    if (runtimeMode() === "release" || routing.localDevDiagnosticEndpoint === null) {
-      throw new BackendBasePolicyError("local dev endpoint is unavailable in release");
+    if (routing.localDevDiagnosticEndpoint === null) {
+      throw new BackendBasePolicyError("local bundled backend endpoint is unavailable");
     }
     if (normalizeBackendBase(routing.localDevDiagnosticEndpoint) !== normalized) {
       throw new BackendBasePolicyError("local dev endpoint snapshot is inconsistent");

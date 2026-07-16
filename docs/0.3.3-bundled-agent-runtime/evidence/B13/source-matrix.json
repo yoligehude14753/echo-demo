@@ -12,6 +12,12 @@
     "platforms_transport": "158844db23cc5884889233fb8bdd7d943f3002f9",
     "platforms_detached_worktree": "/tmp/echodesk-b13-platforms"
   },
+  "narrow_rework": {
+    "b14r_fixed_release_sha": "28caaade04cdb2038c2950017cbf702f126252c1",
+    "scope": "packaged Preview runtime selection only; bootstrap/signing/publish unchanged",
+    "required_follow_up": "B12R must rebind the current candidate SHA, then B14R/B15R must rebuild installed acceptance assets and rerun quarantined bootstrap evidence",
+    "old_artifact_reusable": false
+  },
   "agents": [
     {"role": "runtime-persistence-integration", "id": "019f66a0-d862-7272-b218-846162aedd57"},
     {"role": "model-tool-provider-integration", "id": "019f66a0-d8d3-73c1-8463-3f18625516bd"},
@@ -31,7 +37,11 @@
     {"id": "checkpoint-restart-resume", "status": "PASS_FOCUSED", "evidence": "B13 composition 5 passed; B11+B12 focused 11 passed"},
     {"id": "backend-source-tests", "status": "PASS_FOCUSED", "evidence": "17 agent-runtime, 38 model-runtime, 69 capabilities, 24 task service, and 16 embedded bridge/cancel integration tests passed"},
     {"id": "desktop-agent-runtime-tests", "status": "PASS_FOCUSED", "evidence": "8 Electron runtime tests and agent-kernel/desktop/agent-runtime tsc --noEmit passed via existing lock-resolved workspace node_modules; no lockfile or version change"},
-    {"id": "short-real-provider-smoke", "status": "PASS", "evidence": "status=PASS code=PROVIDER_STREAM_OK model_events=7 EXIT_CODE:0"}
+    {"id": "short-real-provider-smoke", "status": "PASS", "evidence": "status=PASS code=PROVIDER_STREAM_OK model_events=7 EXIT_CODE:0"},
+    {"id": "packaged-preview-default-selection", "status": "PASS_FOCUSED", "evidence": "node --test desktop/electron/tests/backend-endpoint.test.cjs desktop/electron/tests/backend-route-fallback-policy.test.cjs → 18 passed; release default resolves local_dev_diagnostic, bundled spawnBackend=true, stale public/demo env does not override"},
+    {"id": "packaged-preview-explicit-remote", "status": "PASS_FOCUSED", "evidence": "backend-endpoint focused gate proves ECHO_PRINCIPAL_MODE=public is the only release remote opt-in and remains public_service with spawnBackend=false"},
+    {"id": "renderer-release-local-authority", "status": "PASS_FOCUSED", "evidence": "node --test desktop/electron/tests/renderer-packaged-authority.test.cjs → 8 passed; renderer fallback is local-first and accepts the supervised local endpoint in release"},
+    {"id": "b14r-installed-evidence-rebuild", "status": "REBUILD_REQUIRED", "evidence": "B14R fixed artifact 28caaade04cdb2038c2950017cbf702f126252c1 connected public service; this source candidate has not been installed or packaged"}
   ],
   "prohibited_commands": {
     "package_build": false,
