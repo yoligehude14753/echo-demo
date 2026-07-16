@@ -2,6 +2,9 @@
 const { existsSync, readFileSync } = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const {
+  enumeratePeCoffFiles,
+} = require("./b12-post-sign-readback.cjs");
 
 const DESKTOP_ROOT = path.resolve(__dirname, "..");
 const WINDOWS_TIMESTAMP_URL = "http://timestamp.digicert.com";
@@ -517,8 +520,32 @@ async function runWindowsRelease({
     exists,
   );
 
-  for (const [label, artifactPath] of Object.entries(artifacts)) {
-    if (!artifactPath.toLowerCase().endsWith(".exe")) continue;
+  const innerRoot = path.join(desktopRoot, "release", "win-unpacked");
+  let innerPeFiles;
+  if (existsSync(innerRoot)) {
+    innerPeFiles = enumeratePeCoffFiles(innerRoot);
+  } else if (exists === existsSync) {
+    throw new Error(`[release-signing] Windows inner PE/COFF root is missing: ${innerRoot}`);
+  } else {
+    // Unit tests may inject a virtual exists() function without building a package.
+    innerPeFiles = [
+      { absolute_path: artifacts.application, relative_path: "EchoDesk.exe", size_bytes: null, sha256: null },
+      { absolute_path: artifacts.backend, relative_path: path.join("resources", "backend", "echodesk-backend.exe"), size_bytes: null, sha256: null },
+    ];
+  }
+  if (innerPeFiles.length === 0) {
+    throw new Error(`[release-signing] No actual PE/COFF files found below ${innerRoot}`);
+  }
+
+  const verificationTargets = [
+    ...innerPeFiles.map((record) => ({
+      label: `inner PE/COFF ${record.relative_path}`,
+      artifactPath: record.absolute_path,
+      scope: "inner",
+    })),
+    { label: "outer NSIS installer", artifactPath: artifacts.installer, scope: "outer" },
+  ];
+  for (const { label, artifactPath } of verificationTargets) {
     runChecked(
       runner,
       "pwsh",
@@ -533,15 +560,43 @@ async function runWindowsRelease({
       {
         ...commandOptions,
         capture: true,
-        label: `${label} Authenticode chain and timestamp verification`,
+        label: `${label} Authenticode chain, SHA-256, and RFC 3161 verification`,
       },
     );
   }
 
-  logger.log(
-    "[release-signing] Verified Authenticode publisher, certificate chains, and RFC 3161 timestamps",
+  runChecked(
+    runner,
+    "pwsh",
+    [
+      ...verifierArgs,
+      "-Mode",
+      "VerifyZip",
+      ...contractArgs,
+      "-ArtifactPath",
+      artifacts.zip,
+    ],
+    {
+      ...commandOptions,
+      capture: true,
+      label: "portable ZIP Authenticode, SHA-256, and RFC 3161 verification",
+    },
   );
-  return { contract, artifacts };
+
+  logger.log(
+    `[release-signing] Verified ${innerPeFiles.length} inner PE/COFF files and 1 outer NSIS installer; portable ZIP was verified separately`,
+  );
+  return {
+    contract,
+    artifacts,
+    windows_pe_scope: {
+      inner_root: innerRoot,
+      inner_pe_files: innerPeFiles,
+      outer_pe_files: [{ relative_path: path.basename(artifacts.installer), absolute_path: artifacts.installer }],
+      portable_zip: artifacts.zip,
+      verification: "each inner PE/COFF, portable ZIP PE/COFF, and outer NSIS installer verified individually",
+    },
+  };
 }
 
 async function main(argv = process.argv.slice(2)) {

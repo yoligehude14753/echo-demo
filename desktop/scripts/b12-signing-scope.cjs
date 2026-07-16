@@ -4,7 +4,8 @@ const path = require("node:path");
 
 const SCHEMA_VERSION = 1;
 const CONTRACT_ID = "echodesk.b12.signing-scope";
-const STARTING_SHA = "ffbacb9d0ffa1b62a205f98ff437be4219e9ee08";
+const STARTING_SHA = "65ce495a11e8158537b8fb387c9cec25b9801c2a";
+const PARENT_SHA = "fc3ce989b61c01dc074cd2f897974fbd580fddb3";
 const DEFAULT_APP_ID = "com.echodesk.app";
 const DEFAULT_ELECTRON_VERSION = "43.1.0";
 
@@ -78,6 +79,7 @@ function createSigningScope({
     scope_owner: "B12-signing-scope-readback-runner",
     release_sha: normalizedReleaseSha,
     immutable_starting_sha: normalizedStartingSha,
+    release_parent_sha: PARENT_SHA,
     echo_version: normalizedEchoVersion,
     electron_version: normalizedElectronVersion,
     app_bundle_identifier: normalizedAppId,
@@ -188,16 +190,16 @@ function createSigningScope({
       ),
       pe_scope: {
         inner: [
-          "win-unpacked/EchoDesk.exe",
-          "win-unpacked/resources/backend/echodesk-backend.exe",
-          "win-unpacked/resources/**/*.dll",
-          "win-unpacked/resources/**/*.node",
-          "win-unpacked/resources/**/helper*.exe",
-          "win-unpacked/resources/**/updater*.exe",
-          "win-unpacked/resources/**/uninstaller*.exe",
+          "win-unpacked/** (recursive content-detected PE/COFF files; extension is non-authoritative)",
         ],
         outer: ["EchoDesk.Setup.<version>.exe"],
         portable_container: "EchoDesk-<version>-win-x64.zip contains only already-signed PE bytes",
+        enumeration: {
+          detector: "DOS MZ header plus PE\\0\\0 signature at e_lfanew",
+          recursive: true,
+          extension_allowlist_is_authoritative: false,
+          empty_inner_scope_is_failure: true,
+        },
       },
       order: [
         "freeze logical content and fusion-content-manifest",
@@ -230,6 +232,12 @@ function validateSigningScope(scope) {
   }
   assertSha(scope.release_sha, "scope.release_sha");
   assertSha(scope.immutable_starting_sha, "scope.immutable_starting_sha");
+  if (scope.release_sha !== STARTING_SHA || scope.immutable_starting_sha !== STARTING_SHA) {
+    throw new Error(`[b12-signing-scope] scope must bind exact candidate SHA ${STARTING_SHA}`);
+  }
+  if (scope.release_parent_sha !== PARENT_SHA) {
+    throw new Error(`[b12-signing-scope] scope parent must bind ${PARENT_SHA}`);
+  }
   if (scope.credential_policy?.credentials_read !== false || scope.credential_policy?.signing_execution !== false) {
     throw new Error("[b12-signing-scope] B12 scope cannot read credentials or execute signing");
   }
@@ -285,6 +293,7 @@ if (require.main === module) {
 
 module.exports = {
   CONTRACT_ID,
+  PARENT_SHA,
   SCHEMA_VERSION,
   STARTING_SHA,
   createSigningScope,

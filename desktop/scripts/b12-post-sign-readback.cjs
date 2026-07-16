@@ -47,6 +47,172 @@ function sha256Text(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function isPeCoffBuffer(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 64) return false;
+  if (buffer[0] !== 0x4d || buffer[1] !== 0x5a) return false;
+  const peOffset = buffer.readUInt32LE(0x3c);
+  return peOffset >= 64
+    && peOffset + 4 <= buffer.length
+    && buffer.subarray(peOffset, peOffset + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00]));
+}
+
+function isPeCoffFile(filePath) {
+  try {
+    return isPeCoffBuffer(readFileSync(filePath));
+  } catch {
+    return false;
+  }
+}
+
+function walkRegularFiles(root, result = []) {
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(`[b12-readback] cannot enumerate ${root}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (entry.isSymbolicLink()) continue;
+    const candidate = path.join(root, entry.name);
+    if (entry.isFile()) result.push(candidate);
+    else if (entry.isDirectory()) walkRegularFiles(candidate, result);
+  }
+  return result;
+}
+
+function normalizePosixRelative(root, filePath) {
+  return path.relative(root, filePath).split(path.sep).join(path.posix.sep);
+}
+
+function enumeratePeCoffFiles(root) {
+  const resolvedRoot = path.resolve(root);
+  if (!existsSync(resolvedRoot) || !statSync(resolvedRoot).isDirectory()) {
+    throw new Error(`[b12-readback] PE/COFF root does not exist: ${resolvedRoot}`);
+  }
+  return walkRegularFiles(resolvedRoot)
+    .filter((filePath) => isPeCoffFile(filePath))
+    .map((filePath) => {
+      const bytes = readFileSync(filePath);
+      return {
+        relative_path: normalizePosixRelative(resolvedRoot, filePath),
+        absolute_path: filePath,
+        size_bytes: bytes.length,
+        sha256: sha256File(filePath),
+      };
+    })
+    .sort((left, right) => left.relative_path.localeCompare(right.relative_path));
+}
+
+function normalizePeArtifactPath(value, field) {
+  const resolved = path.resolve(String(value || ""));
+  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+    throw new Error(`[b12-readback] ${field} does not exist: ${resolved}`);
+  }
+  if (!isPeCoffFile(resolved)) {
+    throw new Error(`[b12-readback] ${field} is not a PE/COFF file: ${resolved}`);
+  }
+  return resolved;
+}
+
+function readbackWindowsPeScope({
+  innerRoot,
+  outerArtifacts = [],
+  expectedReleaseSha,
+} = {}) {
+  const failures = [];
+  let normalizedReleaseSha = null;
+  const inner = enumeratePeCoffFiles(innerRoot).map((record) => ({
+    ...record,
+    scope: "inner",
+    authenticode_status: "delegated_to_verify-windows-authenticode.ps1",
+    thumbprint: "protected-config:windows-certificate-thumbprint",
+    publisher: "protected-config:windows-publisher",
+    digest_algorithm: "sha256",
+    timestamp_status: "delegated_to_rfc3161_verifier",
+  }));
+  if (inner.length === 0) failures.push({ code: "EMPTY_INNER_PE_SCOPE", root: path.resolve(innerRoot) });
+
+  const outer = [...new Set(outerArtifacts.map((artifact) => normalizePeArtifactPath(artifact, "outer artifact")))]
+    .map((artifactPath) => ({
+      scope: "outer",
+      relative_path: path.basename(artifactPath),
+      absolute_path: artifactPath,
+      size_bytes: statSync(artifactPath).size,
+      sha256: sha256File(artifactPath),
+      authenticode_status: "delegated_to_verify-windows-authenticode.ps1",
+      thumbprint: "protected-config:windows-certificate-thumbprint",
+      publisher: "protected-config:windows-publisher",
+      digest_algorithm: "sha256",
+      timestamp_status: "delegated_to_rfc3161_verifier",
+    }));
+  if (outerArtifacts.length === 0) failures.push({ code: "EMPTY_OUTER_PE_SCOPE" });
+  if (outer.length !== outerArtifacts.length) {
+    failures.push({ code: "DUPLICATE_OUTER_PE_SCOPE", expected: outerArtifacts.length, actual: outer.length });
+  }
+  if (expectedReleaseSha !== undefined) {
+    try {
+      normalizedReleaseSha = normalizeReleaseSha(expectedReleaseSha);
+    } catch (error) {
+      failures.push({ code: "INVALID_RELEASE_SHA", message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return {
+    schema_version: SCHEMA_VERSION,
+    runner: RUNNER_ID,
+    status: failures.length === 0 ? "PASS" : "FAIL",
+    verdict: failures.length === 0 ? "windows_pe_scope_readback_pass" : "release_blocked_signing",
+    release_sha: normalizedReleaseSha,
+    enumeration: {
+      detector: "DOS MZ header plus PE\\0\\0 signature at e_lfanew",
+      recursive: true,
+      extension_is_non_authoritative: true,
+    },
+    inner_root: path.resolve(innerRoot),
+    inner_pe_files: inner,
+    outer_pe_files: outer,
+    all_pe_files: [...inner, ...outer],
+    failures,
+  };
+}
+
+function comparePeCoffTrees(sourceRoot, candidateRoot) {
+  const source = enumeratePeCoffFiles(sourceRoot);
+  const candidate = enumeratePeCoffFiles(candidateRoot);
+  const sourceByPath = new Map(source.map((record) => [record.relative_path, record]));
+  const candidateByPath = new Map(candidate.map((record) => [record.relative_path, record]));
+  const failures = [];
+  for (const [relativePath, expected] of sourceByPath) {
+    const actual = candidateByPath.get(relativePath);
+    if (!actual) {
+      failures.push({ code: "MISSING_PORTABLE_PE", path: relativePath });
+      continue;
+    }
+    if (actual.size_bytes !== expected.size_bytes || actual.sha256 !== expected.sha256) {
+      failures.push({
+        code: "PORTABLE_PE_BYTES_MISMATCH",
+        path: relativePath,
+        expected_size_bytes: expected.size_bytes,
+        actual_size_bytes: actual.size_bytes,
+        expected_sha256: expected.sha256,
+        actual_sha256: actual.sha256,
+      });
+    }
+  }
+  for (const relativePath of candidateByPath.keys()) {
+    if (!sourceByPath.has(relativePath)) failures.push({ code: "EXTRA_PORTABLE_PE", path: relativePath });
+  }
+  return {
+    status: failures.length === 0 ? "PASS" : "FAIL",
+    verdict: failures.length === 0 ? "portable_verified_inner_bytes" : "release_blocked_signing",
+    source_root: path.resolve(sourceRoot),
+    candidate_root: path.resolve(candidateRoot),
+    source_count: source.length,
+    candidate_count: candidate.length,
+    failures,
+  };
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) return value.map((item) => canonicalJson(item));
   if (value && typeof value === "object") {
@@ -182,6 +348,33 @@ function validateManifest(manifest) {
       ? null
       : normalizeHash(declaredLogicalDigest, "logical_content_digest"),
   };
+}
+
+const REQUIRED_PACKAGED_RUNTIME_RESOURCES = [
+  { role: "electron_worker_entry", path: "Resources/agent-runtime/worker.mjs" },
+  { role: "worker_bridge", path: "Resources/agent-runtime/worker/bridge.mjs" },
+  { role: "electron_worker_factory", path: "Resources/agent-runtime/worker/bridge/production-factory.mjs" },
+  { role: "electron_host_deps", path: "Resources/agent-runtime/worker/bridge/b13-host-kernel-deps.mjs" },
+];
+
+function validatePackagedRuntimeResources(files, roots) {
+  const failures = [];
+  for (const required of REQUIRED_PACKAGED_RUNTIME_RESOURCES) {
+    const entry = files.find((candidate) => candidate.path === required.path)
+      || files.find((candidate) => candidate.role === required.role);
+    if (!entry) {
+      failures.push({ code: "MISSING_PACKAGED_RUNTIME_RESOURCE", role: required.role, path: required.path });
+      continue;
+    }
+    if (entry.pending) {
+      failures.push({ code: "PENDING_PACKAGED_RUNTIME_RESOURCE", role: required.role, path: entry.path });
+      continue;
+    }
+    const located = locateEntry(roots, entry.path);
+    if (located.ambiguous) failures.push({ code: "AMBIGUOUS_PACKAGED_RUNTIME_RESOURCE", role: required.role, path: entry.path, matches: located.matches });
+    else if (!located.path) failures.push({ code: "MISSING_PACKAGED_RUNTIME_READBACK", role: required.role, path: entry.path });
+  }
+  return failures;
 }
 
 function walkForFilename(root, filename, result = []) {
@@ -339,7 +532,7 @@ function packageRootsForManifest(root, manifestPath) {
   return roots;
 }
 
-function readbackLayout({ root, manifestPath, expectedReleaseSha, requireFallbackScan = true }) {
+function readbackLayout({ root, manifestPath, expectedReleaseSha, requireFallbackScan = true, requirePackagedRuntime = false }) {
   const resolvedManifestPath = discoverManifest(root, manifestPath);
   if (statSync(resolvedManifestPath).size > MAX_MANIFEST_BYTES) {
     throw new Error("[b12-readback] fusion manifest exceeds the size limit");
@@ -358,6 +551,9 @@ function readbackLayout({ root, manifestPath, expectedReleaseSha, requireFallbac
   const checkedFiles = [];
   const pendingFiles = [];
   const packageRoots = packageRootsForManifest(root, resolvedManifestPath);
+  if (requirePackagedRuntime) {
+    failures.push(...validatePackagedRuntimeResources(normalized.files, packageRoots));
+  }
   for (const expected of normalized.files) {
     if (expected.pending) {
       pendingFiles.push({
@@ -453,11 +649,11 @@ function readbackLayout({ root, manifestPath, expectedReleaseSha, requireFallbac
   };
 }
 
-function readback({ artifactPath, layoutRoot, manifestPath, expectedReleaseSha, requireFallbackScan = true } = {}) {
+function readback({ artifactPath, layoutRoot, manifestPath, expectedReleaseSha, requireFallbackScan = true, requirePackagedRuntime = false } = {}) {
   let prepared;
   try {
     prepared = prepareLayout({ artifactPath, layoutRoot });
-    const result = readbackLayout({ root: prepared.root, manifestPath, expectedReleaseSha, requireFallbackScan });
+    const result = readbackLayout({ root: prepared.root, manifestPath, expectedReleaseSha, requireFallbackScan, requirePackagedRuntime });
     if (artifactPath && existsSync(artifactPath) && statSync(artifactPath).isFile()) {
       result.artifact = {
         path: path.resolve(artifactPath),
@@ -500,6 +696,10 @@ function parseArgs(argv) {
       args.requireFallbackScan = false;
       continue;
     }
+    if (token === "--require-packaged-runtime") {
+      args.requirePackagedRuntime = true;
+      continue;
+    }
     if (!token.startsWith("--")) throw new Error(`[b12-readback] unexpected argument ${token}`);
     const key = token.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
     const value = argv[index + 1];
@@ -512,12 +712,33 @@ function parseArgs(argv) {
 
 function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+  if (args.windowsInnerRoot) {
+    const result = readbackWindowsPeScope({
+      innerRoot: args.windowsInnerRoot,
+      outerArtifacts: args.windowsOuterArtifact ? [args.windowsOuterArtifact] : [],
+      expectedReleaseSha: args.releaseSha,
+    });
+    if (args.windowsCompareRoot) {
+      result.portable_byte_comparison = comparePeCoffTrees(
+        args.windowsInnerRoot,
+        args.windowsCompareRoot,
+      );
+      if (result.portable_byte_comparison.status !== "PASS") {
+        result.status = "FAIL";
+        result.verdict = "release_blocked_signing";
+      }
+    }
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    if (result.status !== "PASS") process.exitCode = 2;
+    return;
+  }
   const result = readback({
     artifactPath: args.artifact,
     layoutRoot: args.layoutRoot,
     manifestPath: args.manifest,
     expectedReleaseSha: args.releaseSha,
     requireFallbackScan: args.requireFallbackScan !== false,
+    requirePackagedRuntime: args.requirePackagedRuntime === true,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.status !== "PASS") process.exitCode = 2;
@@ -536,11 +757,18 @@ module.exports = {
   RUNNER_ID,
   SCHEMA_VERSION,
   canonicalRelativePath,
+  comparePeCoffTrees,
   computeLogicalContentDigest,
   computeCanonicalManifestDigest,
+  enumeratePeCoffFiles,
+  isPeCoffBuffer,
+  isPeCoffFile,
   normalizeReleaseSha,
+  readbackWindowsPeScope,
   normalizeHash,
   readback,
   readbackLayout,
+  REQUIRED_PACKAGED_RUNTIME_RESOURCES,
+  validatePackagedRuntimeResources,
   validateManifest,
 };

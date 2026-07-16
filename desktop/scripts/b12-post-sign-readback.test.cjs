@@ -15,9 +15,10 @@ const {
   computeCanonicalManifestDigest,
   readback,
   validateManifest,
+  validatePackagedRuntimeResources,
 } = require("./b12-post-sign-readback.cjs");
 
-const RELEASE_SHA = "ffbacb9d0ffa1b62a205f98ff437be4219e9ee08";
+const RELEASE_SHA = "65ce495a11e8158537b8fb387c9cec25b9801c2a";
 
 function fixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "echodesk-b12-readback-test-"));
@@ -171,5 +172,23 @@ test("accepts the canonical manifest digest with manifest_digest.value omitted",
     assert.equal(result.manifest_digest_status, "observed");
   } finally {
     rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("fails closed when packaged worker entry, bridge, factory, or host deps are missing", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "echodesk-runtime-readback-test-"));
+  try {
+    const failures = validatePackagedRuntimeResources([
+      {
+        path: "Resources/agent-runtime/worker.mjs",
+        role: "electron_worker_entry",
+        pending: false,
+      },
+    ], [root]);
+    assert.ok(failures.some((failure) => failure.code === "MISSING_PACKAGED_RUNTIME_RESOURCE" && failure.role === "worker_bridge"));
+    assert.ok(failures.some((failure) => failure.role === "electron_worker_factory"));
+    assert.ok(failures.some((failure) => failure.role === "electron_host_deps"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

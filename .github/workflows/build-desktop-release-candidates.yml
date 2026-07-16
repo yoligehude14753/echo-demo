@@ -67,6 +67,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.release_sha }}
+          B13_ACCEPTED_SHA: 65ce495a11e8158537b8fb387c9cec25b9801c2a
         run: |
           set -euo pipefail
           test "${GITHUB_REPOSITORY}" = "yoligehude14753/echo-demo" || {
@@ -79,6 +80,10 @@ jobs:
           }
           [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
             echo "release_sha must be an exact lowercase 40-character commit SHA" >&2
+            exit 1
+          }
+          test "${RELEASE_SHA}" = "${B13_ACCEPTED_SHA}" || {
+            echo "release_sha is not the accepted B13 integration SHA" >&2
             exit 1
           }
           test "${RELEASE_SHA}" = "${GITHUB_SHA}" || {
@@ -159,6 +164,7 @@ jobs:
         shell: bash
         env:
           RELEASE_SHA: ${{ inputs.release_sha }}
+          B13_ACCEPTED_SHA: 65ce495a11e8158537b8fb387c9cec25b9801c2a
         run: |
           set -euo pipefail
           test "${GITHUB_REPOSITORY}" = "yoligehude14753/echo-demo" || {
@@ -171,6 +177,10 @@ jobs:
           }
           [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
             echo "release_sha must be an exact lowercase 40-character commit SHA" >&2
+            exit 1
+          }
+          test "${RELEASE_SHA}" = "${B13_ACCEPTED_SHA}" || {
+            echo "release_sha is not the accepted B13 integration SHA" >&2
             exit 1
           }
           actual="$(git rev-parse HEAD)"
@@ -636,9 +646,57 @@ jobs:
           ECHODESK_WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
         run: npm run app:dist:win
 
+      - name: Record and verify every Windows PE/COFF inner and outer artifact
+        shell: pwsh
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+          WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = node -p "require('./desktop/package.json').version"
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence"
+          New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
+          $innerRoot = (Resolve-Path "desktop/release/win-unpacked").Path
+          $installer = (Resolve-Path "desktop/release/EchoDesk.Setup.$version.exe").Path
+          $thumbprint = ($env:WINDOWS_CERTIFICATE_SHA1 -replace '[\s:]', '').ToUpperInvariant()
+          $verifier = (Resolve-Path "desktop/scripts/verify-windows-authenticode.ps1").Path
+
+          node desktop/scripts/b12-signing-scope.cjs `
+            --release-sha $env:RELEASE_SHA `
+            --echo-version $version `
+            --electron-version 43.1.0 `
+            --platforms windows-x64 |
+            Tee-Object -FilePath (Join-Path $evidenceRoot "windows-signing-scope.json")
+          if ($LASTEXITCODE -ne 0) { throw "B12 Windows signing scope generation failed" }
+
+          node desktop/scripts/b12-post-sign-readback.cjs `
+            --windows-inner-root $innerRoot `
+            --windows-outer-artifact $installer `
+            --release-sha $env:RELEASE_SHA `
+            --json |
+            Tee-Object -FilePath (Join-Path $evidenceRoot "windows-pe-readback.json")
+          if ($LASTEXITCODE -ne 0) { throw "Windows inner/outer PE readback failed closed" }
+          node desktop/scripts/b12-post-sign-readback.cjs --layout-root $innerRoot --release-sha $env:RELEASE_SHA --require-packaged-runtime --allow-missing-fallback-scan --json |
+            Tee-Object -FilePath (Join-Path $evidenceRoot "packaged-runtime-readback.json")
+          if ($LASTEXITCODE -ne 0) { throw "packaged worker runtime resource readback failed closed" }
+
+          & $verifier -Mode VerifyTree -Thumbprint $thumbprint `
+            -ExpectedPublisher $env:WINDOWS_EXPECTED_PUBLISHER `
+            -ArtifactPath $innerRoot |
+            Tee-Object -FilePath (Join-Path $evidenceRoot "windows-inner-authenticode.json")
+          if ($LASTEXITCODE -ne 0) { throw "Windows inner PE/COFF Authenticode verification failed" }
+
+          & $verifier -Mode Verify -Thumbprint $thumbprint `
+            -ExpectedPublisher $env:WINDOWS_EXPECTED_PUBLISHER `
+            -ArtifactPath $installer |
+            Tee-Object -FilePath (Join-Path $evidenceRoot "windows-outer-authenticode.json")
+          if ($LASTEXITCODE -ne 0) { throw "Windows outer NSIS Authenticode verification failed" }
+
       - name: Installed smoke from the signed NSIS candidate
         shell: pwsh
         env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
           WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
           WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
         run: |
@@ -650,6 +708,7 @@ jobs:
       - name: Portable ZIP smoke from the signed candidate
         shell: pwsh
         env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
           WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
           WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
         run: |
@@ -661,27 +720,126 @@ jobs:
             Remove-Item $destination -Recurse -Force
           }
           Expand-Archive -LiteralPath $archive -DestinationPath $destination
-          $app = Join-Path $destination "EchoDesk.exe"
-          $backend = Join-Path $destination "resources/backend/echodesk-backend.exe"
-          if (-not (Test-Path $app -PathType Leaf)) {
-            throw "expanded signed Windows ZIP does not contain root EchoDesk.exe"
-          }
-          if (-not (Test-Path $backend -PathType Leaf)) {
-            throw "expanded signed Windows ZIP does not contain its bundled backend"
-          }
           $thumbprint = ($env:WINDOWS_CERTIFICATE_SHA1 -replace '[\s:]', '').ToUpperInvariant()
-          foreach ($artifact in @($app, $backend)) {
-            ./desktop/scripts/verify-windows-authenticode.ps1 `
-              -Mode Verify `
-              -Thumbprint $thumbprint `
-              -ExpectedPublisher $env:WINDOWS_EXPECTED_PUBLISHER `
-              -ArtifactPath $artifact
-          }
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence"
+          $portableReadback = Join-Path $evidenceRoot "portable-pe-readback.json"
+          node desktop/scripts/b12-post-sign-readback.cjs `
+            --windows-inner-root $destination `
+            --windows-compare-root (Resolve-Path "desktop/release/win-unpacked").Path `
+            --release-sha $env:RELEASE_SHA `
+            --json |
+            Tee-Object -FilePath $portableReadback
+          if ($LASTEXITCODE -ne 0) { throw "portable ZIP contains missing, extra, or mutated PE bytes" }
+          node desktop/scripts/b12-post-sign-readback.cjs --layout-root $destination --release-sha $env:RELEASE_SHA --require-packaged-runtime --allow-missing-fallback-scan --json
+          if ($LASTEXITCODE -ne 0) { throw "portable packaged worker runtime resource readback failed closed" }
+          & ./desktop/scripts/verify-windows-authenticode.ps1 `
+            -Mode VerifyTree `
+            -Thumbprint $thumbprint `
+            -ExpectedPublisher $env:WINDOWS_EXPECTED_PUBLISHER `
+            -ArtifactPath $destination |
+            Tee-Object -FilePath (Join-Path $evidenceRoot "portable-authenticode.json")
+          if ($LASTEXITCODE -ne 0) { throw "portable ZIP PE/COFF Authenticode verification failed" }
+          & ./desktop/scripts/verify-windows-authenticode.ps1 `
+            -Mode VerifyZip `
+            -Thumbprint $thumbprint `
+            -ExpectedPublisher $env:WINDOWS_EXPECTED_PUBLISHER `
+            -ArtifactPath $archive |
+            Tee-Object -FilePath (Join-Path $evidenceRoot "portable-archive-authenticode.json")
+          if ($LASTEXITCODE -ne 0) { throw "portable ZIP archive Authenticode verification failed" }
           ./desktop/scripts/windows-installed-smoke.ps1 `
             -ApplicationDirectory $destination `
             -Port 18770 `
             -ExpectedVersion $version `
             -EvidenceDirectory (Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence/portable")
+
+      - name: Write signed-artifact-manifest and signing-evidence
+        shell: pwsh
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          WINDOWS_CERTIFICATE_SHA1: ${{ secrets.ECHODESK_WINDOWS_CERTIFICATE_SHA1 }}
+          WINDOWS_EXPECTED_PUBLISHER: ${{ secrets.ECHODESK_WINDOWS_EXPECTED_PUBLISHER }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = node -p "require('./desktop/package.json').version"
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence"
+          $peReadback = Get-Content (Join-Path $evidenceRoot "windows-pe-readback.json") -Raw | ConvertFrom-Json
+          $portableReadback = Get-Content (Join-Path $evidenceRoot "portable-pe-readback.json") -Raw | ConvertFrom-Json
+          $innerAuth = @(Get-Content (Join-Path $evidenceRoot "windows-inner-authenticode.json") -Raw | ConvertFrom-Json)
+          $outerAuth = Get-Content (Join-Path $evidenceRoot "windows-outer-authenticode.json") -Raw | ConvertFrom-Json
+          $portableAuth = @(Get-Content (Join-Path $evidenceRoot "portable-authenticode.json") -Raw | ConvertFrom-Json)
+          if ($portableReadback.portable_byte_comparison.status -ne "PASS") {
+            throw "portable PE byte comparison was not PASS"
+          }
+          $innerByPath = @{}
+          foreach ($record in $innerAuth) { $innerByPath[[string]$record.relative_path] = $record }
+          $signedInner = @(
+            foreach ($record in @($peReadback.inner_pe_files)) {
+              $auth = $innerByPath[[string]$record.relative_path]
+              if ($null -eq $auth) { throw "missing Authenticode evidence for inner PE $($record.relative_path)" }
+              [ordered]@{
+                scope = "inner"
+                path = "desktop/release/win-unpacked/$($record.relative_path)"
+                relative_path = $record.relative_path
+                size_bytes = $record.size_bytes
+                sha256 = $record.sha256
+                authenticode_status = $auth.authenticode_status
+                thumbprint = $auth.thumbprint
+                publisher = $auth.publisher
+                digest_algorithm = $auth.digest_algorithm
+                timestamp_status = $auth.timestamp_status
+              }
+            }
+          )
+          $outerPe = @($peReadback.outer_pe_files) | Select-Object -First 1
+          $signedOuter = [ordered]@{
+            scope = "outer"
+            path = "desktop/release/$($outerPe.relative_path)"
+            relative_path = $outerPe.relative_path
+            size_bytes = $outerPe.size_bytes
+            sha256 = $outerPe.sha256
+            authenticode_status = $outerAuth.authenticode_status
+            thumbprint = $outerAuth.thumbprint
+            publisher = $outerAuth.publisher
+            digest_algorithm = $outerAuth.digest_algorithm
+            timestamp_status = $outerAuth.timestamp_status
+          }
+          $signedPortable = @(
+            foreach ($auth in $portableAuth) {
+              [ordered]@{
+                scope = "portable-inner"
+                path = "desktop/release/EchoDesk-$version-win-x64.zip"
+                relative_path = $auth.relative_path
+                sha256 = $auth.sha256
+                authenticode_status = $auth.authenticode_status
+                thumbprint = $auth.thumbprint
+                publisher = $auth.publisher
+                digest_algorithm = $auth.digest_algorithm
+                timestamp_status = $auth.timestamp_status
+              }
+            }
+          )
+          $signedManifest = [ordered]@{
+            schema_version = 1
+            manifest_type = "echo.b15.signed-artifact-manifest"
+            release_sha = $env:RELEASE_SHA
+            signing_state = "verified"
+            generated_after_authenticode_verification = $true
+            artifacts = @($signedInner) + @($signedOuter) + @($signedPortable)
+          }
+          $signingEvidence = [ordered]@{
+            schema_version = 1
+            manifest_type = "echo.b15.signing-evidence"
+            release_sha = $env:RELEASE_SHA
+            certificate_thumbprint = ($env:WINDOWS_CERTIFICATE_SHA1 -replace '[\s:]', '').ToUpperInvariant()
+            publisher = $env:WINDOWS_EXPECTED_PUBLISHER
+            signing_algorithm = "sha256"
+            timestamp = [ordered]@{ algorithm = "RFC3161"; status = "verified" }
+            inner_pe_files = $signedInner
+            outer_pe_files = @($signedOuter)
+            portable_inner_pe_files = $signedPortable
+          }
+          $signedManifest | ConvertTo-Json -Depth 12 | Set-Content -Path "desktop/release/signed-artifact-manifest.json" -Encoding utf8NoBOM
+          $signingEvidence | ConvertTo-Json -Depth 12 | Set-Content -Path "desktop/release/signing-evidence.json" -Encoding utf8NoBOM
 
       - name: Require complete Windows updater assets
         shell: bash
@@ -693,6 +851,8 @@ jobs:
             "desktop/release/EchoDesk.Setup.${version}.exe.blockmap"
             "desktop/release/EchoDesk-${version}-win-x64.zip"
             "desktop/release/latest.yml"
+            "desktop/release/signed-artifact-manifest.json"
+            "desktop/release/signing-evidence.json"
           )
           for asset in "${required[@]}"; do
             test -s "${asset}" || {
@@ -732,7 +892,9 @@ jobs:
             "EchoDesk.Setup.${version}.exe.blockmap" \
             "EchoDesk-${version}-win-x64.zip" \
             latest.yml \
-            EchoDesk-SBOM.cdx.json > SHA256SUMS-Windows.txt
+            EchoDesk-SBOM.cdx.json \
+            signed-artifact-manifest.json \
+            signing-evidence.json > SHA256SUMS-Windows.txt
           sha256sum --check --strict SHA256SUMS-Windows.txt
           expected=(
             "EchoDesk.Setup.${version}.exe"
@@ -740,6 +902,8 @@ jobs:
             "EchoDesk-${version}-win-x64.zip"
             latest.yml
             EchoDesk-SBOM.cdx.json
+            signed-artifact-manifest.json
+            signing-evidence.json
             SHA256SUMS-Windows.txt
           )
           candidates=()
@@ -747,7 +911,7 @@ jobs:
             EchoDesk.Setup.*.exe \
             EchoDesk.Setup.*.exe.blockmap \
             EchoDesk-*-win-x64.zip \
-            latest.yml EchoDesk-SBOM.cdx.json SHA256SUMS-Windows.txt; do
+            latest.yml EchoDesk-SBOM.cdx.json signed-artifact-manifest.json signing-evidence.json SHA256SUMS-Windows.txt; do
             test -f "${file}" && candidates+=("${file}")
           done
           diff -u \
@@ -763,6 +927,8 @@ jobs:
             desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe.blockmap
             desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-win-x64.zip
             desktop/release/latest.yml
+            desktop/release/signed-artifact-manifest.json
+            desktop/release/signing-evidence.json
             desktop/release/SHA256SUMS-Windows.txt
             desktop/release/EchoDesk-SBOM.cdx.json
 
@@ -775,6 +941,8 @@ jobs:
             desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe.blockmap
             desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-win-x64.zip
             desktop/release/latest.yml
+            desktop/release/signed-artifact-manifest.json
+            desktop/release/signing-evidence.json
             desktop/release/SHA256SUMS-Windows.txt
             desktop/release/EchoDesk-SBOM.cdx.json
           if-no-files-found: error
