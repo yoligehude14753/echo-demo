@@ -30,6 +30,7 @@ import {
   shouldHideSharedPublicHistory,
 } from "@/runtime";
 import { useStore } from "@/store";
+import { ensureSyncDeviceId } from "@/syncState";
 
 export interface CaptureRouterHandlers {
   /** chunk 已成功 POST（无论是否 stored，VAD 过滤的也算）。 */
@@ -154,6 +155,7 @@ export function attachCaptureChunkRouter(
       const result = await uploadCaptureChunk(wav, CAPTURE_SAMPLE_RATE, meetingId, {
         signal: controller.signal,
         idempotencyKey: `capture:${generation}:${seq}`,
+        deviceId: ensureSyncDeviceId(),
       });
       if (
         disposed ||

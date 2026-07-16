@@ -13,6 +13,8 @@ import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { EchoEvent, MeetingStateSnapshot } from "@/types";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
+import { requestAndroidCaptureStart } from "@/capture/AndroidCaptureSelector";
+import { isNativeMobile } from "@/runtime";
 
 /**
  * 全局会议状态条：UI 上唯一控制"是否在开会"的入口。
@@ -175,6 +177,9 @@ export default function MeetingStatusBar(): JSX.Element {
     setBusy(true);
     try {
       if (snap.mode === "idle") {
+        if (isNativeMobile() && !(await requestAndroidCaptureStart())) {
+          return;
+        }
         if (hideSharedPublicHistory) {
           const meetingId = newLocalMeetingId();
           await startMeeting(meetingId);

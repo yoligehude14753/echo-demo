@@ -26,6 +26,11 @@ import type {
 } from "@/domain/session";
 import { useStore } from "@/store";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
+import {
+  isAndroidCaptureAuthorized,
+  onAndroidCaptureAuthorizationChange,
+} from "@/capture/AndroidCaptureSelector";
+import { isNativeMobile } from "@/runtime";
 
 const STATS_POLL_MS = 5_000;
 const CAPTURE_INIT_WATCHDOG_MS = 18_000;
@@ -75,7 +80,21 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
   const [transport, setTransport] = useState(createCaptureTransportState);
   const [freshness, setFreshness] = useState(createCaptureFreshnessState);
   const [admission, setAdmission] = useState(createCaptureAdmissionState);
+  const [androidAuthorized, setAndroidAuthorized] = useState(() =>
+    isAndroidCaptureAuthorized(),
+  );
   const previousStatsRef = useRef<CaptureStats | null>(null);
+
+  useEffect(
+    () =>
+      onAndroidCaptureAuthorizationChange(() =>
+        setAndroidAuthorized(isAndroidCaptureAuthorized()),
+      ),
+    [],
+  );
+
+  const captureEnabled =
+    enabled && (!isNativeMobile() || androidAuthorized);
 
   useEffect(() => {
     if (sttCircuitOpenUntil === null) return;
@@ -91,7 +110,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
   }, [sttCircuitOpenUntil]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!captureEnabled) return;
     if (captureState !== "initializing") return;
     const timer = window.setTimeout(() => {
       setCaptureState((current) => {
@@ -106,10 +125,10 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
       });
     }, CAPTURE_INIT_WATCHDOG_MS);
     return () => window.clearTimeout(timer);
-  }, [captureState, enabled]);
+  }, [captureEnabled, captureState]);
 
   useEffect(() => {
-    if (!enabled) {
+    if (!captureEnabled) {
       audioCapture.stop();
       setCaptureState("initializing");
       setErrorMessage(null);
@@ -216,7 +235,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
   }, [
     backendOriginRevision,
     captureGeneration,
-    enabled,
+    captureEnabled,
     isCurrent,
     registerAbortController,
   ]);

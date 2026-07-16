@@ -16,6 +16,7 @@ import { CheckCircle2, FolderOpen, Mic, Sparkles } from "lucide-react";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { apiUrl } from "@/runtime";
 import { apiTransport } from "@/session";
+import { isNativeMobile } from "@/runtime";
 
 type StepKey = "welcome" | "mic" | "done";
 
@@ -331,6 +332,7 @@ function MicStep({
 }
 
 function DoneStep(): JSX.Element {
+  const android = isNativeMobile();
   return (
     <div className="space-y-3 text-[13px] text-ink-700">
       <div className="flex items-center gap-2 text-base font-medium text-ink-900">
@@ -343,7 +345,9 @@ function DoneStep(): JSX.Element {
           在底部输入问题，或直接描述要生成的文档、表格和演示文稿
         </li>
         <li>
-          点击「开始会议」保存本次记录；不开始会议时也会持续显示实时转写
+          {android
+            ? "点击「开始会议」后选择单端或多端收音；确认前不会启用麦克风"
+            : "点击「开始会议」保存本次记录；不开始会议时也会持续显示实时转写"}
         </li>
         <li>
           右上「设置」可管理知识库、数据占用、诊断包和说话人

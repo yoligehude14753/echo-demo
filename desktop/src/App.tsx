@@ -28,6 +28,7 @@ import SettingsPanel from "@/components/SettingsPanel";
 import OnboardingModal from "@/components/OnboardingModal";
 import AboutModal from "@/components/AboutModal";
 import { useEchoCapture } from "@/capture/useEchoCapture";
+import AndroidCaptureSelector from "@/capture/AndroidCaptureSelector";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
@@ -177,6 +178,7 @@ export default function App(): JSX.Element {
         open={onboarding.shouldShow}
         onClose={onboarding.markCompleted}
       />
+      <AndroidCaptureSelector />
 
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
 

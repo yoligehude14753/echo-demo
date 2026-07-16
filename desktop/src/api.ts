@@ -195,21 +195,26 @@ export async function uploadCaptureChunk(
     signal?: AbortSignal;
     timeoutMs?: number;
     idempotencyKey?: string;
+    deviceId?: string;
   } = {},
 ): Promise<CaptureChunkResponse> {
   const fd = new FormData();
   fd.append("audio", blob, "chunk.wav");
   fd.append("sample_rate", String(sampleRate));
   if (meetingId) fd.append("meeting_id", meetingId);
+  if (options.deviceId) fd.append("deviceId", options.deviceId);
   const u = await apiUrl("/capture/chunk");
   const r = await fetchWithAbortTimeout(
     u,
     {
       method: "POST",
       body: fd,
-      headers: options.idempotencyKey
-        ? { "Idempotency-Key": options.idempotencyKey }
-        : undefined,
+      headers: {
+        ...(options.idempotencyKey
+          ? { "Idempotency-Key": options.idempotencyKey }
+          : {}),
+        ...(options.deviceId ? { "X-Capture-Device-Id": options.deviceId } : {}),
+      },
     },
     options.timeoutMs ?? CAPTURE_UPLOAD_TIMEOUT_MS,
     options.signal,
