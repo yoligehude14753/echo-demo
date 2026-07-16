@@ -9,15 +9,15 @@
 - B12 输入：`4742d9d4fd42e5bf90e0ba1be7babc4554d438a2`，本地整合 commit：`6f22e75fc5c219ac9bce10635e0ce0fdbdb4ffbb`
 - 外部 `_platforms` 固定 transport：`158844db23cc5884889233fb8bdd7d943f3002f9`
 - 固定 SHA 的 detached 只读语义 worktree：`/tmp/echodesk-b13-platforms`
-- 当前 verdict：`SOURCE_INTEGRATION_READY`
+- 当前 verdict：`SOURCE_INTEGRATION_READY`（仅 source/runtime candidate；必须先 B12R current-SHA rebind）
 
 ## B14R 窄返工回收
 
-- B14R 观察到的固定 release SHA：`28caaade04cdb2038c2950017cbf702f126252c1`。
-- 观察缺口：安装后的 Preview 默认由 `backend-endpoint.cjs` 选择 `public_service`，因此绕过 bundled local runtime；renderer release fallback 也把无 authority snapshot 解释为 public。
-- 本轮只修 runtime selection：release 默认 `local_dev_diagnostic`，`main.cjs` 因此走 bundled-first supervisor；`ECHO_PRINCIPAL_MODE=public` 保留为显式远端模式；renderer 允许 release 下的 supervised local endpoint。未修改 bootstrap、签名或发布逻辑。
+- B14R 观察到的固定 release SHA：`78616ca6f4f3212a2dd35801ac797f5dba76b55e`。
+- 观察缺口：安装后的 Preview 已走 `127.0.0.1:8769`，但 packaged `main.cjs` 没有 `agent-runtime`/`worker-entry`/`runTurn` 接线，因而没有启动 B13 fused worker。
+- 本轮只修 desktop production runtime composition：release local backend spawn 通过 inherited FD 3 + nonce 绑定 backend；local health 成功后，`main.cjs` 调用资源 hash 校验的 `PackagedFusedWorkerBridge`，由真实 `Worker` 加载既有 `worker.mjs`、production factory 与 B13 host-deps，并路由 framed task/host/event；bridge 或资源缺失即 fail closed。显式 `ECHO_PRINCIPAL_MODE=public` 仍只走 public service，未修改 bootstrap、签名或发布逻辑。
 - focused selection/renderer/route gate：`26 passed`；desktop `tsc --project desktop/tsconfig.json --noEmit`：通过。
-- 该 source candidate 尚未安装或重新打包。必须先由 B12R 对当前 candidate SHA 做 current-SHA rebind，再由 B14R/B15R 重建验收资产并重跑 quarantined bootstrap/安装态 turn-tool-cancel-checkpoint-restart-resume 证据；旧 `28caaade...` artifact 不可复用。
+- 该 source candidate 尚未安装或重新打包。必须先由 B12R 对新 candidate SHA 做 current-SHA rebind，并生成包含 `worker.mjs`、production factory、B13 host-deps 和 fusion manifest 的 hash-verified `Resources/agent-runtime`；再由 B14R/B15R 重建验收资产并重跑 quarantined bootstrap/安装态 turn-tool-cancel-checkpoint-restart-resume 证据；旧 `78616ca...` artifact 不可复用。
 
 ## 本轮窄修与冲突裁定
 
@@ -26,6 +26,7 @@
 - Electron 生产接线新增 `factoryData` 只读、secret-free descriptor，经 `resolveFactoryModule → WorkerManager → worker-entry` 进入可执行 `b13-worker-factory.ts`；缺少 deps module、provenance 或完整 `KernelDeps` 均 fail closed。
 - 本轮补齐 `b13-host-ipc.ts`、`b13-host-kernel-deps.ts` 与 Python `b13_host_ipc.py`：worker 只持有 `MessagePort` 与 value envelope，Python 侧保留 B05M `AgentModelGateway`、B06P `CapabilityHostRegistry/receipt`、B11 session/checkpoint port；credential handle 只在 host resolver 内使用，不进入 IPC payload。
 - 未恢复任何 HTTP/WebSocket fallback。stale bridge/cancel tests 改为验证 `EmbeddedTaskStreamBridge` 与当前 local terminal/outbox 语义。
+- `desktop/electron/tests/packaged-fused-worker-bridge.test.cjs` → `2 passed`：验证 packaged main 的 FD/nonce/worker lifecycle 调用链，并验证缺失 B12R resource manifest 时实际 bridge 构造 fail closed；不把静态字串或 deterministic transport 当作安装态 fused PASS。
 
 ## 三个原 subagent
 
@@ -82,6 +83,6 @@ B06P controlled tool path 在 focused source test 中读取 task-owned 临时文
 
 ## Verdict
 
-`SOURCE_INTEGRATION_READY`：B10→B11→B12 本地整合、B11 persistence identity、真实 Python B05M/B06P host adapter、同协议 Electron WorkerManager→worker-local `KernelDeps` fused turn、receipt/durable checkpoint/restart-resume、embedded/cancel 增量 gates、固定 transport 的 bounded live provider smoke 与三套 TypeScript `--noEmit` 均有证据。仍不包含 package/sign/notarize/install/cross-platform acceptance；不得把本轮 deterministic fused turn 当作 provider stability 或 live provider fused PASS。
+`SOURCE_INTEGRATION_READY`：B10→B11→B12 本地整合、B11 persistence identity、真实 Python B05M/B06P host adapter、同协议 Electron WorkerManager→worker-local `KernelDeps` fused turn、receipt/durable checkpoint/restart-resume、embedded/cancel 增量 gates、固定 transport 的 bounded live provider smoke、三套 TypeScript `--noEmit` 与本轮 packaged-main executable wiring gate 均有 source 证据。当前 packaged resource manifest/factory artifacts 仍需 B12R 对新 candidate SHA rebind；在该 rebind 之前不得声称安装态 fused PASS，也不得复用 `78616ca...` artifact。仍不包含 package/sign/notarize/install/cross-platform acceptance；不得把 deterministic fused turn 当作 provider stability 或 live provider fused PASS。
 
-本轮 B14R 窄返工的最终 verdict 仍为 `SOURCE_INTEGRATION_READY`；它只表示 source/runtime selection 修复已完成。后续 B12R current-SHA rebind 与 B14R/B15R 安装态重建是强制前置条件，不能把旧 `28caaade04cdb2038c2950017cbf702f126252c1` artifact 当作修复后资产。
+本轮 B14R 窄返工的最终 verdict 仍为 `SOURCE_INTEGRATION_READY`；它表示 source/runtime fused-worker wiring 修复已完成。后续 B12R current-SHA rebind 与 B14R/B15R 安装态重建是强制前置条件，不能把旧 `78616ca6f4f3212a2dd35801ac797f5dba76b55e` artifact 当作修复后资产。

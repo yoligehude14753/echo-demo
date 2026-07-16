@@ -98,6 +98,9 @@ const {
   probeBackendContract,
 } = require("./backend-contract.cjs");
 const { createModelRuntimeIpcSurface } = require("./model-runtime-contract.cjs");
+const {
+  startPackagedFusedWorkerBridge,
+} = require("./packaged-fused-worker-bridge.cjs");
 
 // Electron 要求 privileged scheme 在 app ready 前完成声明。打包态只从该
 // secure/standard origin 加载静态资源，不再使用具有 opaque Origin 的 file://。
@@ -166,6 +169,8 @@ const SIGKILL_GRACE_MS = 3000;
 
 // ---------- 运行时状态 ----------
 let backendProc = null;
+let fusedWorkerBridge = null;
+let fusedWorkerNonce = null;
 let backendLifecycleGeneration = 0;
 let mainWindow = null;
 let healthTimer = null;
@@ -2295,6 +2300,10 @@ function startHealthWatcher() {
       if (!backendWasReady) {
         backendWasReady = true;
         restartAttempts = 0; // 一次完整 ready → 清空 backoff 计数器
+        if (!startFusedWorkerBridge()) {
+          void handleBackendDeath("packaged fused worker unavailable");
+          return;
+        }
         emitStatus({ state: "ready", port: BACKEND_PORT });
       }
       healthFailures = 0;
@@ -2315,6 +2324,49 @@ function startHealthWatcher() {
       handleBackendDeath(`healthz failed ${HEALTH_FAIL_THRESHOLD}x`);
     }
   }, HEALTH_INTERVAL_MS);
+}
+
+function startFusedWorkerBridge() {
+  // Development keeps its source-runtime test harness. Only the packaged
+  // release path claims this resource-bound fused bridge.
+  if (PUBLIC_DEMO_MODE || IS_DEV) return true;
+  if (fusedWorkerBridge) return true;
+  const duplex = backendProc?.stdio?.[3];
+  if (!duplex || !fusedWorkerNonce) {
+    emitStatus({
+      state: "fused-runtime-unavailable",
+      reason: "supervised backend has no inherited fused-runtime handle",
+    });
+    return false;
+  }
+  try {
+    fusedWorkerBridge = startPackagedFusedWorkerBridge({
+      duplex,
+      nonce: fusedWorkerNonce,
+      resourcesPath: process.resourcesPath,
+    });
+    log("[runtime] packaged fused worker bridge connected");
+    return true;
+  } catch (error) {
+    fusedWorkerBridge = null;
+    emitStatus({
+      state: "fused-runtime-unavailable",
+      reason: safeFailureCode(error),
+    });
+    log(`[runtime] packaged fused worker bridge rejected [${safeFailureCode(error)}]`);
+    return false;
+  }
+}
+
+function stopFusedWorkerBridge() {
+  const bridge = fusedWorkerBridge;
+  fusedWorkerBridge = null;
+  fusedWorkerNonce = null;
+  try {
+    bridge?.close?.();
+  } catch (error) {
+    log(`[runtime] fused worker bridge stop failed [${safeFailureCode(error)}]`);
+  }
 }
 
 function stopHealthWatcher() {
@@ -2371,6 +2423,7 @@ function attachPublicBackend() {
 // ---------- 进程生命周期 ----------
 
 async function killBackendProc() {
+  stopFusedWorkerBridge();
   if (!backendProc || backendProc.exitCode !== null) {
     backendProc = null;
     return;
@@ -2385,6 +2438,7 @@ async function killBackendProc() {
 }
 
 function stopBackendProcForRestart() {
+  stopFusedWorkerBridge();
   if (!backendProc || backendProc.exitCode !== null) {
     backendProc = null;
     return Promise.resolve();
@@ -2511,6 +2565,7 @@ function spawnBackendAndWatch() {
   log(`[backend] spawn mode=${bundledBackend ? "bundled" : "source"} port=${BACKEND_PORT}`);
 
   try {
+    fusedWorkerNonce = randomBytes(32).toString("hex");
     backendProc = spawn(
       executable,
       args,
@@ -2537,8 +2592,12 @@ function spawnBackendAndWatch() {
           http_proxy: "",
           https_proxy: "",
           all_proxy: "",
+          // The local production backend must consume this exact inherited
+          // duplex and nonce; EmbeddedRuntimeBackend has no external fallback.
+          ECHODESK_RUNTIME_FD: "3",
+          ECHODESK_RUNTIME_NONCE: fusedWorkerNonce,
         },
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
       },
     );
   } catch (e) {
@@ -2561,6 +2620,7 @@ function spawnBackendAndWatch() {
   backendProc.on("exit", (code, signal) => {
     const wasOurs = backendProc !== null; // killBackendProc 会先置 null
     log(`[backend] child exited code=${code} signal=${signal} ours=${wasOurs}`);
+    stopFusedWorkerBridge();
     if (wasOurs && !shuttingDown) {
       // 我们没主动 kill，child 自己崩了 → 让 health watcher 触发死亡路径
       // 立即标记一次失败而非等 watcher tick，加快感知
