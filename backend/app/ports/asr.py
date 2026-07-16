@@ -42,6 +42,16 @@ class ASRRequestContext:
         if any(not str(key).strip() for key in self.options):
             raise ValueError("ASR option names must not be blank")
 
+    @property
+    def scope_key(self) -> tuple[str, str, str]:
+        """Return the scheduler quota key for the authenticated principal."""
+
+        return (
+            self.tenant_id.strip() if self.tenant_id else "unknown-tenant",
+            self.principal_id.strip() if self.principal_id else "unknown-principal",
+            self.device_id.strip() if self.device_id else "unknown-device",
+        )
+
 
 class ASRErrorBase(Exception):
     """Stable exception base for typed ASR failures crossing the port boundary."""
