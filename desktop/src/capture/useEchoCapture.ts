@@ -37,12 +37,16 @@ import type {
 } from "@/domain/session";
 import { useStore } from "@/store";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
-import {
-  isAndroidCaptureAuthorized,
-  onAndroidCaptureAuthorizationChange,
-} from "@/capture/AndroidCaptureSelector";
-import { isNativeMobile } from "@/runtime";
 import { captureDeviceId } from "@/capture/captureDeviceIdentity";
+import {
+  currentFormalMeetingOverlay,
+  deriveCaptureRuntimeState,
+  installFreeCaptureCommandBridge,
+  isFreeCaptureEnabled,
+  onFreeCaptureChange,
+  publishCaptureRuntime,
+  type CaptureRuntimeState,
+} from "@/capture/freeCaptureMode";
 
 const STATS_POLL_MS = 5_000;
 const CONTROL_POLL_MS = 3_000;
@@ -93,21 +97,27 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
   const [transport, setTransport] = useState(createCaptureTransportState);
   const [freshness, setFreshness] = useState(createCaptureFreshnessState);
   const [admission, setAdmission] = useState(createCaptureAdmissionState);
-  const [androidAuthorized, setAndroidAuthorized] = useState(() =>
-    isAndroidCaptureAuthorized(),
+  const [freeModeEnabled, setFreeModeEnabledState] = useState(
+    isFreeCaptureEnabled,
+  );
+  const [deviceSelected, setDeviceSelected] = useState(false);
+  const [formalMeetingId, setFormalMeetingId] = useState(
+    currentFormalMeetingOverlay,
   );
   const previousStatsRef = useRef<CaptureStats | null>(null);
 
   useEffect(
     () =>
-      onAndroidCaptureAuthorizationChange(() =>
-        setAndroidAuthorized(isAndroidCaptureAuthorized()),
-      ),
+      onFreeCaptureChange((enabled) => {
+        setFreeModeEnabledState(enabled);
+        setFormalMeetingId(currentFormalMeetingOverlay());
+      }),
     [],
   );
 
-  const captureEnabled =
-    enabled && (!isNativeMobile() || androidAuthorized);
+  useEffect(() => installFreeCaptureCommandBridge(), []);
+
+  const captureEnabled = enabled && freeModeEnabled;
 
   useEffect(() => {
     if (sttCircuitOpenUntil === null) return;
@@ -144,6 +154,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
     if (!captureEnabled) {
       audioCapture.stop();
       setCaptureState("standby");
+      setDeviceSelected(false);
       setErrorMessage(null);
       setStats(null);
       setTransport(createCaptureTransportState());
@@ -177,21 +188,14 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
       }
     });
 
-    // 首次读取只建立 revision 基线，防止 App 打开后沿用旧选择自动启麦。
-    // 后续更高 revision（来自本机点击或其它设备）才驱动 capturing/standby。
+    // 自由模式是持久用户选择：App/会话恢复后的首次权威 control 也必须恢复收音。
     let controlBaseline: number | null = null;
     let activeControl: CaptureControl | null = null;
     const applyControl = async (
       control: CaptureControl,
       allowActivation: boolean,
     ) => {
-      if (controlBaseline === null) {
-        controlBaseline = control.revision;
-        setCaptureState("standby");
-        audioCapture.stop();
-        return;
-      }
-      if (control.revision < controlBaseline) return;
+      if (controlBaseline !== null && control.revision < controlBaseline) return;
       if (
         activeControl &&
         control.revision === activeControl.revision &&
@@ -202,8 +206,13 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
         return;
       }
       activeControl = control;
-      controlBaseline = Math.max(controlBaseline, control.revision);
-      if (allowActivation && isDeviceSelected(control)) {
+      controlBaseline =
+        controlBaseline === null
+          ? control.revision
+          : Math.max(controlBaseline, control.revision);
+      const selected = isDeviceSelected(control);
+      setDeviceSelected(selected);
+      if (allowActivation && selected) {
         try {
           const authorization = await authorizeCaptureControl({
             deviceId: captureDeviceId(),
@@ -237,7 +246,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
       try {
         const control = await getCaptureControl({ signal: statsController.signal });
         if (!cancelled && isCurrent(originGeneration)) {
-          void applyControl(control, controlBaseline !== null);
+          void applyControl(control, true);
         }
       } catch {
         // 控制 API 暂不可用时保持当前安全状态；绝不因此启麦。
@@ -332,8 +341,36 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
       ? currentMeetingId
       : null;
 
+  const runtimeState: CaptureRuntimeState = deriveCaptureRuntimeState({
+    freeModeEnabled,
+    selected: deviceSelected,
+    captureState,
+    formalMeetingId,
+    uploadUnavailable: transport.warning === "upload_unavailable",
+    speechDetected: admission.lastGateReason === "ok",
+    errorMessage,
+  });
+
+  useEffect(() => {
+    publishCaptureRuntime({
+      version: 1,
+      state: runtimeState,
+      freeModeEnabled,
+      formalMeetingId,
+      selected: deviceSelected,
+      errorMessage,
+    });
+  }, [
+    deviceSelected,
+    errorMessage,
+    formalMeetingId,
+    freeModeEnabled,
+    runtimeState,
+  ]);
+
   return {
     state: captureState,
+    runtimeState,
     ambientChunks,
     ambientStored,
     meetingChunks,

@@ -16,6 +16,7 @@ from app.schemas.meeting import TranscriptSegment
 #   gated         → 前置 RMS/帧级 VAD 把整段挡在 STT 之前
 #   unknown       → 兼容缺少 stt_status 的旧响应；不能被当作 ready
 SttStatus = Literal["ok", "empty", "failed", "circuit_open", "gated", "unknown"]
+CaptureStreamMode = Literal["free", "formal", "auto"]
 
 
 class CaptureChunkResult(BaseModel):
@@ -33,6 +34,7 @@ class CaptureChunkResult(BaseModel):
     # 7 道门处理结果分流标签；前端对 circuit_open 去抖后才触发短退避。
     stt_status: SttStatus = "unknown"
     device_id: str | None = None
+    capture_mode: CaptureStreamMode = "free"
 
 
 class CaptureControlUpdate(BaseModel):

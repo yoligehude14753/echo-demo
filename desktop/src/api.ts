@@ -139,6 +139,7 @@ export interface CaptureChunkResponse {
   meeting_segments: TranscriptSegment[];
   /** M_diag_brake：让前端能区分被哪道门吃了，仅 circuit_open 触发止血。 */
   stt_status: SttStatus;
+  capture_mode: "free" | "formal" | "auto";
 }
 
 const CAPTURE_STT_STATUSES: readonly SttStatus[] = [
@@ -194,6 +195,10 @@ export function normalizeCaptureChunkResponse(
       ? (body.meeting_segments as TranscriptSegment[])
       : [],
     stt_status: normalizeSttStatus(body.stt_status),
+    capture_mode:
+      body.capture_mode === "formal" || body.capture_mode === "auto"
+        ? body.capture_mode
+        : "free",
   };
 }
 
@@ -219,6 +224,7 @@ export async function uploadCaptureChunk(
   fd.append("deviceId", deviceId);
   fd.append("segmentId", segmentId);
   if (meetingId) fd.append("meeting_id", meetingId);
+  fd.append("capture_mode", meetingId ? "formal" : "free");
   const u = await apiUrl("/capture/chunk");
   const r = await fetchWithAbortTimeout(
     u,

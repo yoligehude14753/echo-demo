@@ -137,6 +137,24 @@ interface ElectronEchoBridge {
   openReleasePage?: () => Promise<{ ok: boolean; releaseUrl?: string }>;
   openExternal?: (url: string) => Promise<{ ok: boolean }>;
   onUpdateStatus?: (cb: (status: AppUpdateStatus) => void) => () => void;
+  notifyCaptureState?: (status: {
+    version: 1;
+    state:
+      | "off"
+      | "permission_required"
+      | "device_not_selected"
+      | "free_starting"
+      | "free_listening"
+      | "speech_detected"
+      | "formal_recording"
+      | "offline_buffering"
+      | "error";
+    freeModeEnabled: boolean;
+    formalMeetingId: string | null;
+    selected: boolean;
+    errorMessage: string | null;
+  }) => void;
+  onCaptureCommand?: (cb: (command: "pause" | "resume") => void) => () => void;
   // Phase 3 P3.5 麦克风权限
   getMicStatus?: () => Promise<ElectronMicStatus>;
   requestMic?: () => Promise<boolean>;

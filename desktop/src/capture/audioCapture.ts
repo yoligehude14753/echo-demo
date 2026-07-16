@@ -203,6 +203,7 @@ class AudioCapture {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private generation = 0;
+  private firstFrameGeneration = -1;
   private silentInputSinceMs: number | null = null;
 
   getState(): CaptureState {
@@ -228,6 +229,7 @@ class AudioCapture {
     if (this.running) return;
     this.running = true;
     this.generation += 1;
+    this.firstFrameGeneration = -1;
     this.nativeRuntimeRetryAttempts = 0;
     void this.boot(this.generation);
   }
@@ -259,7 +261,27 @@ class AudioCapture {
   }
 
   private emitChunk(wav: Blob): void {
+    this.firstFrameGeneration = this.generation;
     for (const h of this.chunkHandlers) h(wav);
+  }
+
+  hasFirstFrame(): boolean {
+    return this.running && this.firstFrameGeneration === this.generation;
+  }
+
+  waitForFirstFrame(timeoutMs = 18_000): Promise<void> {
+    if (this.hasFirstFrame()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const off = this.onChunk(() => {
+        window.clearTimeout(timer);
+        off();
+        resolve();
+      });
+      const timer = window.setTimeout(() => {
+        off();
+        reject(new Error("麦克风首帧超时"));
+      }, timeoutMs);
+    });
   }
 
   private teardown(): void {

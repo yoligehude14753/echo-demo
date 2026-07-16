@@ -24,6 +24,11 @@ import type { EchoEvent, MeetingStateSnapshot } from "@/types";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { requestAndroidCaptureStart } from "@/capture/AndroidCaptureSelector";
 import { isNativeMobile } from "@/runtime";
+import { audioCapture } from "@/capture/audioCapture";
+import {
+  setFormalMeetingOverlay,
+  setFreeCaptureEnabled,
+} from "@/capture/freeCaptureMode";
 
 /**
  * 全局会议状态条：UI 上唯一控制"是否在开会"的入口。
@@ -168,6 +173,14 @@ export default function MeetingStatusBar(): JSX.Element {
     return () => clearInterval(t);
   }, [snap.mode]);
 
+  useEffect(() => {
+    setFormalMeetingOverlay(
+      snap.mode === "in_meeting" && snap.started_by === "manual"
+        ? snap.meeting_id
+        : null,
+    );
+  }, [snap.meeting_id, snap.mode, snap.started_by]);
+
   // WS 状态变更事件：实时同步
   useEffect(() => {
     if (!events.length) return;
@@ -216,6 +229,7 @@ export default function MeetingStatusBar(): JSX.Element {
       expectedRevision: snapshot.control.revision,
     });
     announceCaptureControl(control);
+    setFreeCaptureEnabled(true);
     return true;
   }, []);
 
@@ -224,12 +238,13 @@ export default function MeetingStatusBar(): JSX.Element {
     const originGeneration = captureGeneration();
     setBusy(true);
     try {
-      if (snap.mode === "idle") {
+      if (snap.mode === "idle" || snap.started_by === "auto") {
         if (isNativeMobile()) {
           if (!(await requestAndroidCaptureStart())) return;
         } else if (!captureReady && !(await prepareCapture())) {
           return;
         }
+        await audioCapture.waitForFirstFrame();
         if (hideSharedPublicHistory) {
           const meetingId = newLocalMeetingId();
           await startMeeting(meetingId);
@@ -241,6 +256,7 @@ export default function MeetingStatusBar(): JSX.Element {
             started_by: "manual",
           };
           setSnap(next);
+          setFormalMeetingOverlay(meetingId);
           markMeetingActive(meetingId, {
             startedAt: next.started_at,
             select: true,
@@ -251,6 +267,7 @@ export default function MeetingStatusBar(): JSX.Element {
         const s = await manualStartMeeting();
         if (!isCurrent(originGeneration)) return;
         setSnap(s);
+        setFormalMeetingOverlay(s.meeting_id ?? null);
         if (s.meeting_id) {
           markMeetingActive(s.meeting_id, {
             startedAt: s.started_at,
@@ -276,6 +293,7 @@ export default function MeetingStatusBar(): JSX.Element {
               started_at: null,
               started_by: null,
             });
+            setFormalMeetingOverlay(null);
             try {
               const minutes = await finalizeMeeting(
                 meetingId,
@@ -306,6 +324,7 @@ export default function MeetingStatusBar(): JSX.Element {
         const s = await manualEndMeeting();
         if (!isCurrent(originGeneration)) return;
         setSnap(s);
+        setFormalMeetingOverlay(null);
         if (s.meeting_id) {
           markMeetingEnded(s.meeting_id);
         }
@@ -342,6 +361,10 @@ export default function MeetingStatusBar(): JSX.Element {
       message.warning("请至少选择一台收音设备");
       return;
     }
+    if (!selected.includes(captureDeviceId())) {
+      message.warning("要从本设备开始正式会议，请先把本设备选为收音端");
+      return;
+    }
     setCaptureSaving(true);
     try {
       const control = await updateCaptureControl({
@@ -350,6 +373,7 @@ export default function MeetingStatusBar(): JSX.Element {
         expectedRevision: captureRevision,
       });
       announceCaptureControl(control);
+      setFreeCaptureEnabled(true);
       setCapturePickerOpen(false);
       await onClick(true);
     } catch (error) {
@@ -389,9 +413,9 @@ export default function MeetingStatusBar(): JSX.Element {
   void tick; // 强制 elapsed / minutes 重渲染
 
   const tooltipTitle = !isMeeting
-    ? "点击开始会议并选择收音设备；未开始时麦克风保持待机"
+    ? "自由收音持续运行；点击为正式会议建立明确边界"
     : isAuto
-      ? `已自动识别为会议并开始记录；点击可主动结束并生成纪要（已持续 ${elapsedMinutes(snap.started_at)} 分钟）`
+      ? `自由模式已识别到对话；点击开始正式会议（已持续 ${elapsedMinutes(snap.started_at)} 分钟）`
       : "点击结束会议（手动开始，将生成纪要）";
 
   let buttonClass: string;
@@ -412,7 +436,7 @@ export default function MeetingStatusBar(): JSX.Element {
       title="选择收音设备"
       open={capturePickerOpen}
       confirmLoading={captureSaving}
-      okText="开始会议"
+      okText="开启自由收音并开始正式会议"
       cancelText="取消"
       onOk={() => void confirmCaptureSelection()}
       onCancel={() => setCapturePickerOpen(false)}
@@ -474,13 +498,13 @@ export default function MeetingStatusBar(): JSX.Element {
         ) : isAuto ? (
           <>
             <Mic className="w-3 h-3" />
-            <span>自动记录中</span>
+            <span>检测到对话</span>
           </>
         ) : (
           <>
             <Mic className="w-3 h-3" />
-            <span>开始会议</span>
-            <span className="sr-only">待机</span>
+            <span>开始正式会议</span>
+            <span className="sr-only">自由收音</span>
           </>
         )}
       </button>

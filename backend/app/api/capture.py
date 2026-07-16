@@ -10,7 +10,7 @@ M_diag_brake 新增：GET /capture/stats 返回进程级 7 道门处理结果计
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -210,6 +210,7 @@ async def capture_chunk(
     meeting_id: str | None = Form(None),
     device_id: str = Form(..., alias="deviceId"),
     segment_id: str = Form(..., alias="segmentId"),
+    capture_mode: Literal["free", "formal"] = Form("free"),
     settings: Settings = Depends(get_settings),
     governor: PrincipalGovernor = Depends(get_quota_governor),
     selection_store: CaptureSelectionStore = Depends(get_capture_selection_store),
@@ -242,6 +243,7 @@ async def capture_chunk(
         audio_bytes,
         sample_rate=sample_rate,
         meeting_id=mid or None,
+        capture_mode=capture_mode,
         asr_context=_capture_asr_context(request, settings),
     )
     payload = project_client_dict(result.model_dump(mode="json"), principal)

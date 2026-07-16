@@ -16,6 +16,10 @@ import {
   putCaptureControl,
 } from "@/capture/mobileCaptureApi";
 import { CaptureControlConflictError } from "@/capture/captureControlConflict";
+import {
+  isFreeCaptureEnabled,
+  setFreeCaptureEnabled,
+} from "@/capture/freeCaptureMode";
 
 const CAPTURE_AUTH_EVENT = "echodesk:android-capture-authorized";
 type PendingRequest = { resolve: (allowed: boolean) => void };
@@ -23,11 +27,12 @@ let pendingRequest: PendingRequest | null = null;
 
 export function isAndroidCaptureAuthorized(): boolean {
   if (!isNativeMobile()) return true;
-  return document.documentElement.dataset.androidCaptureAuthorized === "1";
+  return isFreeCaptureEnabled();
 }
 
 export function requestAndroidCaptureStart(): Promise<boolean> {
   if (!isNativeMobile()) return Promise.resolve(true);
+  if (isFreeCaptureEnabled()) return Promise.resolve(true);
   if (pendingRequest) return Promise.resolve(false);
   return new Promise((resolve) => {
     pendingRequest = { resolve };
@@ -36,6 +41,7 @@ export function requestAndroidCaptureStart(): Promise<boolean> {
 }
 
 function setAuthorized(allowed: boolean): void {
+  setFreeCaptureEnabled(allowed);
   document.documentElement.dataset.androidCaptureAuthorized = allowed ? "1" : "0";
   window.dispatchEvent(new Event(CAPTURE_AUTH_EVENT));
 }
@@ -74,7 +80,6 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
 
   useEffect(() => {
     if (!isNativeMobile()) return;
-    setAuthorized(false);
     const request = () => {
       setOpen(true);
       setLoading(true);
@@ -111,7 +116,7 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
       const saved = await putCaptureControl(update);
       const auth = await authorizeCaptureDevice(localDeviceId, saved.revision);
       if (!auth.allowed) {
-        message.info("这台设备保持待机，不会启用麦克风");
+        message.info("本设备未被选为收音设备");
       }
       finish(auth.allowed);
     } catch (error) {
@@ -150,7 +155,7 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
           disabled={!control}
           onClick={confirm}
         >
-          确认并开始
+          开启自由收音
         </Button>,
       ]}
       data-testid="android-capture-selector"
@@ -185,7 +190,7 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
           </Checkbox.Group>
         </div>
       ) : (
-        <div>将使用这台 Android 设备收音。确认前不会请求麦克风权限。</div>
+        <div>将使用这台 Android 设备持续自由收音。确认后会记住选择，App 恢复时自动继续。</div>
       )}
     </Modal>
   );
