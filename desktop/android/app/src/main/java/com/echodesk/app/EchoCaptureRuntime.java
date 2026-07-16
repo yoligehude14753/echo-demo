@@ -272,6 +272,14 @@ final class EchoCaptureRuntime {
       if (!queuedMeetingId.isBlank()) {
         writeField(output, boundary, "meeting_id", queuedMeetingId);
       }
+      writeField(
+          output,
+          boundary,
+          "capture_mode",
+          Boolean.parseBoolean(record.metadata.getProperty("formalMode", "false"))
+              ? "formal"
+              : "free"
+      );
       writeFile(output, boundary, "audio", record.audio);
       output.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
     }

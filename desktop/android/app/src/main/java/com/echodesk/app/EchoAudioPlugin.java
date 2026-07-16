@@ -549,6 +549,16 @@ public class EchoAudioPlugin extends Plugin {
                   stats.peak
               );
       if (nativeOwned) {
+        JSObject data = new JSObject();
+        data.put("sampleRate", sampleRate);
+        data.put("source", activeSource);
+        data.put("rms", stats.rms);
+        data.put("peak", stats.peak);
+        data.put("nativeOwned", true);
+        EchoAudioPlugin target = eventTarget;
+        if (target != null) {
+          target.notifyListeners("chunk", data);
+        }
         return;
       }
       JSObject data = new JSObject();

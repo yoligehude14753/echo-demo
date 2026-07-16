@@ -117,6 +117,10 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
 
   useEffect(() => installFreeCaptureCommandBridge(), []);
 
+  useEffect(() => {
+    void audioCapture.setFormalMode(formalMeetingId);
+  }, [formalMeetingId]);
+
   const captureEnabled = enabled && freeModeEnabled;
 
   useEffect(() => {

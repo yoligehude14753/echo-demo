@@ -16,6 +16,9 @@ import {
 import type { CaptureState } from "@/domain/session";
 import { isNativeMobile } from "@/runtime";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import { backendBase } from "@/runtime";
+import { ensureServerSession } from "@/session";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 
 export type CaptureChunkHandler = (wav: Blob) => void | Promise<void>;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
@@ -26,11 +29,12 @@ const TV_SILENT_INPUT_GRACE_MS = 30_000;
 const TV_SILENT_PEAK_THRESHOLD = 0.000002;
 
 interface EchoAudioChunkEvent {
-  base64: string;
+  base64?: string;
   sampleRate: number;
   source?: string;
   rms?: number;
   peak?: number;
+  nativeOwned?: boolean;
 }
 
 interface EchoAudioErrorEvent {
@@ -39,6 +43,15 @@ interface EchoAudioErrorEvent {
 }
 
 interface EchoAudioPlugin {
+  configureSession(options: {
+    baseUrl: string;
+    sessionToken: string;
+    deviceId: string;
+  }): Promise<unknown>;
+  setCaptureMode(options: {
+    formal: boolean;
+    meetingId: string;
+  }): Promise<unknown>;
   start(options: { sampleRate: number; chunkMs: number }): Promise<{
     sampleRate: number;
     source?: string;
@@ -281,6 +294,14 @@ class AudioCapture {
         off();
         reject(new Error("麦克风首帧超时"));
       }, timeoutMs);
+    });
+  }
+
+  async setFormalMode(meetingId: string | null): Promise<void> {
+    if (!shouldUseNativeAudioRecord()) return;
+    await this.nativePlugin.setCaptureMode({
+      formal: meetingId !== null,
+      meetingId: meetingId ?? "",
     });
   }
 
@@ -553,10 +574,26 @@ class AudioCapture {
       this.nativeAttemptGeneration === attemptGeneration;
 
     try {
+      const [baseUrl, sessionToken] = await Promise.all([
+        backendBase(),
+        ensureServerSession(),
+      ]);
+      if (!sessionToken) {
+        throw new Error("无法建立收音会话");
+      }
+      await plugin.configureSession({
+        baseUrl,
+        sessionToken,
+        deviceId: captureDeviceId(),
+      });
       const chunkHandle = await plugin.addListener("chunk", (event) => {
         if (!this.nativeActive || !isActiveAttempt()) return;
-        if (!event.base64) return;
         if (!this.observeNativeInputHealth(event, generation, attemptGeneration)) return;
+        if (event.nativeOwned) {
+          this.firstFrameGeneration = this.generation;
+          return;
+        }
+        if (!event.base64) return;
         this.emitChunk(blobFromBase64Wav(event.base64));
       });
       if (!isActiveAttempt()) {
