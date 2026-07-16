@@ -23,6 +23,7 @@ import {
   configuredBackendBase,
   isDefaultPublicBackend,
   isNativeMobile,
+  isPackagedElectronRenderer,
   isPublicRuntime,
   runtimeMode,
   shareBackendBase,
@@ -841,7 +842,11 @@ export function artifactDownloadUrl(artifactId: string): string {
       "artifact_public_endpoint_invalid",
     );
   }
-  if (role === "local_dev_diagnostic" && runtimeMode() === "release") {
+  if (
+    role === "local_dev_diagnostic" &&
+    runtimeMode() === "release" &&
+    !isPackagedElectronRenderer()
+  ) {
     throw new BackendBasePolicyError(
       "release 不允许使用 local dev 产物地址",
       "artifact_local_role_forbidden",
