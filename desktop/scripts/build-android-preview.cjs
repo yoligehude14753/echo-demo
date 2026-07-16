@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 const {
-  chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
 } = require("node:fs");
-const { createHash, randomBytes } = require("node:crypto");
-const { join } = require("node:path");
+const { createHash } = require("node:crypto");
+const { isAbsolute, join, relative, resolve } = require("node:path");
 
 const {
   ANDROID_DIR,
@@ -20,7 +20,6 @@ const {
 
 const PREVIEW_VERSION = "0.3.3-preview.2";
 const PREVIEW_VERSION_CODE = "30302";
-const PREVIEW_ALIAS = "echodesk-preview";
 const RELEASE_APK = join(
   ANDROID_DIR,
   "app",
@@ -34,63 +33,62 @@ const OUTPUT_APK = join(
   RELEASE_DIR,
   `EchoDesk-${PREVIEW_VERSION}-android-universal-PREVIEW.apk`,
 );
-const SIGNING_DIR = join(ANDROID_DIR, ".preview-signing");
-const PREVIEW_KEYSTORE = join(SIGNING_DIR, "echodesk-preview.p12");
-
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function previewSigningContract(environment = process.env) {
+  const required = [
+    "ECHODESK_ANDROID_PREVIEW_KEYSTORE",
+    "ECHODESK_ANDROID_PREVIEW_KEY_ALIAS",
+    "ECHODESK_ANDROID_PREVIEW_KEYSTORE_PASSWORD",
+    "ECHODESK_ANDROID_PREVIEW_KEY_PASSWORD",
+    "ECHODESK_ANDROID_PREVIEW_EXPECTED_CERT_SHA256",
+  ];
+  const missing = required.filter((name) => !String(environment[name] || "").trim());
+  if (missing.length) {
+    throw new Error(
+      "stable Preview signing requires CI/env inputs; because preview.2 used a random " +
+      `certificate, users must uninstall it once before installing the first stable-signed build: ${missing.join(", ")}`,
+    );
+  }
+  const keystore = resolve(String(environment.ECHODESK_ANDROID_PREVIEW_KEYSTORE));
+  if (!isAbsolute(keystore) || !existsSync(keystore)) {
+    throw new Error("stable Preview keystore does not exist");
+  }
+  const relativeToRepo = relative(ROOT, keystore);
+  if (relativeToRepo === "" || (!relativeToRepo.startsWith("..") && !isAbsolute(relativeToRepo))) {
+    throw new Error("stable Preview keystore must remain outside the repository");
+  }
+  const expectedFingerprint = String(
+    environment.ECHODESK_ANDROID_PREVIEW_EXPECTED_CERT_SHA256,
+  ).replace(/[^0-9a-f]/gi, "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedFingerprint)) {
+    throw new Error("stable Preview certificate fingerprint must contain 64 hex digits");
+  }
+  return { keystore, expectedFingerprint };
+}
+
 function main() {
   const baseEnv = androidEnvironment();
-  const keytool = join(baseEnv.JAVA_HOME, "bin", "keytool");
-  const password = randomBytes(24).toString("base64url");
+  const previewSigning = previewSigningContract(process.env);
   const env = {
     ...baseEnv,
     VITE_ECHODESK_RUNTIME_MODE: "release",
     VITE_ECHODESK_PRINCIPAL_MODE: "public",
-    ECHODESK_ANDROID_PREVIEW_KEYSTORE: PREVIEW_KEYSTORE,
-    ECHODESK_ANDROID_PREVIEW_KEY_ALIAS: PREVIEW_ALIAS,
-    ECHODESK_ANDROID_PREVIEW_KEYSTORE_PASSWORD: password,
-    ECHODESK_ANDROID_PREVIEW_KEY_PASSWORD: password,
+    VITE_ECHODESK_UPDATE_VERSION: PREVIEW_VERSION,
+    ECHODESK_ANDROID_PREVIEW_KEYSTORE: previewSigning.keystore,
   };
 
   mkdirSync(RELEASE_DIR, { recursive: true });
   rmSync(OUTPUT_APK, { force: true });
-  rmSync(SIGNING_DIR, { recursive: true, force: true });
-  mkdirSync(SIGNING_DIR, { recursive: true, mode: 0o700 });
 
+  console.log(
+    "[android-preview] STABLE PREVIEW SIGNER: preview.2 random-signed installs require one uninstall; subsequent builds update in place",
+  );
   console.log(
     "[android-preview] PREVIEW SIDELOAD ONLY: non-debuggable remote-mobile release/public runtime; never publish to Play Store",
   );
-  try {
-    run(
-      keytool,
-      [
-        "-genkeypair",
-        "-keystore",
-        PREVIEW_KEYSTORE,
-        "-storetype",
-        "PKCS12",
-        "-storepass",
-        password,
-        "-keypass",
-        password,
-        "-alias",
-        PREVIEW_ALIAS,
-        "-keyalg",
-        "RSA",
-        "-keysize",
-        "3072",
-        "-validity",
-        "3650",
-        "-dname",
-        "CN=EchoDesk Android Preview,OU=Preview Sideload,O=EchoDesk,C=GB",
-      ],
-      { env },
-    );
-    chmodSync(PREVIEW_KEYSTORE, 0o600);
-
     run("npm", ["run", "build"], { env });
     run("npx", ["cap", "sync", "android"], { env });
     run(
@@ -126,21 +124,28 @@ function main() {
     if (/^application-debuggable$/m.test(badging)) {
       throw new Error("Preview APK must not be debuggable");
     }
-    const signing = run(
+    const signingReport = run(
       apksigner,
       ["verify", "--verbose", "--print-certs", OUTPUT_APK],
       { env, capture: true },
     );
+    const fingerprintMatch = signingReport.match(
+      /Signer #1 certificate SHA-256 digest:\s*([0-9a-f]+)/i,
+    );
+    if (
+      !fingerprintMatch ||
+      fingerprintMatch[1].toLowerCase() !==
+        previewSigning.expectedFingerprint
+    ) {
+      throw new Error("stable Preview certificate fingerprint mismatch");
+    }
     console.log(`[android-preview] APK: ${OUTPUT_APK}`);
     console.log(`[android-preview] SHA-256: ${sha256(OUTPUT_APK)}`);
     console.log(
       `[android-preview] runtime: VITE_ECHODESK_RUNTIME_MODE=${env.VITE_ECHODESK_RUNTIME_MODE} VITE_ECHODESK_PRINCIPAL_MODE=${env.VITE_ECHODESK_PRINCIPAL_MODE}`,
     );
     console.log(`[android-preview] aapt:\n${badging.trim()}`);
-    console.log(`[android-preview] apksigner:\n${signing.trim()}`);
-  } finally {
-    rmSync(SIGNING_DIR, { recursive: true, force: true });
-  }
+    console.log(`[android-preview] apksigner:\n${signingReport.trim()}`);
 }
 
 if (require.main === module) {
@@ -152,4 +157,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main };
+module.exports = { main, previewSigningContract };

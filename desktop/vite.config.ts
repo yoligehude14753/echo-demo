@@ -60,6 +60,9 @@ export default defineConfig({
   },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_UPDATE_VERSION__: JSON.stringify(
+      process.env.VITE_ECHODESK_UPDATE_VERSION || pkg.version,
+    ),
   },
   server: {
     port: 5173,

@@ -78,17 +78,13 @@ const {
   removeRetainedWorkspaceSnapshotFile,
 } = require("./workspace-file-snapshot.cjs");
 const {
-  fetchBoundedHttpsJson,
-  isGithubReleasePayload,
-} = require("./bounded-https-json.cjs");
-const {
   APP_ENTRY_URL,
   APP_HOST,
   APP_SCHEME,
   installAppProtocol,
   registerAppScheme,
 } = require("./app-protocol.cjs");
-const { preferredReleaseAsset } = require("./release-assets.cjs");
+const { createAppUpdateManager } = require("./app-update-protocol.cjs");
 const {
   projectBackendStatusForRenderer,
 } = require("./backend-status-projection.cjs");
@@ -108,18 +104,6 @@ registerAppScheme(protocol);
 
 app.commandLine.appendSwitch("enable-media-stream");
 
-let autoUpdater = null;
-try {
-  ({ autoUpdater } = require("electron-updater"));
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = false;
-  autoUpdater.allowPrerelease = false;
-} catch (e) {
-  console.warn(
-    `[updates] electron-updater unavailable: ${safeFailureCode(e)}`,
-  );
-}
-
 const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
 const BACKEND_ENDPOINT = resolveBackendEndpoint(backendConfig, process.env, {
@@ -130,8 +114,7 @@ const LOCAL_BACKEND_HOST = BACKEND_ENDPOINT.localBase;
 const PUBLIC_BACKEND_HOST = BACKEND_ENDPOINT.publicBase;
 const RELEASE_OWNER = "yoligehude14753";
 const RELEASE_REPO = "echo-demo";
-const RELEASES_URL = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest`;
-const RELEASE_API_URL = `https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest`;
+const RELEASES_URL = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases`;
 const AUTO_UPDATE_CHECK_DELAY_MS = Math.max(
   0,
   parseInt(process.env.ECHODESK_AUTO_UPDATE_CHECK_DELAY_MS || "15000", 10) || 15000,
@@ -141,8 +124,6 @@ const AUTO_UPDATE_CHECK_INTERVAL_MS = Math.max(
   parseInt(process.env.ECHODESK_AUTO_UPDATE_CHECK_INTERVAL_MS || "", 10) ||
     4 * 60 * 60 * 1000,
 );
-const AUTO_UPDATE_DOWNLOAD_ENABLED =
-  process.env.ECHODESK_DISABLE_AUTO_UPDATE_DOWNLOAD !== "1";
 const PUBLIC_DEMO_MODE = BACKEND_ENDPOINT.mode === "public";
 const BACKEND_HOST = BACKEND_ENDPOINT.backendBase;
 const BACKEND_BIND_HOST = BACKEND_ENDPOINT.bindHost;
@@ -195,8 +176,7 @@ let lastUpdateStatus = {
 };
 let updateCheckTimer = null;
 let updateCheckInFlight = false;
-let updateDownloadPromise = null;
-let downloadedUpdateVersion = null;
+let appUpdateManager = null;
 const activeArtifactDownloadSenders = new WeakSet();
 
 // 主进程未捕获异常不弹 fatal dialog；UI 应该自己感知 backend 状态
@@ -436,10 +416,6 @@ function workspaceBackendTransport() {
     });
   }
   return publicWorkspaceBackendTransport;
-}
-
-function normalizeVersion(raw) {
-  return String(raw || "").trim().replace(/^v/i, "");
 }
 
 function sqliteCliJson(dbPath, sql) {
@@ -1793,58 +1769,6 @@ async function runWorkspaceMutation(expectedOrigin, operation) {
   return running;
 }
 
-function compareVersions(a, b) {
-  const aa = normalizeVersion(a).split(".").map((x) => parseInt(x, 10) || 0);
-  const bb = normalizeVersion(b).split(".").map((x) => parseInt(x, 10) || 0);
-  for (let i = 0; i < Math.max(aa.length, bb.length); i += 1) {
-    const av = aa[i] || 0;
-    const bv = bb[i] || 0;
-    if (av > bv) return 1;
-    if (av < bv) return -1;
-  }
-  return 0;
-}
-
-function fetchJson(url) {
-  return fetchBoundedHttpsJson(url, {
-    headers: {
-      "Accept": "application/vnd.github+json",
-      "User-Agent": `EchoDesk/${app.getVersion()}`,
-    },
-    maxBytes: 1024 * 1024,
-    timeoutMs: 8_000,
-    validate: isGithubReleasePayload,
-  });
-}
-
-async function fetchLatestReleaseStatus(base = {}) {
-  const release = await fetchJson(RELEASE_API_URL);
-  const latestVersion = normalizeVersion(release.tag_name || release.name || "");
-  const currentVersion = app.getVersion();
-  const assets = Array.isArray(release.assets)
-    ? release.assets.map((asset) => ({
-        name: asset.name,
-        size: asset.size,
-        url: asset.browser_download_url,
-      }))
-    : [];
-  const preferredAsset = preferredReleaseAsset(assets);
-  return {
-    ...base,
-    status: base.status || "checked",
-    currentVersion,
-    latestVersion,
-    updateAvailable: latestVersion
-      ? compareVersions(latestVersion, currentVersion) > 0
-      : false,
-    releaseName: release.name || release.tag_name || "",
-    releaseUrl: release.html_url || RELEASES_URL,
-    assetName: preferredAsset?.name || null,
-    assetUrl: preferredAsset?.url || null,
-    canAutoInstall: !!base.canAutoInstall,
-  };
-}
-
 function emitUpdateStatus(payload) {
   lastUpdateStatus = {
     ...lastUpdateStatus,
@@ -1866,16 +1790,42 @@ function safeUpdateFailure(error, fallback = "更新服务暂时不可用") {
   return `${fallback} [${safeFailureCode(error)}]`;
 }
 
+function installedMacBundlePath() {
+  if (process.platform !== "darwin") return null;
+  const marker = `${path.sep}Contents${path.sep}MacOS${path.sep}`;
+  const index = process.execPath.lastIndexOf(marker);
+  return index > 0 ? process.execPath.slice(0, index) : null;
+}
+
+function getAppUpdateManager() {
+  if (appUpdateManager) return appUpdateManager;
+  appUpdateManager = createAppUpdateManager({
+    owner: RELEASE_OWNER,
+    repo: RELEASE_REPO,
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    channel: process.env.ECHODESK_UPDATE_CHANNEL === "stable"
+      ? "stable"
+      : "preview",
+    tempRoot: path.join(app.getPath("temp"), "echodesk-updates"),
+    helperPath: path.join(__dirname, "detached-updater.cjs"),
+    executablePath: process.execPath,
+    currentPid: process.pid,
+    currentBundlePath: installedMacBundlePath(),
+    emit: emitUpdateStatus,
+    quit: () => {
+      quittingForReal = true;
+      app.quit();
+    },
+  });
+  return appUpdateManager;
+}
+
 async function checkForUpdatesWithFallback() {
-  emitUpdateStatus({ status: "checking" });
-  let fallback;
   try {
-    fallback = await fetchLatestReleaseStatus({
-      status: "checked",
-      canAutoInstall: false,
-    });
+    return await getAppUpdateManager().check();
   } catch (e) {
-    fallback = {
+    const failure = {
       status: "error",
       currentVersion: app.getVersion(),
       latestVersion: null,
@@ -1886,103 +1836,24 @@ async function checkForUpdatesWithFallback() {
       canAutoInstall: false,
       error: safeUpdateFailure(e),
     };
+    emitUpdateStatus(failure);
+    return failure;
   }
-
-  if (!autoUpdater || IS_DEV) {
-    emitUpdateStatus(fallback);
-    return fallback;
-  }
-
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    const info = result?.updateInfo;
-    const latestVersion = normalizeVersion(
-      info?.version || fallback.latestVersion || app.getVersion(),
-    );
-    const updateAvailable = compareVersions(latestVersion, app.getVersion()) > 0;
-    const fallbackWithoutError = { ...fallback };
-    delete fallbackWithoutError.error;
-    const merged = {
-      ...fallbackWithoutError,
-      status:
-        updateAvailable && latestVersion === downloadedUpdateVersion
-          ? "downloaded"
-          : updateAvailable
-            ? "available"
-            : "current",
-      latestVersion,
-      updateAvailable,
-      canAutoInstall: updateAvailable,
-    };
-    emitUpdateStatus(merged);
-    maybeDownloadUpdateInBackground(merged, "check");
-    return merged;
-  } catch (e) {
-    const merged = {
-      ...fallback,
-      status: fallback.updateAvailable ? "available" : "checked",
-      error: safeUpdateFailure(e),
-      canAutoInstall: false,
-    };
-    emitUpdateStatus(merged);
-    return merged;
-  }
-}
-
-function maybeDownloadUpdateInBackground(status, reason) {
-  if (
-    !AUTO_UPDATE_DOWNLOAD_ENABLED ||
-    !autoUpdater ||
-    IS_DEV ||
-    !status?.updateAvailable ||
-    !status?.canAutoInstall ||
-    normalizeVersion(status?.latestVersion) === downloadedUpdateVersion ||
-    lastUpdateStatus.status === "downloaded" ||
-    lastUpdateStatus.status === "installing" ||
-    lastUpdateStatus.status === "downloading" ||
-    updateDownloadPromise
-  ) {
-    return;
-  }
-  const downloadPromise = (async () => {
-    emitUpdateStatus({
-      status: "downloading",
-      percent: lastUpdateStatus.percent ?? 0,
-      canAutoInstall: true,
-      autoDownloaded: true,
-      downloadReason: reason,
-    });
-    await autoUpdater.downloadUpdate();
-  })();
-  updateDownloadPromise = downloadPromise;
-  downloadPromise
-    .catch((e) => {
-      emitUpdateStatus({
-        status: "error",
-        error: safeUpdateFailure(e, "更新包下载失败"),
-        canAutoInstall: false,
-      });
-    })
-    .finally(() => {
-      if (updateDownloadPromise === downloadPromise) {
-        updateDownloadPromise = null;
-      }
-    });
 }
 
 async function runScheduledUpdateCheck(reason) {
   if (updateCheckInFlight || shuttingDown || quittingForReal) return;
   updateCheckInFlight = true;
   try {
-    const status = await checkForUpdatesWithFallback();
-    maybeDownloadUpdateInBackground(status, reason);
+    log(`[updates] scheduled check: ${reason}`);
+    await checkForUpdatesWithFallback();
   } finally {
     updateCheckInFlight = false;
   }
 }
 
 function scheduleStartupUpdateCheck() {
-  if (!autoUpdater || IS_DEV || process.env.ECHODESK_DISABLE_AUTO_UPDATE_CHECK === "1") {
+  if (IS_DEV || process.env.ECHODESK_DISABLE_AUTO_UPDATE_CHECK === "1") {
     return;
   }
   setTimeout(() => {
@@ -1994,61 +1865,6 @@ function scheduleStartupUpdateCheck() {
       }, AUTO_UPDATE_CHECK_INTERVAL_MS);
     }
   }, AUTO_UPDATE_CHECK_DELAY_MS);
-}
-
-if (autoUpdater) {
-  autoUpdater.setFeedURL({
-    provider: "github",
-    owner: RELEASE_OWNER,
-    repo: RELEASE_REPO,
-    releaseType: "release",
-  });
-  autoUpdater.on("checking-for-update", () =>
-    emitUpdateStatus({ status: "checking", canAutoInstall: !IS_DEV }),
-  );
-  autoUpdater.on("update-available", (info) => {
-    const status = {
-      status: "available",
-      latestVersion: normalizeVersion(info.version),
-      updateAvailable: true,
-      releaseName: info.releaseName || `EchoDesk v${info.version}`,
-      releaseUrl: RELEASES_URL,
-      canAutoInstall: !IS_DEV,
-    };
-    emitUpdateStatus(status);
-    maybeDownloadUpdateInBackground(status, "event");
-  });
-  autoUpdater.on("update-not-available", (info) =>
-    emitUpdateStatus({
-      status: "current",
-      latestVersion: normalizeVersion(info.version),
-      updateAvailable: false,
-      canAutoInstall: !IS_DEV,
-    }),
-  );
-  autoUpdater.on("download-progress", (progress) =>
-    emitUpdateStatus({
-      status: "downloading",
-      percent: Math.round(progress.percent || 0),
-      canAutoInstall: true,
-    }),
-  );
-  autoUpdater.on("update-downloaded", (info) => {
-    downloadedUpdateVersion = normalizeVersion(info.version);
-    emitUpdateStatus({
-      status: "downloaded",
-      latestVersion: downloadedUpdateVersion,
-      updateAvailable: true,
-      canAutoInstall: true,
-    });
-  });
-  autoUpdater.on("error", (err) =>
-    emitUpdateStatus({
-      status: "error",
-      error: safeUpdateFailure(err),
-      canAutoInstall: false,
-    }),
-  );
 }
 
 function firstLanAddress() {
@@ -2902,21 +2718,13 @@ ipcMain.handle("updates:last-status", async (event) => {
 
 ipcMain.handle("updates:download-and-install", async (event) => {
   assertTrustedIpcOrigin(event);
-  if (!autoUpdater || IS_DEV) {
+  if (IS_DEV) {
     await openExternalHttps(RELEASES_URL);
     return { ok: false, reason: "manual-release-page", releaseUrl: RELEASES_URL };
   }
   try {
-    if (lastUpdateStatus.status !== "downloaded") {
-      emitUpdateStatus({ status: "downloading", percent: 0, canAutoInstall: true });
-      await (updateDownloadPromise || autoUpdater.downloadUpdate());
-    }
-    if (lastUpdateStatus.status !== "downloaded") {
-      throw new Error("update package is not ready yet");
-    }
-    emitUpdateStatus({ status: "installing", canAutoInstall: true });
-    autoUpdater.quitAndInstall(false, true);
-    return { ok: true };
+    await getAppUpdateManager().download();
+    return await getAppUpdateManager().install();
   } catch (e) {
     emitUpdateStatus({
       status: "error",

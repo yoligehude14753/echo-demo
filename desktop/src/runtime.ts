@@ -6,7 +6,7 @@
  */
 
 import backendConfig from "../backend.config.json";
-import desktopReleaseAssetPatterns from "../electron/release-asset-patterns.json";
+import { registerPlugin } from "@capacitor/core";
 import type {
   ModelRuntimeFallback,
   ModelRuntimeIdentity,
@@ -40,7 +40,10 @@ export interface AppUpdateStatus {
   releaseUrl?: string;
   assetName?: string | null;
   assetUrl?: string | null;
+  assetDigest?: string | null;
+  assetSize?: number | null;
   canAutoInstall?: boolean;
+  requiresUserConfirmation?: boolean;
   percent?: number;
   autoDownloaded?: boolean;
   downloadReason?: string;
@@ -183,6 +186,7 @@ declare global {
   }
   // 由 vite.config.ts 从当前 package version 注入；编译时替换为版本字面量。
   const __APP_VERSION__: string;
+  const __APP_UPDATE_VERSION__: string;
 }
 
 let cachedBase: string | null = null;
@@ -202,9 +206,9 @@ export const DEFAULT_SYNC_HUB_BASE: string | null = null;
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
 const PUBLIC_DATA_BOUNDARY_SCHEMA = 4;
 export const RELEASES_URL =
-  "https://github.com/yoligehude14753/echo-demo/releases/latest";
+  "https://github.com/yoligehude14753/echo-demo/releases";
 const RELEASE_API_URL =
-  "https://api.github.com/repos/yoligehude14753/echo-demo/releases/latest";
+  "https://api.github.com/repos/yoligehude14753/echo-demo/releases?per_page=20";
 
 export class BackendBasePolicyError extends Error {
   constructor(
@@ -451,10 +455,10 @@ export function isNewerAppUpdate(
   status: AppUpdateStatus | null | undefined,
 ): boolean {
   if (!status?.latestVersion) return false;
-  const reportedCurrent = status.currentVersion || __APP_VERSION__;
+  const reportedCurrent = status.currentVersion || __APP_UPDATE_VERSION__;
   return (
     compareVersions(status.latestVersion, reportedCurrent) > 0 &&
-    compareVersions(status.latestVersion, __APP_VERSION__) > 0
+    compareVersions(status.latestVersion, __APP_UPDATE_VERSION__) > 0
   );
 }
 
@@ -470,33 +474,30 @@ export function canInstallAppUpdate(
 }
 
 function preferredUpdateAsset(
-  assets: Array<{ name: string; url: string; size?: number }>,
-): { name: string; url: string; size?: number } | null {
-  let patterns = desktopReleaseAssetPatterns.darwin.map(
-    (source) => new RegExp(source, "i"),
-  );
+  assets: Array<{
+    name: string;
+    url: string;
+    size: number;
+    digest: string;
+  }>,
+  version: string,
+): { name: string; url: string; size: number; digest: string } | null {
+  let exactName = `EchoDesk-${version}-arm64-mac.zip`;
   if (typeof window !== "undefined") {
     const ua = window.navigator.userAgent;
     const tv = isTvRuntime();
     if (tv && (isNativeMobile() || /Android|AFT|TV|EchoDeskTV/i.test(ua))) {
-      patterns = [/smart-tv\.apk$/i, /smart-tv-oneclick\.zip$/i];
+      return null;
     } else if (isNativeMobile() || /Android/i.test(ua)) {
-      patterns = [/-android\.apk$/i, /smart-tv\.apk$/i];
+      exactName = `EchoDesk-${version}-android-universal-PREVIEW.apk`;
     } else if (/Windows/i.test(ua)) {
-      patterns = desktopReleaseAssetPatterns.win32.map(
-        (source) => new RegExp(source, "i"),
-      );
+      exactName = `EchoDesk.Setup.${version}.exe`;
     } else if (/Linux/i.test(ua)) {
-      patterns = desktopReleaseAssetPatterns.linux.map(
-        (source) => new RegExp(source, "i"),
-      );
+      return null;
     }
   }
-  for (const pattern of patterns) {
-    const asset = assets.find((a) => pattern.test(a.name));
-    if (asset) return asset;
-  }
-  return null;
+  const matches = assets.filter((asset) => asset.name === exactName);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function envBackendBase(): string | null {
@@ -635,42 +636,78 @@ export async function checkAppUpdate(): Promise<AppUpdateStatus> {
       headers: { Accept: "application/vnd.github+json" },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const release = (await res.json()) as {
+    const releases = (await res.json()) as Array<{
       tag_name?: string;
       name?: string;
       html_url?: string;
+      draft?: boolean;
+      prerelease?: boolean;
       assets?: Array<{
         name?: string;
         size?: number;
+        digest?: string;
         browser_download_url?: string;
       }>;
-    };
-    const latestVersion = normalizeVersion(release.tag_name || release.name);
-    const assets = (release.assets ?? [])
-      .filter((a) => a.name && a.browser_download_url)
-      .map((a) => ({
-        name: a.name as string,
-        size: a.size,
-        url: a.browser_download_url as string,
-      }));
-    const asset = preferredUpdateAsset(assets);
-    const hasNewerVersion = compareVersions(latestVersion, __APP_VERSION__) > 0;
+    }>;
+    if (!Array.isArray(releases)) throw new Error("invalid release list");
+    const channel = "preview";
+    const candidates = releases
+      .filter(
+        (release) =>
+          release &&
+          release.draft !== true &&
+          (channel === "preview" || release.prerelease !== true),
+      )
+      .flatMap((release) => {
+        try {
+          const version = normalizeVersion(release.tag_name || release.name);
+          if (compareVersions(version, __APP_UPDATE_VERSION__) <= 0) return [];
+          const assets = (release.assets ?? [])
+            .filter(
+              (asset) =>
+                typeof asset.name === "string" &&
+                typeof asset.browser_download_url === "string" &&
+                Number.isSafeInteger(asset.size) &&
+                (asset.size ?? 0) > 0 &&
+                /^sha256:[0-9a-f]{64}$/i.test(asset.digest ?? ""),
+            )
+            .map((asset) => ({
+              name: asset.name as string,
+              size: asset.size as number,
+              digest: asset.digest as string,
+              url: asset.browser_download_url as string,
+            }));
+          return [{ release, version, asset: preferredUpdateAsset(assets, version) }];
+        } catch {
+          return [];
+        }
+      })
+      .sort((left, right) => compareVersions(right.version, left.version));
+    const candidate = candidates[0] ?? null;
+    const latestVersion = candidate?.version ?? __APP_UPDATE_VERSION__;
+    const asset = candidate?.asset ?? null;
+    const hasNewerVersion =
+      compareVersions(latestVersion, __APP_UPDATE_VERSION__) > 0;
     const updateAvailable = hasNewerVersion && asset !== null;
     return {
       status: updateAvailable ? "available" : hasNewerVersion ? "checked" : "current",
-      currentVersion: __APP_VERSION__,
+      currentVersion: __APP_UPDATE_VERSION__,
       latestVersion,
       updateAvailable,
-      releaseName: release.name || release.tag_name || "",
-      releaseUrl: release.html_url || RELEASES_URL,
+      releaseName:
+        candidate?.release.name || candidate?.release.tag_name || "",
+      releaseUrl: candidate?.release.html_url || RELEASES_URL,
       assetName: asset?.name ?? null,
       assetUrl: asset?.url ?? null,
-      canAutoInstall: false,
+      assetDigest: asset?.digest ?? null,
+      assetSize: asset?.size ?? null,
+      canAutoInstall: isNativeMobile(),
+      requiresUserConfirmation: isNativeMobile(),
     };
   } catch (e) {
     return {
       status: "error",
-      currentVersion: __APP_VERSION__,
+      currentVersion: __APP_UPDATE_VERSION__,
       latestVersion: null,
       updateAvailable: false,
       releaseUrl: RELEASES_URL,
@@ -681,6 +718,16 @@ export async function checkAppUpdate(): Promise<AppUpdateStatus> {
     };
   }
 }
+
+interface EchoUpdaterPlugin {
+  downloadAndInstall(options: {
+    url: string;
+    digest: string;
+    size: number;
+  }): Promise<{ ok: boolean; requiresUserConfirmation: boolean }>;
+}
+
+const echoUpdater = registerPlugin<EchoUpdaterPlugin>("EchoUpdater");
 
 export async function openUpdateTarget(status?: AppUpdateStatus): Promise<void> {
   const target = status?.assetUrl || status?.releaseUrl || RELEASES_URL;
@@ -699,6 +746,20 @@ export async function installAppUpdate(status?: AppUpdateStatus): Promise<void> 
   }
   if (status?.canAutoInstall && typeof window !== "undefined" && window.echo?.installUpdate) {
     await window.echo.installUpdate();
+    return;
+  }
+  if (
+    isNativeMobile() &&
+    status.assetUrl &&
+    status.assetDigest &&
+    Number.isSafeInteger(status.assetSize) &&
+    (status.assetSize ?? 0) > 0
+  ) {
+    await echoUpdater.downloadAndInstall({
+      url: status.assetUrl,
+      digest: status.assetDigest,
+      size: status.assetSize as number,
+    });
     return;
   }
   await openUpdateTarget(status);

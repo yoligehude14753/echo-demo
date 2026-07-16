@@ -243,6 +243,7 @@ function updateInstallButtonLabel(status: AppUpdateStatus | null): string {
     status.updateAvailable &&
     status.canAutoInstall
   ) {
+    if (status.requiresUserConfirmation) return "下载并安装（需系统确认）";
     return "下载并安装";
   }
   if (
@@ -1196,8 +1197,16 @@ export default function SettingsPanel({
     setUpdateInstallBusy(true);
     try {
       if (!isCurrent(generation)) return;
+      if (info.requiresUserConfirmation) {
+        setUpdateInfo({ ...info, status: "downloading", percent: 0 });
+      }
       await installAppUpdate(info);
       if (!isCurrent(generation)) return;
+      if (info.requiresUserConfirmation) {
+        setUpdateInfo({ ...info, status: "installing" });
+        message.info("安装包已校验，请在系统安装界面确认更新");
+        return;
+      }
       if (!info.canAutoInstall) {
         message.info("已打开下载页面");
       }
@@ -1771,6 +1780,15 @@ export default function SettingsPanel({
                 data-testid="update-asset-name"
               >
                 {updateInfo.assetName}
+              </div>
+            )}
+            {updateInfo?.requiresUserConfirmation && !releaseVersionBehind && (
+              <div
+                className="rounded border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] leading-relaxed text-blue-700"
+                data-testid="android-update-confirmation"
+              >
+                Android 会先校验安装包，再打开系统安装界面；是否安装必须由你确认。
+                旧 preview.2 使用随机证书，首次切换到稳定 Preview 签名需卸载一次，之后可原位更新。
               </div>
             )}
             {updateInfo?.error && (

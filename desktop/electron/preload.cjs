@@ -42,8 +42,8 @@ contextBridge.exposeInMainWorld("echo", {
   // degraded UI 上"重启 backend"按钮触发；主进程清 backoff + 重新 spawn
   manualRestartBackend: () => ipcRenderer.invoke("backend:manual-restart"),
 
-  // 更新检查：桌面打包版走 electron-updater；dev/浏览器/Android 由前端走 GitHub
-  // Release fallback。桌面端后台下载完成后由 renderer 请求用户确认安装。
+  // 更新检查：桌面打包版由主进程读取 GitHub prerelease API，按平台选择唯一
+  // 资产并校验 API asset.digest；renderer 只能触发受控检查/安装状态机。
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   getUpdateStatus: () => ipcRenderer.invoke("updates:last-status"),
   installUpdate: () => ipcRenderer.invoke("updates:download-and-install"),

@@ -56,7 +56,6 @@
     "@capacitor/core": "^8.4.0",
     "@types/qrcode": "^1.5.6",
     "antd": "^5.19.4",
-    "electron-updater": "^6.8.9",
     "exceljs": "4.4.0",
     "lucide-react": "^0.395.0",
     "mammoth": "^1.12.0",

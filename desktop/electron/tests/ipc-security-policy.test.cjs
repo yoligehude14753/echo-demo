@@ -7,6 +7,10 @@ const test = require("node:test");
 
 const main = readFileSync(path.resolve(__dirname, "../main.cjs"), "utf8");
 const preload = readFileSync(path.resolve(__dirname, "../preload.cjs"), "utf8");
+const updater = readFileSync(
+  path.resolve(__dirname, "../app-update-protocol.cjs"),
+  "utf8",
+);
 const modelRuntimeContract = readFileSync(
   path.resolve(__dirname, "../model-runtime-contract.cjs"),
   "utf8",
@@ -142,10 +146,12 @@ test("update and microphone IPC expose stable safe errors instead of local paths
   assert.doesNotMatch(registrationBody("mic:open-system-prefs"), /e\?\.message/);
 });
 
-test("release metadata uses bounded HTTPS JSON with shape validation", () => {
-  assert.match(main, /fetchBoundedHttpsJson\(url, \{/);
-  assert.match(main, /maxBytes: 1024 \* 1024/);
-  assert.match(main, /timeoutMs: 8_000/);
-  assert.match(main, /validate: isGithubReleasePayload/);
-  assert.doesNotMatch(main, /res\.on\("data", \(chunk\) => chunks\.push\(chunk\)\)/);
+test("release metadata and packages are bounded and digest-verified", () => {
+  assert.match(updater, /fetchBoundedHttpsJson\(apiUrl, \{/);
+  assert.match(updater, /maxBytes: MAX_RELEASES_BYTES/);
+  assert.match(updater, /timeoutMs: 8_000/);
+  assert.match(updater, /validate: isReleaseList/);
+  assert.match(updater, /normalizeDigest\(asset\.digest\)/);
+  assert.match(updater, /hash\.digest\("hex"\) !== expectedDigest/);
+  assert.doesNotMatch(main, /electron-updater|quitAndInstall/);
 });

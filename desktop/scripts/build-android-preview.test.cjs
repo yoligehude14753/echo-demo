@@ -54,10 +54,11 @@ test("Android Preview uses a non-debuggable release variant", () => {
   assert.match(builder, /outputs[\s\S]*apk[\s\S]*release[\s\S]*app-release\.apk/);
 });
 
-test("Android Preview signing is task-owned and fail-closed", () => {
-  assert.match(builder, /SIGNING_DIR = join\(ANDROID_DIR, "\.preview-signing"\)/);
-  assert.match(builder, /randomBytes\(24\)/);
-  assert.match(builder, /rmSync\(SIGNING_DIR, \{ recursive: true, force: true \}\)/);
+test("Android Preview signing uses a stable external CI/env identity", () => {
+  assert.match(builder, /ECHODESK_ANDROID_PREVIEW_EXPECTED_CERT_SHA256/);
+  assert.match(builder, /stable Preview keystore must remain outside the repository/);
+  assert.match(builder, /preview\.2 random-signed installs require one uninstall/);
+  assert.doesNotMatch(builder, /randomBytes|genkeypair|\.preview-signing/);
   assert.match(gradle, /echoPreviewSigning/);
   assert.match(gradle, /ECHODESK_ANDROID_PREVIEW_KEYSTORE/);
   assert.match(gradle, /signingConfig signingConfigs\.preview/);
