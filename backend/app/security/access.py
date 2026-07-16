@@ -44,11 +44,13 @@ _HOST_CAPABILITY_PATTERNS = (
     (None, re.compile(r"^/admin(?:/.*)?$")),
     (None, re.compile(r"^/healthz/full$")),
     (None, re.compile(r"^/workspace(?:/.*)?$")),
-    ("POST", re.compile(r"^/artifacts/generate$")),
     ("POST", re.compile(r"^/agents/tasks$")),
     ("POST", re.compile(r"^/agents/tasks/[^/]+/(?:cancel|retry)$")),
     ("POST", re.compile(r"^/agents/grants/claude_code$")),
     ("DELETE", re.compile(r"^/agents/grants/[^/]+$")),
+)
+_OWNER_CAPABILITY_PATTERNS = (
+    ("artifact:generate", "POST", re.compile(r"^/artifacts/generate$")),
 )
 
 
@@ -438,6 +440,14 @@ class AccessPolicy:
             for required_method, pattern in _HOST_CAPABILITY_PATTERNS
         )
 
+    @staticmethod
+    def owner_capability_for_route(method: str, path: str) -> str | None:
+        normalized = method.upper()
+        for capability, required_method, pattern in _OWNER_CAPABILITY_PATTERNS:
+            if required_method == normalized and pattern.fullmatch(path):
+                return capability
+        return None
+
     def is_lan_request_allowed(self, *, method: str, path: str, client_host: str) -> bool:
         if self.settings.public_demo_mode:
             # Public deployments are intentionally reached through a trusted
@@ -478,7 +488,33 @@ class AccessPolicy:
             return
         raise AccessPolicyError("host-admin authorization required", status_code=403)
 
-    async def resolve_http_principal(  # noqa: PLR0911 - ordered auth boundary
+    def require_owner_capability(
+        self,
+        principal: Principal,
+        capability: str,
+        *,
+        client_host: str,
+        authorization: str = "",
+        x_echo_admin_token: str = "",
+    ) -> None:
+        """Allow one narrowly scoped capability without granting host-admin.
+
+        Public owner sessions are server-issued and retain a durable family id.
+        Local mode remains loopback-only unless the caller presents the explicit
+        host-admin token, preserving the LAN host-runtime boundary.
+        """
+
+        if capability != "artifact:generate":
+            raise AccessPolicyError("owner capability not granted", status_code=403)
+        if principal.mode == "public" and principal.family_id:
+            return
+        if not self.settings.public_demo_mode and client_host in _LOOPBACK_HOSTS:
+            return
+        if self._has_admin_token(authorization, x_echo_admin_token):
+            return
+        raise AccessPolicyError("owner capability authorization required", status_code=403)
+
+    async def resolve_http_principal(  # noqa: PLR0911, PLR0912 - ordered auth boundary
         self,
         *,
         method: str,
@@ -490,6 +526,28 @@ class AccessPolicy:
         client_version: str = "",
         sync_token: str = "",
     ) -> Principal:
+        owner_capability = self.owner_capability_for_route(method, path)
+        if owner_capability is not None:
+            if not self.settings.public_demo_mode or self._has_admin_token(
+                authorization,
+                x_echo_admin_token,
+            ):
+                principal = local_principal()
+            else:
+                if not is_supported_public_client(client_version):
+                    raise AccessPolicyError("client upgrade required", status_code=426)
+                scheme, _, token = authorization.partition(" ")
+                if scheme.lower() != "bearer" or not token:
+                    raise AccessPolicyError("session required", status_code=401)
+                principal = await self.sessions.validate_public_token(token)
+            self.require_owner_capability(
+                principal,
+                owner_capability,
+                client_host=client_host,
+                authorization=authorization,
+                x_echo_admin_token=x_echo_admin_token,
+            )
+            return principal
         if self.is_host_capability_route(method, path):
             self.require_host_admin(
                 client_host=client_host,
