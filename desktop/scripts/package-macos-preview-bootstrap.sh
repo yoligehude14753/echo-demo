@@ -9,7 +9,7 @@ Usage:
   package-macos-preview-bootstrap.sh \
     --app /path/to/EchoDesk.app \
     --release-sha 0123456789abcdef0123456789abcdef01234567 \
-    --version 0.3.3-preview.2 \
+    --version 0.3.3-preview.3 \
     [--output-dir /path/to/output]
 
 Creates a uniquely named macOS Preview bootstrap ZIP plus its external

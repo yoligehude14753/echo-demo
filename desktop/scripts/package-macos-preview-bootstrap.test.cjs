@@ -51,7 +51,7 @@ test("packager emits a unique bound archive without tracked product bytes", () =
         "--release-sha",
         "0123456789abcdef0123456789abcdef01234567",
         "--version",
-        "0.3.3-preview.2",
+        "0.3.3-preview.3",
         "--output-dir",
         output,
       ],
@@ -72,7 +72,7 @@ test("packager emits a unique bound archive without tracked product bytes", () =
 
     const manifest = JSON.parse(fs.readFileSync(values.MANIFEST, "utf8"));
     assert.equal(manifest.release_sha, "0123456789abcdef0123456789abcdef01234567");
-    assert.equal(manifest.version, "0.3.3-preview.2");
+    assert.equal(manifest.version, "0.3.3-preview.3");
     assert.equal(manifest.bundle_path, "Payload/EchoDesk Preview.app");
     assert.match(manifest.payload_tree_sha256, /^[0-9a-f]{64}$/);
 

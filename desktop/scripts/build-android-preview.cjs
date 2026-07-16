@@ -18,8 +18,8 @@ const {
   run,
 } = require("./android-build-common.cjs");
 
-const PREVIEW_VERSION = "0.3.3-preview.2";
-const PREVIEW_VERSION_CODE = "30302";
+const PREVIEW_VERSION = "0.3.3-preview.3";
+const PREVIEW_VERSION_CODE = "30303";
 const RELEASE_APK = join(
   ANDROID_DIR,
   "app",
