@@ -4,6 +4,9 @@ const { existsSync, statSync } = require("node:fs");
 const { join, resolve } = require("node:path");
 
 const { peMachine } = require("./build-backend-win.cjs");
+const {
+  prepareAgentRuntimePackage,
+} = require("./prepare-agent-runtime-package.cjs");
 
 function backendArtifactName(platform) {
   if (platform === "win32") return "echodesk-backend.exe";
@@ -51,6 +54,7 @@ async function beforePack(context) {
   const platform =
     context?.electronPlatformName || context?.packager?.platform?.nodeName;
   verifyBundledBackend({ platform });
+  prepareAgentRuntimePackage();
 }
 
 module.exports = beforePack;

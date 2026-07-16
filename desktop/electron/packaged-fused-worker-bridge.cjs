@@ -135,7 +135,7 @@ class PackagedFusedWorkerBridge {
     const { root, manifest } = readManifest(resourcesPath);
     this.manifest = createRuntimeManifest(manifest);
     this.workerResource = resourceByRole(root, manifest, "electron_worker_entry", "agent-runtime/worker.mjs");
-    this.factoryResource = resourceByRole(root, manifest, "electron_worker_factory", "agent-runtime/bridge/production-factory.mjs");
+    this.factoryResource = resourceByRole(root, manifest, "b13_worker_factory", "agent-runtime/worker/bridge/b13-worker-factory.mjs");
     this.depsResource = resourceByRole(root, manifest, "electron_host_deps", "agent-runtime/bridge/b13-host-kernel-deps.mjs");
     const channels = new MessageChannel();
     this.hostPort = channels.port1;
