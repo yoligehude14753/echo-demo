@@ -79,8 +79,8 @@ final class EchoCaptureRuntime {
     this.queue = new NativeCaptureQueue(
         new File(context.getFilesDir(), "native-capture-queue")
     );
-    this.baseUrl = preferences.getString(KEY_BASE_URL, "");
-    this.deviceId = preferences.getString(KEY_DEVICE_ID, "");
+    this.baseUrl = normalizeBaseUrl(preferences.getString(KEY_BASE_URL, ""));
+    this.deviceId = normalizeSessionField(preferences.getString(KEY_DEVICE_ID, ""));
   }
 
   synchronized void configureSession(
@@ -134,7 +134,17 @@ final class EchoCaptureRuntime {
   }
 
   boolean hasUploadSession() {
-    return !baseUrl.isBlank() && !bearerToken.isBlank() && !deviceId.isBlank();
+    return hasUploadSession(baseUrl, bearerToken, deviceId);
+  }
+
+  static boolean hasUploadSession(
+      String baseUrl,
+      String bearerToken,
+      String deviceId
+  ) {
+    return !normalizeBaseUrl(baseUrl).isBlank()
+        && !normalizeSessionField(bearerToken).isBlank()
+        && !normalizeSessionField(deviceId).isBlank();
   }
 
   int queuedCount() {
@@ -349,6 +359,10 @@ final class EchoCaptureRuntime {
       normalized = normalized.substring(0, normalized.length() - 1);
     }
     return normalized;
+  }
+
+  private static String normalizeSessionField(String value) {
+    return value == null ? "" : value.trim();
   }
 
   private String appVersion() {
