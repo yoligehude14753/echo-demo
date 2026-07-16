@@ -2301,7 +2301,8 @@ function startHealthWatcher() {
         backendWasReady = true;
         restartAttempts = 0; // 一次完整 ready → 清空 backoff 计数器
         if (!startFusedWorkerBridge()) {
-          void handleBackendDeath("packaged fused worker unavailable");
+          // 融合 worker 是本地 HTTP backend 之上的独立能力。打包资源缺失时，
+          // 融合任务继续 fail closed，但不能杀死健康 backend 并触发无限重启。
           return;
         }
         emitStatus({ state: "ready", port: BACKEND_PORT });
@@ -2334,7 +2335,8 @@ function startFusedWorkerBridge() {
   const duplex = backendProc?.stdio?.[3];
   if (!duplex || !fusedWorkerNonce) {
     emitStatus({
-      state: "fused-runtime-unavailable",
+      state: "degraded",
+      port: BACKEND_PORT,
       reason: "supervised backend has no inherited fused-runtime handle",
     });
     return false;
@@ -2350,8 +2352,9 @@ function startFusedWorkerBridge() {
   } catch (error) {
     fusedWorkerBridge = null;
     emitStatus({
-      state: "fused-runtime-unavailable",
-      reason: safeFailureCode(error),
+      state: "degraded",
+      port: BACKEND_PORT,
+      reason: `packaged fused worker unavailable: ${safeFailureCode(error)}`,
     });
     log(`[runtime] packaged fused worker bridge rejected [${safeFailureCode(error)}]`);
     return false;

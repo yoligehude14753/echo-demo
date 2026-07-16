@@ -45,3 +45,22 @@ test("packaged fused worker path fails closed when the re-bound runtime manifest
     fs.rmSync(resourcesPath, { recursive: true, force: true });
   }
 });
+
+test("fused runtime failure does not tear down a healthy HTTP backend", () => {
+  const readyBranch = mainSource.slice(
+    mainSource.indexOf("if (!backendWasReady)"),
+    mainSource.indexOf("healthFailures = 0;", mainSource.indexOf("if (!backendWasReady)")),
+  );
+  assert.match(readyBranch, /if \(!startFusedWorkerBridge\(\)\)/);
+  assert.doesNotMatch(
+    readyBranch,
+    /handleBackendDeath\(["']packaged fused worker unavailable["']\)/,
+  );
+
+  const bridgeStart = mainSource.slice(
+    mainSource.indexOf("function startFusedWorkerBridge()"),
+    mainSource.indexOf("function stopFusedWorkerBridge()"),
+  );
+  assert.match(bridgeStart, /state:\s*"degraded"/);
+  assert.match(bridgeStart, /port:\s*BACKEND_PORT/);
+});
