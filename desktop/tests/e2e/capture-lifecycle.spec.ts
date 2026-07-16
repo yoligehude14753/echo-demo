@@ -328,7 +328,7 @@ test("Capture 上传单飞且队列有界，过载时明确背压", async ({ pag
     requests += 1;
     concurrent += 1;
     maxConcurrent = Math.max(maxConcurrent, concurrent);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 500));
     concurrent -= 1;
     await route.fulfill({
       status: 200,
