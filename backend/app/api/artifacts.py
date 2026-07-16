@@ -27,8 +27,9 @@ from app.adapters.skill import SkillError, SkillExecutor
 from app.api.deps import (
     get_artifact_repository,
     get_event_bus,
+    get_repository,
+    get_request_principal,
     get_workflow_dispatcher,
-    require_admin_access,
 )
 from app.api.deps import get_llm_singleton as get_llm
 from app.artifacts.recovery import validated_artifact_file_path
@@ -41,13 +42,20 @@ from app.artifacts.staging import (
 )
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
+from app.ports.repository import RepositoryPort
 from app.ports.skill import SkillExecutorPort
-from app.schemas.artifact import ArtifactRequest, GeneratedArtifact, GeneratedArtifactDTO
+from app.schemas.artifact import (
+    ArtifactRequest,
+    GeneratedArtifact,
+    GeneratedArtifactDTO,
+    normalize_kind,
+)
 from app.schemas.events import EchoEvent
 from app.schemas.workflow import WorkflowRunCreate
 from app.security.context import current_principal
 from app.security.errors import InternalHTTPException
 from app.security.headers import PRIVATE_NO_STORE_HEADERS
+from app.security.models import Principal
 from app.security.public_projection import project_client_dict
 from app.security.scope import scoped_directory
 from app.use_cases.generate_artifact import generate_artifact
@@ -57,6 +65,7 @@ _log = logging.getLogger("echodesk.artifacts")
 
 router = APIRouter(tags=["artifacts"])
 
+_PUBLIC_OWNER_SAFE_KINDS = frozenset({"pptx", "html", "markdown", "txt"})
 
 _skill_singleton: SkillExecutor | None = None
 
@@ -298,10 +307,11 @@ def bind_artifact_workflow_handler(
 @router.post(
     "/artifacts/generate",
     response_model=GeneratedArtifactDTO,
-    dependencies=[Depends(require_admin_access)],
 )
 async def generate(
     body: ArtifactRequest,
+    principal: Principal = Depends(get_request_principal),
+    repository: RepositoryPort = Depends(get_repository),
     llm: LLMPort = Depends(get_llm),
     runner: SkillExecutorPort = Depends(get_skill),
     event_bus: InMemoryEventBus = Depends(get_event_bus),
@@ -317,6 +327,14 @@ async def generate(
     """
     if not body.brief.strip():
         raise HTTPException(status_code=400, detail="brief empty")
+    artifact_kind = normalize_kind(body.artifact_type)
+    if principal.mode == "public" and artifact_kind not in _PUBLIC_OWNER_SAFE_KINDS:
+        raise HTTPException(
+            status_code=403,
+            detail="artifact type is not available to owner sessions",
+        )
+    if body.meeting_id and await repository.get_meeting(body.meeting_id) is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
     bind_artifact_workflow_handler(
         dispatcher,
         settings=artifact_repo.settings,
