@@ -1042,11 +1042,14 @@ async function postDeviceSession(
   body: Record<string, string>,
   origin: string,
 ): Promise<IssuedSessionResponse> {
-  const response = await fetchWithTimeout(await backendUrlForOrigin(endpoint, origin), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const response = await fetchWithTimeout(
+    await backendUrlForOrigin(endpoint, origin),
+    withClientVersion({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
   const upgradeError = upgradeErrorFromResponse(response, origin);
   if (upgradeError) throw upgradeError;
   if (response.status === 401 || response.status === 403) {

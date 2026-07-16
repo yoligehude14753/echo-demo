@@ -1001,7 +1001,17 @@ def test_public_routes_require_server_issued_session(public_client: TestClient) 
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "version",
-    ["", "0.2.50", "0.3.0", "0.3.1", "0.3.1-rc.1", "0.3.2", "invalid", "0.3"],
+    [
+        "",
+        "0.2.50",
+        "0.3.0",
+        "0.3.1",
+        "0.3.1-rc.1",
+        "0.3.2",
+        "0.3.3-preview.1",
+        "invalid",
+        "0.3",
+    ],
 )
 def test_public_routes_reject_missing_invalid_or_old_client_versions(
     public_client: TestClient,
@@ -1023,7 +1033,17 @@ def test_public_routes_reject_missing_invalid_or_old_client_versions(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("version", ["0.3.3", "v0.3.3", "echodesk-0.3.3", "0.3.10"])
+@pytest.mark.parametrize(
+    "version",
+    [
+        "0.3.3-preview.2",
+        "v0.3.3-preview.2",
+        "0.3.3",
+        "v0.3.3",
+        "echodesk-0.3.3",
+        "0.3.10",
+    ],
+)
 def test_supported_public_client_versions_continue_to_session_auth(
     public_client: TestClient,
     version: str,
