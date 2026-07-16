@@ -165,6 +165,21 @@ test("platform asset names are exact", () => {
   );
 });
 
+test("Preview3 discovers the exact Preview4 asset on every supported updater path", () => {
+  for (const platform of ["darwin", "win32", "android"]) {
+    const selected = selectRelease(
+      [release("0.3.3-preview.4", { assetName: updateAssetName(platform, "0.3.3-preview.4") })],
+      {
+        currentVersion: "0.3.3-preview.3",
+        channel: "preview",
+        platform,
+      },
+    );
+    assert.equal(selected?.version, "0.3.3-preview.4");
+    assert.equal(selected?.asset.name, updateAssetName(platform, "0.3.3-preview.4"));
+  }
+});
+
 test("detached updater stages and verifies mac payload without command scripts", () => {
   const helper = readFileSync(
     path.resolve(__dirname, "../detached-updater.cjs"),
