@@ -1,10 +1,15 @@
 package com.echodesk.app;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
+import android.net.Uri;
+import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 
@@ -27,7 +32,11 @@ import java.nio.ByteOrder;
 @CapacitorPlugin(
     name = "EchoAudio",
     permissions = {
-        @Permission(alias = "microphone", strings = {Manifest.permission.RECORD_AUDIO})
+        @Permission(alias = "microphone", strings = {Manifest.permission.RECORD_AUDIO}),
+        @Permission(
+            alias = "notifications",
+            strings = {Manifest.permission.POST_NOTIFICATIONS}
+        )
     }
 )
 public class EchoAudioPlugin extends Plugin {
@@ -46,6 +55,8 @@ public class EchoAudioPlugin extends Plugin {
       MediaRecorder.AudioSource.VOICE_COMMUNICATION,
       MediaRecorder.AudioSource.CAMCORDER
   };
+  private static volatile EchoAudioPlugin activeInstance = null;
+  private static volatile EchoAudioPlugin eventTarget = null;
 
   private final Object lock = new Object();
   private AudioRecord recorder = null;
@@ -55,9 +66,71 @@ public class EchoAudioPlugin extends Plugin {
   private String activeSource = "unknown";
 
   @PluginMethod
+  public void configureSession(PluginCall call) {
+    String baseUrl = call.getString("baseUrl", "");
+    String sessionToken = call.getString("sessionToken", "");
+    String deviceId = call.getString("deviceId", "");
+    if (
+        baseUrl == null
+            || baseUrl.isBlank()
+            || sessionToken == null
+            || sessionToken.isBlank()
+            || deviceId == null
+            || deviceId.isBlank()
+    ) {
+      call.reject("baseUrl, sessionToken and authoritative deviceId are required");
+      return;
+    }
+    EchoCaptureRuntime runtime = EchoCaptureRuntime.get(getContext());
+    runtime.configureSession(baseUrl, sessionToken, deviceId);
+    JSObject result = runtimeStatus(runtime);
+    call.resolve(result);
+  }
+
+  @PluginMethod
+  public void clearSession(PluginCall call) {
+    EchoCaptureRuntime.get(getContext()).clearSession();
+    call.resolve();
+  }
+
+  @PluginMethod
+  public void setCaptureMode(PluginCall call) {
+    boolean formal = Boolean.TRUE.equals(call.getBoolean("formal", false));
+    String meetingId = call.getString("meetingId", "");
+    EchoCaptureRuntime runtime = EchoCaptureRuntime.get(getContext());
+    runtime.setFormalMode(formal, meetingId);
+    EchoCaptureService.updateQueueState(
+        getContext(),
+        runtime.queuedCount(),
+        formal,
+        runtime.isPaused()
+    );
+    call.resolve(runtimeStatus(runtime));
+  }
+
+  @PluginMethod
+  public void pauseFreeMode(PluginCall call) {
+    EchoCaptureService.pause(getContext());
+    call.resolve(runtimeStatus(EchoCaptureRuntime.get(getContext())));
+  }
+
+  @PluginMethod
+  public void stopAndExit(PluginCall call) {
+    EchoCaptureService.stopAndExit(getContext());
+    call.resolve();
+  }
+
+  @PluginMethod
   public void start(PluginCall call) {
     if (getPermissionState("microphone") != PermissionState.GRANTED) {
       requestPermissionForAlias("microphone", call, "startAfterPermission");
+      return;
+    }
+    if (
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            && getPermissionState("notifications") != PermissionState.GRANTED
+    ) {
+      requestPermissionForAlias("notifications", call, "startAfterPermission");
       return;
     }
     startRecording(call);
@@ -69,6 +142,13 @@ public class EchoAudioPlugin extends Plugin {
       call.reject("RECORD_AUDIO not granted");
       return;
     }
+    if (
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            && getPermissionState("notifications") != PermissionState.GRANTED
+    ) {
+      requestPermissionForAlias("notifications", call, "startAfterPermission");
+      return;
+    }
     startRecording(call);
   }
 
@@ -77,6 +157,27 @@ public class EchoAudioPlugin extends Plugin {
     int chunkMs = call.getInt("chunkMs", DEFAULT_CHUNK_MS);
     if (sampleRate <= 0) sampleRate = DEFAULT_SAMPLE_RATE;
     if (chunkMs < 1000) chunkMs = DEFAULT_CHUNK_MS;
+
+    EchoAudioPlugin existing = activeInstance;
+    if (existing != null && existing.running) {
+      eventTarget = this;
+      EchoCaptureRuntime runtime = EchoCaptureRuntime.get(getContext());
+      runtime.markFreeModeEnabled(true);
+      runtime.setPaused(false);
+      JSObject result = recordingResult(existing.activeSampleRate, existing.activeSource, true);
+      call.resolve(result);
+      return;
+    }
+
+    try {
+      EchoCaptureService.start(getContext());
+    } catch (Throwable error) {
+      call.reject(
+          "Android microphone foreground service could not start",
+          error instanceof Exception ? (Exception) error : new Exception(error)
+      );
+      return;
+    }
 
     synchronized (lock) {
       stopLocked();
@@ -175,6 +276,7 @@ public class EchoAudioPlugin extends Plugin {
       }
 
       if (next == null) {
+        EchoCaptureService.stop(getContext());
         String details = probeSummary.length() > 0
             ? " Probe summary: " + probeSummary + "."
             : "";
@@ -191,12 +293,32 @@ public class EchoAudioPlugin extends Plugin {
       final int loopChunkMs = chunkMs;
       worker = new Thread(() -> recordLoop(loopSampleRate, loopChunkMs), "EchoDeskAudioRecord");
       worker.start();
+      activeInstance = this;
+      eventTarget = this;
     }
 
+    EchoCaptureRuntime runtime = EchoCaptureRuntime.get(getContext());
+    runtime.markFreeModeEnabled(true);
+    runtime.setPaused(false);
+    EchoCaptureService.markRecording(getContext(), activeSource);
+    call.resolve(recordingResult(activeSampleRate, activeSource, false));
+  }
+
+  private JSObject recordingResult(int sampleRate, String source, boolean resumed) {
     JSObject result = new JSObject();
-    result.put("sampleRate", activeSampleRate);
-    result.put("source", activeSource);
-    call.resolve(result);
+    result.put("sampleRate", sampleRate);
+    result.put("source", source);
+    result.put("resumed", resumed);
+    result.put("foregroundService", EchoCaptureService.isActive());
+    result.put("batteryOptimized", isBatteryOptimized());
+    EchoCaptureRuntime runtime = EchoCaptureRuntime.get(getContext());
+    result.put("freeModeEnabled", runtime.isFreeModeEnabled());
+    result.put("paused", runtime.isPaused());
+    result.put("formalMode", runtime.isFormalMode());
+    result.put("nativeUpload", runtime.hasUploadSession());
+    result.put("queuedChunks", runtime.queuedCount());
+    result.put("queuedBytes", runtime.queuedBytes());
+    return result;
   }
 
   private static int[] candidateSampleRates(int requested) {
@@ -224,18 +346,97 @@ public class EchoAudioPlugin extends Plugin {
 
   @PluginMethod
   public void stop(PluginCall call) {
-    synchronized (lock) {
-      stopLocked();
-    }
+    // Backward-compatible explicit stop means pause. Only stopAndExit disables
+    // the persisted free-mode choice and removes the notification.
+    EchoCaptureService.pause(getContext());
     call.resolve();
+  }
+
+  @PluginMethod
+  public void status(PluginCall call) {
+    eventTarget = this;
+    EchoAudioPlugin existing = activeInstance;
+    JSObject result = new JSObject();
+    result.put("active", existing != null && existing.running && EchoCaptureService.isActive());
+    result.put("foregroundService", EchoCaptureService.isActive());
+    result.put("batteryOptimized", isBatteryOptimized());
+    EchoCaptureRuntime runtime = EchoCaptureRuntime.get(getContext());
+    result.put("freeModeEnabled", runtime.isFreeModeEnabled());
+    result.put("paused", runtime.isPaused());
+    result.put("formalMode", runtime.isFormalMode());
+    result.put("nativeUpload", runtime.hasUploadSession());
+    result.put("queuedChunks", runtime.queuedCount());
+    result.put("queuedBytes", runtime.queuedBytes());
+    call.resolve(result);
+  }
+
+  @PluginMethod
+  public void openBatteryOptimizationSettings(PluginCall call) {
+    try {
+      Intent intent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+      getContext().startActivity(intent);
+      call.resolve();
+    } catch (Throwable error) {
+      try {
+        Intent fallback = new Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:" + getContext().getPackageName())
+        );
+        fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(fallback);
+        call.resolve();
+      } catch (Throwable fallbackError) {
+        call.reject(
+            "battery optimization settings unavailable",
+            fallbackError instanceof Exception
+                ? (Exception) fallbackError
+                : new Exception(fallbackError)
+        );
+      }
+    }
   }
 
   @Override
   protected void handleOnDestroy() {
-    synchronized (lock) {
-      stopLocked();
+    if (eventTarget == this) {
+      eventTarget = null;
+    }
+    if (!EchoCaptureService.isActive()) {
+      stopActiveCapture();
     }
     super.handleOnDestroy();
+  }
+
+  static void stopActiveCaptureFromService() {
+    EchoAudioPlugin existing = activeInstance;
+    if (existing == null) return;
+    EchoAudioPlugin target = eventTarget;
+    synchronized (existing.lock) {
+      existing.stopLocked();
+    }
+    if (target != null) {
+      target.notifyListeners("stopped", new JSObject());
+    }
+    activeInstance = null;
+    eventTarget = null;
+  }
+
+  static void pauseActiveCaptureFromService() {
+    stopActiveCaptureFromService();
+  }
+
+  private void stopActiveCapture() {
+    stopActiveCaptureFromService();
+    EchoCaptureService.stop(getContext());
+  }
+
+  private boolean isBatteryOptimized() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false;
+    PowerManager manager =
+        (PowerManager) getContext().getSystemService(android.content.Context.POWER_SERVICE);
+    return manager != null
+        && !manager.isIgnoringBatteryOptimizations(getContext().getPackageName());
   }
 
   private AudioRecord buildRecorder(int source, int sampleRate) {
@@ -337,13 +538,29 @@ public class EchoAudioPlugin extends Plugin {
               + " rms=" + Math.round(stats.rms)
               + " peak=" + stats.peak
       );
+      boolean nativeOwned =
+          EchoCaptureRuntime
+              .get(getContext())
+              .acceptPcm(
+                  pcm,
+                  sampleRate,
+                  activeSource,
+                  stats.rms,
+                  stats.peak
+              );
+      if (nativeOwned) {
+        return;
+      }
       JSObject data = new JSObject();
       data.put("sampleRate", sampleRate);
       data.put("source", activeSource);
       data.put("rms", stats.rms);
       data.put("peak", stats.peak);
       data.put("base64", Base64.encodeToString(wavBytes(pcm, sampleRate), Base64.NO_WRAP));
-      notifyListeners("chunk", data);
+      EchoAudioPlugin target = eventTarget;
+      if (target != null) {
+        target.notifyListeners("chunk", data);
+      }
     } catch (IOException e) {
       emitError("Failed to build wav chunk: " + e.getMessage());
     }
@@ -354,7 +571,10 @@ public class EchoAudioPlugin extends Plugin {
     JSObject data = new JSObject();
     data.put("message", message);
     data.put("source", activeSource);
-    notifyListeners("error", data);
+    EchoAudioPlugin target = eventTarget;
+    if (target != null) {
+      target.notifyListeners("error", data);
+    }
   }
 
   private void stopLocked() {
@@ -414,6 +634,10 @@ public class EchoAudioPlugin extends Plugin {
     }
   }
 
+  static byte[] wavBytesForNativeQueue(byte[] pcm, int sampleRate) throws IOException {
+    return wavBytes(pcm, sampleRate);
+  }
+
   private static byte[] wavBytes(byte[] pcm, int sampleRate) throws IOException {
     ByteArrayOutputStream out = new ByteArrayOutputStream(pcm.length + 44);
     int byteRate = sampleRate * 2;
@@ -440,5 +664,16 @@ public class EchoAudioPlugin extends Plugin {
 
   private static void writeLeShort(ByteArrayOutputStream out, short value) throws IOException {
     out.write(ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(value).array());
+  }
+
+  private static JSObject runtimeStatus(EchoCaptureRuntime runtime) {
+    JSObject result = new JSObject();
+    result.put("freeModeEnabled", runtime.isFreeModeEnabled());
+    result.put("paused", runtime.isPaused());
+    result.put("formalMode", runtime.isFormalMode());
+    result.put("nativeUpload", runtime.hasUploadSession());
+    result.put("queuedChunks", runtime.queuedCount());
+    result.put("queuedBytes", runtime.queuedBytes());
+    return result;
   }
 }
