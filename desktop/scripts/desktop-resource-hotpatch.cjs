@@ -356,10 +356,15 @@ function swapResources({
   keepBackup,
   commandRunner = runChecked,
 }) {
-  const parent = path.dirname(resources);
+  // Keep transaction trees outside the application bundle/install directory.
+  // macOS codesign --deep walks every subdirectory under Contents, so placing
+  // the backup or staging tree beside Contents/Resources makes an otherwise
+  // valid bundle fail signing before the atomic transaction can commit.
+  const parent = path.dirname(appPath);
+  const appToken = path.basename(appPath).replace(/[^0-9A-Za-z._-]/g, "_");
   const token = manifest.to.source_sha.slice(0, 12);
-  const stage = path.join(parent, `.echodesk-resources-stage-${token}-${process.pid}`);
-  const backup = path.join(parent, `.echodesk-resources-backup-${token}-${process.pid}`);
+  const stage = path.join(parent, `.${appToken}.resources-stage-${token}-${process.pid}`);
+  const backup = path.join(parent, `.${appToken}.resources-backup-${token}-${process.pid}`);
   if (fs.existsSync(stage) || fs.existsSync(backup)) throw new Error("transaction paths already exist");
   fs.cpSync(resources, stage, {
     recursive: true,
