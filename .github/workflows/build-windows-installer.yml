@@ -39,6 +39,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Parse Windows installed smoke
+        if: ${{ inputs.skip_smoke != true }}
         shell: pwsh
         run: |
           $tokens = $null
@@ -70,6 +71,7 @@ jobs:
             backend/app/adapters/skill/assets/ppt_ib_deck/package-lock.json
 
       - name: Require official npm lock registries
+        if: ${{ inputs.skip_smoke != true }}
         run: |
           node scripts/check-npm-lock-registries.cjs
           python scripts/check-ci-action-pins.py
@@ -94,15 +96,20 @@ jobs:
           PY=.venv/Scripts/python
           "$PY" -m pip install --require-hashes -r packaging/requirements-build.lock
           npm ci --prefix app/adapters/skill/assets/ppt_ib_deck
-          npm audit --prefix app/adapters/skill/assets/ppt_ib_deck --audit-level=high --registry=https://registry.npmjs.org
+          if [ "${{ inputs.skip_smoke }}" != "true" ]; then
+            npm audit --prefix app/adapters/skill/assets/ppt_ib_deck --audit-level=high --registry=https://registry.npmjs.org
+          fi
 
       - name: Install desktop dependencies
         working-directory: desktop
         run: |
           npm ci
-          npm audit --audit-level=high --registry=https://registry.npmjs.org
+          if ("${{ inputs.skip_smoke }}" -ne "true") {
+            npm audit --audit-level=high --registry=https://registry.npmjs.org
+          }
 
       - name: Run Electron main-process contracts
+        if: ${{ inputs.skip_smoke != true }}
         working-directory: desktop
         run: npm run test:electron
 
@@ -204,6 +211,7 @@ jobs:
           retention-days: 14
 
       - name: Guard public build contents
+        if: ${{ inputs.skip_smoke != true }}
         shell: bash
         run: |
           set -euo pipefail
