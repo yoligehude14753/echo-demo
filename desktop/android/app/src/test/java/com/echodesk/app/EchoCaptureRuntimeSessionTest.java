@@ -31,4 +31,23 @@ public class EchoCaptureRuntimeSessionTest {
         )
     );
   }
+
+  @Test
+  public void nativeQueueRequiresLiveUnblockedBearerSession() {
+    assertFalse(
+        EchoCaptureRuntime.canQueueNativeCapture(
+            "https://echodesk.yoliyoli.uk", "", "device-123", false
+        )
+    );
+    assertFalse(
+        EchoCaptureRuntime.canQueueNativeCapture(
+            "https://echodesk.yoliyoli.uk", "token", "device-123", true
+        )
+    );
+    assertTrue(
+        EchoCaptureRuntime.canQueueNativeCapture(
+            "https://echodesk.yoliyoli.uk", "token", "device-123", false
+        )
+    );
+  }
 }

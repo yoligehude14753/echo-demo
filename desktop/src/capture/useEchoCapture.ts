@@ -38,6 +38,7 @@ import type {
 import { useStore } from "@/store";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { captureDeviceId } from "@/capture/captureDeviceIdentity";
+import { isNativeMobile } from "@/runtime";
 import {
   currentFormalMeetingOverlay,
   deriveCaptureRuntimeState,
@@ -45,6 +46,7 @@ import {
   isFreeCaptureEnabled,
   onFreeCaptureChange,
   publishCaptureRuntime,
+  requestFreeCaptureSetup,
   type CaptureRuntimeState,
 } from "@/capture/freeCaptureMode";
 
@@ -195,6 +197,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
     // 自由模式是持久用户选择：App/会话恢复后的首次权威 control 也必须恢复收音。
     let controlBaseline: number | null = null;
     let activeControl: CaptureControl | null = null;
+    let setupRequested = false;
     const applyControl = async (
       control: CaptureControl,
       allowActivation: boolean,
@@ -216,6 +219,14 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
           : Math.max(controlBaseline, control.revision);
       const selected = isDeviceSelected(control);
       setDeviceSelected(selected);
+      if (
+        isNativeMobile() &&
+        control.selectedDeviceIds.length === 0 &&
+        !setupRequested
+      ) {
+        setupRequested = true;
+        requestFreeCaptureSetup("first_run");
+      }
       if (allowActivation && selected) {
         try {
           const authorization = await authorizeCaptureControl({
@@ -256,7 +267,18 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
         // 控制 API 暂不可用时保持当前安全状态；绝不因此启麦。
       }
     };
-    void fetchControl();
+    const onNativeControlRefresh = () => void fetchControl();
+    window.addEventListener(
+      "echodesk:capture-control-refresh",
+      onNativeControlRefresh,
+    );
+    void audioCapture.attachNativeRuntime()
+      .then(() => fetchControl())
+      .catch((error: unknown) => {
+        if (cancelled || !isCurrent(originGeneration)) return;
+        const detail = error instanceof Error ? error.message : String(error);
+        setErrorMessage(`收音身份未就绪：${detail}`);
+      });
     const controlTimer = window.setInterval(
       () => void fetchControl(),
       CONTROL_POLL_MS,
@@ -326,6 +348,10 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
       window.clearInterval(statsTimer);
       window.clearInterval(controlTimer);
       window.removeEventListener(CAPTURE_CONTROL_EVENT, onControlChange);
+      window.removeEventListener(
+        "echodesk:capture-control-refresh",
+        onNativeControlRefresh,
+      );
       offStatus();
       offRouter();
       audioCapture.stop();

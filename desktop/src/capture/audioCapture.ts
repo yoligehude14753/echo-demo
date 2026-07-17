@@ -42,6 +42,10 @@ interface EchoAudioErrorEvent {
   source?: string;
 }
 
+interface EchoAudioUploadSessionRequiredEvent {
+  status: number;
+}
+
 interface EchoAudioPlugin {
   configureSession(options: {
     baseUrl: string;
@@ -57,6 +61,13 @@ interface EchoAudioPlugin {
     source?: string;
   }>;
   stop(): Promise<void>;
+  status(): Promise<{
+    active?: boolean;
+    foregroundService?: boolean;
+    nativeUpload?: boolean;
+    authBlocked?: boolean;
+    queuedChunks?: number;
+  }>;
   addListener(
     eventName: "chunk",
     listenerFunc: (event: EchoAudioChunkEvent) => void,
@@ -64,6 +75,10 @@ interface EchoAudioPlugin {
   addListener(
     eventName: "error",
     listenerFunc: (event: EchoAudioErrorEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "uploadSessionRequired",
+    listenerFunc: (event: EchoAudioUploadSessionRequiredEvent) => void,
   ): Promise<PluginListenerHandle>;
 }
 
@@ -211,6 +226,8 @@ class AudioCapture {
   private nativeRuntimeRetryAttempts = 0;
   private nativeCleanup: Promise<void> = Promise.resolve();
   private nativeSilentChunks = 0;
+  private nativeSessionHandle: PluginListenerHandle | null = null;
+  private nativeSessionRecovery: Promise<void> | null = null;
   private buf: Float32Array[] = [];
   private accSamples = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -248,6 +265,10 @@ class AudioCapture {
   }
 
   stop(): void {
+    if (shouldUseNativeAudioRecord()) {
+      // A fresh renderer cannot trust its in-memory nativeActive flag.
+      void this.nativePlugin.stop().catch(() => undefined);
+    }
     if (
       !this.running &&
       this.stream === null &&
@@ -265,6 +286,48 @@ class AudioCapture {
     }
     this.teardown();
     this.setState("initializing");
+  }
+
+  async attachNativeRuntime(): Promise<void> {
+    if (!shouldUseNativeAudioRecord()) return;
+    const plugin = this.nativePlugin;
+    if (!this.nativeSessionHandle) {
+      this.nativeSessionHandle = await plugin.addListener(
+        "uploadSessionRequired",
+        (event) => {
+          if (event.status === 409) {
+            window.dispatchEvent(new Event("echodesk:capture-control-refresh"));
+            return;
+          }
+          if (this.nativeSessionRecovery) return;
+          this.nativeSessionRecovery = this.configureNativeUploadSession(
+            event.status === 401 || event.status === 403,
+          )
+            .catch((error: unknown) => {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.setState("error", `收音身份恢复失败：${detail}`);
+            })
+            .finally(() => {
+              this.nativeSessionRecovery = null;
+            });
+        },
+      );
+    }
+    await this.configureNativeUploadSession(false);
+  }
+
+  private async configureNativeUploadSession(forceRenew: boolean): Promise<void> {
+    const [baseUrl, sessionToken] = await Promise.all([
+      backendBase(),
+      ensureServerSession(forceRenew),
+    ]);
+    if (!sessionToken) throw new Error("无法建立收音上传会话");
+    await this.nativePlugin.configureSession({
+      baseUrl,
+      sessionToken,
+      deviceId: captureDeviceId(),
+    });
+    window.dispatchEvent(new Event("echodesk:capture-control-refresh"));
   }
 
   private setState(next: CaptureState, errorMessage?: string): void {
@@ -574,18 +637,7 @@ class AudioCapture {
       this.nativeAttemptGeneration === attemptGeneration;
 
     try {
-      const [baseUrl, sessionToken] = await Promise.all([
-        backendBase(),
-        ensureServerSession(),
-      ]);
-      if (!sessionToken) {
-        throw new Error("无法建立收音会话");
-      }
-      await plugin.configureSession({
-        baseUrl,
-        sessionToken,
-        deviceId: captureDeviceId(),
-      });
+      await this.attachNativeRuntime();
       const chunkHandle = await plugin.addListener("chunk", (event) => {
         if (!this.nativeActive || !isActiveAttempt()) return;
         if (!this.observeNativeInputHealth(event, generation, attemptGeneration)) return;

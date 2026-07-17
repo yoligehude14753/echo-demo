@@ -67,6 +67,7 @@ public class EchoAudioPlugin extends Plugin {
 
   @PluginMethod
   public void configureSession(PluginCall call) {
+    eventTarget = this;
     String baseUrl = call.getString("baseUrl", "");
     String sessionToken = call.getString("sessionToken", "");
     String deviceId = call.getString("deviceId", "");
@@ -365,9 +366,18 @@ public class EchoAudioPlugin extends Plugin {
     result.put("paused", runtime.isPaused());
     result.put("formalMode", runtime.isFormalMode());
     result.put("nativeUpload", runtime.hasUploadSession());
+    result.put("authBlocked", runtime.isAuthBlocked());
     result.put("queuedChunks", runtime.queuedCount());
     result.put("queuedBytes", runtime.queuedBytes());
     call.resolve(result);
+  }
+
+  static void notifyUploadRecoveryRequired(int status) {
+    EchoAudioPlugin target = eventTarget;
+    if (target == null) return;
+    JSObject payload = new JSObject();
+    payload.put("status", status);
+    target.notifyListeners("uploadSessionRequired", payload);
   }
 
   @PluginMethod

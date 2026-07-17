@@ -102,6 +102,21 @@ public final class EchoCaptureService extends Service {
     updateNotification(context, title, text);
   }
 
+  public static void updateUploadState(Context context, String state, int queuedChunks) {
+    if (!active) return;
+    String text;
+    if ("selection_blocked".equals(state)) {
+      text = "当前设备未被选为收音设备，上传已暂停";
+    } else if ("auth_blocked".equals(state)) {
+      text = "收音身份已失效，正在等待重新验证";
+    } else if ("auth_required".equals(state)) {
+      text = "收音会话未建立，新音频不会进入待发送队列";
+    } else {
+      text = queuedChunks > 0 ? "待联网同步 " + queuedChunks + " 个音频片段" : "上传已就绪";
+    }
+    updateNotification(context, "EchoDesk 收音上传状态", text);
+  }
+
   public static void notifyRestoreRequired(Context context) {
     EchoCaptureRuntime runtime = EchoCaptureRuntime.get(context);
     if (!runtime.isFreeModeEnabled()) return;

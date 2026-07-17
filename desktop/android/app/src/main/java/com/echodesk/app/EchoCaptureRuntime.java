@@ -72,6 +72,7 @@ final class EchoCaptureRuntime {
   private volatile boolean formalMode;
   private volatile String meetingId;
   private volatile boolean authBlocked;
+  private volatile int recoveryAttempts;
 
   private EchoCaptureRuntime(Context context) {
     this.context = context;
@@ -133,6 +134,10 @@ final class EchoCaptureRuntime {
     return formalMode;
   }
 
+  boolean isAuthBlocked() {
+    return authBlocked;
+  }
+
   boolean hasUploadSession() {
     return hasUploadSession(baseUrl, bearerToken, deviceId);
   }
@@ -145,6 +150,15 @@ final class EchoCaptureRuntime {
     return !normalizeBaseUrl(baseUrl).isBlank()
         && !normalizeSessionField(bearerToken).isBlank()
         && !normalizeSessionField(deviceId).isBlank();
+  }
+
+  static boolean canQueueNativeCapture(
+      String baseUrl,
+      String bearerToken,
+      String deviceId,
+      boolean authBlocked
+  ) {
+    return !authBlocked && hasUploadSession(baseUrl, bearerToken, deviceId);
   }
 
   int queuedCount() {
@@ -163,6 +177,10 @@ final class EchoCaptureRuntime {
       int peak
   ) {
     if (isPaused()) return true;
+    if (!canQueueNativeCapture(baseUrl, bearerToken, deviceId, authBlocked)) {
+      EchoCaptureService.updateUploadState(context, "auth_required", queue.count());
+      return false;
+    }
     boolean currentFormal = formalMode;
     NativeAudioGate.Result gated = gate.process(pcm, sampleRate, currentFormal);
     if (!gated.accepted) {
@@ -217,7 +235,14 @@ final class EchoCaptureRuntime {
   }
 
   void requestDrain() {
-    if (authBlocked || !hasUploadSession()) return;
+    if (authBlocked || !hasUploadSession()) {
+      EchoCaptureService.updateUploadState(
+          context,
+          authBlocked ? "auth_blocked" : "auth_required",
+          queue.count()
+      );
+      return;
+    }
     if (!drainRunning.compareAndSet(false, true)) return;
     uploader.execute(this::drain);
   }
@@ -230,6 +255,7 @@ final class EchoCaptureRuntime {
         if (authBlocked || !hasUploadSession()) break;
         int status = upload(record);
         if (status >= 200 && status < 300) {
+          recoveryAttempts = 0;
           queue.remove(record);
           EchoCaptureService.updateQueueState(
               context,
@@ -239,8 +265,19 @@ final class EchoCaptureRuntime {
           );
           continue;
         }
-        if (status == 401 || status == 403) {
+        if (status == 401 || status == 403 || status == 409) {
           authBlocked = true;
+          recoveryAttempts += 1;
+          EchoCaptureService.updateUploadState(
+              context,
+              status == 409 ? "selection_blocked" : "auth_blocked",
+              queue.count()
+          );
+          if (recoveryAttempts <= 3) {
+            EchoAudioPlugin.notifyUploadRecoveryRequired(status);
+          } else {
+            EchoCaptureService.updateUploadState(context, "auth_blocked", queue.count());
+          }
           Log.w(TAG, "native upload waiting for renewed authenticated session: " + status);
           break;
         }
