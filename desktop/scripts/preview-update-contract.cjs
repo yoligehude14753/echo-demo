@@ -12,9 +12,9 @@ const {
 
 const DESKTOP_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, "..");
-const PREVIOUS_VERSION = "0.3.3-preview.3";
-const TARGET_VERSION = "0.3.3-preview.4";
-const TARGET_VERSION_CODE = 30304;
+const PREVIOUS_VERSION = "0.3.3-preview.4";
+const TARGET_VERSION = "0.3.4";
+const TARGET_VERSION_CODE = 30400;
 const OWNER = "yoligehude14753";
 const REPO = "echo-demo";
 
@@ -36,7 +36,7 @@ function releaseFixture(version, platform) {
     tag_name: `v${version}`,
     name: `EchoDesk ${version}`,
     draft: false,
-    prerelease: true,
+    prerelease: false,
     html_url: `https://github.com/${OWNER}/${REPO}/releases/tag/v${version}`,
     assets: [
       {
@@ -57,8 +57,8 @@ function assertVersionContract(root = REPO_ROOT) {
   const ledger = readJson(path.join(desktopRoot, "android", "version-codes.json"));
   const backend = readFileSync(path.join(root, "backend", "app", "__init__.py"), "utf8");
   const env = readFileSync(path.join(root, ".env.example"), "utf8");
-  const previewBuilder = readFileSync(
-    path.join(desktopRoot, "scripts", "build-android-preview.cjs"),
+  const releaseBuilder = readFileSync(
+    path.join(desktopRoot, "scripts", "build-android-release.cjs"),
     "utf8",
   );
 
@@ -85,18 +85,18 @@ function assertVersionContract(root = REPO_ROOT) {
     previous?.status !== "historical-preview" ||
     target?.version !== TARGET_VERSION ||
     target?.versionCode !== TARGET_VERSION_CODE ||
-    target?.status !== "current-preview"
+    target?.status !== "current-release"
   ) {
-    throw new Error("Android Preview version ledger is not a strict preview.3 -> preview.4 step");
+    throw new Error("Android version ledger is not a strict Preview4 -> 0.3.4 release step");
   }
   if (
-    !previewBuilder.includes(`PREVIEW_VERSION = "${TARGET_VERSION}"`) ||
-    !previewBuilder.includes(`PREVIEW_VERSION_CODE = "${TARGET_VERSION_CODE}"`)
+    !releaseBuilder.includes('const { version } = require(join(ROOT, "package.json"))') ||
+    !releaseBuilder.includes('`EchoDesk-${version}-android.apk`')
   ) {
-    throw new Error("Android stable-Preview builder is not pinned to the target");
+    throw new Error("Android formal release builder is not bound to the package version");
   }
   if (compareSemver(TARGET_VERSION, PREVIOUS_VERSION) <= 0) {
-    throw new Error("target version must be newer than the installed Preview3 version");
+    throw new Error("target version must be newer than the installed Preview4 version");
   }
 
   const assets = canonicalAssets();
@@ -107,7 +107,7 @@ function assertVersionContract(root = REPO_ROOT) {
       platform,
     });
     if (!selected || selected.version !== TARGET_VERSION || selected.asset.name !== assets[platform]) {
-      throw new Error(`updater cannot select the canonical ${platform} Preview4 asset`);
+      throw new Error(`Preview4 updater cannot select the canonical ${platform} 0.3.4 asset`);
     }
   }
   return {
@@ -118,8 +118,9 @@ function assertVersionContract(root = REPO_ROOT) {
     targetTag: `v${TARGET_VERSION}`,
     androidVersionCode: TARGET_VERSION_CODE,
     assets,
-    preview2Upgrade: "manual-once",
-    preview3ToPreview4: "in-app",
+    releaseChannel: "stable",
+    releaseNotes: `EchoDesk ${TARGET_VERSION}`,
+    preview4ToStable: "in-app",
   };
 }
 
@@ -137,7 +138,7 @@ if (require.main === module) {
       `${JSON.stringify({ ...result, sourceSha: currentSourceSha() }, null, 2)}\n`,
     );
   } catch (error) {
-    process.stderr.write(`[preview-update-contract] ${error?.message || error}\n`);
+    process.stderr.write(`[release-update-contract] ${error?.message || error}\n`);
     process.exitCode = 1;
   }
 }

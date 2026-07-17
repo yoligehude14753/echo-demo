@@ -65,7 +65,7 @@ test("preview channel queries release arrays and selects the exact mac ZIP", () 
   );
 });
 
-test("stable and preview channels only accept their canonical release shapes", () => {
+test("stable stays on formal releases while preview can promote to a newer formal release", () => {
   const releases = [
     release("0.3.4-preview.2"),
     release("0.3.4", { prerelease: false }),
@@ -84,8 +84,28 @@ test("stable and preview channels only accept their canonical release shapes", (
       channel: "preview",
       platform: "darwin",
     }).version,
-    "0.3.4-preview.2",
+    "0.3.4",
   );
+});
+
+test("Preview4 discovers formal 0.3.4 on every supported updater path", () => {
+  for (const platform of ["darwin", "win32", "android"]) {
+    const selected = selectRelease(
+      [
+        release("0.3.4", {
+          prerelease: false,
+          assetName: updateAssetName(platform, "0.3.4"),
+        }),
+      ],
+      {
+        currentVersion: "0.3.3-preview.4",
+        channel: "preview",
+        platform,
+      },
+    );
+    assert.equal(selected?.version, "0.3.4");
+    assert.equal(selected?.asset.name, updateAssetName(platform, "0.3.4"));
+  }
 });
 
 test("preview ignores adhoc and malformed tags even when marked prerelease", () => {
@@ -162,6 +182,10 @@ test("platform asset names are exact", () => {
   assert.equal(
     updateAssetName("android", "0.3.4-preview.1"),
     "EchoDesk-0.3.4-preview.1-android-universal-PREVIEW.apk",
+  );
+  assert.equal(
+    updateAssetName("android", "0.3.4"),
+    "EchoDesk-0.3.4-android.apk",
   );
 });
 

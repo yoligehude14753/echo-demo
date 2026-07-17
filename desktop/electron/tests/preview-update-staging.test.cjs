@@ -26,8 +26,10 @@ function releaseFixture(extraAssets = []) {
   return {
     id: 44,
     tag_name: `v${TARGET_VERSION}`,
+    name: `EchoDesk ${TARGET_VERSION}`,
+    body: `EchoDesk ${TARGET_VERSION} formal release notes`,
     draft: false,
-    prerelease: true,
+    prerelease: false,
     html_url: `https://github.com/example/releases/tag/v${TARGET_VERSION}`,
     assets: [
       ...Object.values(canonicalAssets()).map((name, index) => ({
@@ -42,23 +44,26 @@ function releaseFixture(extraAssets = []) {
   };
 }
 
-test("Preview4 version bump remains a strict updater-compatible metadata step", () => {
+test("0.3.4 promotion remains a strict updater-compatible metadata step", () => {
   const result = assertVersionContract();
-  assert.equal(result.previousVersion, "0.3.3-preview.3");
+  assert.equal(result.previousVersion, "0.3.3-preview.4");
   assert.equal(result.targetVersion, TARGET_VERSION);
   assert.equal(result.androidVersionCode, TARGET_VERSION_CODE);
   assert.deepEqual(result.assets, {
-    darwin: "EchoDesk-0.3.3-preview.4-arm64-mac.zip",
-    win32: "EchoDesk.Setup.0.3.3-preview.4.exe",
-    android: "EchoDesk-0.3.3-preview.4-android-universal-PREVIEW.apk",
+    darwin: "EchoDesk-0.3.4-arm64-mac.zip",
+    win32: "EchoDesk.Setup.0.3.4.exe",
+    android: "EchoDesk-0.3.4-android.apk",
   });
-  assert.equal(result.preview2Upgrade, "manual-once");
-  assert.equal(result.preview3ToPreview4, "in-app");
+  assert.equal(result.releaseChannel, "stable");
+  assert.equal(result.releaseNotes, "EchoDesk 0.3.4");
+  assert.equal(result.preview4ToStable, "in-app");
 });
 
 test("release readback requires exact tag SHA and exactly three canonical update assets", () => {
   const evidence = validateRelease(releaseFixture(), SOURCE_SHA, SOURCE_SHA);
   assert.equal(evidence.sourceSha, SOURCE_SHA);
+  assert.equal(evidence.prerelease, false);
+  assert.match(evidence.releaseNotes, /0\.3\.4/);
   assert.deepEqual(Object.keys(evidence.assets).sort(), Object.values(canonicalAssets()).sort());
   assert.throws(
     () => validateRelease(releaseFixture(), SOURCE_SHA, "d".repeat(40)),

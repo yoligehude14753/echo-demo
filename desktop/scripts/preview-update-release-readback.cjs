@@ -59,10 +59,13 @@ function validateRelease(release, expectedSha, tagSha) {
   if (
     release?.tag_name !== tag ||
     release?.draft !== false ||
-    release?.prerelease !== true ||
+    release?.prerelease !== false ||
+    release?.name !== `EchoDesk ${TARGET_VERSION}` ||
+    typeof release?.body !== "string" ||
+    !release.body.includes(TARGET_VERSION) ||
     typeof release?.html_url !== "string"
   ) {
-    throw new Error("release must be the public Preview4 prerelease");
+    throw new Error("release must be the public 0.3.4 stable release with versioned notes");
   }
   const expectedNames = Object.values(canonicalAssets()).sort();
   const actualNames = (release.assets || []).map((asset) => asset?.name).sort();
@@ -98,7 +101,9 @@ function validateRelease(release, expectedSha, tagSha) {
     tag,
     releaseId: release.id,
     releaseUrl: release.html_url,
-    prerelease: true,
+    prerelease: false,
+    releaseName: release.name,
+    releaseNotes: release.body,
     assets,
   };
 }

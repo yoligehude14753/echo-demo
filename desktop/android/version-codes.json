@@ -29,7 +29,12 @@
     {
       "version": "0.3.3-preview.4",
       "versionCode": 30304,
-      "status": "current-preview"
+      "status": "historical-preview"
+    },
+    {
+      "version": "0.3.4",
+      "versionCode": 30400,
+      "status": "current-release"
     }
   ]
 }

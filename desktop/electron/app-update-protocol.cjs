@@ -84,7 +84,9 @@ function updateAssetName(platform, version) {
   if (platform === "darwin") return `EchoDesk-${version}-arm64-mac.zip`;
   if (platform === "win32") return `EchoDesk.Setup.${version}.exe`;
   if (platform === "android") {
-    return `EchoDesk-${version}-android-universal-PREVIEW.apk`;
+    return String(version).includes("-")
+      ? `EchoDesk-${version}-android-universal-PREVIEW.apk`
+      : `EchoDesk-${version}-android.apk`;
   }
   return null;
 }
@@ -99,10 +101,11 @@ function releaseVersionForChannel(release, channel) {
   if (!release || release.draft === true) return null;
   if (channel === "preview") {
     const tag = String(release.tag_name || "").trim();
-    if (
-      release.prerelease !== true ||
-      !/^v\d+\.\d+\.\d+-preview\.\d+$/.test(tag)
-    ) {
+    if (release.prerelease === true) {
+      if (!/^v\d+\.\d+\.\d+-preview\.\d+$/.test(tag)) return null;
+    } else if (release.prerelease === false) {
+      if (!/^v\d+\.\d+\.\d+$/.test(tag)) return null;
+    } else {
       return null;
     }
     return parseSemver(tag).raw;
@@ -120,10 +123,11 @@ function isCompatibleUpgrade(version, currentVersion, channel) {
     return compareSemver(version, currentVersion) > 0;
   }
   const next = String(version).match(/^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/);
+  if (!next) return compareSemver(version, currentVersion) > 0;
   const current = String(currentVersion).match(
     /^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/,
   );
-  if (!next || !current) return false;
+  if (!current) return false;
   return (
     next[1] === current[1] &&
     next[2] === current[2] &&
