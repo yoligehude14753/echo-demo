@@ -182,7 +182,7 @@ async def test_published_v11_upgrade_preserves_data_and_archives_old_control_pla
     result = await run_migrations(db_path)
 
     assert result.errors == []
-    assert result.current_version == 41
+    assert result.current_version == 44
     assert result.not_applicable == []
     assert await _integrity(db_path) == ("ok", [])
     async with aiosqlite.connect(str(db_path)) as conn:
@@ -330,9 +330,9 @@ async def test_current_v36_switch_marks_restored_history_not_applicable_and_conv
 
     switched = await run_migrations(current_db)
 
-    assert switched.errors == [] and switched.applied == [37, 38, 39, 40, 41]
+    assert switched.errors == [] and switched.applied == [37, 38, 39, 40, 41, 42, 43, 44]
     assert switched.not_applicable == [6, 7, 8, 9]
-    assert switched.current_version == 41
+    assert switched.current_version == 44
     assert await _integrity(current_db) == ("ok", [])
     async with aiosqlite.connect(str(current_db)) as conn:
         history_rows = await (
@@ -443,7 +443,7 @@ async def test_v37_rebuild_guard_rolls_back_compatibility_prelude(tmp_path: Path
     assert view is not None and version_37 is None
 
     resumed = await run_migrations(db_path)
-    assert resumed.errors == [] and resumed.applied == [37, 38, 39, 40, 41]
+    assert resumed.errors == [] and resumed.applied == [37, 38, 39, 40, 41, 42, 43, 44]
     assert await _integrity(db_path) == ("ok", [])
 
 
@@ -490,7 +490,7 @@ def test_two_processes_upgrade_published_v11_without_duplicate_or_lock_failure(
     result_queue.close()
 
     pending_versions = [version for version in map(_version, _migration_files()) if version >= 12]
-    assert all(errors == [] and current == 41 for errors, current, _applied in results)
+    assert all(errors == [] and current == 44 for errors, current, _applied in results)
     assert sum(len(applied) for _errors, _current, applied in results) == len(pending_versions)
     assert asyncio.run(_integrity(db_path)) == ("ok", [])
 

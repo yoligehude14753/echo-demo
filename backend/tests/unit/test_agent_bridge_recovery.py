@@ -10,6 +10,7 @@ from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.repo.migrator import run_migrations
 from app.agents.artifact_transfer import ArtifactDownloadResult
 from app.agents.base import AgentIntent, AgentTaskState
+from app.agents.embedded_runtime import EmbeddedRuntimeBackend
 from app.agents.events import EchoTaskEvent
 from app.agents.service import AgentTaskRecord, AgentTaskService
 from app.config import Settings
@@ -18,7 +19,7 @@ from app.security import Principal
 from app.security.context import bind_principal, reset_principal
 
 
-class _EnabledBackend:
+class _EnabledBackend(EmbeddedRuntimeBackend):
     enabled = True
     is_embedded = True
     base_url = "http://127.0.0.1:9"

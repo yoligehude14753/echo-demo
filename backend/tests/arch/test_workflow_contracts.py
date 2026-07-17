@@ -250,7 +250,7 @@ def test_agentos_runtime_install_contract(tmp_path: Path) -> None:
         assert completed.stdout.strip() == ("1" if expected else "0")
         updated = json.loads(config_path.read_text(encoding="utf-8"))
         assert updated["agent_os_enabled"] is expected
-        assert updated["agent_os_url"] == ""
+        assert updated["agent_os_url"] == "http://127.0.0.1:4128"
 
     private_start_marker = 'PRIVATE_UPSTREAM="$($PYTHON_BIN - "$MAIN_BASE_URL" <<\'PY\'\n'
     private_end_marker = '\nPY\n)"'

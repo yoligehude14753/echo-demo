@@ -18,10 +18,12 @@ import pytest
 from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.llm import LLMError
 from app.adapters.repo.migrator import run_migrations
+from app.adapters.repo.sqlite import SQLiteRepository
 from app.api.artifacts import generate as artifacts_generate
 from app.artifacts.repository import ArtifactRepository
 from app.config import Settings
 from app.schemas.artifact import ArtifactRequest
+from app.security import local_principal
 from app.use_cases.retrieve_and_answer import _classify
 from app.workflows.kernel import WorkflowDispatcher
 from app.workflows.service import WorkflowService
@@ -38,6 +40,8 @@ async def test_artifacts_emits_failed_on_llm_error(tmp_path: Path) -> None:
     fake_llm = AsyncMock()
     fake_skill = AsyncMock()
     artifact_repo = ArtifactRepository(settings)
+    repository = SQLiteRepository(settings.db_path)
+    await repository.init()
 
     async def boom(*_: Any, **__: Any) -> Any:
         raise LLMError("Yunwu connect timeout")
@@ -53,6 +57,8 @@ async def test_artifacts_emits_failed_on_llm_error(tmp_path: Path) -> None:
         with pytest.raises(HTTPException) as ei:
             await artifacts_generate(
                 body=ArtifactRequest(artifact_type="html", brief="test brief"),
+                principal=local_principal(),
+                repository=repository,
                 llm=fake_llm,
                 runner=fake_skill,
                 event_bus=bus,

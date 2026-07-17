@@ -289,7 +289,7 @@ async def test_direct_bm25_adapter_before_migrations_keeps_upgrade_chain_valid(
 
     assert result.errors == []
     with sqlite3.connect(settings.db_path) as conn:
-        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 41
+        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 44
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM sqlite_master "
