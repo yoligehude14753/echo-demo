@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "manifest_type": "echo.c09.integration",
+  "task_id": "C09",
+  "echo_base": {
+    "batch": "B04K",
+    "accepted_head": "ebfddfe6e8a649b51dd65a4fff07c46fa1d8d8a6",
+    "commit_resolution": "full_sha"
+  },
+  "integration_order": [
+    {
+      "position": 1,
+      "batch": "B05M",
+      "commits": [
+        "b5d6943163481762f824bc169dab639a473a3ef7",
+        "21b39c65b10376f2b96559eecb1cbbe8bc952e50",
+        "3b67fcc0540aa0bd766122d9219fde51a0db442a",
+        "ffce0b645586db589c96e30fd8ead755201125c2",
+        "1714e394a08e6fcf20f22de5362d576674e79dd5"
+      ]
+    },
+    {
+      "position": 2,
+      "batch": "B06P",
+      "commits": [
+        "e7bacd136f77cfeba157af0dc6151b692b43ac05",
+        "7ea07c003f0609eef3f29b1384350f08edc61ebb",
+        "49cb72e0bd71ade06e50d2bfe834a974ad92289d"
+      ]
+    }
+  ],
+  "accepted_lineages": {
+    "B04K": {
+      "accepted_head": "ebfddfe6e8a649b51dd65a4fff07c46fa1d8d8a6"
+    },
+    "B05M": {
+      "accepted_head": "1714e394a08e6fcf20f22de5362d576674e79dd5"
+    },
+    "B06P": {
+      "accepted_head": "49cb72e0bd71ade06e50d2bfe834a974ad92289d"
+    }
+  },
+  "external_dependencies": [
+    {
+      "repository": "_platforms",
+      "commit": "158844db23cc5884889233fb8bdd7d943f3002f9",
+      "commit_resolution": "full_sha",
+      "binding_mode": "manifest_only",
+      "in_echo_git_lineage": false
+    }
+  ],
+  "lineage_note": "The external _platforms dependency is fixed by this manifest only; it is not an Echo git object and is not part of Echo git lineage."
+}

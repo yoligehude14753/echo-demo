@@ -16,6 +16,7 @@ from app.adapters.repo.sqlite import SQLiteRepository
 from app.agents.base import AgentIntent
 from app.agents.events import EchoTaskEvent
 from app.agents.service import get_agent_task_service
+from app.api import artifacts as artifacts_api
 from app.api import capture as capture_api
 from app.api import deps as deps_mod
 from app.api import retrieval as retrieval_api
@@ -36,7 +37,7 @@ from app.security.client_version import (
 from app.security.context import bind_principal, reset_principal
 from app.security.models import Principal
 from app.security.public_projection import project_client_dict, server_private_roots
-from app.security.scope import scoped_directory_for
+from app.security.scope import scoped_directory, scoped_directory_for
 from app.workflows.service import WorkflowService
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -868,11 +869,28 @@ def test_public_capture_and_rag_docs_redact_server_file_references(
     public_client.app.dependency_overrides[capture_api.get_ambient_pipeline] = _AmbientPathProbe
     public_client.app.dependency_overrides[retrieval_api.get_rag] = _RagPathProbe
     headers = {"Authorization": f"Bearer {session['token']}"}
+    device_id = str(session["principal"]["device_id"])
     try:
+        control = public_client.get("/capture/control", headers=headers)
+        assert control.status_code == 200, control.text
+        selected = public_client.put(
+            "/capture/control",
+            headers=headers,
+            json={
+                "mode": "single",
+                "selectedDeviceIds": [device_id],
+                "expectedRevision": control.json()["revision"],
+            },
+        )
+        assert selected.status_code == 200, selected.text
         capture = public_client.post(
             "/capture/chunk",
             headers=headers,
             files={"audio": ("probe.wav", b"safe-audio-probe", "audio/wav")},
+            data={
+                "deviceId": device_id,
+                "segmentId": "path-projection-probe",
+            },
         )
         rag_docs = public_client.get("/rag/docs", headers=headers)
     finally:
@@ -1001,7 +1019,17 @@ def test_public_routes_require_server_issued_session(public_client: TestClient) 
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "version",
-    ["", "0.2.50", "0.3.0", "0.3.1", "0.3.1-rc.1", "0.3.2", "invalid", "0.3"],
+    [
+        "",
+        "0.2.50",
+        "0.3.0",
+        "0.3.1",
+        "0.3.1-rc.1",
+        "0.3.2",
+        "0.3.3-preview.1",
+        "invalid",
+        "0.3",
+    ],
 )
 def test_public_routes_reject_missing_invalid_or_old_client_versions(
     public_client: TestClient,
@@ -1023,7 +1051,17 @@ def test_public_routes_reject_missing_invalid_or_old_client_versions(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("version", ["0.3.3", "v0.3.3", "echodesk-0.3.3", "0.3.10"])
+@pytest.mark.parametrize(
+    "version",
+    [
+        "0.3.3-preview.2",
+        "v0.3.3-preview.2",
+        "0.3.3",
+        "v0.3.3",
+        "echodesk-0.3.3",
+        "0.3.10",
+    ],
+)
 def test_supported_public_client_versions_continue_to_session_auth(
     public_client: TestClient,
     version: str,
@@ -1254,14 +1292,6 @@ def test_public_session_cannot_reach_host_runtime_capabilities(
     assert public_client.get("/workspace/status", headers=headers).status_code == 403
     assert (
         public_client.post(
-            "/artifacts/generate",
-            headers=headers,
-            json={"artifact_type": "html", "brief": "run generated host code"},
-        ).status_code
-        == 403
-    )
-    assert (
-        public_client.post(
             "/agents/grants/claude_code",
             headers=headers,
             json={"device_id": "attacker", "workspace_ids": []},
@@ -1279,6 +1309,112 @@ def test_public_session_cannot_reach_host_runtime_capabilities(
 
     trusted = {"X-Echo-Admin-Token": "test-admin"}
     assert public_client.get("/workspace/status", headers=trusted).status_code == 200
+
+
+class _OwnerScopedPptSkill:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.calls = 0
+
+    async def generate(
+        self,
+        *,
+        llm: object,
+        artifact_type: str,
+        brief: str,
+        extra_instructions: str | None = None,
+        artifact_id: str | None = None,
+    ) -> GeneratedArtifact:
+        _ = llm, extra_instructions
+        assert artifact_type in {"ppt", "pptx"}
+        assert artifact_id is not None
+        self.calls += 1
+        directory = scoped_directory(self.root) / artifact_id
+        directory.mkdir(parents=True)
+        output = directory / "output.pptx"
+        output.write_bytes(b"PK\x03\x04" + b"owner-scoped-ppt" * 512)
+        (directory / "meta.json").write_text(
+            json.dumps({"title": brief, "artifact_type": "pptx"}),
+            encoding="utf-8",
+        )
+        return GeneratedArtifact(
+            artifact_id=artifact_id,
+            artifact_type="pptx",
+            title=brief,
+            file_path=str(output),
+            mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            size_bytes=output.stat().st_size,
+            generation_latency_ms=1,
+            model="test-owner-ppt",
+        )
+
+
+@pytest.mark.unit
+def test_public_owner_can_generate_safe_artifact_without_cross_owner_access(
+    public_client: TestClient,
+) -> None:
+    settings = public_client.app.dependency_overrides[deps_mod.get_settings]()
+    runner = _OwnerScopedPptSkill(settings.skill_executor_build_dir)
+    public_client.app.dependency_overrides[artifacts_api.get_skill] = lambda: runner
+    session_a, _credential_a = _issue(public_client, "artifact-owner-a")
+    session_b, _credential_b = _issue(public_client, "artifact-owner-b")
+    headers_a = {"Authorization": f"Bearer {session_a['token']}"}
+    headers_b = {"Authorization": f"Bearer {session_b['token']}"}
+
+    assert (
+        public_client.post(
+            "/artifacts/generate",
+            json={"artifact_type": "pptx", "brief": "anonymous deck"},
+        ).status_code
+        == 401
+    )
+    denied_kind = public_client.post(
+        "/artifacts/generate",
+        headers=headers_a,
+        json={"artifact_type": "word", "brief": "generated code is not owner safe"},
+    )
+    assert denied_kind.status_code == 403
+    assert denied_kind.json()["detail"] == "artifact type is not available to owner sessions"
+
+    assert public_client.post(
+        "/meetings/owner-a-meeting/start",
+        headers=headers_a,
+    ).status_code == 200
+    cross_owner = public_client.post(
+        "/artifacts/generate",
+        headers=headers_b,
+        json={
+            "artifact_type": "pptx",
+            "brief": "cross owner deck",
+            "meeting_id": "owner-a-meeting",
+        },
+    )
+    assert cross_owner.status_code == 404
+
+    generated = public_client.post(
+        "/artifacts/generate",
+        headers=headers_a,
+        json={
+            "artifact_type": "pptx",
+            "brief": "owner A quarterly deck",
+            "meeting_id": "owner-a-meeting",
+        },
+    )
+    assert generated.status_code == 200, generated.text
+    payload = generated.json()
+    assert payload["artifact_type"] == "pptx"
+    assert payload["file_path"] is None
+    assert runner.calls == 1
+
+    assert [item["artifact_id"] for item in public_client.get(
+        "/artifacts",
+        headers=headers_a,
+    ).json()] == [payload["artifact_id"]]
+    assert public_client.get("/artifacts", headers=headers_b).json() == []
+    assert public_client.get(
+        f"/artifacts/{payload['artifact_id']}/download",
+        headers=headers_b,
+    ).status_code == 404
 
 
 @pytest.mark.unit

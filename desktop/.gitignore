@@ -9,3 +9,4 @@ tsconfig.tsbuildinfo
 test-results/
 playwright-report/
 .playwright-cli/
+.agent-runtime-package/

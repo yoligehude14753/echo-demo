@@ -7,7 +7,7 @@ P1.4（独立产品 Phase 1）：/healthz/full 是 UI status pill + 诊断包的
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.api.health import (
@@ -15,6 +15,7 @@ from app.api.health import (
     _apply_probe_results,
     _db_status,
     _host_port_from_url,
+    _probe_all,
     _probe_to_dict,
     healthz_full,
     start_prober,
@@ -63,10 +64,40 @@ class TestProbeToDict:
         assert "latency_ms" not in d
 
     def test_na_includes_reason_keeps_ok_null(self) -> None:
-        p = ProbeResult(ok=None, reason="no_api_key", checked_at=1700000000.0)
+        p = ProbeResult(
+            ok=None,
+            required=False,
+            reason="no_api_key",
+            checked_at=1700000000.0,
+        )
         d = _probe_to_dict(p)
         assert d["ok"] is None
+        assert d["required"] is False
         assert d["reason"] == "no_api_key"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tts_not_configured_is_optional_and_not_probed() -> None:
+    settings = Settings(tts_enabled=False, _env_file=None)  # type: ignore[call-arg]
+    with (
+        patch(
+            "app.api.health._probe_tcp",
+            new=AsyncMock(side_effect=lambda *_args: ProbeResult(ok=True)),
+        ),
+        patch(
+            "app.api.health._probe_openai_models",
+            new=AsyncMock(side_effect=lambda *_args: ProbeResult(ok=True)),
+        ),
+    ):
+        results = await _probe_all(settings)
+
+    assert results["speech_synthesis"].ok is None
+    assert results["speech_synthesis"].required is False
+    assert results["speech_synthesis"].reason == "not_configured"
+    assert results["speech_recognition"].required is True
+    assert results["fast_model"].required is True
+    assert results["main_model"].required is True
 
 
 @pytest.mark.unit

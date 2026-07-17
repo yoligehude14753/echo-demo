@@ -299,6 +299,7 @@ function DoorBreakdown({
 export default function CaptureStatus({ status }: Props): JSX.Element {
   const {
     state,
+    runtimeState,
     ambientChunks,
     ambientStored,
     meetingChunks,
@@ -325,7 +326,31 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
     return () => window.clearTimeout(t);
   }, [state]);
 
-  if (state === "initializing") {
+  if (runtimeState === "off") {
+    return (
+      <Tag
+        className="!border-paper-300 !bg-paper-100 !text-ink-500"
+        data-testid="capture-status"
+        tabIndex={-1}
+      >
+        自由收音已暂停
+      </Tag>
+    );
+  }
+
+  if (runtimeState === "device_not_selected") {
+    return (
+      <Tag
+        className="!border-paper-300 !bg-paper-100 !text-ink-500"
+        data-testid="capture-status"
+        tabIndex={-1}
+      >
+        本设备未选为收音端
+      </Tag>
+    );
+  }
+
+  if (state === "initializing" || runtimeState === "free_starting") {
     if (initializingTooLong) {
       return (
         <Tag color="red" data-testid="capture-status" tabIndex={-1}>
@@ -369,7 +394,16 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
   const circuitOpen =
     sttCircuitOpenUntil !== null && sttCircuitOpenUntil > Date.now();
   const operationalLabel = primaryOperationalLabel(status);
-  const statusLabel = operationalLabel || (circuitOpen ? "语音识别暂时不可用" : "正在转写");
+  const modeLabel =
+    runtimeState === "formal_recording"
+      ? "正式会议中"
+      : runtimeState === "speech_detected"
+        ? "检测到语音"
+        : runtimeState === "offline_buffering"
+          ? "离线缓存中"
+          : "自由收音中";
+  const statusLabel =
+    operationalLabel || (circuitOpen ? "语音识别暂时不可用" : modeLabel);
   const ariaLabel = meetingOverlayId
       ? `${statusLabel}，已采集 ${ambientChunks} 段，已保存 ${ambientStored} 段，会议中已记录 ${meetingChunks} 段`
       : `${statusLabel}，已采集 ${ambientChunks} 段，已保存 ${ambientStored} 段，静音和底噪会自动过滤`;

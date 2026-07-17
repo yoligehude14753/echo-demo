@@ -20,6 +20,7 @@ public class MainActivity extends BridgeActivity {
     }
     registerPlugin(EchoAudioPlugin.class);
     registerPlugin(EchoIdentityPlugin.class);
+    registerPlugin(EchoUpdaterPlugin.class);
     super.onCreate(savedInstanceState);
     enterTvFullscreen();
   }

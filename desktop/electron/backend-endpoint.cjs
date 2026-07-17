@@ -211,10 +211,11 @@ function principalModeFor(runtimeMode, env) {
     fail("conflicting_principal_mode", "legacy local and public switches conflict");
   }
   if (runtimeMode === "release") {
-    if (explicit === "local") {
-      fail("local_mode_forbidden_in_release", "release packages only use public service");
-    }
-    return { mode: "public", source: "release-config" };
+    // Installed Preview is local-first: the supervisor must start the bundled
+    // backend, which owns the fused worker runtime.  Remote service remains an
+    // explicit opt-in so a stale/demo environment cannot silently bypass it.
+    if (explicit) return { mode: explicit, source: "explicit-principal-mode" };
+    return { mode: "local", source: "release-default-local" };
   }
   if (explicit) return { mode: explicit, source: "explicit-principal-mode" };
   if (legacyLocal) return { mode: "local", source: "legacy-force-local" };
@@ -277,13 +278,17 @@ function resolveBackendEndpoint(config, env = process.env, options = {}) {
   const isPublic = principal.mode === "public";
   const endpointSource = isPublic
     ? runtimeMode === "release"
-      ? roles.legacy
-        ? "release-legacy-public"
-        : "release-config"
+      ? principal.source === "explicit-principal-mode"
+        ? "explicit-principal-mode"
+        : roles.legacy
+          ? "release-legacy-public"
+          : "release-config"
       : env.ECHO_PUBLIC_BACKEND_BASE
         ? "explicit-public-endpoint"
         : principal.source
-    : env.ECHO_LOCAL_DEV_DIAGNOSTIC_BASE || env.ECHO_BACKEND_PORT
+    : runtimeMode === "release"
+      ? principal.source
+      : env.ECHO_LOCAL_DEV_DIAGNOSTIC_BASE || env.ECHO_BACKEND_PORT
       ? "explicit-local-endpoint"
       : principal.source;
 
@@ -300,11 +305,11 @@ function resolveBackendEndpoint(config, env = process.env, options = {}) {
     publicBase,
     publicServiceEndpoint: publicBase,
     pairedHubSyncGatewayEndpoint: null,
-    localDevDiagnosticEndpoint: runtimeMode === "release" ? null : localBase,
+    localDevDiagnosticEndpoint: runtimeMode === "release" && isPublic ? null : localBase,
     backendBase: isPublic ? publicBase : localBase,
     bindHost,
     bindScope,
-    spawnBackend: !isPublic && runtimeMode !== "release" && env.ECHO_SPAWN_BACKEND !== "0",
+    spawnBackend: !isPublic && env.ECHO_SPAWN_BACKEND !== "0",
   });
 }
 

@@ -1,6 +1,9 @@
 /* eslint-disable no-console */
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  validateAndroidGradleVersionContract,
+} = require("./android-gradle-version-contract.cjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const desktopRoot = path.resolve(__dirname, "..");
@@ -91,11 +94,8 @@ if (currentAndroidRelease?.version !== version) {
   );
 }
 const androidGradle = readDesktop("android/app/build.gradle");
-if (!/versionCode\s+currentAndroidRelease\.versionCode\s+as\s+Integer/.test(androidGradle)) {
-  fail("Android Gradle versionCode must come from the append-only version ledger");
-}
-if (!/versionName\s+currentAndroidRelease\.version\.toString\(\)/.test(androidGradle)) {
-  fail("Android Gradle versionName must come from the append-only version ledger");
+for (const error of validateAndroidGradleVersionContract(androidGradle)) {
+  fail(error);
 }
 
 const installedSmoke = readDesktop("tests/e2e-real/installed-local-workflow.spec.ts");

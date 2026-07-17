@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "echo": {
+    "version": "0.3.3",
+    "compatibility_evidence_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+    "effective_working_base_sha": "9fef66c83e6a06541c98cca3194e37ac5a6dd533",
+    "effective_f04_head_before_closeout": "87de108fab64b43688463976b95cc92472c41721",
+    "delta_classification": "test-only; no production runtime change"
+  },
+  "claude": {
+    "declared_version": "unknown",
+    "source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+    "manifest_sha256": "b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+    "manifest_path": "docs/0.3.3-bundled-agent-runtime/evidence/F01/claude-source-manifest.sha256",
+    "entrypoints": ["query.ts", "QueryEngine.ts", "Tool.ts"],
+    "source_use": "bounded adapted loop only; no direct vendoring"
+  },
+  "runtime": {
+    "electron": "43.1.0",
+    "node": "24.18.0",
+    "v8": "15.0.245.13-electron.0",
+    "modules_abi": "148",
+    "napi": "10",
+    "typescript": "5.9.3",
+    "bundler": "Vite 7.3.6 / esbuild 0.28.1",
+    "fingerprint_source": "docs/0.3.3-bundled-agent-runtime/evidence/F03/electron-runtime-fingerprint.json"
+  },
+  "contracts": {
+    "kernel_api": 1,
+    "worker_ipc": 1,
+    "model_runtime": 1,
+    "grant_snapshot": 1,
+    "checkpoint": 1,
+    "event": 1
+  },
+  "adapters": [
+    {
+      "name": "f04-bounded-loop",
+      "scope": "experiments/fusion-compatibility/F04/loop/**",
+      "sha256": {
+        "loop.mjs": "200c97d6e287b8769c69b32a2d0689b3059d4b95d53bb260ca51b0f87568e5e4",
+        "trace.mjs": "b679ecc01b385df5896311041181a15e26e8004015bf7c672312f667c78f7da4"
+      }
+    },
+    {
+      "name": "f04-message-model-tool-event-cancel-adapter",
+      "scope": "experiments/fusion-compatibility/F04/adapter/**",
+      "sha256": {
+        "adapter.ts": "5320a39f11c94839fe1221b0bc51cccb5b3817874fc744ca4235399134340223",
+        "test.mjs": "1f3890932be3d8667138330f62fd0e73f2cfded5fc040ff94dbf20480c71427c"
+      }
+    },
+    {
+      "name": "f04-integrated-runner",
+      "scope": "experiments/fusion-compatibility/F04/integration.mjs",
+      "sha256": "cbb0d756f77178cf7cf998298672b311d405853943215e20f0dc709e43cff7f7"
+    },
+    {
+      "name": "f04-electron-worker-harness",
+      "scope": "experiments/fusion-compatibility/F04/electron-worker-harness.cjs",
+      "sha256": "4a22c45c641fff8562482159d1aa5cd65a0a8263af86400157db5012905cae57"
+    }
+  ],
+  "platform_probes": {
+    "macos": {
+      "status": "f04_electron_worker_passed",
+      "evidence": "docs/0.3.3-bundled-agent-runtime/evidence/F04/macos-worker-trace.json",
+      "supporting_f03_evidence": "docs/0.3.3-bundled-agent-runtime/evidence/F03/macos-probe.json",
+      "f04_integrated_logic": "Electron 43.1.0 main + worker_threads fused harness passed"
+    },
+    "sunny": {
+      "status": "f04_electron_worker_passed",
+      "evidence": "docs/0.3.3-bundled-agent-runtime/evidence/F04/sunny-worker-trace.json",
+      "supporting_f03_evidence": "docs/0.3.3-bundled-agent-runtime/evidence/F03/sunny-windows-probe.json",
+      "f04_integrated_logic": "Sunny Electron 43.1.0 CLI main + worker_threads fused harness passed"
+    }
+  },
+  "excluded_dependencies": [
+    "node:fs",
+    "node:child_process",
+    "node:net",
+    "node:http",
+    "node:https",
+    "electron production imports",
+    "Claude auth/config/session/update/bridge modules",
+    "real AgentTaskService",
+    "real model credentials",
+    "localhost ports"
+  ],
+  "verdict": "FUSION_COMPATIBLE"
+}

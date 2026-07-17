@@ -1,0 +1,36 @@
+event_id: "E-20260717T0454-001"
+event_type: "add"
+timestamp: "2026-07-17T04:54:00+08:00"
+author: "agent/codex-fix-capture-asr-context"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-038"
+      claim: "The production capture pipeline persisted valid WAV audio but failed before ASR scheduler admission because the application ASRRequestContext lacked the scheduler scope_key contract."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-17T04:45:00+08:00"
+      observed_by: "agent/codex-fix-capture-asr-context"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "runtime:heyi /home/ai/echodesk-public/shared/data/user/logs/backend.log at 2026-07-17 04:45"
+        - "backend/app/ports/asr.py"
+        - "backend/app/adapters/stt/scheduler.py"
+        - "backend/app/use_cases/ambient_capture.py"
+        - "runtime:focused ASR tests 33 passed"
+      evidence: "Production repeatedly raised AttributeError: ASRRequestContext has no attribute scope_key at scheduler admission while FireRed returned HTTP 200. The application context now exposes the authenticated tenant, principal and device quota key."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.3"
+        - "capture"
+        - "asr"
+        - "production"
+        - "contract"
+git_commit: null

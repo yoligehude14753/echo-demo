@@ -1,6 +1,6 @@
 {
   "name": "echodesk-desktop",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "EchoDesk public demo desktop client",
   "author": "EchoDesk <support@yoliyoli.uk>",
   "homepage": "https://github.com/yoligehude14753/echo-demo",
@@ -23,6 +23,10 @@
     "electron:dev": "npm run electron:brand && concurrently -k -n vite,electron -c blue,magenta \"vite\" \"wait-on http://localhost:5173 && cross-env ELECTRON_DEV=1 electron electron/main.cjs\"",
     "electron:start": "npm run electron:brand && cross-env ELECTRON_DEV=1 electron electron/main.cjs",
     "test:electron": "node --test electron/tests/*.test.cjs",
+    "test:hotpatch": "node --test scripts/desktop-resource-hotpatch.test.cjs",
+    "update:staging:contract": "node scripts/preview-update-contract.cjs",
+    "update:readback:release": "node scripts/preview-update-release-readback.cjs",
+    "update:readback:installed": "node scripts/preview-update-installed-readback.cjs",
     "postinstall": "node scripts/prepare-android-gradle-locks.cjs && node electron/scripts/brand-dev-electron.cjs",
     "backend:build:mac": "node scripts/build-backend-mac.cjs",
     "backend:build:linux": "node scripts/build-backend-linux.cjs",
@@ -35,7 +39,10 @@
     "app:dist:win": "node scripts/desktop-release-signing.cjs windows",
     "app:dist:win:unsigned-test": "npm run backend:build:win && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis zip --x64 --publish never",
     "app:dist:linux": "npm run backend:build:linux && npm run build && electron-builder --linux AppImage deb --x64 --publish never",
+    "hotpatch:create": "node scripts/desktop-resource-hotpatch.cjs create",
+    "hotpatch:apply": "node scripts/desktop-resource-hotpatch.cjs apply",
     "app:build:android:development": "node scripts/build-android-debug.cjs",
+    "app:build:android:preview": "node scripts/build-android-preview.cjs",
     "app:dist:android": "node scripts/build-android-release.cjs",
     "app:package:tv": "node scripts/package-tv-installer.cjs",
     "tv:smoke": "node scripts/tv-adb-smoke.cjs",
@@ -55,7 +62,6 @@
     "@capacitor/core": "^8.4.0",
     "@types/qrcode": "^1.5.6",
     "antd": "^5.19.4",
-    "electron-updater": "^6.8.9",
     "exceljs": "4.4.0",
     "lucide-react": "^0.395.0",
     "mammoth": "^1.12.0",
@@ -81,6 +87,7 @@
     "cross-env": "^7.0.3",
     "electron": "43.1.0",
     "electron-builder": "^26.15.3",
+    "esbuild": "0.28.1",
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.2",
     "eslint-plugin-react-refresh": "^0.4.7",
@@ -118,6 +125,12 @@
       "!electron/tests/**",
       "backend.config.json",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".agent-runtime-package",
+        "to": "agent-runtime"
+      }
     ],
     "beforePack": "scripts/verify-bundled-backend.cjs",
     "afterPack": "scripts/after-pack-mac.cjs",

@@ -25,6 +25,22 @@ test("packaged renderer prefers main-process backend authority over localStorage
   assert.match(runtime, /window\.echo\?\.backendHost/);
 });
 
+test("renderer fallback remains local-first when the main-process snapshot is absent", () => {
+  const principalFallback = runtime
+    .split("export function principalMode()", 2)[1]
+    .split("export function backendRole()", 2)[0];
+  assert.match(principalFallback, /return "local";/);
+  assert.doesNotMatch(principalFallback, /runtimeMode\(\) === "release" \? "public"/);
+});
+
+test("packaged local routing accepts the supervised bundled endpoint in release", () => {
+  assert.doesNotMatch(
+    runtime,
+    /runtimeMode\(\) === "release" \|\| routing\.localDevDiagnosticEndpoint === null/,
+  );
+  assert.match(runtime, /local bundled backend endpoint is unavailable/);
+});
+
 test("artifact URL policy has no local fallback", () => {
   const artifactApi = readFileSync(
     path.resolve(__dirname, "../../src/api.ts"),
@@ -56,6 +72,17 @@ test("public endpoint absence cannot use the relative development proxy", () => 
   assert.match(wsFunction, /canUseRelativeBackendProxy\(\)/);
   assert.match(apiFunction, /canUseRelativeBackendProxy\(\)/);
   assert.match(artifactFunction, /canUseRelativeBackendProxy\(\)/);
+});
+
+test("native mobile traffic has an explicit PC-backend route and no relative fallback", () => {
+  const route = runtime
+    .split("export function mobilePcBackendBase", 2)[1]
+    .split("export async function checkAppUpdate", 2)[0];
+  assert.match(route, /isNativeMobile\(\)/);
+  assert.match(route, /mobile_backend_route_unavailable/);
+  assert.match(route, /configuredMobilePcBackendBase\(\)/);
+  assert.doesNotMatch(route, /window\.location|apiPath\(|canUseRelativeBackendProxy\(/);
+  assert.match(runtime, /if \(isNativeMobile\(\)\) return mobilePcBackendBase\(\);/);
 });
 
 test("invalid transcription reason codes map to unknown", () => {

@@ -1,0 +1,88 @@
+{
+  "fixture_schema": "b05m-settings-and-contract.v1",
+  "config": {
+    "schemaVersion": 1,
+    "revision": 12,
+    "activatedAt": "2026-07-15T00:00:00Z",
+    "routes": {
+      "agent_main": {
+        "routeId": "anthropic-primary",
+        "protocol": "anthropic_messages",
+        "baseUrl": "https://api.example.invalid/v1",
+        "credentialHandle": "cred://echo/model/anthropic-primary",
+        "model": "claude-sonnet-redacted",
+        "fallbackRouteIds": [],
+        "capabilities": {
+          "streaming": true,
+          "toolUse": true,
+          "parallelToolUse": true,
+          "toolChoice": true,
+          "systemMessages": true,
+          "usageInStream": true,
+          "promptCache": false,
+          "multimodalImages": false,
+          "multimodalDocuments": false
+        },
+        "limits": {
+          "contextWindow": 131072,
+          "maxOutputTokens": 4096,
+          "requestTimeoutS": 60,
+          "maxRetries": 2
+        },
+        "tokenizer": {
+          "kind": "provider",
+          "identifier": "provider-tokenizer-redacted",
+          "estimated": false,
+          "safetyMarginTokens": 256
+        },
+        "reasoning": {
+          "mode": "none",
+          "stripThinkTags": false,
+          "tokenBudget": null
+        }
+      }
+    }
+  },
+  "identity_projection": {
+    "schemaVersion": 1,
+    "purpose": "agent_main",
+    "revision": 12,
+    "routeId": "anthropic-primary",
+    "protocol": "anthropic_messages",
+    "model": "claude-sonnet-redacted"
+  },
+  "public_agent_model_request_fields": [
+    "requestId",
+    "taskId",
+    "purpose",
+    "configRevision",
+    "routeId",
+    "model",
+    "system",
+    "messages",
+    "tools",
+    "toolChoice",
+    "maxOutputTokens",
+    "temperature",
+    "stopSequences"
+  ],
+  "public_agent_model_event_common_fields": ["type", "requestId"],
+  "fallback_event": {
+    "type": "agent.model.fallback",
+    "taskId": "task-settings-contract",
+    "operationKey": "op-settings-contract",
+    "configRevision": 12,
+    "fromRouteId": "anthropic-primary",
+    "toRouteId": "openai-compatible-primary",
+    "reason": "provider_timeout"
+  },
+  "envelope_negative_cases": [
+    {"kind": "request", "name": "missing_schemaVersion", "remove": "schemaVersion"},
+    {"kind": "request", "name": "missing_taskId", "remove": "taskId"},
+    {"kind": "request", "name": "unknown_field", "add": {"futureField": true}},
+    {"kind": "request", "name": "mismatched_routeId", "replace": {"routeId": "other-route"}},
+    {"kind": "event", "name": "missing_operationKey", "remove": "operationKey"},
+    {"kind": "event", "name": "unknown_field", "add": {"futureField": true}},
+    {"kind": "event", "name": "mismatched_configRevision", "replace": {"configRevision": 11}}
+  ]
+}

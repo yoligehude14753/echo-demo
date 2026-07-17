@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "entrypoint": {
+    "path": "query.ts",
+    "sha256": "74e0ce0d86cfd453add8dc1d15ccb6311b02964b8321e3721b8e71fbd87252ce"
+  },
+  "analysis": {
+    "method": "read-only lexical import/from/require traversal with .js/.mjs-to-.ts/.tsx resolution and src/ alias resolution",
+    "resolved_nodes": 1780,
+    "lexical_edges": 11988,
+    "unresolved_local_specifiers": 616,
+    "dynamic_or_require_edges": 602,
+    "external_package_names": 134,
+    "caveat": "Counts are an over-approximation because the source tree contains comments, type-only imports, feature-gated require/imports, and string literals. They are a compatibility map, not proof of runtime reachability."
+  },
+  "direct_query_imports": {
+    "resolved_local": [
+      "hooks/useCanUseTool.tsx",
+      "services/api/withRetry.ts",
+      "services/compact/autoCompact.ts",
+      "services/compact/compact.ts",
+      "services/analytics/index.ts",
+      "utils/imageValidation.ts",
+      "utils/imageResizer.ts",
+      "Tool.ts",
+      "utils/systemPromptType.ts",
+      "utils/log.ts",
+      "services/api/errors.ts",
+      "utils/debug.ts",
+      "utils/messages.ts",
+      "services/toolUseSummary/toolUseSummaryGenerator.ts",
+      "utils/api.ts",
+      "utils/attachments.ts",
+      "utils/messageQueueManager.ts",
+      "utils/commandLifecycle.ts",
+      "utils/headlessProfiler.ts",
+      "utils/model/model.ts",
+      "utils/tokens.ts",
+      "utils/context.ts",
+      "services/analytics/growthbook.ts",
+      "tools/SleepTool/prompt.ts",
+      "utils/hooks/postSamplingHooks.ts",
+      "utils/hooks.ts",
+      "services/api/dumpPrompts.ts",
+      "services/tools/StreamingToolExecutor.ts",
+      "utils/queryProfiler.ts",
+      "services/tools/toolOrchestration.ts",
+      "utils/toolResultStorage.ts",
+      "utils/sessionStorage.ts",
+      "query/stopHooks.ts",
+      "query/config.ts",
+      "query/deps.ts",
+      "bootstrap/state.ts",
+      "query/tokenBudget.ts",
+      "utils/array.ts"
+    ],
+    "external_or_runtime": [
+      "@anthropic-ai/sdk/resources/index.mjs",
+      "bun:bundle"
+    ],
+    "unresolved_local_or_generated": [
+      "./services/compact/reactiveCompact.js",
+      "./services/contextCollapse/index.js",
+      "./types/message.js",
+      "./services/skillSearch/prefetch.js",
+      "./jobs/classifier.js",
+      "./constants/querySource.js",
+      "./query/transitions.js",
+      "./services/compact/snipCompact.js",
+      "./utils/taskSummary.js"
+    ]
+  },
+  "runtime_and_build_dependencies_observed": {
+    "compile_time_macros": [
+      "MACRO.VERSION",
+      "MACRO.BUILD_TIME",
+      "MACRO.PACKAGE_URL",
+      "MACRO.NATIVE_PACKAGE_URL",
+      "MACRO.VERSION_CHANGELOG",
+      "MACRO.FEEDBACK_CHANNEL"
+    ],
+    "feature_macro": "bun:bundle feature(...)",
+    "environment": [
+      "process.env.USER_TYPE",
+      "process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+      "process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES",
+      "process.env.CLAUDE_CODE_DISABLE_FAST_MODE",
+      "process.env.CLAUDE_JOB_DIR",
+      "process.env.ANTHROPIC_API_KEY",
+      "process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN"
+    ],
+    "native_or_binary_references": [
+      "audio-capture.node",
+      "image-processor-napi",
+      "color-diff-napi",
+      "modifiers-napi",
+      "sharp"
+    ],
+    "node_capabilities_observed": [
+      "fs",
+      "child_process",
+      "net",
+      "http",
+      "https",
+      "os",
+      "crypto",
+      "worker_threads",
+      "process"
+    ],
+    "network_and_service_clients": [
+      "@anthropic-ai/sdk",
+      "axios",
+      "ws",
+      "undici",
+      "@modelcontextprotocol/sdk",
+      "google-auth-library"
+    ]
+  },
+  "compatibility_implications": [
+    "The source is not a self-contained query loop: versioned SDK, Bun feature defines, generated files, environment/auth, native modules, and Node capabilities are in the closure.",
+    "The unresolved entries are feature-gated or generated candidates and must be explicitly DIRECT, ADAPT, REWRITE, or EXCLUDE before production bundling.",
+    "The import graph cannot be proven against a package lock because the source root has no package manifest or lockfile."
+  ]
+}

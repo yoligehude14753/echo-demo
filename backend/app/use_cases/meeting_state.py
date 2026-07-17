@@ -300,8 +300,16 @@ class MeetingState:
     # ── 用户手动控制 ────────────────────────────────────────────────
 
     async def manual_start(self, *, title: str | None = None) -> CurrentMeeting:
-        """用户点击状态栏开始会议。已在会议中则原样返回当前会议。"""
+        """建立正式会议边界；若自由模式已有自动段，先闭合它再新建正式会议。"""
         await self.hydrate()
+        current = self._current
+        if current is not None and current.started_by == "auto":
+            await self._end_current(
+                current.meeting_id,
+                ended_at=datetime.now(UTC),
+                ended_by="auto",
+                reason="formal_boundary_started",
+            )
         async with self._lock:
             if self._current is not None:
                 return self._current

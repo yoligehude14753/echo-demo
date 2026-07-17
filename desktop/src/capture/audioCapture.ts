@@ -16,6 +16,9 @@ import {
 import type { CaptureState } from "@/domain/session";
 import { isNativeMobile } from "@/runtime";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import { backendBase } from "@/runtime";
+import { ensureServerSession } from "@/session";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 
 export type CaptureChunkHandler = (wav: Blob) => void | Promise<void>;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
@@ -26,11 +29,12 @@ const TV_SILENT_INPUT_GRACE_MS = 30_000;
 const TV_SILENT_PEAK_THRESHOLD = 0.000002;
 
 interface EchoAudioChunkEvent {
-  base64: string;
+  base64?: string;
   sampleRate: number;
   source?: string;
   rms?: number;
   peak?: number;
+  nativeOwned?: boolean;
 }
 
 interface EchoAudioErrorEvent {
@@ -38,12 +42,32 @@ interface EchoAudioErrorEvent {
   source?: string;
 }
 
+interface EchoAudioUploadSessionRequiredEvent {
+  status: number;
+}
+
 interface EchoAudioPlugin {
+  configureSession(options: {
+    baseUrl: string;
+    sessionToken: string;
+    deviceId: string;
+  }): Promise<unknown>;
+  setCaptureMode(options: {
+    formal: boolean;
+    meetingId: string;
+  }): Promise<unknown>;
   start(options: { sampleRate: number; chunkMs: number }): Promise<{
     sampleRate: number;
     source?: string;
   }>;
   stop(): Promise<void>;
+  status(): Promise<{
+    active?: boolean;
+    foregroundService?: boolean;
+    nativeUpload?: boolean;
+    authBlocked?: boolean;
+    queuedChunks?: number;
+  }>;
   addListener(
     eventName: "chunk",
     listenerFunc: (event: EchoAudioChunkEvent) => void,
@@ -51,6 +75,10 @@ interface EchoAudioPlugin {
   addListener(
     eventName: "error",
     listenerFunc: (event: EchoAudioErrorEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "uploadSessionRequired",
+    listenerFunc: (event: EchoAudioUploadSessionRequiredEvent) => void,
   ): Promise<PluginListenerHandle>;
 }
 
@@ -198,11 +226,14 @@ class AudioCapture {
   private nativeRuntimeRetryAttempts = 0;
   private nativeCleanup: Promise<void> = Promise.resolve();
   private nativeSilentChunks = 0;
+  private nativeSessionHandle: PluginListenerHandle | null = null;
+  private nativeSessionRecovery: Promise<void> | null = null;
   private buf: Float32Array[] = [];
   private accSamples = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private generation = 0;
+  private firstFrameGeneration = -1;
   private silentInputSinceMs: number | null = null;
 
   getState(): CaptureState {
@@ -228,11 +259,16 @@ class AudioCapture {
     if (this.running) return;
     this.running = true;
     this.generation += 1;
+    this.firstFrameGeneration = -1;
     this.nativeRuntimeRetryAttempts = 0;
     void this.boot(this.generation);
   }
 
   stop(): void {
+    if (shouldUseNativeAudioRecord()) {
+      // A fresh renderer cannot trust its in-memory nativeActive flag.
+      void this.nativePlugin.stop().catch(() => undefined);
+    }
     if (
       !this.running &&
       this.stream === null &&
@@ -252,6 +288,48 @@ class AudioCapture {
     this.setState("initializing");
   }
 
+  async attachNativeRuntime(): Promise<void> {
+    if (!shouldUseNativeAudioRecord()) return;
+    const plugin = this.nativePlugin;
+    if (!this.nativeSessionHandle) {
+      this.nativeSessionHandle = await plugin.addListener(
+        "uploadSessionRequired",
+        (event) => {
+          if (event.status === 409) {
+            window.dispatchEvent(new Event("echodesk:capture-control-refresh"));
+            return;
+          }
+          if (this.nativeSessionRecovery) return;
+          this.nativeSessionRecovery = this.configureNativeUploadSession(
+            event.status === 401 || event.status === 403,
+          )
+            .catch((error: unknown) => {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.setState("error", `收音身份恢复失败：${detail}`);
+            })
+            .finally(() => {
+              this.nativeSessionRecovery = null;
+            });
+        },
+      );
+    }
+    await this.configureNativeUploadSession(false);
+  }
+
+  private async configureNativeUploadSession(forceRenew: boolean): Promise<void> {
+    const [baseUrl, sessionToken] = await Promise.all([
+      backendBase(),
+      ensureServerSession(forceRenew),
+    ]);
+    if (!sessionToken) throw new Error("无法建立收音上传会话");
+    await this.nativePlugin.configureSession({
+      baseUrl,
+      sessionToken,
+      deviceId: captureDeviceId(),
+    });
+    window.dispatchEvent(new Event("echodesk:capture-control-refresh"));
+  }
+
   private setState(next: CaptureState, errorMessage?: string): void {
     this.state = next;
     this.errorMessage = errorMessage ?? null;
@@ -259,7 +337,35 @@ class AudioCapture {
   }
 
   private emitChunk(wav: Blob): void {
+    this.firstFrameGeneration = this.generation;
     for (const h of this.chunkHandlers) h(wav);
+  }
+
+  hasFirstFrame(): boolean {
+    return this.running && this.firstFrameGeneration === this.generation;
+  }
+
+  waitForFirstFrame(timeoutMs = 18_000): Promise<void> {
+    if (this.hasFirstFrame()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const off = this.onChunk(() => {
+        window.clearTimeout(timer);
+        off();
+        resolve();
+      });
+      const timer = window.setTimeout(() => {
+        off();
+        reject(new Error("麦克风首帧超时"));
+      }, timeoutMs);
+    });
+  }
+
+  async setFormalMode(meetingId: string | null): Promise<void> {
+    if (!shouldUseNativeAudioRecord()) return;
+    await this.nativePlugin.setCaptureMode({
+      formal: meetingId !== null,
+      meetingId: meetingId ?? "",
+    });
   }
 
   private teardown(): void {
@@ -531,10 +637,15 @@ class AudioCapture {
       this.nativeAttemptGeneration === attemptGeneration;
 
     try {
+      await this.attachNativeRuntime();
       const chunkHandle = await plugin.addListener("chunk", (event) => {
         if (!this.nativeActive || !isActiveAttempt()) return;
-        if (!event.base64) return;
         if (!this.observeNativeInputHealth(event, generation, attemptGeneration)) return;
+        if (event.nativeOwned) {
+          this.firstFrameGeneration = this.generation;
+          return;
+        }
+        if (!event.base64) return;
         this.emitChunk(blobFromBase64Wav(event.base64));
       });
       if (!isActiveAttempt()) {

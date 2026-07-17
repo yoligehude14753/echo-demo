@@ -1,0 +1,53 @@
+{
+  "schema": "b02-model-runtime-fixture-manifest.v1",
+  "fixtures": [
+    {
+      "path": "anthropic_messages_stream.json",
+      "sha256": "9cefc3265f5df5725c630e3ff03eba0c2853c0884396bfe25c9aee30ff27e934",
+      "protocol": "anthropic_messages",
+      "source_kind": "official_wire_shape"
+    },
+    {
+      "path": "openai_chat_stream.json",
+      "sha256": "efd8a62e778bcc2e795b38ef8966b6fa23768c5bd6b4221caee9d99289d87cf1",
+      "protocol": "openai_chat",
+      "source_kind": "official_wire_shape"
+    },
+    {
+      "path": "error_mapping.json",
+      "sha256": "6d1b1a4d984734df9ee431597dd0106246ca6c3c4e525913f9c39ea1a7413076",
+      "protocol": "shared_error_contract",
+      "source_kind": "official_wire_shape"
+    },
+    {
+      "path": "snapshot_and_negative_cases.json",
+      "sha256": "6c5a7310531727f5f5d9a667d0de0eb5f43c2b037a2b63ea273237cb406ebd5c",
+      "protocol": "model_runtime_contract",
+      "source_kind": "frozen_public_contract"
+    },
+    {
+      "path": "anthropic_stream.jsonl",
+      "sha256": "bd4d1ad73fe9f2a89ef1e7a51e73fad2ca3c88dc974d925d1b67c6acbb25cb2b",
+      "protocol": "anthropic_messages",
+      "source_kind": "official_wire_shape"
+    },
+    {
+      "path": "openai_stream.jsonl",
+      "sha256": "3485730d4e63f2acb1c023091866818926a07ed7106a9ec95f123629c820fe4c",
+      "protocol": "openai_chat",
+      "source_kind": "official_wire_shape"
+    },
+    {
+      "path": "anthropic_error.jsonl",
+      "sha256": "317e57f4a3bedf0914984e62b81e6905e472416794a3d987e50b4bffb42ae677",
+      "protocol": "anthropic_messages",
+      "source_kind": "official_wire_shape"
+    },
+    {
+      "path": "openai_error.jsonl",
+      "sha256": "d82eee99e53e46993e47db41cf0609e1b05c4518cb6dcd07e3271278596c8cd4",
+      "protocol": "openai_chat",
+      "source_kind": "official_wire_shape"
+    }
+  ]
+}

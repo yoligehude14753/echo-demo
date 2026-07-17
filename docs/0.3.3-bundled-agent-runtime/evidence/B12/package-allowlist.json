@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "manifest_type": "echo.b12.package-allowlist",
+  "task_id": "B12",
+  "status": "candidate_with_pending_unsigned_build",
+  "release_sha": "65ce495a11e8158537b8fb387c9cec25b9801c2a",
+  "c09_lineage": {
+    "manifest": "docs/0.3.3-bundled-agent-runtime/evidence/C09/integration-manifest.json",
+    "accepted_echo_sha": "49cb72e0bd71ade06e50d2bfe834a974ad92289d",
+    "external_platforms_sha": "158844db23cc5884889233fb8bdd7d943f3002f9"
+  },
+  "fusion_identity": {
+    "echo_version": "0.3.3",
+    "compatibility_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+    "claude_source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+    "claude_declared_version": "unknown",
+    "electron": "43.1.0",
+    "node": "24.18.0",
+    "modules_abi": "148",
+    "contract_versions": {
+      "kernel_api": 1,
+      "worker_ipc": 1,
+      "model_runtime": 1,
+      "grant_snapshot": 1,
+      "checkpoint": 1,
+      "event": 1
+    }
+  },
+  "resolver_contract": {
+    "module": "desktop/electron/agent-runtime/package-layout-resolver.cjs",
+    "export": "resolvePackageResource(entry, { resourcesPath })",
+    "production_root": "process.resourcesPath when it names Resources, otherwise process.resourcesPath/Resources",
+    "entry_fields": {
+      "path": ["path", "package_relative_path", "packageRelativePath"],
+      "placement": ["placement", "load_mode"],
+      "size": ["size", "size_bytes"],
+      "sha256": ["sha256", "sha_256"]
+    },
+    "placements": {
+      "asar": "Resources/app.asar/<relative>",
+      "asarUnpack": "Resources/app.asar.unpacked/<relative>",
+      "extraResources": "Resources/<relative>",
+      "auto": "probe all three and reject ambiguity"
+    },
+    "success_result": ["resolver", "path", "resolvedPath", "placement", "size", "sha256", "executable", "role", "platform", "arch"],
+    "fail_closed_codes": ["PACKAGE_RESOURCES_ROOT_INVALID", "PACKAGE_RESOURCE_PATH_INVALID", "PACKAGE_RESOURCE_PATH_ESCAPE", "PACKAGE_RESOURCE_SYMLINK", "PACKAGE_RESOURCE_MISSING", "PACKAGE_RESOURCE_AMBIGUOUS", "PACKAGE_RESOURCE_SIZE_MISMATCH", "PACKAGE_RESOURCE_HASH_MISMATCH"],
+    "forbidden_discovery": ["process.cwd", "HOME", "PATH", "process.env", "global Claude/AgentOS/CLI/daemon/runtime install"],
+    "glue_rule": "main/worker glue passes only process.resourcesPath and a manifest entry; it must not pass cwd, home, environment or user-selected roots."
+  },
+  "layout": {
+    "asar": {
+      "rule": "explicit_entries_only",
+      "entries": [
+        {"package_relative_path":"app.asar/electron/main.cjs","source_path":"desktop/electron/main.cjs","role":"electron_main"},
+        {"package_relative_path":"app.asar/electron/packaged-fused-worker-bridge.cjs","source_path":"desktop/electron/packaged-fused-worker-bridge.cjs","role":"packaged_fused_worker_bridge"},
+        {"package_relative_path":"app.asar/electron/preload.cjs","source_path":"desktop/electron/preload.cjs","role":"electron_preload"},
+        {"package_relative_path":"app.asar/electron/app-protocol.cjs","source_path":"desktop/electron/app-protocol.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/artifact-download.cjs","source_path":"desktop/electron/artifact-download.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/backend-contract.cjs","source_path":"desktop/electron/backend-contract.cjs","role":"backend_contract"},
+        {"package_relative_path":"app.asar/electron/backend-endpoint.cjs","source_path":"desktop/electron/backend-endpoint.cjs","role":"runtime_selection_entrypoint"},
+        {"package_relative_path":"app.asar/electron/backend-manual-restart.cjs","source_path":"desktop/electron/backend-manual-restart.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/backend-runtime-env.cjs","source_path":"desktop/electron/backend-runtime-env.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/backend-status-projection.cjs","source_path":"desktop/electron/backend-status-projection.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/bounded-https-json.cjs","source_path":"desktop/electron/bounded-https-json.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/controlled-local-file.cjs","source_path":"desktop/electron/controlled-local-file.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/credential-vault.cjs","source_path":"desktop/electron/credential-vault.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/media-permission-policy.cjs","source_path":"desktop/electron/media-permission-policy.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/model-runtime-contract.cjs","source_path":"desktop/electron/model-runtime-contract.cjs","role":"model_runtime_contract"},
+        {"package_relative_path":"app.asar/electron/private-json-store.cjs","source_path":"desktop/electron/private-json-store.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/public-identity-session.cjs","source_path":"desktop/electron/public-identity-session.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/release-asset-patterns.json","source_path":"desktop/electron/release-asset-patterns.json","role":"updater_metadata_input"},
+        {"package_relative_path":"app.asar/electron/release-assets.cjs","source_path":"desktop/electron/release-assets.cjs","role":"updater_metadata_input"},
+        {"package_relative_path":"app.asar/electron/workspace-backend-transport.cjs","source_path":"desktop/electron/workspace-backend-transport.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/workspace-file-snapshot.cjs","source_path":"desktop/electron/workspace-file-snapshot.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/workspace-registry.cjs","source_path":"desktop/electron/workspace-registry.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/workspace-root-identity.cjs","source_path":"desktop/electron/workspace-root-identity.cjs","role":"main_dependency"},
+        {"package_relative_path":"app.asar/electron/agent-runtime/package-layout-resolver.cjs","source_path":"desktop/electron/agent-runtime/package-layout-resolver.cjs","role":"package_layout_resolver"},
+        {"package_relative_path":"app.asar/backend.config.json","source_path":"desktop/backend.config.json","role":"frozen_backend_configuration"},
+        {"package_relative_path":"app.asar/package.json","source_path":"desktop/package.json","role":"desktop_version_and_builder_contract"}
+      ],
+      "renderer": {
+        "package_relative_path": "app.asar/dist/index.html",
+        "source_path": "desktop/dist/index.html",
+        "role": "renderer_entry",
+        "status": "pending_unsigned_build",
+        "generated_asset_policy": "B13 must enumerate only final .js/.css/.svg/.png/.woff/.woff2 assets in fusion-content-manifest; reject source, test, fixture, .map, .env and unlisted extensions"
+      }
+    },
+    "unpacked_resources": {
+      "rule": "explicit_entries_only",
+      "entries": [
+        {"package_relative_path":"Resources/backend/echodesk-backend","source_path":"backend/dist/echodesk-backend","role":"bundled_backend_executable","platform":"darwin|linux","arch":"arm64|x64","executable":true,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/backend/echodesk-backend.exe","source_path":"backend/dist/echodesk-backend.exe","role":"bundled_backend_executable","platform":"win32","arch":"x64","executable":true,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/worker.mjs","source_path":"desktop/electron/agent-runtime/worker/worker-entry.ts","role":"electron_worker_entry","platform":"darwin|win32","arch":"arm64|x64","executable":true,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/worker/bridge/production-factory.mjs","source_path":"desktop/electron/agent-runtime/bridge/production-factory.ts","role":"electron_worker_factory","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/worker/bridge/b13-host-kernel-deps.mjs","source_path":"desktop/electron/agent-runtime/bridge/b13-host-kernel-deps.ts","role":"electron_host_deps","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/worker/bridge/b13-host-ipc.mjs","source_path":"desktop/electron/agent-runtime/bridge/b13-host-ipc.ts","role":"b13_host_ipc","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/worker/bridge/b13-worker-factory.mjs","source_path":"desktop/electron/agent-runtime/bridge/b13-worker-factory.ts","role":"b13_worker_factory","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/worker/bridge/embedded-runtime-server.mjs","source_path":"desktop/electron/agent-runtime/bridge/embedded-runtime-server.ts","role":"embedded_runtime_server","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/worker/bridge/framed-runtime.mjs","source_path":"desktop/electron/agent-runtime/bridge/framed-runtime.ts","role":"embedded_runtime_transport","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/worker/bridge/production-composition.mjs","source_path":"desktop/electron/agent-runtime/bridge/production-composition.ts","role":"production_runtime_composition","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"pending_unsigned_build"},
+        {"package_relative_path":"Resources/agent-runtime/fusion-content-manifest.json","source_path":"docs/0.3.3-bundled-agent-runtime/evidence/B12/fusion-content-manifest.json","role":"fusion_content_manifest","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"B12_owned"},
+        {"package_relative_path":"Resources/agent-runtime/contracts/worker-contract.json","source_path":"desktop/electron/agent-runtime/test/contract/worker-contract.json","role":"frozen_worker_contract","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"source_bound"},
+        {"package_relative_path":"Resources/agent-runtime/contracts/kernel-source-closure-manifest.json","source_path":"desktop/agent-kernel/source/source-closure-manifest.json","role":"frozen_kernel_source_contract","platform":"darwin|win32","arch":"arm64|x64","executable":false,"status":"source_bound"}
+      ],
+      "native_and_wasm": {
+        "entries": [],
+        "policy": "No native or WASM content is admitted implicitly. A future entry must name one exact package_relative_path, platform, arch, ABI, placement and SHA-256 before signing."
+      }
+    },
+    "agent_kernel": {
+      "rule": "explicit_source_inputs_to_compiled_bundle",
+      "package_root": "Resources/agent-runtime/kernel",
+      "source_entries": [
+        "desktop/agent-kernel/core/checkpoint.ts",
+        "desktop/agent-kernel/core/errors.ts",
+        "desktop/agent-kernel/core/identity.ts",
+        "desktop/agent-kernel/core/index.ts",
+        "desktop/agent-kernel/core/kernel.ts",
+        "desktop/agent-kernel/core/types.ts",
+        "desktop/agent-kernel/src/compact/microCompact.ts",
+        "desktop/agent-kernel/src/context/budget.ts",
+        "desktop/agent-kernel/src/context/checkpoint.ts",
+        "desktop/agent-kernel/src/context/hash.ts",
+        "desktop/agent-kernel/src/context/index.ts",
+        "desktop/agent-kernel/src/context/turn.ts",
+        "desktop/agent-kernel/src/context/types.ts",
+        "desktop/agent-kernel/src/summary/summary.ts"
+      ],
+      "excluded_source_globs": ["**/*.test.ts", "**/test/**", "**/gate/**", "**/fixture**", "**/*.map"]
+    },
+    "agent_worker": {
+      "rule": "explicit_source_inputs_to_compiled_worker",
+      "package_root": "Resources/agent-runtime/worker",
+      "source_entries": [
+        "desktop/electron/agent-runtime/index.ts",
+        "desktop/electron/agent-runtime/message-port/channel.ts",
+        "desktop/electron/agent-runtime/message-port/envelope.ts",
+        "desktop/electron/agent-runtime/pool/worker-manager.ts",
+        "desktop/electron/agent-runtime/pool/worker-pool.ts",
+        "desktop/electron/agent-runtime/worker/bridge.ts",
+        "desktop/electron/agent-runtime/worker/identity.ts",
+        "desktop/electron/agent-runtime/worker/worker-entry.ts",
+        "desktop/electron/agent-runtime/bridge/framed-runtime.ts",
+        "desktop/electron/agent-runtime/bridge/production-factory.ts",
+        "desktop/electron/agent-runtime/bridge/production-composition.ts",
+        "desktop/electron/agent-runtime/bridge/embedded-runtime-server.ts",
+        "desktop/electron/agent-runtime/bridge/b13-worker-factory.ts",
+        "desktop/electron/agent-runtime/bridge/b13-host-ipc.ts",
+        "desktop/electron/agent-runtime/bridge/b13-host-kernel-deps.ts"
+      ],
+      "excluded_source_globs": ["**/*.test.ts", "**/test/**", "**/fixtures/**", "**/*.map"]
+    },
+    "echo_skills": {
+      "rule": "explicit_resources_and_lock_bound_dependency_closure",
+      "package_root": "Resources/backend/app/adapters/skill/assets/ppt_ib_deck",
+      "source_entries": [
+        "backend/app/adapters/skill/assets/ppt_ib_deck/example_data.json",
+        "backend/app/adapters/skill/assets/ppt_ib_deck/ib_master.pptx",
+        "backend/app/adapters/skill/assets/ppt_ib_deck/llm_system_prompt.md",
+        "backend/app/adapters/skill/assets/ppt_ib_deck/package-lock.json",
+        "backend/app/adapters/skill/assets/ppt_ib_deck/package.json",
+        "backend/app/adapters/skill/assets/ppt_ib_deck/render.mjs",
+        "backend/app/adapters/skill/assets/ppt_ib_deck/schema.md"
+      ],
+      "dependency_policy": "Only the exact package-lock.json closure for docxtemplater, pizzip and pptxgenjs may be added by the build inventory; no runtime npm install or cache is package content.",
+      "manifest_policy": "B06P signed EchoSkill manifests and resource hashes are required; manifest-provided scripts are not executable by this allowlist."
+    }
+  },
+  "build_inputs": [
+    {"source_path":"backend/packaging/echodesk-backend.spec","role":"backend_packaging_contract"},
+    {"source_path":"backend/packaging/entrypoint.py","role":"backend_worker_entry"},
+    {"source_path":"backend/app/__init__.py","role":"backend_version"},
+    {"source_path":"backend/app/build_contract.py","role":"backend_build_identity"},
+    {"source_path":"backend/app/agents/embedded_runtime.py","role":"backend_embedded_runtime_source"},
+    {"source_path":"backend/app/runtime/b13_composition.py","role":"backend_b13_composition_source"},
+    {"source_path":"backend/app/runtime/b13_host_ipc.py","role":"backend_b13_host_ipc_source"},
+    {"source_path":"backend/app/runtime/b13_model_tool_provider.py","role":"backend_b13_model_tool_provider_source"},
+    {"source_path":"desktop/src/runtime.ts","role":"renderer_runtime_selection_source"},
+    {"source_path":"desktop/electron/packaged-fused-worker-bridge.cjs","role":"packaged_fused_worker_bridge_source"},
+    {"source_path":"desktop/scripts/verify-release-update-metadata.cjs","role":"updater_metadata_generator_input"},
+    {"source_path":"desktop/scripts/refresh-mac-update-metadata.cjs","role":"updater_metadata_generator_input"}
+  ],
+  "forbidden_package_content": [
+    "source/**",
+    "**/*.test.*",
+    "**/test/**",
+    "**/tests/**",
+    "**/fixture*",
+    "**/*.map",
+    "**/.env*",
+    "**/*.pem",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/node_modules/.cache/**",
+    "**/.claude/**",
+    "external Claude source/config/auth/session/update/bridge modules",
+    "AgentOS/CLI/daemon/runtime installer content",
+    "PATH/HOME/global-auth discovered content"
+  ],
+  "signing_boundary": {
+    "unsigned_only": true,
+    "real_signing_performed": false,
+    "post_sign_mutation": "any change to app.asar, unpacked resources, worker, kernel, skill, manifest, plist, PE or installer invalidates the candidate",
+    "missing_or_unhashed_entry": "release_blocked_signing"
+  }
+}

@@ -1427,7 +1427,7 @@ async def manual_start_meeting(
     state: Annotated[MeetingState, Depends(get_meeting_state)],
     title: str | None = Form(None),
 ) -> dict[str, object]:
-    """用户点击状态栏：手动开始会议。已在会议中则原样返回。"""
+    """用户点击状态栏：建立正式会议边界；自由模式自动段会先闭合。"""
     state.start_watchdog()
     cur = await state.manual_start(title=title)
     return {

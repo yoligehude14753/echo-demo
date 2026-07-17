@@ -19,7 +19,7 @@
 #   2 = 参数 / 路径错误
 #   3 = pip install 失败
 #   4 = smoke test 失败
-#   5 = AgentOS 安装或启动失败
+#   5 = 保留给历史安装参数错误，不再用于外部 runner 安装
 #
 # 兼容：mac arm64 + intel；Python 3.11 / 3.12（3.13 未测）
 
@@ -69,10 +69,6 @@ if [ "${1:-}" = "--uninstall" ]; then
     if [ "$ans" != "yes" ]; then
         info "已取消"
         exit 0
-    fi
-    if [ -x "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install-agentos.sh" ]; then
-        ECHODESK_HOME="$ECHODESK_HOME" \
-            "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install-agentos.sh" --uninstall || true
     fi
     rm -rf "$ECHODESK_HOME"
     ok "已删除 $ECHODESK_HOME"
@@ -259,7 +255,7 @@ DEFAULT_CONFIG=$(cat <<'JSON'
   "llm_main_model": "deepseek-v4-flash",
   "llm_main_base_url": "https://yunwu.ai/v1",
   "agent_os_enabled": false,
-  "agent_os_url": "http://127.0.0.1:4128",
+  "agent_os_url": "",
   "llm_fast_provider": "yunwu",
   "llm_fast_model": "gpt-5.4-nano",
   "llm_fast_base_url": "https://yunwu.ai/v1",
@@ -345,38 +341,6 @@ step8_smoke() {
     ok "smoke 通过"
 }
 
-# ---------- Step 9: install the local AgentOS control plane ----------
-
-step9_install_agentos() {
-    info "step 9: 安装 AgentOS / Claude Code runner"
-    if [ "${ECHODESK_SKIP_AGENTOS_INSTALL:-0}" = "1" ]; then
-        warn "ECHODESK_SKIP_AGENTOS_INSTALL=1，跳过 AgentOS 安装"
-        return
-    fi
-
-    local installer="$REPO/scripts/install-agentos.sh"
-    local source="${ECHODESK_AGENTOS_SOURCE:-$(cd "$REPO/.." && pwd)/agentos}"
-    if [ ! -x "$installer" ]; then
-        err "AgentOS 安装器缺失: $installer"
-        exit 5
-    fi
-    if [ ! -f "$source/agentos/server/__main__.py" ]; then
-        warn "未找到 AgentOS 源码: $source"
-        warn "Agent Workflow 将保持禁用；设置 ECHODESK_AGENTOS_SOURCE 后重跑安装器"
-        if [ "${ECHODESK_AGENTOS_REQUIRED:-0}" = "1" ]; then
-            exit 5
-        fi
-        return
-    fi
-
-    if ! ECHODESK_HOME="$ECHODESK_HOME" ECHODESK_AGENTOS_SOURCE="$source" \
-        "$installer" "$REPO"; then
-        err "AgentOS 安装或启动失败"
-        exit 5
-    fi
-    ok "AgentOS / Claude Code runner 已安装"
-}
-
 # ---------- 主流程 ----------
 
 # 解析参数
@@ -404,7 +368,6 @@ step6_install_deps
 step6_5_install_ppt_deck_deps
 step7_write_config
 step8_smoke
-step9_install_agentos
 
 printf "\n${GREEN}╔══════════════════════════════════════════════════════════╗${NC}\n"
 printf "${GREEN}║                  安装完成                                  ║${NC}\n"
@@ -416,7 +379,7 @@ EchoDesk backend 就位：
   config:  $USER_CONFIG
   data:    $ECHODESK_HOME
   logs:    $LOG_DIR
-  agent:   http://127.0.0.1:4128（已配置主模型 API Key 时启用）
+  agent:   未安装或启动外部 runner；bundled agent runtime 由安装包提供
 
 下一步：
   1. 把 EchoDesk.app 拖到 /Applications/

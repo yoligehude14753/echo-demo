@@ -52,6 +52,19 @@ _EXPECTED_FIELDS = {
 }
 
 
+def enable_local_capture(client: TestClient) -> None:
+    current = client.get("/capture/control").json()
+    response = client.put(
+        "/capture/control",
+        json={
+            "mode": "single",
+            "selectedDeviceIds": ["legacy-local"],
+            "expectedRevision": current["revision"],
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[TestClient]:
     """构造 TestClient，注入 isolated Settings 让 /capture/stats 拿到新 pipeline。"""
@@ -98,11 +111,16 @@ def test_get_stats_reflects_recent_ingests(client: TestClient) -> None:
     """喂几个 silent chunk → gated_rms 应等于 chunks_total，stored 应仍为 0。"""
     # 喂 2 个 SILENT chunk → 都被 rms_gate 拦
     silent = b"\x00" * 1000
+    enable_local_capture(client)
     for _ in range(2):
         r = client.post(
             "/capture/chunk",
             files={"audio": ("c.wav", silent, "audio/wav")},
-            data={"sample_rate": "16000"},
+            data={
+                "sample_rate": "16000",
+                "deviceId": "legacy-local",
+                "segmentId": "stats-silent",
+            },
         )
         assert r.status_code == 200, r.text
         # 后端 SttStatus 应该是 'gated' 因为前置门拦了
@@ -125,10 +143,15 @@ def test_get_stats_reflects_recent_ingests(client: TestClient) -> None:
 def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:
     """POST /capture/chunk response 必须包含 stt_status 字段（前端止血依赖此 field）。"""
     silent = b"\x00" * 1000
+    enable_local_capture(client)
     r = client.post(
         "/capture/chunk",
         files={"audio": ("c.wav", silent, "audio/wav")},
-        data={"sample_rate": "16000"},
+        data={
+            "sample_rate": "16000",
+            "deviceId": "legacy-local",
+            "segmentId": "status-silent",
+        },
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -146,10 +169,15 @@ def test_post_chunk_accepts_frontend_silent_wav_without_persisting(
 ) -> None:
     """前端 WAV 会先解 PCM 做质量门控；静音必须产生零持久文件。"""
     wav = pcm_to_wav(b"\x00\x00" * 16_000, sample_rate=16_000)
+    enable_local_capture(client)
     r = client.post(
         "/capture/chunk",
         files={"audio": ("chunk.wav", wav, "audio/wav")},
-        data={"sample_rate": "16000"},
+        data={
+            "sample_rate": "16000",
+            "deviceId": "legacy-local",
+            "segmentId": "frontend-silent",
+        },
     )
 
     assert r.status_code == 200, r.text

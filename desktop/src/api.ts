@@ -23,16 +23,26 @@ import {
   configuredBackendBase,
   isDefaultPublicBackend,
   isNativeMobile,
+  isPackagedElectronRenderer,
   isPublicRuntime,
   runtimeMode,
   shareBackendBase,
 } from "@/runtime";
 import { apiTransport } from "@/session";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 import {
   enqueueSyncOperation,
   ensureSyncDeviceId,
   makeOperationId,
 } from "@/syncState";
+import {
+  normalizeCaptureControl,
+  normalizeCaptureDevices,
+  type CaptureControl,
+  type CaptureControlSnapshot,
+  type CaptureMode,
+} from "@/capture/captureControl";
+import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
 const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
@@ -129,6 +139,7 @@ export interface CaptureChunkResponse {
   meeting_segments: TranscriptSegment[];
   /** M_diag_brake：让前端能区分被哪道门吃了，仅 circuit_open 触发止血。 */
   stt_status: SttStatus;
+  capture_mode: "free" | "formal" | "auto";
 }
 
 const CAPTURE_STT_STATUSES: readonly SttStatus[] = [
@@ -184,6 +195,10 @@ export function normalizeCaptureChunkResponse(
       ? (body.meeting_segments as TranscriptSegment[])
       : [],
     stt_status: normalizeSttStatus(body.stt_status),
+    capture_mode:
+      body.capture_mode === "formal" || body.capture_mode === "auto"
+        ? body.capture_mode
+        : "free",
   };
 }
 
@@ -195,27 +210,115 @@ export async function uploadCaptureChunk(
     signal?: AbortSignal;
     timeoutMs?: number;
     idempotencyKey?: string;
+    deviceId?: string;
+    segmentId?: string;
   } = {},
 ): Promise<CaptureChunkResponse> {
+  const deviceId = options.deviceId ?? captureDeviceId();
+  const segmentId =
+    options.segmentId ??
+    `${deviceId}:${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
   const fd = new FormData();
   fd.append("audio", blob, "chunk.wav");
   fd.append("sample_rate", String(sampleRate));
+  fd.append("deviceId", deviceId);
+  fd.append("segmentId", segmentId);
   if (meetingId) fd.append("meeting_id", meetingId);
+  fd.append("capture_mode", meetingId ? "formal" : "free");
   const u = await apiUrl("/capture/chunk");
   const r = await fetchWithAbortTimeout(
     u,
     {
       method: "POST",
       body: fd,
-      headers: options.idempotencyKey
-        ? { "Idempotency-Key": options.idempotencyKey }
-        : undefined,
+      headers: {
+        ...(options.idempotencyKey
+          ? { "Idempotency-Key": options.idempotencyKey }
+          : {}),
+        "X-Capture-Device-Id": deviceId,
+        "X-Capture-Segment-Id": segmentId,
+      },
     },
     options.timeoutMs ?? CAPTURE_UPLOAD_TIMEOUT_MS,
     options.signal,
   );
   const parsed = await asJson<unknown>(r);
   return normalizeCaptureChunkResponse(parsed);
+}
+
+export async function getCaptureControl(
+  options: ApiReadOptions = {},
+): Promise<CaptureControl> {
+  const response = await fetchWithAbortTimeout(
+    await apiUrl("/capture/control"),
+    { method: "GET" },
+    DEFAULT_PROBE_TIMEOUT_MS,
+    options.signal,
+  );
+  return normalizeCaptureControl(await asJson<unknown>(response));
+}
+
+export async function getCaptureDevices(
+  options: ApiReadOptions = {},
+): Promise<CaptureControlSnapshot> {
+  const [devicesUrl, control] = await Promise.all([
+    apiUrl("/capture/devices"),
+    getCaptureControl(options),
+  ]);
+  const response = await fetchWithAbortTimeout(
+    devicesUrl,
+    { method: "GET" },
+    DEFAULT_PROBE_TIMEOUT_MS,
+    options.signal,
+  );
+  const body = await asJson<unknown>(response);
+  return {
+    control,
+    devices: normalizeCaptureDevices(body),
+  };
+}
+
+export async function updateCaptureControl(input: {
+  mode: CaptureMode;
+  selectedDeviceIds: string[];
+  expectedRevision: number;
+}): Promise<CaptureControl> {
+  const response = await fetchWithAbortTimeout(
+    await apiUrl("/capture/control"),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    DEFAULT_PROBE_TIMEOUT_MS,
+  );
+  if (response.status === 409) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new CaptureControlConflictError();
+  }
+  return normalizeCaptureControl(await asJson<unknown>(response));
+}
+
+export async function authorizeCaptureControl(input: {
+  deviceId: string;
+  revision: number;
+}): Promise<{ allowed: boolean; mode: CaptureMode; revision: number }> {
+  const response = await fetchWithAbortTimeout(
+    await apiUrl("/capture/control/authorize"),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    DEFAULT_PROBE_TIMEOUT_MS,
+  );
+  const body = await asJson<Record<string, unknown>>(response);
+  return {
+    allowed: body.allowed === true,
+    mode: body.mode === "multi" ? "multi" : "single",
+    revision:
+      typeof body.revision === "number" ? body.revision : input.revision,
+  };
 }
 
 /**
@@ -751,7 +854,11 @@ export function artifactDownloadUrl(artifactId: string): string {
       "artifact_public_endpoint_invalid",
     );
   }
-  if (role === "local_dev_diagnostic" && runtimeMode() === "release") {
+  if (
+    role === "local_dev_diagnostic" &&
+    runtimeMode() === "release" &&
+    !isPackagedElectronRenderer()
+  ) {
     throw new BackendBasePolicyError(
       "release 不允许使用 local dev 产物地址",
       "artifact_local_role_forbidden",
@@ -1656,8 +1763,14 @@ export async function ttsSpeak(
  * 与 backend /tts/diag 一一对应。
  */
 export interface TtsDiagResult {
-  ok: boolean;
-  state: "ok" | "disabled" | "upstream_error" | "silent_output" | "empty";
+  ok: boolean | null;
+  state:
+    | "ok"
+    | "not_configured"
+    | "disabled"
+    | "upstream_error"
+    | "silent_output"
+    | "empty";
   detail: string | null;
   latency_ms: number | null;
   pcm_bytes: number | null;

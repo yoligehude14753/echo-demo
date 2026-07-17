@@ -1,0 +1,58 @@
+{
+  "batch": "B13",
+  "record_type": "unified-source-verification",
+  "observed_date": "2026-07-16",
+  "worktree": "/Users/yoligehude/.codex/worktrees/1fd3/echo",
+  "lineage": {
+    "b10_required": "8d5bdb6fdaa0b0d8e2be8275f98b4f6f862ccab5",
+    "b11_input": "d2fae70a203510ea5ecbee4c8238da41a1608c79",
+    "b11_local_commit": "a5bf3308f58ae9958b27dce9b03f1a5b6d1d2c47",
+    "b12_input": "4742d9d4fd42e5bf90e0ba1be7babc4554d438a2",
+    "b12_local_commit": "6f22e75fc5c219ac9bce10635e0ce0fdbdb4ffbb",
+    "platforms_transport": "158844db23cc5884889233fb8bdd7d943f3002f9",
+    "platforms_detached_worktree": "/tmp/echodesk-b13-platforms"
+  },
+  "narrow_rework": {
+    "b14r_fixed_release_sha": "78616ca6f4f3212a2dd35801ac797f5dba76b55e",
+    "scope": "packaged Preview fused-worker runtime composition only; bootstrap/signing/publish unchanged",
+    "required_follow_up": "B12R must rebind the new candidate SHA and regenerate the resource manifest/factory artifacts, then B14R/B15R must rebuild installed acceptance assets and rerun quarantined bootstrap turn/tool/cancel/checkpoint/restart-resume evidence",
+    "old_artifact_reusable": false
+  },
+  "agents": [
+    {"role": "runtime-persistence-integration", "id": "019f66a0-d862-7272-b218-846162aedd57"},
+    {"role": "model-tool-provider-integration", "id": "019f66a0-d8d3-73c1-8463-3f18625516bd"},
+    {"role": "unified-source-verification", "id": "019f66a0-d94e-7750-a83c-e8657aeb8327"}
+  ],
+  "matrix": [
+    {"id": "durable-event-state", "status": "PASS_FOCUSED", "evidence": "B13 composition tests and B11 persistence tests"},
+    {"id": "duplicate-raw-event", "status": "PASS_IN_SOURCE_GROUP", "evidence": "agent runtime/backend source group"},
+    {"id": "first-terminal-wins", "status": "PASS_IN_SOURCE_GROUP", "evidence": "agent runtime/backend source group"},
+    {"id": "cancel-outbox-idempotency", "status": "PASS_FOCUSED", "evidence": "EmbeddedTaskStreamBridge/cancel recovery increment: 16 passed; stale HTTP/WebSocket assumptions removed from test fixtures"},
+    {"id": "timeout-crash-fail-closed", "status": "PASS_FOCUSED", "evidence": "8 Electron runtime tests and B13 fail-closed composition test"},
+    {"id": "production-real-handler-turn", "status": "PASS_FOCUSED", "evidence": "b13-fused-host-ipc.test.ts → 1 passed: resolveFactoryModule/factoryData → WorkerManager → worker-local KernelDeps executes model stream, B06P receipt, durable event/checkpoint, close and restart/resume with unchanged taskId/operationKey"},
+    {"id": "python-host-adapter-authorities", "status": "PASS_FOCUSED", "evidence": "PYTHONPATH=/tmp/echodesk-b13-platforms/llm/src python3.11 -m pytest -q backend/tests/unit/agent_runtime/test_b13_host_ipc.py → 1 passed; real B05M AgentModelGateway, B06P CapabilityHostRegistry receipt, B11 session port contract, camelCase worker envelope normalization"},
+    {"id": "host-ipc-fail-closed", "status": "PASS_SOURCE", "evidence": "B13 host protocol allowlist rejects secret-bearing fields and identity/protocol mismatch; missing hostPort, factoryData, provenance, provider factory, or partial deps return B13_HOST_* failure"},
+    {"id": "model-route-revision-identity", "status": "PASS_FOCUSED", "evidence": "B13 model/tool/provider 3 passed; B05M route/revision binding"},
+    {"id": "tool-grant-receipt-provenance", "status": "PASS_FOCUSED", "evidence": "B13 B06P FileReadHost receipt test and 69 capability tests"},
+    {"id": "checkpoint-restart-resume", "status": "PASS_FOCUSED", "evidence": "B13 composition 5 passed; B11+B12 focused 11 passed"},
+    {"id": "backend-source-tests", "status": "PASS_FOCUSED", "evidence": "17 agent-runtime, 38 model-runtime, 69 capabilities, 24 task service, and 16 embedded bridge/cancel integration tests passed"},
+    {"id": "desktop-agent-runtime-tests", "status": "PASS_FOCUSED", "evidence": "8 Electron runtime tests and agent-kernel/desktop/agent-runtime tsc --noEmit passed via existing lock-resolved workspace node_modules; no lockfile or version change"},
+    {"id": "short-real-provider-smoke", "status": "PASS", "evidence": "status=PASS code=PROVIDER_STREAM_OK model_events=7 EXIT_CODE:0"},
+    {"id": "packaged-preview-default-selection", "status": "PASS_FOCUSED", "evidence": "node --test desktop/electron/tests/backend-endpoint.test.cjs desktop/electron/tests/backend-route-fallback-policy.test.cjs → 18 passed; release default resolves local_dev_diagnostic, bundled spawnBackend=true, stale public/demo env does not override"},
+    {"id": "packaged-preview-explicit-remote", "status": "PASS_FOCUSED", "evidence": "backend-endpoint focused gate proves ECHO_PRINCIPAL_MODE=public is the only release remote opt-in and remains public_service with spawnBackend=false"},
+    {"id": "renderer-release-local-authority", "status": "PASS_FOCUSED", "evidence": "node --test desktop/electron/tests/renderer-packaged-authority.test.cjs → 8 passed; renderer fallback is local-first and accepts the supervised local endpoint in release"},
+    {"id": "packaged-main-fused-worker-wiring", "status": "PASS_FOCUSED", "evidence": "packaged-fused-worker-bridge.test.cjs → 2 passed; release main passes inherited FD 3 + nonce, starts the resource-bound Worker bridge after local health, routes framed host/task events, and closes it with backend lifecycle"},
+    {"id": "packaged-runtime-resource-rebind", "status": "REBUILD_REQUIRED", "evidence": "current B12 manifest still records pending worker/factory artifacts; bridge fails closed until B12R rebinds the new candidate SHA and emits exactly one hash-verified packaged runtime resource set"},
+    {"id": "b14r-installed-evidence-rebuild", "status": "REBUILD_REQUIRED", "evidence": "B14R fixed artifact 78616ca6f4f3212a2dd35801ac797f5dba76b55e proved bootstrap/local backend/startup but packaged main lacked fused-worker wiring; source candidate has not been packaged or installed"}
+  ],
+  "prohibited_commands": {
+    "package_build": false,
+    "signing_notarization_install": false,
+    "cross_platform": false,
+    "provider_stability_or_load": false,
+    "claude_cli_daemon_install_or_global_fallback": false,
+    "push_or_pull_request": false
+  },
+  "factstore_health": {"status": "ERROR", "exit_code": 2, "reason": "echo/_state/events is absent; outside B13 frozen write set"},
+  "verdict": "SOURCE_INTEGRATION_READY"
+}

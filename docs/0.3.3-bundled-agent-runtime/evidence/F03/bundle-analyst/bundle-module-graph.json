@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "kind": "static-module-graph-slice",
+  "role": "F03 bundle/package analyst",
+  "complete_closure": false,
+  "reason": "Claude source snapshot 没有 package.json/lock/tsconfig；未执行安装、构建或 bundler graph。",
+  "echo": {
+    "entry": "desktop/electron/main.cjs",
+    "module_system": "CJS host + Vite ES module renderer",
+    "package_type": "module",
+    "alias": {
+      "@/*": "desktop/src/*"
+    },
+    "dynamic_imports": [
+      {
+        "file": "desktop/src/components/ArtifactPreviewModal.tsx",
+        "specifier": "mammoth/mammoth.browser.js",
+        "classification": "renderer_dynamic_chunk"
+      },
+      {
+        "file": "desktop/src/components/ArtifactPreviewModal.tsx",
+        "specifier": "exceljs",
+        "classification": "renderer_dynamic_chunk"
+      },
+      {
+        "file": "desktop/src/components/MeetingShareModal.tsx",
+        "specifier": "qrcode",
+        "classification": "renderer_dynamic_chunk"
+      }
+    ],
+    "native_or_worker_edges": [
+      {
+        "file": "desktop/electron/main.cjs",
+        "edge": "node:child_process",
+        "classification": "backend_process_host"
+      },
+      {
+        "file": "desktop/src/syncWorker.ts",
+        "edge": "renderer Worker",
+        "classification": "not embedded agent worker"
+      }
+    ]
+  },
+  "claude_source": {
+    "root": "/Users/yoligehude/Downloads/src",
+    "file_count_observed": 1902,
+    "entry": "QueryEngine.ts",
+    "entry_edges": [
+      {
+        "specifier": "bun:bundle",
+        "kind": "compile_macro",
+        "risk": "no Echo/Vite replacement contract"
+      },
+      {
+        "specifier": "@anthropic-ai/sdk/resources/messages.mjs",
+        "kind": "external_esm_sdk",
+        "risk": "sdk package/version absent from source snapshot"
+      },
+      {
+        "specifier": "src/bootstrap/state.js",
+        "kind": "path_alias_esm",
+        "risk": "source alias unresolved by Echo Vite alias"
+      },
+      {
+        "specifier": "./query.js",
+        "kind": "relative_esm_js_specifier",
+        "risk": "TS source-to-emitted-JS mapping must be preserved"
+      },
+      {
+        "specifier": "require('src/components/MessageSelector.js')",
+        "kind": "dynamic_cjs_require",
+        "risk": "bundler/worker CJS interop and alias resolution"
+      },
+      {
+        "specifier": "feature('COORDINATOR_MODE') ? require(...) : ...",
+        "kind": "macro_gated_require",
+        "risk": "unresolved macro changes closure"
+      },
+      {
+        "specifier": "feature('HISTORY_SNIP') ? require(...) : ...",
+        "kind": "macro_gated_require",
+        "risk": "unresolved macro changes closure"
+      }
+    ],
+    "closure_edges_requiring_separate_treatment": [
+      "services/voice.ts -> audio-capture.node",
+      "upstreamproxy/upstreamproxy.ts -> bun:ffi",
+      "services/lsp/LSPClient.ts -> child_process",
+      "utils/getWorktreePathsPortable.ts -> child_process",
+      "memdir/paths.ts -> HOME/CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
+      "main.tsx -> dynamic imports, process.env, ~/.claude, CLI/server paths"
+    ],
+    "manifest": null,
+    "lockfile": null
+  },
+  "packaging_edges": {
+    "electron_builder_files": [
+      "dist/**",
+      "electron/**",
+      "!electron/tests/**",
+      "backend.config.json",
+      "package.json"
+    ],
+    "extra_resources": [
+      "resources/backend/echodesk-backend",
+      "resources/backend/echodesk-backend.exe"
+    ],
+    "agent_runtime_edge_present": false,
+    "agent_manifest_edge_present": false,
+    "asar_unpack_rules": []
+  },
+  "unknown_critical": [
+    "full Claude QueryEngine production import closure",
+    "exact SDK and optional dependency versions",
+    "macro values and generated artifacts",
+    "worker entry output and chunk names",
+    "native addon platform/ABI/resource placement",
+    "WASM/binary manifest and hash binding"
+  ],
+  "verdict": "BUNDLE_ADAPTER_REQUIRED"
+}

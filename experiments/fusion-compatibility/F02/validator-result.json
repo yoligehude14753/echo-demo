@@ -1,0 +1,9 @@
+{
+  "validator": "task_owned_validator.py",
+  "command": "python3 experiments/fusion-compatibility/F02/task_owned_validator.py --claude docs/0.3.3-bundled-agent-runtime/evidence/F02/claude-canonical-turn-trace.jsonl --echo docs/0.3.3-bundled-agent-runtime/evidence/F02/echo-canonical-turn-trace.jsonl",
+  "structural_valid": true,
+  "trace_cases": ["success", "one-tool-call", "permission-denied", "cancel", "compact/resume"],
+  "critical_gaps": ["F02-G01", "F02-G06", "F02-G07", "F02-G08", "F02-G13", "F02-G15"],
+  "verdict": "SEMANTIC_BLOCKED",
+  "note": "Trace structure and correlations validate; compatibility is blocked by unresolved source closure, permission, checkpoint/compact, skills/hooks, and forbidden config-discovery gaps."
+}

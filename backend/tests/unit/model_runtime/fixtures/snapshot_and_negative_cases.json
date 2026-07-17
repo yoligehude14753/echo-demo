@@ -1,0 +1,175 @@
+{
+  "fixture_schema": "b02-model-runtime-contract-negative.v1",
+  "snapshot": {
+    "schemaVersion": 1,
+    "revision": 7,
+    "configHash": "8a5d7c3a5cf6a4d7d9e7a3f9bd4f2d0b9e5b0c5c1a4d2e3f6b7c8d9e0f1a2b34",
+    "purpose": "agent_main",
+    "routeId": "anthropic-primary",
+    "protocol": "anthropic_messages",
+    "model": "claude-sonnet-redacted",
+    "capabilities": {
+      "streaming": true,
+      "tool_use": true,
+      "parallel_tool_use": true,
+      "tool_choice": true,
+      "system_messages": true,
+      "usage_in_stream": true,
+      "prompt_cache": false,
+      "multimodal_images": false,
+      "multimodal_documents": false
+    },
+    "limits": {
+      "context_window": 131072,
+      "max_output_tokens": 4096,
+      "request_timeout_s": 60,
+      "max_retries": 2
+    },
+    "tokenizer": {
+      "kind": "provider",
+      "identifier": "provider-tokenizer-redacted",
+      "estimated": false,
+      "safety_margin_tokens": 256
+    },
+    "reasoning": {"mode": "none", "strip_think_tags": false, "token_budget": null},
+    "credentialHandle": "cred://echo/model/anthropic-primary"
+  },
+  "canonical_request_identity": {
+    "requestId": "req-anthropic-golden",
+    "taskId": "task-contract-verifier",
+    "operationKey": "op-contract-verifier",
+    "configRevision": 7,
+    "routeId": "anthropic-primary"
+  },
+  "negative_cases": [
+    {
+      "name": "endpoint_contains_userinfo",
+      "input": {"base_url": "https://user:password@example.invalid/v1"},
+      "expected": {"code": "MODEL_ENDPOINT_INVALID", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "endpoint_contains_query_secret",
+      "input": {"base_url": "https://api.example.invalid/v1?token=redacted"},
+      "expected": {"code": "MODEL_ENDPOINT_INVALID", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "raw_auth_value_in_snapshot",
+      "input": {"credentialHandle": "raw-secret-marker-redacted"},
+      "expected": {"code": "MODEL_AUTH_INVALID", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "agent_main_without_tool_capability",
+      "input": {"purpose": "agent_main", "capabilities": {"streaming": true, "tool_use": false}},
+      "expected": {"code": "MODEL_CAPABILITY_MISSING", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "unknown_stream_chunk",
+      "input": {"type": "provider.mystery_chunk", "requestId": "req-anthropic-golden"},
+      "expected": {"code": "MODEL_SCHEMA_VERSION_MISMATCH", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "schema_version_mismatch",
+      "input": {"schemaVersion": 2, "requestId": "req-anthropic-golden"},
+      "expected": {"code": "MODEL_SCHEMA_VERSION_MISMATCH", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "request_id_mismatch",
+      "input": {"schemaVersion": 1, "requestId": "req-other", "activeRequestId": "req-anthropic-golden"},
+      "expected": {"code": "MODEL_REQUEST_ID_MISMATCH", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "stale_revision",
+      "input": {"configRevision": 6, "activeConfigRevision": 7},
+      "expected": {"code": "MODEL_CONFIG_STALE_REVISION", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "tool_result_unknown_id",
+      "input": {"toolUseId": "tool-unknown-redacted", "activeToolUseIds": ["tool-read-redacted", "tool-glob-redacted"]},
+      "expected": {"code": "MODEL_TOOL_CORRELATION_MISMATCH", "action": "reject", "tool_invocations": 0}
+    },
+    {
+      "name": "tool_result_duplicate_id",
+      "input": {"toolUseId": "tool-read-redacted", "alreadyCompleted": true},
+      "expected": {"code": "MODEL_TOOL_CORRELATION_MISMATCH", "action": "reject", "tool_invocations": 0}
+    }
+  ],
+  "duplicate_request_identity": {
+    "canonical": {
+      "requestId": "req-anthropic-golden",
+      "taskId": "task-contract-verifier",
+      "operationKey": "op-contract-verifier",
+      "configRevision": 7,
+      "routeId": "anthropic-primary"
+    },
+    "conflicting_variant": {
+      "requestId": "req-anthropic-golden",
+      "taskId": "task-other",
+      "operationKey": "op-contract-verifier",
+      "configRevision": 7,
+      "routeId": "anthropic-primary"
+    },
+    "expected": {"action": "reject", "code": "MODEL_REQUEST_ID_MISMATCH", "tool_invocations": 0}
+  },
+  "request_envelope_negative_cases": [
+    {
+      "name": "missing_schema_version",
+      "envelope": {"requestId": "req-anthropic-golden", "taskId": "task-contract-verifier", "operationKey": "op-contract-verifier", "configRevision": 7, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_ENVELOPE_INVALID", "missing": "schemaVersion", "tool_invocations": 0}
+    },
+    {
+      "name": "missing_request_id",
+      "envelope": {"schemaVersion": 1, "taskId": "task-contract-verifier", "operationKey": "op-contract-verifier", "configRevision": 7, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_ENVELOPE_INVALID", "missing": "requestId", "tool_invocations": 0}
+    },
+    {
+      "name": "missing_task_id",
+      "envelope": {"schemaVersion": 1, "requestId": "req-anthropic-golden", "operationKey": "op-contract-verifier", "configRevision": 7, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_ENVELOPE_INVALID", "missing": "taskId", "tool_invocations": 0}
+    },
+    {
+      "name": "missing_operation_key",
+      "envelope": {"schemaVersion": 1, "requestId": "req-anthropic-golden", "taskId": "task-contract-verifier", "configRevision": 7, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_ENVELOPE_INVALID", "missing": "operationKey", "tool_invocations": 0}
+    },
+    {
+      "name": "missing_config_revision",
+      "envelope": {"schemaVersion": 1, "requestId": "req-anthropic-golden", "taskId": "task-contract-verifier", "operationKey": "op-contract-verifier", "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_ENVELOPE_INVALID", "missing": "configRevision", "tool_invocations": 0}
+    },
+    {
+      "name": "missing_route_id",
+      "envelope": {"schemaVersion": 1, "requestId": "req-anthropic-golden", "taskId": "task-contract-verifier", "operationKey": "op-contract-verifier", "configRevision": 7},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_ENVELOPE_INVALID", "missing": "routeId", "tool_invocations": 0}
+    },
+    {
+      "name": "wrong_schema_version",
+      "envelope": {"schemaVersion": 2, "requestId": "req-anthropic-golden", "taskId": "task-contract-verifier", "operationKey": "op-contract-verifier", "configRevision": 7, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_SCHEMA_VERSION_MISMATCH", "tool_invocations": 0}
+    },
+    {
+      "name": "request_id_mismatch",
+      "envelope": {"schemaVersion": 1, "requestId": "req-other", "taskId": "task-contract-verifier", "operationKey": "op-contract-verifier", "configRevision": 7, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_ID_MISMATCH", "mismatch": "requestId", "tool_invocations": 0}
+    },
+    {
+      "name": "task_id_mismatch",
+      "envelope": {"schemaVersion": 1, "requestId": "req-anthropic-golden", "taskId": "task-other", "operationKey": "op-contract-verifier", "configRevision": 7, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_IDENTITY_MISMATCH", "mismatch": "taskId", "tool_invocations": 0}
+    },
+    {
+      "name": "operation_key_mismatch",
+      "envelope": {"schemaVersion": 1, "requestId": "req-anthropic-golden", "taskId": "task-contract-verifier", "operationKey": "op-other", "configRevision": 7, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_IDENTITY_MISMATCH", "mismatch": "operationKey", "tool_invocations": 0}
+    },
+    {
+      "name": "config_revision_mismatch",
+      "envelope": {"schemaVersion": 1, "requestId": "req-anthropic-golden", "taskId": "task-contract-verifier", "operationKey": "op-contract-verifier", "configRevision": 6, "routeId": "anthropic-primary"},
+      "expected": {"action": "reject", "code": "MODEL_CONFIG_REVISION_MISSING", "mismatch": "configRevision", "tool_invocations": 0}
+    },
+    {
+      "name": "route_id_mismatch",
+      "envelope": {"schemaVersion": 1, "requestId": "req-anthropic-golden", "taskId": "task-contract-verifier", "operationKey": "op-contract-verifier", "configRevision": 7, "routeId": "openai-compatible-primary"},
+      "expected": {"action": "reject", "code": "MODEL_REQUEST_IDENTITY_MISMATCH", "mismatch": "routeId", "tool_invocations": 0}
+    }
+  ]
+}

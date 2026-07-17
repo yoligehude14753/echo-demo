@@ -9,6 +9,17 @@ contextBridge.exposeInMainWorld("echo", {
   getBackendHost: () => ipcRenderer.invoke("echo:backend-host"),
   getBackendRouting: () => ipcRenderer.invoke("echo:backend-routing"),
   getBackendContract: () => ipcRenderer.invoke("echo:backend-contract"),
+  getModelRuntimeIdentity: () => ipcRenderer.invoke("model-runtime:get-identity"),
+  onModelRuntimeIdentity: (cb) => {
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on("model-runtime:identity", handler);
+    return () => ipcRenderer.removeListener("model-runtime:identity", handler);
+  },
+  onModelRuntimeFallback: (cb) => {
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on("model-runtime:fallback", handler);
+    return () => ipcRenderer.removeListener("model-runtime:fallback", handler);
+  },
   getShareBackendHost: () => ipcRenderer.invoke("echo:share-backend-host"),
   loadLocalLegacyHistory: () =>
     ipcRenderer.invoke("echo:load-local-legacy-history"),
@@ -31,8 +42,8 @@ contextBridge.exposeInMainWorld("echo", {
   // degraded UI 上"重启 backend"按钮触发；主进程清 backoff + 重新 spawn
   manualRestartBackend: () => ipcRenderer.invoke("backend:manual-restart"),
 
-  // 更新检查：桌面打包版走 electron-updater；dev/浏览器/Android 由前端走 GitHub
-  // Release fallback。桌面端后台下载完成后由 renderer 请求用户确认安装。
+  // 更新检查：桌面打包版由主进程读取 GitHub prerelease API，按平台选择唯一
+  // 资产并校验 API asset.digest；renderer 只能触发受控检查/安装状态机。
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   getUpdateStatus: () => ipcRenderer.invoke("updates:last-status"),
   installUpdate: () => ipcRenderer.invoke("updates:download-and-install"),
@@ -43,6 +54,20 @@ contextBridge.exposeInMainWorld("echo", {
     ipcRenderer.on("updates:status", handler);
     return () => ipcRenderer.removeListener("updates:status", handler);
   },
+
+  // Desktop background residency. Renderer reports only a compact,
+  // fail-closed projection; the main process owns tray/menu lifecycle.
+  notifyCaptureState: (status) =>
+    ipcRenderer.invoke("background:set-status", status),
+  onCaptureCommand: (cb) => {
+    const handler = (_event, command) => cb(command);
+    ipcRenderer.on("background:command", handler);
+    return () => ipcRenderer.removeListener("background:command", handler);
+  },
+  getLoginItemSettings: () =>
+    ipcRenderer.invoke("background:get-login-item"),
+  setOpenAtLogin: (openAtLogin) =>
+    ipcRenderer.invoke("background:set-login-item", openAtLogin === true),
 
   // 麦克风权限（P3.5）
   // - getMicStatus: macOS systemPreferences.getMediaAccessStatus("microphone")

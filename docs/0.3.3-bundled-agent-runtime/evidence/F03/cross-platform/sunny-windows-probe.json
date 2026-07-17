@@ -1,0 +1,106 @@
+{
+  "schema": "f03-cross-platform-probe.v1",
+  "startedAt": "2026-07-15T06:22:59.293Z",
+  "finishedAt": "2026-07-15T06:22:59.370Z",
+  "host": {
+    "platform": "win32",
+    "platformRelease": "10.0.26200",
+    "arch": "x64",
+    "node": "24.16.0",
+    "electron": null,
+    "execPathBasename": "node.exe",
+    "cwdIsAbsolute": true
+  },
+  "runtimeScope": "shell_node_boundary_only",
+  "dependencyBoundary": {
+    "nodeModulesRead": false,
+    "npmOrElectronCacheRead": false,
+    "externalRuntimeRead": false,
+    "networkActions": [],
+    "productOrDaemonStarted": false
+  },
+  "worker": {
+    "status": "passed",
+    "node": "24.16.0",
+    "electron": null,
+    "execPathBasename": "node.exe",
+    "cwdIsAbsolute": true
+  },
+  "isolation": {
+    "status": "passed",
+    "childExitCode": 0,
+    "stderrPresent": false,
+    "checks": [
+      {
+        "id": "isolated-home",
+        "status": "passed",
+        "evidence": "child process received task-owned synthetic home value"
+      },
+      {
+        "id": "isolated-path",
+        "status": "passed",
+        "evidence": "child process received scrubbed PATH"
+      },
+      {
+        "id": "no-global-agent-or-node-hints",
+        "status": "passed",
+        "evidence": "global Claude/Node override variables were absent in child env",
+        "details": {
+          "present": []
+        }
+      }
+    ]
+  },
+  "paths": {
+    "host": "Windows",
+    "filesystemWrites": "none",
+    "checks": [
+      {
+        "id": "windows-drive",
+        "status": "passed",
+        "evidence": "drive-letter path semantics exercised on the actual Windows host",
+        "details": {
+          "root": "C:\\"
+        }
+      },
+      {
+        "id": "windows-unc",
+        "status": "passed",
+        "evidence": "UNC path shape exercised on the actual Windows host",
+        "details": {
+          "filesystem": {
+            "configured": false,
+            "exists": false
+          }
+        }
+      },
+      {
+        "id": "windows-long-path",
+        "status": "passed",
+        "evidence": "long path shape constructed on the actual Windows host; no filesystem write",
+        "details": {
+          "pathLength": 342,
+          "filesystemAccess": "not_run"
+        }
+      },
+      {
+        "id": "macos-posix",
+        "status": "not_run_host_mismatch",
+        "evidence": "macOS POSIX semantics are never simulated on Windows"
+      }
+    ]
+  },
+  "verdictHints": {
+    "embeddedElectronProof": "blocked_shell_node_only",
+    "crossPlatformComparison": "requires_same_harness_on_actual_other_host",
+    "uncFilesystemProof": "not_configured"
+  },
+  "evidenceMetadata": {
+    "harnessSha256": "90af163b334d87d1c4294bd90bb65743212be4fc7cc654ed93826e26656ea767",
+    "repoHead": "492053c53441793c220f3b8e1dd231f1faea6e42",
+    "target": "win-sunny-friend",
+    "transport": "ssh stdin; no remote file upload",
+    "command": "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1 win-sunny-friend 'node -' < experiments/fusion-compatibility/F03/cross-platform/harness.cjs",
+    "sshExit": 0
+  }
+}

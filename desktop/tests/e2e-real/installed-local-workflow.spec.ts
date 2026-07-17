@@ -42,7 +42,7 @@ const AGENTOS_SERVER_PORT = 14128;
 const DEVICE_ID = "desktop-installed-local-e2e";
 const TODO_MARKER = "ECHODESK_TODO_E2E_OK";
 const TRANSCRIPT_SEGMENTS = [
-  "本次是 EchoDesk 0.3.3 安装态工作流验收。我们确认桌面客户端连接隔离的本地 backend 和 SQLite。",
+  "本次是 EchoDesk 0.3.4 安装态工作流验收。我们确认桌面客户端连接隔离的本地 backend 和 SQLite。",
   "明确决议：会议纪要、待办、产物和 AgentOS 都必须经过真实产品 API 和 Workflow Kernel，禁止直接修改数据库或使用 mock。",
   `行动项：请 EchoDesk 生成 TXT 纯文本验收报告，报告第一行必须原样包含 ${TODO_MARKER}，正文按执行摘要、状态转换、持久化证据、结论与下一步四节展开。`,
   "报告需要说明首次待办运行因执行超时失败，应用重启后恢复 failed 状态和原 run_id，随后重试成功并通过 retry_of 建立谱系，产物可从会议详情下载。",
@@ -572,7 +572,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
 
     let first = await launchInstalled(1, modelConfig);
     const appVersion = await first.app.evaluate(async ({ app }) => app.getVersion());
-    expect(appVersion).toBe("0.3.3");
+    expect(appVersion).toBe("0.3.4");
     expect(
       await first.win.evaluate(
         () => (window as unknown as { echo?: { isPublicDemo?: boolean } }).echo?.isPublicDemo,
@@ -589,7 +589,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
       .toBe("http://127.0.0.1:8769");
 
     const health = await api<JsonMap>(first.win, "/healthz/full");
-    expect((health.backend as JsonMap).version).toBe("0.3.3");
+    expect((health.backend as JsonMap).version).toBe("0.3.4");
     const chat = await ssePost(first.win, "/chat", {
       question: "只回复 ECHODESK_CHAT_GL5_OK，不要添加其他内容。",
       model: "FAST",
@@ -624,7 +624,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     if (stateAfterEnd.minutes_status === "generation_failed") {
       expect(meetingAfterEnd!.state).toBe("ended");
       minutes = await postForm<JsonMap>(first.win, `/meetings/${meetingId}/finalize`, {
-        title: "EchoDesk 0.3.3 安装态工作流验收",
+        title: "EchoDesk 0.3.4 安装态工作流验收",
       });
       const meetingsAfterRecovery = await api<JsonMap[]>(first.win, "/meetings?limit=50");
       const recoveredMeeting = meetingsAfterRecovery.find(
@@ -648,7 +648,7 @@ test.describe.serial("installed EchoDesk 0.3 local workflow", () => {
     expect(todoId).toMatch(/^t-/);
     expect(todoCommand.toLowerCase()).toContain("txt");
     const ragAnswer = await ssePost(first.win, "/rag/ask", {
-      question: "EchoDesk 0.3.3 安装态工作流验收会议的行动项和报告要求是什么？",
+      question: "EchoDesk 0.3.4 安装态工作流验收会议的行动项和报告要求是什么？",
       rag_top_k: 6,
       web_top_n: 0,
     });

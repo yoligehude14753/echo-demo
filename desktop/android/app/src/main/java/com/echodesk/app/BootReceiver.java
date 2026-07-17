@@ -18,13 +18,13 @@ public class BootReceiver extends BroadcastReceiver {
     }
 
     try {
-      Intent launchIntent = new Intent(context, MainActivity.class);
-      launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-      launchIntent.putExtra("echodesk_boot_autostart", true);
-      context.startActivity(launchIntent);
-      Log.i(TAG, "EchoDesk launched after TV boot: " + action);
+      // Android forbids silently re-enabling microphone capture after a reboot.
+      // Preserve the user's free-mode preference, but require an explicit tap.
+      EchoCaptureService.stop(context);
+      EchoCaptureService.notifyRestoreRequired(context);
+      Log.i(TAG, "EchoDesk posted capture restore notice after boot: " + action);
     } catch (Exception e) {
-      Log.w(TAG, "Failed to launch EchoDesk after TV boot", e);
+      Log.w(TAG, "Failed to post EchoDesk capture restore notice", e);
     }
   }
 }

@@ -47,6 +47,7 @@ class ProbeResult:
     """ok 三态：True 探通 / False 探失败 / None 不适用（如缺 api key）。"""
 
     ok: bool | None = None
+    required: bool = True
     latency_ms: float | None = None
     error: str | None = None
     reason: str | None = None
@@ -124,13 +125,25 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
 
     if settings.tts_enabled:
         host, port = _host_port_from_url(settings.tts_qwen3_url)
-        probes.append(("speech_synthesis", asyncio.ensure_future(_probe_tcp(host, port))))
+        probes.append(
+            (
+                "speech_synthesis",
+                asyncio.ensure_future(_probe_optional_tcp(host, port)),
+            )
+        )
     else:
         probes.append(
             (
                 "speech_synthesis",
                 asyncio.ensure_future(
-                    asyncio.sleep(0, ProbeResult(ok=None, reason="tts_disabled"))
+                    asyncio.sleep(
+                        0,
+                        ProbeResult(
+                            ok=None,
+                            required=False,
+                            reason="not_configured",
+                        ),
+                    )
                 ),
             )
         )
@@ -160,14 +173,35 @@ async def _probe_all(settings: Settings) -> dict[str, ProbeResult]:
         probes.append(
             (
                 "web_search",
-                asyncio.ensure_future(asyncio.sleep(0, ProbeResult(ok=None, reason="no_api_key"))),
+                asyncio.ensure_future(
+                    asyncio.sleep(
+                        0,
+                        ProbeResult(
+                            ok=None,
+                            required=False,
+                            reason="no_api_key",
+                        ),
+                    )
+                ),
             )
         )
     else:
-        probes.append(("web_search", asyncio.ensure_future(_probe_tcp("api.tavily.com", 443))))
+        probes.append(
+            (
+                "web_search",
+                asyncio.ensure_future(_probe_optional_tcp("api.tavily.com", 443)),
+            )
+        )
 
     values = await asyncio.gather(*(probe for _, probe in probes))
     return {name: value for (name, _), value in zip(probes, values, strict=True)}
+
+
+async def _probe_optional_tcp(host: str, port: int) -> ProbeResult:
+    """Run a TCP probe whose failure degrades only the optional capability."""
+    result = await _probe_tcp(host, port)
+    result.required = False
+    return result
 
 
 def _apply_probe_results(results: dict[str, ProbeResult]) -> None:
@@ -192,6 +226,7 @@ def _apply_probe_results(results: dict[str, ProbeResult]) -> None:
             if previous and previous.ok is True and failures < _PROBE_FAILURE_GRACE_COUNT:
                 _cache[name] = ProbeResult(
                     ok=True,
+                    required=result.required,
                     latency_ms=previous.latency_ms,
                     reason=f"last_ok_retained_after_{result.error or 'probe_failure'}",
                     checked_at=result.checked_at,
@@ -200,6 +235,7 @@ def _apply_probe_results(results: dict[str, ProbeResult]) -> None:
             if previous is None and failures < _PROBE_FAILURE_GRACE_COUNT:
                 _cache[name] = ProbeResult(
                     ok=None,
+                    required=result.required,
                     reason=(
                         f"checking_after_{result.error or 'probe_failure'}"
                         f"_{failures}/{_PROBE_FAILURE_GRACE_COUNT}"

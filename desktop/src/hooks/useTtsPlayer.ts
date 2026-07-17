@@ -62,7 +62,10 @@ function persistEnabled(v: boolean): void {
 function isSynthesisExplicitlyDisabled(
   health: TtsDiagResult | null,
 ): boolean {
-  return health?.state === "disabled";
+  return (
+    health?.state === "disabled" ||
+    health?.state === "not_configured"
+  );
 }
 
 function pcm16ToAudioBuffer(
@@ -392,7 +395,12 @@ function useTtsController(): TtsController {
   }, [enabled, events, drain, synthHealth?.state]);
 
   useEffect(() => {
-    if (synthHealth?.state !== "disabled") return;
+    if (
+      synthHealth?.state !== "disabled" &&
+      synthHealth?.state !== "not_configured"
+    ) {
+      return;
+    }
     generationRef.current += 1;
     cancel();
     setLastError(null);

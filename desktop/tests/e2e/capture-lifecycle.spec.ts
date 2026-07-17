@@ -1,6 +1,45 @@
 import { expect, test } from "@playwright/test";
 import { installEchoMock } from "./_mock";
 
+async function installCaptureControlContract(page: Parameters<typeof installEchoMock>[0]) {
+  await page.route(/\/capture\/control$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        mode: "single",
+        selectedDeviceIds: [],
+        revision: 1,
+      }),
+    });
+  });
+  await page.route(/\/capture\/control\/authorize$/, async (route) => {
+    const body = route.request().postDataJSON() as { revision: number };
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        allowed: true,
+        mode: "single",
+        revision: body.revision,
+      }),
+    });
+  });
+}
+
+async function authorizeLocalCapture(page: Parameters<typeof installEchoMock>[0], revision: number) {
+  await page.evaluate(async (nextRevision) => {
+    const [{ announceCaptureControl }, { ensureSyncDeviceId }] = await Promise.all([
+      import("/src/capture/captureControl.ts"),
+      import("/src/syncState.ts"),
+    ]);
+    announceCaptureControl({
+      mode: "single",
+      selectedDeviceIds: [ensureSyncDeviceId()],
+      revision: nextRevision,
+    });
+  }, revision);
+  await expect(page.getByTestId("capture-status")).not.toContainText("麦克风待机");
+}
+
 test("AudioCapture stop 后晚到 getUserMedia 结果不会复活 capturing", async ({ page }) => {
   await page.addInitScript(() => {
     type TestWindow = Window & {
@@ -289,7 +328,7 @@ test("Capture 上传单飞且队列有界，过载时明确背压", async ({ pag
     requests += 1;
     concurrent += 1;
     maxConcurrent = Math.max(maxConcurrent, concurrent);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 500));
     concurrent -= 1;
     await route.fulfill({
       status: 200,
@@ -303,8 +342,13 @@ test("Capture 上传单飞且队列有界，过载时明确背压", async ({ pag
       }),
     });
   });
-  await installEchoMock(page, { skipPaths: ["/capture/chunk"] });
+  await installCaptureControlContract(page);
+  await installEchoMock(page, {
+    skipPaths: ["/capture/chunk", "/capture/control"],
+  });
   await page.goto("/");
+  await expect(page.getByTestId("capture-status")).toContainText("麦克风待机");
+  await authorizeLocalCapture(page, 2);
 
   await page.evaluate(() => {
     for (let i = 0; i < 20; i += 1) {
@@ -353,8 +397,11 @@ test("切换 backend origin 会丢弃旧 Capture 响应和排队音频", async (
       },
     });
   }, backendA);
-  await installEchoMock(page);
+  await installCaptureControlContract(page);
+  await installEchoMock(page, { skipPaths: ["/capture/control"] });
   await page.goto("/");
+  await expect(page.getByTestId("capture-status")).toContainText("麦克风待机");
+  await authorizeLocalCapture(page, 2);
 
   await page.evaluate(
     ({ originA, originB }) => {
@@ -471,11 +518,10 @@ test("切换 backend origin 会丢弃旧 Capture 响应和排队音频", async (
     bRequests: 0,
     ambientTexts: [],
   });
-  await expect(page.getByTestId("capture-status")).toContainText(
-    "已采集 0 · 已保存 0",
-  );
+  await expect(page.getByTestId("capture-status")).toContainText("麦克风待机");
 
   // B generation 的新音频仍应正常上传，不能被 A 的旧 drain 阻塞。
+  await authorizeLocalCapture(page, 3);
   await page.evaluate(() => window.__echoAudioCapture?.__emitChunkForTest());
   await expect
     .poll(() =>

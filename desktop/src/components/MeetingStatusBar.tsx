@@ -1,18 +1,36 @@
 import { useCallback, useEffect, useState } from "react";
-import { Tooltip, message } from "antd";
+import { Checkbox, Modal, Radio, Tooltip, message } from "antd";
 import { Mic, Square } from "lucide-react";
 import {
   endMeeting,
   finalizeMeeting,
+  getCaptureDevices,
   getCurrentMeeting,
   manualEndMeeting,
   manualStartMeeting,
   startMeeting,
+  updateCaptureControl,
 } from "@/api";
+import {
+  announceCaptureControl,
+  type CaptureDevice,
+  type CaptureMode,
+} from "@/capture/captureControl";
+import { CaptureControlConflictError } from "@/capture/captureControlConflict";
+import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { EchoEvent, MeetingStateSnapshot } from "@/types";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
+import { requestAndroidCaptureStart } from "@/capture/AndroidCaptureSelector";
+import { isNativeMobile } from "@/runtime";
+import { audioCapture } from "@/capture/audioCapture";
+import {
+  currentCaptureRuntimeSnapshot,
+  onFreeCaptureSetupRequest,
+  setFormalMeetingOverlay,
+  setFreeCaptureEnabled,
+} from "@/capture/freeCaptureMode";
 
 /**
  * 全局会议状态条：UI 上唯一控制"是否在开会"的入口。
@@ -70,6 +88,14 @@ export default function MeetingStatusBar(): JSX.Element {
   });
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
+  const [capturePickerOpen, setCapturePickerOpen] = useState(false);
+  const [captureDevices, setCaptureDevices] = useState<CaptureDevice[]>([]);
+  const [captureMode, setCaptureMode] = useState<CaptureMode>("single");
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);
+  const [captureRevision, setCaptureRevision] = useState(0);
+  const [captureSaving, setCaptureSaving] = useState(false);
+  const [captureSelectionStartsFormal, setCaptureSelectionStartsFormal] =
+    useState(false);
   const events = useStore((s) => s.events);
   const currentMeetingId = useStore((s) => s.currentMeetingId);
   const currentMeetingState = useStore((s) =>
@@ -151,6 +177,14 @@ export default function MeetingStatusBar(): JSX.Element {
     return () => clearInterval(t);
   }, [snap.mode]);
 
+  useEffect(() => {
+    setFormalMeetingOverlay(
+      snap.mode === "in_meeting" && snap.started_by === "manual"
+        ? snap.meeting_id
+        : null,
+    );
+  }, [snap.meeting_id, snap.mode, snap.started_by]);
+
   // WS 状态变更事件：实时同步
   useEffect(() => {
     if (!events.length) return;
@@ -169,12 +203,78 @@ export default function MeetingStatusBar(): JSX.Element {
     }
   }, [events, refresh]);
 
-  const onClick = useCallback(async () => {
+  const prepareCapture = useCallback(
+    async (startFormalAfterSelection: boolean): Promise<boolean> => {
+      const snapshot = await getCaptureDevices();
+      const onlineDevices = snapshot.devices.filter((device) => device.online);
+      const localDeviceId = captureDeviceId();
+      if (onlineDevices.length > 1) {
+        const initialSelection = snapshot.control.selectedDeviceIds.filter((id) =>
+          onlineDevices.some((device) => device.deviceId === id),
+        );
+        setCaptureDevices(onlineDevices);
+        setCaptureRevision(snapshot.control.revision);
+        setCaptureMode(snapshot.control.mode);
+        setSelectedDeviceIds(
+          initialSelection.length > 0
+            ? initialSelection
+            : [
+                onlineDevices.some((device) => device.deviceId === localDeviceId)
+                  ? localDeviceId
+                  : onlineDevices[0].deviceId,
+              ],
+        );
+        setCaptureSelectionStartsFormal(startFormalAfterSelection);
+        setCapturePickerOpen(true);
+        return false;
+      }
+      const control = await updateCaptureControl({
+        mode: "single",
+        selectedDeviceIds: [localDeviceId],
+        expectedRevision: snapshot.control.revision,
+      });
+      announceCaptureControl(control);
+      setFreeCaptureEnabled(true);
+      return true;
+    },
+    [],
+  );
+
+  useEffect(
+    () =>
+      onFreeCaptureSetupRequest((reason) => {
+        if (isNativeMobile()) return;
+        void prepareCapture(reason === "formal_meeting").catch((error) => {
+          console.error("[capture-control] automatic setup failed", error);
+          message.error("无法准备自由收音，请检查服务连接");
+        });
+      }),
+    [prepareCapture],
+  );
+
+  const onClick = useCallback(async (captureReady = false) => {
     if (busy) return;
     const originGeneration = captureGeneration();
     setBusy(true);
     try {
-      if (snap.mode === "idle") {
+      if (snap.mode === "idle" || snap.started_by === "auto") {
+        const runtime = currentCaptureRuntimeSnapshot();
+        const captureAlreadySelected =
+          runtime?.freeModeEnabled === true && runtime.selected;
+        if (isNativeMobile()) {
+          if (!captureAlreadySelected && !(await requestAndroidCaptureStart())) {
+            return;
+          }
+        } else if (!captureReady && !captureAlreadySelected) {
+          if (runtime?.selected) {
+            // An explicit pause is respected during normal operation. A formal
+            // meeting is the user's explicit request to resume this device.
+            setFreeCaptureEnabled(true);
+          } else if (!(await prepareCapture(true))) {
+            return;
+          }
+        }
+        await audioCapture.waitForFirstFrame();
         if (hideSharedPublicHistory) {
           const meetingId = newLocalMeetingId();
           await startMeeting(meetingId);
@@ -186,6 +286,7 @@ export default function MeetingStatusBar(): JSX.Element {
             started_by: "manual",
           };
           setSnap(next);
+          setFormalMeetingOverlay(meetingId);
           markMeetingActive(meetingId, {
             startedAt: next.started_at,
             select: true,
@@ -196,6 +297,7 @@ export default function MeetingStatusBar(): JSX.Element {
         const s = await manualStartMeeting();
         if (!isCurrent(originGeneration)) return;
         setSnap(s);
+        setFormalMeetingOverlay(s.meeting_id ?? null);
         if (s.meeting_id) {
           markMeetingActive(s.meeting_id, {
             startedAt: s.started_at,
@@ -221,6 +323,7 @@ export default function MeetingStatusBar(): JSX.Element {
               started_at: null,
               started_by: null,
             });
+            setFormalMeetingOverlay(null);
             try {
               const minutes = await finalizeMeeting(
                 meetingId,
@@ -251,6 +354,7 @@ export default function MeetingStatusBar(): JSX.Element {
         const s = await manualEndMeeting();
         if (!isCurrent(originGeneration)) return;
         setSnap(s);
+        setFormalMeetingOverlay(null);
         if (s.meeting_id) {
           markMeetingEnded(s.meeting_id);
         }
@@ -272,9 +376,73 @@ export default function MeetingStatusBar(): JSX.Element {
     isCurrent,
     markMeetingActive,
     markMeetingEnded,
+    prepareCapture,
     snap.meeting_id,
     snap.mode,
+    snap.started_by,
     upsertMeeting,
+  ]);
+
+  const confirmCaptureSelection = useCallback(async () => {
+    const selected =
+      captureMode === "single"
+        ? selectedDeviceIds.slice(0, 1)
+        : selectedDeviceIds;
+    if (selected.length === 0) {
+      message.warning("请至少选择一台收音设备");
+      return;
+    }
+    if (!selected.includes(captureDeviceId())) {
+      message.warning(
+        captureSelectionStartsFormal
+          ? "要从本设备开始正式会议，请先把本设备选为收音端"
+          : "要在本设备自由收音，请先把本设备选为收音端",
+      );
+      return;
+    }
+    setCaptureSaving(true);
+    try {
+      const control = await updateCaptureControl({
+        mode: captureMode,
+        selectedDeviceIds: selected,
+        expectedRevision: captureRevision,
+      });
+      announceCaptureControl(control);
+      setFreeCaptureEnabled(true);
+      setCapturePickerOpen(false);
+      if (captureSelectionStartsFormal) {
+        await onClick(true);
+      }
+    } catch (error) {
+      console.error("[capture-control] selection failed", error);
+      if (error instanceof CaptureControlConflictError) {
+        try {
+          const refreshed = await getCaptureDevices();
+          const onlineDevices = refreshed.devices.filter((device) => device.online);
+          const authoritativeSelection = refreshed.control.selectedDeviceIds.filter(
+            (id) => onlineDevices.some((device) => device.deviceId === id),
+          );
+          setCaptureDevices(onlineDevices);
+          setCaptureRevision(refreshed.control.revision);
+          setCaptureMode(refreshed.control.mode);
+          setSelectedDeviceIds(authoritativeSelection);
+          message.warning("收音选择已更新，请确认最新选择后重试");
+        } catch {
+          setCapturePickerOpen(false);
+          message.error("无法刷新最新收音选择，请重新打开");
+        }
+      } else {
+        message.error("收音设备选择保存失败，请重试");
+      }
+    } finally {
+      setCaptureSaving(false);
+    }
+  }, [
+    captureMode,
+    captureRevision,
+    captureSelectionStartsFormal,
+    onClick,
+    selectedDeviceIds,
   ]);
 
   const isMeeting = snap.mode === "in_meeting";
@@ -283,9 +451,9 @@ export default function MeetingStatusBar(): JSX.Element {
   void tick; // 强制 elapsed / minutes 重渲染
 
   const tooltipTitle = !isMeeting
-    ? "点击手动开始会议；未点击时环境音也会持续采集并自动识别会议"
+    ? "自由收音持续运行；点击为正式会议建立明确边界"
     : isAuto
-      ? `已自动识别为会议并开始记录；点击可主动结束并生成纪要（已持续 ${elapsedMinutes(snap.started_at)} 分钟）`
+      ? `自由模式已识别到对话；点击开始正式会议（已持续 ${elapsedMinutes(snap.started_at)} 分钟）`
       : "点击结束会议（手动开始，将生成纪要）";
 
   let buttonClass: string;
@@ -301,10 +469,63 @@ export default function MeetingStatusBar(): JSX.Element {
   }
 
   return (
+    <>
+    <Modal
+      title="选择收音设备"
+      open={capturePickerOpen}
+      confirmLoading={captureSaving}
+      okText={
+        captureSelectionStartsFormal
+          ? "开启自由收音并开始正式会议"
+          : "开启自由收音"
+      }
+      cancelText="取消"
+      onOk={() => void confirmCaptureSelection()}
+      onCancel={() => {
+        if (!captureSelectionStartsFormal) setFreeCaptureEnabled(false);
+        setCapturePickerOpen(false);
+      }}
+      destroyOnClose
+    >
+      <Radio.Group
+        value={captureMode}
+        onChange={(event) => {
+          const mode = event.target.value as CaptureMode;
+          setCaptureMode(mode);
+          if (mode === "single") {
+            setSelectedDeviceIds((current) => current.slice(0, 1));
+          }
+        }}
+      >
+        <Radio value="single">仅一台设备</Radio>
+        <Radio value="multi">多台设备同时收音</Radio>
+      </Radio.Group>
+      <div className="mt-4 flex flex-col gap-2">
+        {captureDevices.map((device) => (
+          <Checkbox
+            key={device.deviceId}
+            checked={selectedDeviceIds.includes(device.deviceId)}
+            onChange={(event) => {
+              setSelectedDeviceIds((current) => {
+                if (captureMode === "single") {
+                  return event.target.checked ? [device.deviceId] : [];
+                }
+                return event.target.checked
+                  ? Array.from(new Set([...current, device.deviceId]))
+                  : current.filter((id) => id !== device.deviceId);
+              });
+            }}
+          >
+            {device.deviceName}
+            <span className="ml-2 text-xs text-ink-400">{device.platform}</span>
+          </Checkbox>
+        ))}
+      </div>
+    </Modal>
     <Tooltip title={tooltipTitle}>
       <button
         type="button"
-        onClick={onClick}
+        onClick={() => void onClick(false)}
         disabled={busy}
         className={`app-no-drag inline-flex h-8 min-w-[104px] items-center justify-center gap-1.5 rounded-md px-3 text-[12px] font-semibold transition ${buttonClass} disabled:opacity-50`}
         data-testid="meeting-status-bar"
@@ -322,16 +543,17 @@ export default function MeetingStatusBar(): JSX.Element {
         ) : isAuto ? (
           <>
             <Mic className="w-3 h-3" />
-            <span>自动记录中</span>
+            <span>检测到对话</span>
           </>
         ) : (
           <>
             <Mic className="w-3 h-3" />
-            <span>开始会议</span>
-            <span className="sr-only">待机</span>
+            <span>开始正式会议</span>
+            <span className="sr-only">自由收音</span>
           </>
         )}
       </button>
     </Tooltip>
+    </>
   );
 }

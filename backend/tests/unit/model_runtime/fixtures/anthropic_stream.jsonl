@@ -1,0 +1,14 @@
+{"type":"message_start","message":{"id":"msg_redacted_anthropic","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":12,"output_tokens":0}}}
+{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}
+{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"from model."}}
+{"type":"content_block_stop","index":0}
+{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_redacted_1","name":"lookup","input":{}}}
+{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"q\":\"pa"}}
+{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"ris\"}"}}
+{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_redacted_2","name":"lookup","input":{}}}
+{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"q\":\"tokyo\"}"}}
+{"type":"content_block_stop","index":1}
+{"type":"content_block_stop","index":2}
+{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":9,"cache_read_input_tokens":3}}
+{"type":"message_stop"}

@@ -48,7 +48,7 @@ from app.agents.events import (
     reduce_snapshot,
     utc_now_iso,
 )
-from app.agents.stream_bridge import EchoTaskStreamBridge
+from app.agents.stream_bridge import EmbeddedTaskStreamBridge
 from app.artifacts.repository import ArtifactRepository
 from app.config import Settings
 from app.runtime.execution_lease import ExecutionLeaseStore, LeaseOwnershipError, LeaseToken
@@ -2429,15 +2429,16 @@ class AgentTaskService:
                     lease_token=lease,
                 )
 
-            bridge = EchoTaskStreamBridge(
+            if not getattr(self.backend, "is_embedded", False):
+                raise RuntimeError("non-embedded agent runtime is not supported")
+            bridge = EmbeddedTaskStreamBridge(
                 task_id=rec.task_id,
                 runner_task_id=rec.runner_task_id,
-                agentos_base_url=self.backend.base_url,
+                runtime=self.backend,
                 recorder=_record,
                 conversation_id=rec.conversation_id,
                 message_id=rec.message_id,
                 title=rec.title,
-                result_terminal_seen=result_seen,
             )
             bridge_task = asyncio.create_task(
                 bridge.run(),

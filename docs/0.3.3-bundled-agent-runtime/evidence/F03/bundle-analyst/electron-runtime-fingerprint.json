@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "role": "F03 bundle/package analyst",
+  "generated_at": "2026-07-15T00:00:00+08:00",
+  "checkout": {
+    "head": "492053c53441793c220f3b8e1dd231f1faea6e42",
+    "state": "detached",
+    "f03_document_baseline": "705c7392c6475bcb2036eee4636c6ee1b5ddb8cd",
+    "baseline_match": false
+  },
+  "package_resolution": {
+    "package_version": "0.3.3",
+    "lockfile_version": 3,
+    "electron_declared": "43.1.0",
+    "electron_locked": "43.1.0",
+    "electron_f03_expected": "33.4.x",
+    "vite_locked": "7.3.6",
+    "typescript_locked": "5.9.3",
+    "electron_builder_locked": "26.15.3"
+  },
+  "embedded_runtime_probe": {
+    "status": "PASS_FOR_TASK_OWNED_ELECTRON_PROBE",
+    "electron_binary_observed": true,
+    "electron_binary_path": "task-owned Electron 43.1.0 runtime",
+    "node_modules_present": false,
+    "reason": "Echo desktop/node_modules remains absent; task-owned Electron runtime was used without substituting shell Node.",
+    "shell_node_observation": "v24.3.0",
+    "shell_node_is_runtime_evidence": false,
+    "worker_fingerprint": "electron-runtime-fingerprint-macos.json",
+    "sunny_windows_fingerprint": "../electron-runtime-fingerprint-sunny-windows.json"
+  },
+  "process_constraints": {
+    "subagents_created": 0,
+    "formal_build": false,
+    "formal_install": false,
+    "daemon_or_cli_started": false,
+    "product_code_changed": false,
+    "release_config_changed": false
+  },
+  "verdict": "RUNTIME_BLOCKED"
+}

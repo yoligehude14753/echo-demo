@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "task": "B04K",
+  "role": "worker-runtime",
+  "base_sha": "1904cb8c49502d64c53ff163d6e04b88d396c751",
+  "head_sha": "1904cb8c49502d64c53ff163d6e04b88d396c751",
+  "compatibility_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "f04_evidence_sha": "db57ddefc95c494c3785659db89befe6d8cf9c94",
+  "delta_probe": {
+    "count": 0,
+    "reason": "F04 worker identity and same-PID compatibility unknowns were inherited as closed; no F01-F04 replay or platform fingerprint probe was run."
+  },
+  "delivered": {
+    "message_port": [
+      "message-port/envelope.ts",
+      "message-port/channel.ts"
+    ],
+    "worker": [
+      "worker/identity.ts",
+      "worker/bridge.ts",
+      "worker/worker-entry.ts"
+    ],
+    "pool": [
+      "pool/worker-manager.ts",
+      "pool/worker-pool.ts"
+    ],
+    "public_surface": [
+      "index.ts",
+      "package.json",
+      "tsconfig.json"
+    ],
+    "focused_tests": [
+      "test/message-port.test.ts",
+      "test/runtime.test.ts",
+      "test/fixtures/kernel-runtime-fixture.ts"
+    ]
+  },
+  "verified": {
+    "typecheck": {
+      "command": "/Users/yoligehude/Desktop/all/echo/desktop/node_modules/typescript/bin/tsc --noEmit --project desktop/electron/agent-runtime/tsconfig.json --typeRoots /Users/yoligehude/Desktop/all/echo/desktop/node_modules/@types",
+      "result": "PASS"
+    },
+    "focused_tests": {
+      "command": "node --experimental-strip-types --test desktop/electron/agent-runtime/test/*.test.ts",
+      "result": "8 passed, 0 failed",
+      "coverage": [
+        "v1 MessagePort envelope schema/unknown-field/size fail-closed",
+        "production worker turn and checkpoint",
+        "same PID and worker thread assertion",
+        "cancel and idempotent cancel",
+        "worker crash and restart",
+        "pool lease/release",
+        "manifest/build identity mismatch",
+        "non-durable runtimeEventId"
+      ]
+    }
+  },
+  "rework": {
+    "base_sha": "f4fe8ab88873f2b5a686bd9749fa2eab2d9283cb",
+    "parameter_property": {
+      "result": "already_explicit_fields_and_constructor_assignments",
+      "changed": false
+    },
+    "kernel_context_pipeline": {
+      "result": "integrated",
+      "events": [
+        "agent.compaction.completed",
+        "agent.summary.updated"
+      ],
+      "checkpoint_strategy": "microcompact"
+    },
+    "touched_typechecks": "PASS",
+    "production_worker_contract": "PASS: 3/3",
+    "same_pid_restart": "PASS",
+    "verdict": "ACCEPTED_CANDIDATE"
+  },
+  "contract_versions": {
+    "kernel_api": 1,
+    "worker_ipc": 1,
+    "model_runtime": 1,
+    "grant_snapshot": 1,
+    "checkpoint": 1,
+    "event": 1,
+    "changed": false
+  },
+  "ownership_audit": {
+    "implemented": [
+      "worker manager/pool",
+      "MessagePort envelope/channel",
+      "cancel/close/crash/restart lifecycle",
+      "manifest/build identity",
+      "delivery-local non-durable runtimeEventId",
+      "kernel KernelSession bridge"
+    ],
+    "excluded": [
+      "B10 backend framed transport/durable seq/raw-hash dedupe/terminal arbitration",
+      "B11 durable repository/session/artifact/provenance persistence",
+      "B12 package/installer/resource migration",
+      "provider/model gateway/tool host"
+    ],
+    "forbidden_imports_in_production": [
+      "node:fs",
+      "node:child_process",
+      "node:net",
+      "node:http",
+      "node:https"
+    ]
+  },
+  "source_gap_ledger": [
+    {
+      "gap": "reactiveCompact/contextCollapse/snipCompact/taskSummary",
+      "status": "EXCLUDED_SOURCE_GAP",
+      "owner": "kernel-context",
+      "worker_action": "bridge only; no guessed implementation"
+    }
+  ],
+  "not_run_by_contract": [
+    "F01-F04 replay",
+    "dual-platform runtime fingerprint",
+    "Web API probe",
+    "source/SemVer rediscovery",
+    "provider smoke",
+    "installed/asar/package verification"
+  ],
+  "commit": {
+    "created": true,
+    "reason": "local rework commit; no push, PR, or release"
+  },
+  "worktree_note": "The shared checkout contains parallel untracked changes under desktop/agent-kernel/** and desktop/electron/agent-runtime/test/contract/**; this worker did not modify or revert them."
+}

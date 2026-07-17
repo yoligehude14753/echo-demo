@@ -683,6 +683,7 @@ class AmbientCapturePipeline:
         *,
         sample_rate: int = 16_000,
         meeting_id: str | None = None,
+        capture_mode: str = "free",
         asr_context: ASRRequestContext | None = None,
     ) -> CaptureChunkResult:
         if self._state is not None and not self._settings.public_demo_mode:
@@ -1025,6 +1026,13 @@ class AmbientCapturePipeline:
             meeting_id=effective_meeting_id,
             meeting_segments=meeting_segments,
             stt_status=stt_status,
+            capture_mode=(
+                "formal"
+                if capture_mode == "formal" and meeting_id is not None
+                else "auto"
+                if effective_meeting_id is not None
+                else "free"
+            ),
         )
 
     async def _safe_stt(

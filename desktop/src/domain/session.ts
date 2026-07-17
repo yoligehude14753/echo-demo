@@ -17,13 +17,15 @@
  */
 
 /** 麦克风采集域 — 与会议无关，永不手动关闭 */
-export type CaptureState = "initializing" | "capturing" | "error";
+export type CaptureState = "standby" | "initializing" | "capturing" | "error";
 
 /** 会议域 — 用户手动开关 */
 export type MeetingState = "idle" | "in_meeting" | "ended";
 
 export interface CaptureStatus {
   state: CaptureState;
+  /** 用户可见的自由收音/正式会议正交状态。 */
+  runtimeState: import("@/capture/freeCaptureMode").CaptureRuntimeState;
   /**
    * 已上传的 chunk 数（含被 VAD/底噪/STT 空文本过滤掉的、未入库的）。
    * 等于"麦克风产生 + 后端 POST /capture/chunk 200"次数。

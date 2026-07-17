@@ -28,6 +28,11 @@ import SettingsPanel from "@/components/SettingsPanel";
 import OnboardingModal from "@/components/OnboardingModal";
 import AboutModal from "@/components/AboutModal";
 import { useEchoCapture } from "@/capture/useEchoCapture";
+import AndroidCaptureSelector from "@/capture/AndroidCaptureSelector";
+import {
+  isFreeCapturePreferenceConfigured,
+  requestFreeCaptureSetup,
+} from "@/capture/freeCaptureMode";
 import { useStore } from "@/store";
 import { useEchoWS } from "@/ws";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
@@ -67,6 +72,20 @@ export default function App(): JSX.Element {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
+  const initialFreeCaptureSetupRequested = useRef(false);
+
+  useEffect(() => {
+    if (onboarding.shouldShow) return;
+    if (initialFreeCaptureSetupRequested.current) return;
+    if (isFreeCapturePreferenceConfigured()) return;
+    // Child selectors subscribe during the same commit. Defer one task so both
+    // Desktop and Android can receive the first-run setup request.
+    const timer = window.setTimeout(() => {
+      initialFreeCaptureSetupRequested.current = true;
+      requestFreeCaptureSetup("first_run");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [onboarding.shouldShow]);
 
   useEffect(() => {
     const eventType = events[events.length - 1]?.type;
@@ -177,6 +196,7 @@ export default function App(): JSX.Element {
         open={onboarding.shouldShow}
         onClose={onboarding.markCompleted}
       />
+      <AndroidCaptureSelector />
 
       <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
@@ -471,12 +491,18 @@ function TtsTopBarButton({
 }: {
   tts: ReturnType<typeof useTtsPlayer>;
 }): JSX.Element {
+  const notConfigured =
+    tts.synthHealth?.state === "not_configured" ||
+    tts.synthHealth?.state === "disabled";
   const unhealthy =
     tts.enabled &&
+    !notConfigured &&
     (tts.lastError !== null ||
-      (tts.synthHealth !== null && tts.synthHealth.ok === false));
+      tts.synthHealth?.ok === false);
   const tooltip = !tts.enabled
     ? "语音播报已关闭"
+    : notConfigured
+      ? "语音播报未配置（可选），不影响会议、转写或 AI"
     : unhealthy
       ? "语音播报暂时不可用，可在 AI 状态中重新测试"
       : tts.synthHealth?.ok
@@ -486,15 +512,22 @@ function TtsTopBarButton({
     ? "播报中"
     : !tts.enabled
       ? "已静音"
+      : notConfigured
+        ? "播报未配置"
       : unhealthy
         ? "播报异常"
         : "语音播报";
-  const color = !tts.enabled
+  const color = !tts.enabled || notConfigured
     ? "text-ink-400 hover:bg-paper-200"
     : unhealthy
       ? "text-amber-600 hover:bg-paper-200"
       : "text-accent hover:bg-paper-200";
-  const Icon = !tts.enabled ? VolumeX : unhealthy ? AlertTriangle : Volume2;
+  const Icon =
+    !tts.enabled || notConfigured
+      ? VolumeX
+      : unhealthy
+        ? AlertTriangle
+        : Volume2;
   return (
     <Tooltip title={tooltip}>
       <button
@@ -505,6 +538,8 @@ function TtsTopBarButton({
         data-tts-state={
           !tts.enabled
             ? "disabled"
+            : notConfigured
+              ? "not_configured"
             : unhealthy
               ? "unhealthy"
               : tts.isSpeaking

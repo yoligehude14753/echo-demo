@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "task": "B04K/kernel-context",
+  "base": "1904cb8c49502d64c53ff163d6e04b88d396c751",
+  "compatibilityBaseline": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "f04Evidence": "db57ddefc95c494c3785659db89befe6d8cf9c94",
+  "sourceSnapshotId": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "contract": {
+    "kernelApi": 1,
+    "workerProtocol": 1,
+    "modelRuntime": 1,
+    "grantSnapshot": 1,
+    "checkpoint": 1,
+    "event": 1,
+    "changed": false
+  },
+  "deltaProbe": {
+    "count": 0,
+    "reason": "Fixed snapshot semantics for micro-compact, token continuation, Brief and summary formatting were directly readable; no unknown production delta required a probe."
+  },
+  "delivered": {
+    "contextBudget": true,
+    "continuation": true,
+    "microCompact": true,
+    "brief": true,
+    "summary": true,
+    "checkpointPayload": true,
+    "compactSummaryCheckpointComposition": true
+  },
+  "focusedVerification": [
+    {
+      "command": "npx --yes --package typescript@5.9.3 tsc --noEmit ... non-test desktop/agent-kernel/core + src files",
+      "result": "PASS"
+    },
+    {
+      "command": "node --experimental-strip-types --test desktop/agent-kernel/src/context/context-contract.test.ts",
+      "result": "PASS: 4/4"
+    }
+  ],
+  "rework": {
+    "base": "f4fe8ab88873f2b5a686bd9749fa2eab2d9283cb",
+    "productionKernelGlue": "integrated into EchoAgentKernel turn/checkpoint path",
+    "events": [
+      "agent.compaction.started",
+      "agent.compaction.completed",
+      "agent.summary.updated"
+    ],
+    "checkpointStrategy": "microcompact",
+    "touchedTypechecks": "PASS",
+    "productionWorkerContract": "PASS: 3/3",
+    "samePidRestart": "PASS",
+    "verdict": "ACCEPTED_CANDIDATE"
+  },
+  "failClosedCases": [
+    "corrupt checkpoint checksum",
+    "checkpoint task identity mismatch",
+    "checkpoint durable sequence ahead",
+    "expired grant"
+  ],
+  "scope": {
+    "allowedRootsOnly": true,
+    "forbiddenRootsTouched": false,
+    "coreContractFilesChanged": false,
+    "electronWorkerFilesChanged": false,
+    "goldenTestFilesChanged": false
+  },
+  "sourceGapLedger": "source-gap-ledger.json",
+  "status": "accepted_candidate_after_rework"
+}

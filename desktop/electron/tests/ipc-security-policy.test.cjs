@@ -6,6 +6,15 @@ const path = require("node:path");
 const test = require("node:test");
 
 const main = readFileSync(path.resolve(__dirname, "../main.cjs"), "utf8");
+const preload = readFileSync(path.resolve(__dirname, "../preload.cjs"), "utf8");
+const updater = readFileSync(
+  path.resolve(__dirname, "../app-update-protocol.cjs"),
+  "utf8",
+);
+const modelRuntimeContract = readFileSync(
+  path.resolve(__dirname, "../model-runtime-contract.cjs"),
+  "utf8",
+);
 const preview = readFileSync(
   path.resolve(__dirname, "../../src/components/ArtifactPreviewModal.tsx"),
   "utf8",
@@ -64,6 +73,17 @@ test("every renderer-callable IPC channel starts with a trusted-origin guard", (
     const guard = body.indexOf("assertTrustedIpcOrigin(event)");
     assert.ok(guard >= 0 && guard < 300, `${channel} must guard before work`);
   }
+});
+
+test("model runtime identity/fallback bridges are read-only subscriptions", () => {
+  assert.match(preload, /getModelRuntimeIdentity:\s*\(\) => ipcRenderer\.invoke\("model-runtime:get-identity"\)/);
+  assert.match(preload, /onModelRuntimeIdentity:[\s\S]*model-runtime:identity/);
+  assert.match(preload, /onModelRuntimeFallback:[\s\S]*model-runtime:fallback/);
+  assert.doesNotMatch(preload, /publishModelRuntimeIdentity/);
+  assert.doesNotMatch(preload, /setModelRuntimeIdentity/);
+  assert.match(main, /modelRuntimeIpc\.register\(\)/);
+  assert.match(modelRuntimeContract, /ipcMain\.handle\("model-runtime:get-identity"/);
+  assert.match(modelRuntimeContract, /assertTrustedIpcOrigin\(event\)/);
 });
 
 test("workspace picker exposes local paths only outside public mode", () => {
@@ -126,10 +146,12 @@ test("update and microphone IPC expose stable safe errors instead of local paths
   assert.doesNotMatch(registrationBody("mic:open-system-prefs"), /e\?\.message/);
 });
 
-test("release metadata uses bounded HTTPS JSON with shape validation", () => {
-  assert.match(main, /fetchBoundedHttpsJson\(url, \{/);
-  assert.match(main, /maxBytes: 1024 \* 1024/);
-  assert.match(main, /timeoutMs: 8_000/);
-  assert.match(main, /validate: isGithubReleasePayload/);
-  assert.doesNotMatch(main, /res\.on\("data", \(chunk\) => chunks\.push\(chunk\)\)/);
+test("release metadata and packages are bounded and digest-verified", () => {
+  assert.match(updater, /fetchBoundedHttpsJson\(apiUrl, \{/);
+  assert.match(updater, /maxBytes: MAX_RELEASES_BYTES/);
+  assert.match(updater, /timeoutMs: 8_000/);
+  assert.match(updater, /validate: isReleaseList/);
+  assert.match(updater, /normalizeDigest\(asset\.digest\)/);
+  assert.match(updater, /hash\.digest\("hex"\) !== expectedDigest/);
+  assert.doesNotMatch(main, /electron-updater|quitAndInstall/);
 });

@@ -95,7 +95,7 @@ function createManualBackendRestart(options) {
     emitStatus,
     resetRestartState,
     stopHealthWatcher,
-    stopExternalHealthWatcher,
+    stopPublicBackendHealthWatcher,
     stopBackendProc,
     killBackendProc,
     spawnBackendAndWatch,
@@ -132,7 +132,7 @@ function createManualBackendRestart(options) {
 
       resetRestartState();
       stopHealthWatcher();
-      stopExternalHealthWatcher();
+      stopPublicBackendHealthWatcher();
       emitStatus({
         state: "restarting",
         attempt: 1,

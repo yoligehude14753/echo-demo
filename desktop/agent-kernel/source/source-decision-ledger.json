@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "artifact": "B01-source-decision-ledger",
+  "source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "manifest_root_sha256": "b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "echo_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "contract_versions": {"kernel_api":1,"worker_ipc":1,"model_runtime":1,"grant_snapshot":1,"checkpoint":1,"event":1},
+  "decision_legend": {
+    "PORT_AS_IS": "纯函数或无副作用形状可直接复用",
+    "ADAPT": "保留语义，在 Echo port/contract 边界重建",
+    "REWRITE": "必须改写实现或依赖注入，禁止原模块直接进入 kernel",
+    "EXCLUDE": "明确不进入 source closure；不为生产路径提供兼容承诺"
+  },
+  "decisions": [
+    {"id":"B01-D01","subject":"three entrypoints","refs":["query.ts","QueryEngine.ts","Tool.ts"],"decision":"ADAPT","status":"accepted_with_blockers","evidence":"F01 entrypoint hashes; F04 bounded adapted loop contract","reason":"只提取 loop/message/tool/event/cancel 语义，不 direct-vendor full query closure。"},
+    {"id":"B01-D02","subject":"Bun feature macros","refs":["bun:bundle","MACRO.*","F01-G03","F01-G04"],"decision":"REWRITE","status":"open","evidence":"F01 graph and source-gap-ledger","reason":"使用 Echo-owned constants and fixed feature branches；禁止运行 Bun macro。","blocker":"macro producer/value 未绑定，full release 仍 blocked"},
+    {"id":"B01-D03","subject":"internal src aliases","refs":["F01-G05"],"decision":"REWRITE","status":"open","evidence":"F01 source-gap-ledger","reason":"必须改为确定性相对路径或显式 adapter alias；本产物不宣称 full alias closure 已闭合。"},
+    {"id":"B01-D04","subject":"generated and feature-gated local modules","refs":["F01-G06","F01-G07","types/message.js","constants/querySource.js","query/transitions.js","services/compact/reactiveCompact.js","services/contextCollapse/index.js","services/skillSearch/prefetch.js","jobs/classifier.js","services/compact/snipCompact.js","utils/taskSummary.js"],"decision":"EXCLUDE","status":"open","evidence":"F01 hard missing set","reason":"bounded one-tool loop 不依赖这些生产/生成路径；message 与 transitions 只在 ADAPT 边界重建。","blocker":"full query direct import remains blocked"},
+    {"id":"B01-D05","subject":"Anthropic SDK","refs":["@anthropic-ai/sdk/resources/index.mjs","F01-G08"],"decision":"REWRITE","status":"open","evidence":"F01 direct external import and dependency matrix","reason":"SDK types/protocol only at adapter boundary；model call 走 EchoModelPort，不能猜测 SDK version。","blocker":"exact package lock/version absent"},
+    {"id":"B01-D06","subject":"network clients","refs":["axios","ws","undici","@modelcontextprotocol/sdk","F01-G09","F01-G12"],"decision":"REWRITE","status":"open","evidence":"F01 runtime dependency observations","reason":"kernel 不直接 import network client；由 Echo-owned model/tool port 提供受控能力。","blocker":"network dependency closure unversioned"},
+    {"id":"B01-D07","subject":"provider and auth clients","refs":["AWS","Vertex","Foundry","google-auth-library","F01-G13"],"decision":"EXCLUDE","status":"accepted","evidence":"F01 runtime dependency observations and F04 excluded_dependencies","reason":"不把 provider selection、OAuth 或 credentials 带入 embedded kernel。"},
+    {"id":"B01-D08","subject":"filesystem and persistence","refs":["node:fs","utils/sessionStorage.ts","utils/toolResultStorage.ts","F01-G10"],"decision":"REWRITE","status":"open","evidence":"F01 source-gap-ledger and F04 excluded_dependencies","reason":"结果/检查点只能通过 Echo checkpoint/event port；不直接读写文件。"},
+    {"id":"B01-D09","subject":"process and CLI side effects","refs":["node:child_process","utils/commandLifecycle.ts","CLI parser","F01-G11"],"decision":"EXCLUDE","status":"accepted","evidence":"F01 source-gap-ledger; F04 excluded_dependencies","reason":"CLI parser、shell、spawn/exec、AgentOS/proxy daemon 不进入 kernel closure。"},
+    {"id":"B01-D10","subject":"OS and environment side effects","refs":["node:os","process","HOME","PATH","F01-G13"],"decision":"EXCLUDE","status":"accepted","evidence":"F01 source-gap-ledger; F04 worker no HOME/PATH evidence","reason":"gate 与 source slice 不读取 HOME/PATH 或 Claude global state。"},
+    {"id":"B01-D11","subject":"Claude global auth/config/history/update/telemetry","refs":["utils/auth.ts","~/.claude/.credentials.json","services/analytics/index.ts","services/analytics/growthbook.ts","utils/sessionStorage.ts"],"decision":"EXCLUDE","status":"accepted","evidence":"F01 source-gap-ledger; F04 excluded_dependencies","reason":"全局认证、配置、历史、更新、analytics/telemetry 与 terminal UI 均明确排除。"},
+    {"id":"B01-D12","subject":"native and optional ABI","refs":["audio-capture.node","image-processor-napi","color-diff-napi","modifiers-napi","sharp","F01-G14"],"decision":"EXCLUDE","status":"open","evidence":"F01 source-gap-ledger","reason":"无 immutable ABI/package evidence，且不属于 one-tool loop。","blocker":"per-platform native proof absent"},
+    {"id":"B01-D13","subject":"pure utility","refs":["utils/array.ts"],"decision":"PORT_AS_IS","status":"accepted","evidence":"F01 direct_query_imports.resolved_local","reason":"纯计算工具，无外部 I/O、环境读取或 Claude runtime 绑定。"},
+    {"id":"B01-D14","subject":"message/tool/event/cancel semantics","refs":["utils/messages.ts","services/tools/StreamingToolExecutor.ts","query/stopHooks.ts","F04 contract freeze"],"decision":"ADAPT","status":"accepted_with_blockers","evidence":"F04 version-and-interface-freeze.md","reason":"只接受 taskId/requestId/toolUseId/grantRevision/schemaVersion 等冻结字段，保持 first-terminal-wins。"},
+    {"id":"B01-D15","subject":"model/config/deps/bootstrap","refs":["utils/model/model.ts","query/config.ts","query/deps.ts","bootstrap/state.ts"],"decision":"REWRITE","status":"open","evidence":"F01 query direct list and dependency matrix","reason":"改为 Echo authoritative model runtime snapshot、显式 ports 与 task state；不使用 productionDeps。","blocker":"production dependency closure not proven"},
+    {"id":"B01-D16","subject":"compaction, profiler, prompt dump and feature analytics","refs":["services/compact/*","utils/headlessProfiler.ts","utils/queryProfiler.ts","services/api/dumpPrompts.ts","services/analytics/*"],"decision":"EXCLUDE","status":"accepted","evidence":"F01 direct_query_imports and gap ledger","reason":"不属于 bounded source slice，避免 telemetry、prompt persistence 和 compact side effects。"},
+    {"id":"B01-D17","subject":"runtime and contract binding","refs":["F04/FUSION_COMPATIBILITY_BASELINE_V1.json","F04/version-and-interface-freeze.md"],"decision":"ADAPT","status":"accepted","evidence":"F04 frozen identity and contract versions","reason":"manifest/graph/ledger 必须绑定 source snapshot、manifest root、Echo baseline、runtime fingerprint 与六类 contract version。"},
+    {"id":"B01-D18","subject":"full release provenance","refs":["F01-G01","F01-G08","F01-G09","F01-G16"],"decision":"EXCLUDE","status":"blocked_with_evidence","evidence":"F01 report final verdict mapping","reason":"不把 unknown upstream version、lock、runtime validation 冒充 SOURCE_COMPATIBLE；保留 release blocker。"}
+  ],
+  "explicit_exclusions": [
+    "CLI parser",
+    "terminal UI",
+    "AgentOS/proxy daemon",
+    "Claude global auth/config/history/update/telemetry",
+    "process side effects",
+    "network side effects",
+    "OS/filesystem side effects",
+    "native/optional ABI dependencies",
+    "real model credentials",
+    "localhost ports"
+  ],
+  "final_state": {
+    "source_compatibility": "SOURCE_ADAPTER_REQUIRED",
+    "full_direct_vendoring": "SOURCE_BLOCKED",
+    "bounded_nonproduction_slice": "accepted_with_adapters",
+    "release_ready": false
+  }
+}

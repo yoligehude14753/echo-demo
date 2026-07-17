@@ -6,7 +6,11 @@
  */
 
 import backendConfig from "../backend.config.json";
-import desktopReleaseAssetPatterns from "../electron/release-asset-patterns.json";
+import { registerPlugin } from "@capacitor/core";
+import type {
+  ModelRuntimeFallback,
+  ModelRuntimeIdentity,
+} from "./modelRuntimeContract";
 
 // SupervisorStatus 的具体形状定义在 hooks/useBackendHealth.ts；
 // 这里用宽松 unknown 让 runtime.ts 不强耦合 health hook，且 hook 内做窄化
@@ -36,7 +40,10 @@ export interface AppUpdateStatus {
   releaseUrl?: string;
   assetName?: string | null;
   assetUrl?: string | null;
+  assetDigest?: string | null;
+  assetSize?: number | null;
   canAutoInstall?: boolean;
+  requiresUserConfirmation?: boolean;
   percent?: number;
   autoDownloaded?: boolean;
   downloadReason?: string;
@@ -110,6 +117,9 @@ interface ElectronEchoBridge {
   getBackendHost?: () => Promise<string>;
   getBackendRouting?: () => Promise<ElectronBackendRouting>;
   getBackendContract?: () => Promise<ElectronBackendBuildContract | null>;
+  getModelRuntimeIdentity?: () => Promise<ModelRuntimeIdentity | null>;
+  onModelRuntimeIdentity?: (cb: (identity: ModelRuntimeIdentity) => void) => () => void;
+  onModelRuntimeFallback?: (cb: (fallback: ModelRuntimeFallback) => void) => () => void;
   getShareBackendHost?: () => Promise<string>;
   loadLocalLegacyHistory?: () => Promise<unknown | null>;
   ensurePublicSession?: () => Promise<ElectronPublicSession | null>;
@@ -127,6 +137,24 @@ interface ElectronEchoBridge {
   openReleasePage?: () => Promise<{ ok: boolean; releaseUrl?: string }>;
   openExternal?: (url: string) => Promise<{ ok: boolean }>;
   onUpdateStatus?: (cb: (status: AppUpdateStatus) => void) => () => void;
+  notifyCaptureState?: (status: {
+    version: 1;
+    state:
+      | "off"
+      | "permission_required"
+      | "device_not_selected"
+      | "free_starting"
+      | "free_listening"
+      | "speech_detected"
+      | "formal_recording"
+      | "offline_buffering"
+      | "error";
+    freeModeEnabled: boolean;
+    formalMeetingId: string | null;
+    selected: boolean;
+    errorMessage: string | null;
+  }) => void;
+  onCaptureCommand?: (cb: (command: "pause" | "resume") => void) => () => void;
   // Phase 3 P3.5 麦克风权限
   getMicStatus?: () => Promise<ElectronMicStatus>;
   requestMic?: () => Promise<boolean>;
@@ -176,6 +204,7 @@ declare global {
   }
   // 由 vite.config.ts 从当前 package version 注入；编译时替换为版本字面量。
   const __APP_VERSION__: string;
+  const __APP_UPDATE_VERSION__: string;
 }
 
 let cachedBase: string | null = null;
@@ -195,9 +224,9 @@ export const DEFAULT_SYNC_HUB_BASE: string | null = null;
 export const FORCE_TV_UI_KEY = "echodesk.forceTvUi";
 const PUBLIC_DATA_BOUNDARY_SCHEMA = 4;
 export const RELEASES_URL =
-  "https://github.com/yoligehude14753/echo-demo/releases/latest";
+  "https://github.com/yoligehude14753/echo-demo/releases";
 const RELEASE_API_URL =
-  "https://api.github.com/repos/yoligehude14753/echo-demo/releases/latest";
+  "https://api.github.com/repos/yoligehude14753/echo-demo/releases?per_page=20";
 
 export class BackendBasePolicyError extends Error {
   constructor(
@@ -312,7 +341,9 @@ export function principalMode(): EchoPrincipalMode {
   }
   const configured = runtimeEnv().VITE_ECHODESK_PRINCIPAL_MODE;
   if (isEchoPrincipalMode(configured)) return configured;
-  return runtimeMode() === "release" ? "public" : "local";
+  // Installed Preview is local-first; remote public service is selected only
+  // by the authoritative main-process routing snapshot or an explicit mode.
+  return "local";
 }
 
 export function backendRole(): EchoBackendRole {
@@ -359,8 +390,8 @@ function normalizedElectronBackendBase(): string | null {
     return normalized;
   }
   if (routing?.role === "local_dev_diagnostic") {
-    if (runtimeMode() === "release" || routing.localDevDiagnosticEndpoint === null) {
-      throw new BackendBasePolicyError("local dev endpoint is unavailable in release");
+    if (routing.localDevDiagnosticEndpoint === null) {
+      throw new BackendBasePolicyError("local bundled backend endpoint is unavailable");
     }
     if (normalizeBackendBase(routing.localDevDiagnosticEndpoint) !== normalized) {
       throw new BackendBasePolicyError("local dev endpoint snapshot is inconsistent");
@@ -375,6 +406,62 @@ function normalizedElectronBackendBase(): string | null {
 
 function normalizeVersion(raw: string | null | undefined): string {
   return String(raw ?? "").trim().replace(/^v/i, "");
+}
+
+type AppUpdateChannel = "preview" | "stable";
+
+interface GithubAppRelease {
+  tag_name?: string;
+  name?: string;
+  html_url?: string;
+  draft?: boolean;
+  prerelease?: boolean;
+  assets?: Array<{
+    name?: string;
+    size?: number;
+    digest?: string;
+    browser_download_url?: string;
+  }>;
+}
+
+function releaseVersionForChannel(
+  release: GithubAppRelease,
+  channel: AppUpdateChannel,
+): string | null {
+  if (!release || release.draft === true) return null;
+  if (channel === "preview") {
+    const tag = String(release.tag_name ?? "").trim();
+    return release.prerelease === true &&
+      /^v\d+\.\d+\.\d+-preview\.\d+$/.test(tag)
+      ? normalizeVersion(tag)
+      : null;
+  }
+  if (release.prerelease === true) return null;
+  const value = String(release.tag_name || release.name || "").trim();
+  return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z.-]+)?$/.test(
+    value,
+  )
+    ? normalizeVersion(value)
+    : null;
+}
+
+function isCompatibleAppUpgrade(
+  version: string,
+  currentVersion: string,
+  channel: AppUpdateChannel,
+): boolean {
+  if (channel !== "preview") return compareVersions(version, currentVersion) > 0;
+  const next = version.match(/^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/);
+  const current = currentVersion.match(
+    /^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/,
+  );
+  if (!next || !current) return false;
+  return (
+    next[1] === current[1] &&
+    next[2] === current[2] &&
+    next[3] === current[3] &&
+    compareNumericIdentifiers(next[4], current[4]) > 0
+  );
 }
 
 interface ParsedVersion {
@@ -442,10 +529,10 @@ export function isNewerAppUpdate(
   status: AppUpdateStatus | null | undefined,
 ): boolean {
   if (!status?.latestVersion) return false;
-  const reportedCurrent = status.currentVersion || __APP_VERSION__;
+  const reportedCurrent = status.currentVersion || __APP_UPDATE_VERSION__;
   return (
     compareVersions(status.latestVersion, reportedCurrent) > 0 &&
-    compareVersions(status.latestVersion, __APP_VERSION__) > 0
+    compareVersions(status.latestVersion, __APP_UPDATE_VERSION__) > 0
   );
 }
 
@@ -461,33 +548,68 @@ export function canInstallAppUpdate(
 }
 
 function preferredUpdateAsset(
-  assets: Array<{ name: string; url: string; size?: number }>,
-): { name: string; url: string; size?: number } | null {
-  let patterns = desktopReleaseAssetPatterns.darwin.map(
-    (source) => new RegExp(source, "i"),
-  );
+  assets: Array<{
+    name: string;
+    url: string;
+    size: number;
+    digest: string;
+  }>,
+  version: string,
+): { name: string; url: string; size: number; digest: string } | null {
+  let exactName = `EchoDesk-${version}-arm64-mac.zip`;
   if (typeof window !== "undefined") {
     const ua = window.navigator.userAgent;
     const tv = isTvRuntime();
     if (tv && (isNativeMobile() || /Android|AFT|TV|EchoDeskTV/i.test(ua))) {
-      patterns = [/smart-tv\.apk$/i, /smart-tv-oneclick\.zip$/i];
+      return null;
     } else if (isNativeMobile() || /Android/i.test(ua)) {
-      patterns = [/-android\.apk$/i, /smart-tv\.apk$/i];
+      exactName = `EchoDesk-${version}-android-universal-PREVIEW.apk`;
     } else if (/Windows/i.test(ua)) {
-      patterns = desktopReleaseAssetPatterns.win32.map(
-        (source) => new RegExp(source, "i"),
-      );
+      exactName = `EchoDesk.Setup.${version}.exe`;
     } else if (/Linux/i.test(ua)) {
-      patterns = desktopReleaseAssetPatterns.linux.map(
-        (source) => new RegExp(source, "i"),
-      );
+      return null;
     }
   }
-  for (const pattern of patterns) {
-    const asset = assets.find((a) => pattern.test(a.name));
-    if (asset) return asset;
-  }
-  return null;
+  const matches = assets.filter((asset) => asset.name === exactName);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export function selectCompatibleAppUpdate(
+  releases: GithubAppRelease[],
+  currentVersion: string,
+  channel: AppUpdateChannel,
+): {
+  release: GithubAppRelease;
+  version: string;
+  asset: { name: string; url: string; size: number; digest: string };
+} | null {
+  return (
+    releases
+      .flatMap((release) => {
+        const version = releaseVersionForChannel(release, channel);
+        if (!version || !isCompatibleAppUpgrade(version, currentVersion, channel)) {
+          return [];
+        }
+        const assets = (release.assets ?? [])
+          .filter(
+            (asset) =>
+              typeof asset.name === "string" &&
+              typeof asset.browser_download_url === "string" &&
+              Number.isSafeInteger(asset.size) &&
+              (asset.size ?? 0) > 0 &&
+              /^sha256:[0-9a-f]{64}$/i.test(asset.digest ?? ""),
+          )
+          .map((asset) => ({
+            name: asset.name as string,
+            size: asset.size as number,
+            digest: asset.digest as string,
+            url: asset.browser_download_url as string,
+          }));
+        const asset = preferredUpdateAsset(assets, version);
+        return asset ? [{ release, version, asset }] : [];
+      })
+      .sort((left, right) => compareVersions(right.version, left.version))[0] ?? null
+  );
 }
 
 function envBackendBase(): string | null {
@@ -590,6 +712,32 @@ export function isNativeMobile(): boolean {
   return window.Capacitor?.isNativePlatform?.() === true;
 }
 
+function configuredMobilePcBackendBase(): string | null {
+  if (runtimeMode() === "release") return DEFAULT_ANDROID_BACKEND_BASE;
+  return envBackendBase() ?? storedBackendBase();
+}
+
+/**
+ * Native Android/TV 的业务流量只能发往 PC backend；不能使用 WebView 相对
+ * proxy，也不能把本机不存在的 local backend 当成 fallback。
+ */
+export function mobilePcBackendBase(): string {
+  if (!isNativeMobile()) {
+    throw new BackendBasePolicyError(
+      "mobile PC backend route is only available in a native mobile runtime",
+      "mobile_backend_route_invalid_runtime",
+    );
+  }
+  const base = configuredMobilePcBackendBase();
+  if (!base) {
+    throw new BackendBasePolicyError(
+      "explicit PC backend endpoint is required for mobile development",
+      "mobile_backend_route_unavailable",
+    );
+  }
+  return base;
+}
+
 export async function checkAppUpdate(): Promise<AppUpdateStatus> {
   if (typeof window !== "undefined" && window.echo?.checkForUpdates) {
     return window.echo.checkForUpdates();
@@ -600,42 +748,37 @@ export async function checkAppUpdate(): Promise<AppUpdateStatus> {
       headers: { Accept: "application/vnd.github+json" },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const release = (await res.json()) as {
-      tag_name?: string;
-      name?: string;
-      html_url?: string;
-      assets?: Array<{
-        name?: string;
-        size?: number;
-        browser_download_url?: string;
-      }>;
-    };
-    const latestVersion = normalizeVersion(release.tag_name || release.name);
-    const assets = (release.assets ?? [])
-      .filter((a) => a.name && a.browser_download_url)
-      .map((a) => ({
-        name: a.name as string,
-        size: a.size,
-        url: a.browser_download_url as string,
-      }));
-    const asset = preferredUpdateAsset(assets);
-    const hasNewerVersion = compareVersions(latestVersion, __APP_VERSION__) > 0;
+    const releases = (await res.json()) as GithubAppRelease[];
+    if (!Array.isArray(releases)) throw new Error("invalid release list");
+    const candidate = selectCompatibleAppUpdate(
+      releases,
+      __APP_UPDATE_VERSION__,
+      "preview",
+    );
+    const latestVersion = candidate?.version ?? __APP_UPDATE_VERSION__;
+    const asset = candidate?.asset ?? null;
+    const hasNewerVersion =
+      compareVersions(latestVersion, __APP_UPDATE_VERSION__) > 0;
     const updateAvailable = hasNewerVersion && asset !== null;
     return {
       status: updateAvailable ? "available" : hasNewerVersion ? "checked" : "current",
-      currentVersion: __APP_VERSION__,
+      currentVersion: __APP_UPDATE_VERSION__,
       latestVersion,
       updateAvailable,
-      releaseName: release.name || release.tag_name || "",
-      releaseUrl: release.html_url || RELEASES_URL,
+      releaseName:
+        candidate?.release.name || candidate?.release.tag_name || "",
+      releaseUrl: candidate?.release.html_url || RELEASES_URL,
       assetName: asset?.name ?? null,
       assetUrl: asset?.url ?? null,
-      canAutoInstall: false,
+      assetDigest: asset?.digest ?? null,
+      assetSize: asset?.size ?? null,
+      canAutoInstall: isNativeMobile(),
+      requiresUserConfirmation: isNativeMobile(),
     };
   } catch (e) {
     return {
       status: "error",
-      currentVersion: __APP_VERSION__,
+      currentVersion: __APP_UPDATE_VERSION__,
       latestVersion: null,
       updateAvailable: false,
       releaseUrl: RELEASES_URL,
@@ -646,6 +789,16 @@ export async function checkAppUpdate(): Promise<AppUpdateStatus> {
     };
   }
 }
+
+interface EchoUpdaterPlugin {
+  downloadAndInstall(options: {
+    url: string;
+    digest: string;
+    size: number;
+  }): Promise<{ ok: boolean; requiresUserConfirmation: boolean }>;
+}
+
+const echoUpdater = registerPlugin<EchoUpdaterPlugin>("EchoUpdater");
 
 export async function openUpdateTarget(status?: AppUpdateStatus): Promise<void> {
   const target = status?.assetUrl || status?.releaseUrl || RELEASES_URL;
@@ -666,10 +819,25 @@ export async function installAppUpdate(status?: AppUpdateStatus): Promise<void> 
     await window.echo.installUpdate();
     return;
   }
+  if (
+    isNativeMobile() &&
+    status.assetUrl &&
+    status.assetDigest &&
+    Number.isSafeInteger(status.assetSize) &&
+    (status.assetSize ?? 0) > 0
+  ) {
+    await echoUpdater.downloadAndInstall({
+      url: status.assetUrl,
+      digest: status.assetDigest,
+      size: status.assetSize as number,
+    });
+    return;
+  }
   await openUpdateTarget(status);
 }
 
 export function configuredBackendBase(): string | null {
+  if (isNativeMobile()) return mobilePcBackendBase();
   if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
     return normalizedElectronBackendBase();
   }

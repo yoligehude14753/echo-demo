@@ -29,6 +29,37 @@ if (currentAndroidRelease.version?.toString() != desktopPackage.version?.toStrin
     throw new GradleException("Android version-code ledger current release must match desktop/package.json")
 }
 
+def previewSigningRequested = project.findProperty("echoPreviewSigning")?.toString() == "true"
+def previewVersionName = project.findProperty("echoPreviewVersionName")?.toString()
+def previewVersionCode = project.findProperty("echoPreviewVersionCode")?.toString()
+if (previewSigningRequested) {
+    if (!(previewVersionName ==~ /\d+\.\d+\.\d+-preview\.\d+/) ||
+        !(previewVersionCode ==~ /\d+/)) {
+        throw new GradleException(
+            "Android Preview builds require numeric echoPreviewVersionCode and " +
+            "echoPreviewVersionName=<semver>-preview.<n>"
+        )
+    }
+    def previewSigningVariables = [
+        "ECHODESK_ANDROID_PREVIEW_KEYSTORE",
+        "ECHODESK_ANDROID_PREVIEW_KEY_ALIAS",
+        "ECHODESK_ANDROID_PREVIEW_KEYSTORE_PASSWORD",
+        "ECHODESK_ANDROID_PREVIEW_KEY_PASSWORD",
+    ]
+    def missingPreviewSigning = previewSigningVariables.findAll {
+        !System.getenv(it)?.trim()
+    }
+    if (!missingPreviewSigning.isEmpty()) {
+        throw new GradleException(
+            "Android Preview signing requires task-owned inputs: " +
+            missingPreviewSigning.join(", ")
+        )
+    }
+    if (!file(System.getenv("ECHODESK_ANDROID_PREVIEW_KEYSTORE")).isFile()) {
+        throw new GradleException("Android Preview keystore does not exist")
+    }
+}
+
 def releaseTaskRequested = gradle.startParameter.taskNames.any {
     it.toLowerCase().contains("release")
 }
@@ -58,8 +89,12 @@ android {
         applicationId project.findProperty("echoApplicationId") ?: "com.echodesk.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode currentAndroidRelease.versionCode as Integer
-        versionName currentAndroidRelease.version.toString()
+        versionCode previewSigningRequested
+            ? previewVersionCode.toInteger()
+            : currentAndroidRelease.versionCode as Integer
+        versionName previewSigningRequested
+            ? previewVersionName
+            : currentAndroidRelease.version.toString()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -67,17 +102,30 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (previewSigningRequested) {
+            preview {
+                storeFile file(System.getenv("ECHODESK_ANDROID_PREVIEW_KEYSTORE"))
+                storePassword System.getenv("ECHODESK_ANDROID_PREVIEW_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ECHODESK_ANDROID_PREVIEW_KEY_ALIAS")
+                keyPassword System.getenv("ECHODESK_ANDROID_PREVIEW_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (previewSigningRequested) {
+                signingConfig signingConfigs.preview
+            }
         }
     }
 }
 
 // Public release APKs are signed outside Gradle by build-android-release.cjs.
 // Gradle may only create app-release-unsigned.apk for that controlled pipeline.
-if (releaseTaskRequested) {
+if (releaseTaskRequested && !previewSigningRequested) {
     if (!externalSigningRequested) {
         throw new GradleException(
             "Public Android release must use the controlled v3.1 external signing pipeline"

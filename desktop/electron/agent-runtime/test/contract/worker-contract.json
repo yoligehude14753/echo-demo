@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "contract": "echo-agent-worker/v1",
+  "kernel_contract": "echo-agent-kernel/v1",
+  "compatibility_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "f04_evidence_commit": "db57ddefc95c494c3785659db89befe6d8cf9c94",
+  "input_base_sha": "1904cb8c49502d64c53ff163d6e04b88d396c751",
+  "contract_versions": {
+    "kernel_api": 1,
+    "worker_ipc": 1,
+    "model_runtime": 1,
+    "grant_snapshot": 1,
+    "checkpoint": 1,
+    "event": 1
+  },
+  "required_proof": {
+    "proof_kind": "production-worker",
+    "same_pid": true,
+    "worker_is_main_thread": false,
+    "main_is_main_thread": true,
+    "turn": ["compact", "summary", "checkpoint"],
+    "non_durable_runtime_event_id": true,
+    "recovery": "crash-restart-or-corrupt-checkpoint-fail-closed"
+  },
+  "required_runtime": {
+    "electron": "43.1.0",
+    "node": "24.18.0",
+    "modules": "148"
+  },
+  "forbidden_imports": [
+    "node:child_process",
+    "node:fs",
+    "node:fs/promises",
+    "node:http",
+    "node:https",
+    "node:net",
+    "electron"
+  ]
+}

@@ -370,9 +370,10 @@ async def test_resume_submit_race_never_revives_cancelled_task(tmp_path: Path) -
     assert cancelled is not None and cancelled.state.value == "cancelled"
     assert resumed.state.value == "cancelled"
     assert resumed.runner_task_id == "runner_late_submit"
-    assert backend.cancel_calls == [
-        ("runner_late_submit", ANY),
-    ]
+    # The cancel command was completed before the late submit produced a
+    # runner id; embedded runtime cancellation is local and must not revive a
+    # legacy remote HTTP side effect.
+    assert backend.cancel_calls == []
     async with aiosqlite.connect(service.settings.db_path) as conn:
         row = await (
             await conn.execute(
@@ -389,7 +390,7 @@ async def test_resume_submit_race_never_revives_cancelled_task(tmp_path: Path) -
         ).fetchone()
     assert row is not None and row[0:3] == (
         "cancelled",
-        "runner_late_submit",
+        None,
         "cancelled",
     )
     assert row[3] is not None

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kernel_contract": "echo-agent-kernel/v1",
+  "source_snapshot_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "source_manifest_sha256": "80ad812c210a098c189845972e71e968c860c4b36187da420a8f540f80fb91ab",
+  "echo_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "build_identity": {
+    "id": "b01-agent-kernel-v1",
+    "kernel_contract": "echo-agent-kernel/v1",
+    "runtime": {
+      "engine": "node",
+      "major": 24
+    },
+    "worker": {
+      "kind": "electron-worker",
+      "modules": "148"
+    }
+  },
+  "files": [
+    {
+      "path": "kernel.ts",
+      "sha256": "b36af5dba005bdc578cf3171ab08032731d6c8771f2528588cff360ab483914d"
+    },
+    {
+      "path": "model.ts",
+      "sha256": "9d9d32f1647867fe05f18d6783a6867689f6d1af71bb9ef8b8c4aeaed09afb13"
+    }
+  ],
+  "import_graph": {
+    "kernel.ts": [
+      "./model.js"
+    ],
+    "model.ts": []
+  },
+  "manifest_sha256": "3c27ddc48a64febbb4eeecdf041223cccf8f7cd674142ff189472a5a45c049c3"
+}

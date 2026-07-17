@@ -637,7 +637,9 @@ class Settings(BaseSettings):
 
     # ── Agent runner（ADR-012：EchoDesk UI + AgentOS control plane）────
     agent_os_enabled: bool = False
-    agent_os_url: str = "http://127.0.0.1:4128"
+    # 外部 runner 不是 bundled runtime 的 fallback；只有显式配置 endpoint
+    # 并显式开启时才允许兼容 adapter 连接。
+    agent_os_url: str = ""
     agent_task_timeout_s: float = 1800.0
     agent_artifact_proxy_max_bytes: int = Field(
         default=256 * 1024 * 1024,

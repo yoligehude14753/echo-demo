@@ -175,7 +175,8 @@ def test_agentos_runtime_install_contract(tmp_path: Path) -> None:
     install_backend_text = install_backend.read_text(encoding="utf-8")
     install_agentos_text = install_agentos.read_text(encoding="utf-8")
     run_agentos_text = run_agentos.read_text(encoding="utf-8")
-    assert "step9_install_agentos" in install_backend_text
+    assert "step9_install_agentos" not in install_backend_text
+    assert "install-agentos.sh" not in install_backend_text
     assert 'config["agent_os_enabled"] = enabled' in install_agentos_text
     assert 'config.get("llm_main_api_key", "")' in install_agentos_text
     assert "private_upstream_without_key" in install_agentos_text
@@ -249,7 +250,7 @@ def test_agentos_runtime_install_contract(tmp_path: Path) -> None:
         assert completed.stdout.strip() == ("1" if expected else "0")
         updated = json.loads(config_path.read_text(encoding="utf-8"))
         assert updated["agent_os_enabled"] is expected
-        assert updated["agent_os_url"] == "http://127.0.0.1:4128"
+        assert updated["agent_os_url"] == ""
 
     private_start_marker = 'PRIVATE_UPSTREAM="$($PYTHON_BIN - "$MAIN_BASE_URL" <<\'PY\'\n'
     private_end_marker = '\nPY\n)"'

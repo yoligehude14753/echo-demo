@@ -34,7 +34,7 @@ test("degraded packaged backend restart kills the child and reuses bundled-first
     emitStatus: (status) => calls.push(["status", status]),
     resetRestartState: () => calls.push(["reset"]),
     stopHealthWatcher: () => calls.push(["stop-health"]),
-    stopExternalHealthWatcher: () => calls.push(["stop-external"]),
+    stopPublicBackendHealthWatcher: () => calls.push(["stop-public"]),
     stopBackendProc: async () => calls.push(["stop-bundled-child"]),
     spawnBackendAndWatch: () => calls.push(["spawn-bundled-first"]),
     isShuttingDown: () => false,
@@ -49,7 +49,7 @@ test("degraded packaged backend restart kills the child and reuses bundled-first
   assert.deepEqual(calls, [
     ["reset"],
     ["stop-health"],
-    ["stop-external"],
+    ["stop-public"],
     ["status", { state: "restarting", attempt: 1, backoff_ms: 500, reason: "manual restart" }],
     ["stop-bundled-child"],
     ["schedule", 500],
@@ -73,7 +73,7 @@ test("manual restart is single-flight across double and triple clicks", async ()
     emitStatus: (status) => calls.push(["status", status]),
     resetRestartState: () => calls.push(["reset"]),
     stopHealthWatcher: () => calls.push(["stop-health"]),
-    stopExternalHealthWatcher: () => calls.push(["stop-external"]),
+    stopPublicBackendHealthWatcher: () => calls.push(["stop-public"]),
     stopBackendProc: async () => {
       calls.push(["stop-child"]);
       await stop;
@@ -111,7 +111,7 @@ test("shutdown after a late child exit prevents the replacement spawn", async ()
     emitStatus: () => {},
     resetRestartState: () => {},
     stopHealthWatcher: () => {},
-    stopExternalHealthWatcher: () => {},
+    stopPublicBackendHealthWatcher: () => {},
     stopBackendProc: () => stop,
     spawnBackendAndWatch: () => {
       spawns += 1;

@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "artifact": "B01-source-import-graph",
+  "source_snapshot_id": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "manifest_root_sha256": "b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+  "echo_baseline_sha": "492053c53441793c220f3b8e1dd231f1faea6e42",
+  "method": "F01 read-only lexical graph evidence; no Claude source restoration; no F04 file copy.",
+  "f01_counts": {
+    "resolved_nodes": 1780,
+    "lexical_edges": 11988,
+    "unresolved_local_specifiers": 616,
+    "dynamic_or_require_edges": 602,
+    "external_package_names": 134,
+    "caveat": "F01 counts are lexical over-approximation and are not runtime reachability proof."
+  },
+  "roots": [
+    {"path":"query.ts","decision":"ADAPT","direct_edges_listed":true},
+    {"path":"QueryEngine.ts","decision":"ADAPT","direct_edges_listed":false},
+    {"path":"Tool.ts","decision":"ADAPT","direct_edges_listed":false}
+  ],
+  "direct_edges": [
+    {"from":"query.ts","to":"hooks/useCanUseTool.tsx","decision":"ADAPT"},
+    {"from":"query.ts","to":"services/api/withRetry.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"services/compact/autoCompact.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"services/compact/compact.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"services/analytics/index.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"utils/imageValidation.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"utils/imageResizer.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"Tool.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/systemPromptType.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/log.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"services/api/errors.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/debug.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"utils/messages.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"services/toolUseSummary/toolUseSummaryGenerator.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/api.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"utils/attachments.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"utils/messageQueueManager.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/commandLifecycle.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"utils/headlessProfiler.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"utils/model/model.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"utils/tokens.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/context.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"services/analytics/growthbook.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"tools/SleepTool/prompt.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"utils/hooks/postSamplingHooks.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"utils/hooks.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"services/api/dumpPrompts.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"services/tools/StreamingToolExecutor.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/queryProfiler.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"services/tools/toolOrchestration.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/toolResultStorage.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"utils/sessionStorage.ts","decision":"EXCLUDE"},
+    {"from":"query.ts","to":"query/stopHooks.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"query/config.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"query/deps.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"bootstrap/state.ts","decision":"REWRITE"},
+    {"from":"query.ts","to":"query/tokenBudget.ts","decision":"ADAPT"},
+    {"from":"query.ts","to":"utils/array.ts","decision":"PORT_AS_IS"}
+  ],
+  "external_edges": [
+    {"from":"query.ts","to":"@anthropic-ai/sdk/resources/index.mjs","decision":"REWRITE","reason":"Anthropic protocol stays at adapter boundary; no SDK direct import."},
+    {"from":"query.ts","to":"bun:bundle","decision":"REWRITE","reason":"Bun feature macro becomes explicit adapter-owned constant/branch."}
+  ],
+  "unresolved_local_edges": [
+    {"from":"query.ts","to":"./services/compact/reactiveCompact.js","decision":"EXCLUDE","reason":"F01 hard missing; compact outside bounded slice."},
+    {"from":"query.ts","to":"./services/contextCollapse/index.js","decision":"EXCLUDE","reason":"F01 hard missing; context-collapse production path excluded."},
+    {"from":"query.ts","to":"./types/message.js","decision":"ADAPT","reason":"F01 hard missing; message shape is rebuilt at Echo adapter boundary."},
+    {"from":"query.ts","to":"./services/skillSearch/prefetch.js","decision":"EXCLUDE","reason":"F01 unresolved feature-gated path; not required by one-tool loop."},
+    {"from":"query.ts","to":"./jobs/classifier.js","decision":"EXCLUDE","reason":"F01 unresolved job path; not kernel closure."},
+    {"from":"query.ts","to":"./constants/querySource.js","decision":"REWRITE","reason":"Source identity becomes explicit Echo operationKey/route metadata."},
+    {"from":"query.ts","to":"./query/transitions.js","decision":"ADAPT","reason":"State transition semantics are copied only as bounded Echo loop behavior."},
+    {"from":"query.ts","to":"./services/compact/snipCompact.js","decision":"EXCLUDE","reason":"F01 hard missing; compaction path excluded."},
+    {"from":"query.ts","to":"./utils/taskSummary.js","decision":"EXCLUDE","reason":"F01 hard missing; task summary is not required by kernel one-tool slice."}
+  ],
+  "dynamic_or_require_edges": [
+    {"from":"query.ts and transitive closure","count":602,"decision":"REWRITE","reason":"Dynamic/require targets cannot cross the kernel boundary; only explicit bounded ports may remain."}
+  ],
+  "external_dependency_groups": [
+    {"group":"network clients: axios, ws, undici, @modelcontextprotocol/sdk","count_scope":134,"decision":"REWRITE","reason":"Map model/tool transport to Echo ports; direct network imports forbidden."},
+    {"group":"provider/auth clients: AWS, Vertex, Foundry, google-auth-library","count_scope":134,"decision":"EXCLUDE","reason":"Provider/auth selection and credentials are outside kernel."},
+    {"group":"native/optional: audio-capture.node, image-processor-napi, color-diff-napi, modifiers-napi, sharp","count_scope":134,"decision":"EXCLUDE","reason":"No immutable ABI evidence and not part of bounded loop."}
+  ],
+  "transitive_evidence": {
+    "resolved_node_count": {"count":1780,"decision":"ADAPT","meaning":"F01 lexical closure count; paths are not enumerated in supplied evidence."},
+    "lexical_edge_count": {"count":11988,"decision":"ADAPT","meaning":"F01 lexical edge count; every listed decision surface below is fail-closed."},
+    "unresolved_local_count": {"count":616,"decision":"REWRITE","meaning":"The nine F01 hard-missing query candidates are explicitly classified; remaining aggregate unresolved edges remain release-blocked."},
+    "dynamic_or_require_count": {"count":602,"decision":"REWRITE","meaning":"No dynamic target is accepted as direct import."},
+    "external_package_name_count": {"count":134,"decision":"REWRITE","meaning":"External package closure is not version-bound and cannot be direct-imported."}
+  },
+  "coverage_gaps": [
+    {"root":"QueryEngine.ts","kind":"missing_exact_direct_edge_list","decision":"ADAPT","fail_closed":true,"reason":"F01 graph only names query.ts direct imports; no full source restoration permitted."},
+    {"root":"Tool.ts","kind":"missing_exact_direct_edge_list","decision":"ADAPT","fail_closed":true,"reason":"F01 graph only names query.ts direct imports; no full source restoration permitted."},
+    {"root":"all roots","kind":"missing_transitive_paths","decision":"REWRITE","fail_closed":true,"reason":"Only F01 aggregate counts are available; SOURCE_COMPATIBLE is not claimed."}
+  ],
+  "forbidden_surfaces": [
+    {"name":"CLI parser","decision":"EXCLUDE"},
+    {"name":"terminal UI","decision":"EXCLUDE"},
+    {"name":"AgentOS/proxy daemon","decision":"EXCLUDE"},
+    {"name":"Claude global auth/config/history/update/telemetry","decision":"EXCLUDE"},
+    {"name":"process/network/OS side effects","decision":"REWRITE"}
+  ],
+  "evidence": {
+    "f01_graph": "docs/0.3.3-bundled-agent-runtime/evidence/F01/query-production-import-graph.json",
+    "f01_gap_ledger": "docs/0.3.3-bundled-agent-runtime/evidence/F01/source-gap-ledger.md",
+    "f04_baseline": "docs/0.3.3-bundled-agent-runtime/evidence/F04/FUSION_COMPATIBILITY_BASELINE_V1.json"
+  }
+}

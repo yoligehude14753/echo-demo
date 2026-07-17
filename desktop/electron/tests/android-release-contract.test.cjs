@@ -5,6 +5,9 @@ const test = require("node:test");
 const {
   hasNonEmptyPastSignatures,
 } = require("../../scripts/android-signing-rotation-smoke.cjs");
+const {
+  validateAndroidGradleVersionContract,
+} = require("../../scripts/android-gradle-version-contract.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..", "..");
 const repoRoot = path.resolve(desktopRoot, "..");
@@ -37,19 +40,35 @@ test("Android version codes come from an append-only monotonic ledger", () => {
   assert.equal(ledger.releases.at(-1).version, pkg.version);
 
   const gradle = readDesktop("android/app/build.gradle");
-  assert.match(
-    gradle,
-    /versionCode currentAndroidRelease\.versionCode as Integer/,
-  );
-  assert.match(
-    gradle,
-    /versionName currentAndroidRelease\.version\.toString\(\)/,
-  );
+  assert.deepEqual(validateAndroidGradleVersionContract(gradle), []);
   assert.doesNotMatch(gradle, /versionCode\s+\d+/);
 
   const versionCheck = readDesktop("scripts/check-version-sync.cjs");
   assert.match(versionCheck, /version-codes\.json/);
   assert.doesNotMatch(versionCheck, /minor\s*\*\s*100\s*\+\s*patch/);
+});
+
+test("Android Gradle version contract rejects drift in either variant", () => {
+  const gradle = readDesktop("android/app/build.gradle");
+  const mutations = [
+    gradle.replace(
+      "previewVersionCode.toInteger()",
+      "currentAndroidRelease.versionCode as Integer",
+    ),
+    gradle.replace(
+      "currentAndroidRelease.versionCode as Integer",
+      "303",
+    ),
+    gradle.replace("previewSigningRequested\n            ?", "true\n            ?"),
+    gradle.replace(
+      "versionName previewSigningRequested",
+      "versionName currentAndroidRelease.version.toString()\n        versionName previewSigningRequested",
+    ),
+  ];
+
+  for (const mutation of mutations) {
+    assert.notDeepEqual(validateAndroidGradleVersionContract(mutation), []);
+  }
 });
 
 test("TV installer preserves the user's microphone permission decision", () => {

@@ -154,7 +154,7 @@ class AgentCommandOutbox:
                    last_error = NULL, outcome = NULL, force_remote = 1,
                    completed_at = NULL, updated_at = ?
                WHERE tenant_id = ? AND owner_id = ? AND task_id = ?
-                 AND command_type = 'cancel'""",
+                 AND command_type = 'cancel' AND completed_at IS NULL""",
             (
                 runner_task_id,
                 utc_now_iso(),

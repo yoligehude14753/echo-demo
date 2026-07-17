@@ -91,6 +91,7 @@ test("429, 5xx and network renewal errors retain the confirmed owner", async ({
   let enrollCalls = 0;
   let renewMode: "429" | "503" | "network" | "ok" = "429";
   const renewBodies: string[] = [];
+  const identityClientVersions: string[] = [];
   await installEchoMock(page, {
     isElectron: false,
     skipPaths: ["/bootstrap", "/session/enroll", "/session/renew"],
@@ -104,6 +105,9 @@ test("429, 5xx and network renewal errors retain the confirmed owner", async ({
   );
   await page.route(/\/(api\/)?session\/enroll$/, (route) => {
     enrollCalls += 1;
+    identityClientVersions.push(
+      route.request().headers()["x-echodesk-client-version"] ?? "",
+    );
     return route.fulfill({
       status: 201,
       contentType: "application/json",
@@ -115,6 +119,9 @@ test("429, 5xx and network renewal errors retain the confirmed owner", async ({
   });
   await page.route(/\/(api\/)?session\/renew$/, (route) => {
     renewBodies.push(route.request().postData() ?? "");
+    identityClientVersions.push(
+      route.request().headers()["x-echodesk-client-version"] ?? "",
+    );
     if (renewMode === "network") return route.abort("connectionreset");
     if (renewMode !== "ok") {
       return route.fulfill({ status: Number(renewMode), body: renewMode });
@@ -176,6 +183,7 @@ test("429, 5xx and network renewal errors retain the confirmed owner", async ({
   expect(enrollCalls).toBe(1);
   expect(renewBodies).toHaveLength(4);
   expect(new Set(renewBodies).size).toBe(1);
+  expect(identityClientVersions).toEqual(Array(5).fill("0.3.3"));
 });
 
 test("pending rotation survives a transient error and commits when the new secret renews", async ({

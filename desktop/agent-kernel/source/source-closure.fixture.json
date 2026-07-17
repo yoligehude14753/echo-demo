@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "expected_gate_status": "PASS",
+  "roots": ["query.ts", "QueryEngine.ts", "Tool.ts"],
+  "expected_f01_counts": {
+    "resolved_nodes": 1780,
+    "lexical_edges": 11988,
+    "unresolved_local_specifiers": 616,
+    "dynamic_or_require_edges": 602,
+    "external_package_names": 134
+  },
+  "required_decisions": ["PORT_AS_IS", "ADAPT", "REWRITE", "EXCLUDE"],
+  "required_exclusions": [
+    "CLI parser",
+    "terminal UI",
+    "AgentOS/proxy daemon",
+    "Claude global auth/config/history/update/telemetry",
+    "process side effects",
+    "network side effects",
+    "OS/filesystem side effects"
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "f04-electron-worker-trace.v1",
+  "platform": "win32",
+  "host": "sunny_friend",
+  "taskRoot": "C:\\Users\\anyut\\AppData\\Local\\Temp\\echodesk-f03-electron-43",
+  "main": {
+    "pid": 1076,
+    "platform": "win32",
+    "arch": "x64",
+    "electron": "43.1.0",
+    "node": "24.18.0",
+    "v8": "15.0.245.13-electron.0",
+    "modules": "148",
+    "napi": "10",
+    "isMainThread": true,
+    "threadId": 0
+  },
+  "worker": {
+    "pid": 1076,
+    "platform": "win32",
+    "arch": "x64",
+    "electron": "43.1.0",
+    "node": "24.18.0",
+    "v8": "15.0.245.13-electron.0",
+    "modules": "148",
+    "napi": "10",
+    "isMainThread": false,
+    "threadId": 1,
+    "samePid": true,
+    "workerInvariant": true
+  },
+  "identity": {
+    "sourceSnapshot": "sha256:b1f141a4bd591335d2be4e347218d936a753041f8536a9b881c7ef7100b8416a",
+    "echoBaseline": "492053c53441793c220f3b8e1dd231f1faea6e42"
+  },
+  "fused": {
+    "success": {"events": 7, "toolInvocations": 1, "terminal": "succeeded"},
+    "oneTool": {"toolUseId": "tool-1", "resultToolUseId": "tool-1", "correlation": "exact", "terminal": "succeeded"},
+    "cancel": {"events": 6, "toolInvocations": 0, "terminal": "cancelled", "firstTerminalWins": true, "lateTerminal": "audit-only"},
+    "mismatch": {"code": "MODEL_TOOL_CORRELATION_MISMATCH", "toolInvoked": false, "terminal": "failed"},
+    "schemaMismatch": {"code": "MODEL_SCHEMA_VERSION_MISMATCH", "startup": "rejected"},
+    "sourceMismatch": {"code": "SOURCE_SNAPSHOT_MISMATCH", "startup": "rejected"},
+    "runtimeMismatch": {"code": "RUNTIME_FINGERPRINT_MISMATCH", "startup": "rejected"}
+  },
+  "isolation": {"home": "C:\\Users\\anyut", "path": null, "forbidden": []},
+  "verdict": "passed"
+}

@@ -44,6 +44,11 @@ test("first-run 引导：3 步可前进 + 完成后持久化", async ({ page }) 
 
   // 引导 Modal 应自动弹出
   await expect(page.getByText("欢迎来到 EchoDesk")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("onboarding-local-runtime-copy")).toContainText(
+    "都跑在你自己的电脑上",
+  );
+  await expect(page.getByText("/Users/test/.echodesk")).toBeVisible();
+  await expect(page.getByTestId("onboarding-native-runtime-contract")).toHaveCount(0);
   expect(
     await page.evaluate(
       () => (window as unknown as { __getUserMediaCalls?: number }).__getUserMediaCalls ?? 0,
@@ -91,4 +96,52 @@ test("first-run 引导：跳过按钮立即关闭", async ({ page }) => {
   await expect(page.getByText("欢迎来到 EchoDesk")).toBeVisible({ timeout: 5_000 });
   await page.getByTestId("onboarding-skip").click();
   await expect(page.getByText("欢迎来到 EchoDesk")).not.toBeVisible({ timeout: 3_000 });
+});
+
+test("native Android 引导明确 remote-mobile、public endpoint 与 paired Hub 边界", async ({
+  page,
+}) => {
+  await installEchoMock(page, { isElectron: false });
+  await page.goto("/");
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        Capacitor?: { isNativePlatform: () => boolean };
+      }
+    ).Capacitor = { isNativePlatform: () => true };
+  });
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("replay-onboarding").click();
+
+  const contract = page.getByTestId("onboarding-native-runtime-contract");
+  await expect(contract).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("onboarding-native-runtime-copy")).toContainText(
+    "远程移动端",
+  );
+  await expect(page.getByTestId("onboarding-native-runtime-copy")).toContainText(
+    "不会启动桌面 backend 或 bundled worker",
+  );
+  await expect(contract).toContainText("https://echodesk.yoliyoli.uk");
+  await expect(contract).toContainText("固定连接该公共服务");
+  await expect(contract).toContainText("不能在设置中改写业务 endpoint");
+  await expect(contract).toContainText("Hub 地址并使用配对码");
+  await expect(page.getByTestId("onboarding-local-runtime-copy")).toHaveCount(0);
+  await expect(page.getByText("~/.echodesk/", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("数据存放位置", { exact: true })).toHaveCount(0);
+
+  await page.getByTestId("onboarding-next").click();
+  await expect(
+    page.getByText("本 Preview 固定的公共服务 https://echodesk.yoliyoli.uk"),
+  ).toBeVisible();
+  await expect(page.getByText("手机内没有本地 ASR 或桌面 bundled backend")).toBeVisible();
+  await page.getByTestId("onboarding-next").click();
+  await expect(page.getByTestId("onboarding-native-done-copy")).toContainText(
+    "单端或多端收音",
+  );
+  await expect(page.getByTestId("onboarding-native-done-copy")).toContainText(
+    "转写与纪要依赖远程服务可用",
+  );
+  await expect(page.getByTestId("onboarding-native-done-copy")).toContainText(
+    "多端同步需要另行配对 Hub",
+  );
 });

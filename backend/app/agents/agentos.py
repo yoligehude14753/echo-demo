@@ -1,6 +1,9 @@
-"""AgentOS client：EchoDesk 后端唯一允许直连 AgentOS 的位置。"""
+"""AgentOS compatibility surface plus the embedded runtime adapter exports.
 
-from __future__ import annotations
+The B12 HTTP client remains available for its accepted compatibility contract.
+B13 production composition must inject ``EmbeddedRuntimeBackend`` directly;
+this module is not an HTTP fallback for the inherited-fd runtime path.
+"""
 
 import hashlib
 import json
@@ -9,18 +12,32 @@ import logging
 import httpx
 
 from app.agents.base import AgentIntent, AgentSubmitResult
+from app.agents.embedded_runtime import EmbeddedRuntimeBackend, EmbeddedRuntimeError
 from app.config import Settings
 
 _log = logging.getLogger("echodesk.agents.agentos")
 AGENTOS_SUBMIT_MAX_WALL_S = 50.0
+
+__all__ = [
+    "AGENTOS_SUBMIT_MAX_WALL_S",
+    "AgentOSBackend",
+    "EmbeddedRuntimeBackend",
+    "EmbeddedRuntimeError",
+    "submit_operation_key",
+]
 
 
 class AgentOSBackend:
     name = "claude_code"
 
     def __init__(self, settings: Settings) -> None:
-        self.base_url = settings.agent_os_url.rstrip("/")
-        self.enabled = settings.agent_os_enabled
+        self.base_url = settings.agent_os_url.strip().rstrip("/")
+        self.enabled = settings.agent_os_enabled and bool(self.base_url)
+        self._disabled_reason = (
+            "agent runner disabled"
+            if not settings.agent_os_enabled
+            else "agent runner endpoint is not explicitly configured"
+        )
         self._settings = settings
 
     async def submit(self, intent: AgentIntent) -> AgentSubmitResult:
@@ -29,7 +46,7 @@ class AgentOSBackend:
                 task_id=intent.echo_task_id or "",
                 accepted=False,
                 provider=self.name,
-                error="agent runner disabled",
+                error=self._disabled_reason,
             )
         if not intent.echo_task_id:
             return AgentSubmitResult(

@@ -29,6 +29,22 @@ const {
 const desktopRoot = path.resolve(__dirname, "../..");
 const repoRoot = path.resolve(desktopRoot, "..");
 
+function readSingleGradleBlock(source, blockName) {
+  const matches = [
+    ...source.matchAll(new RegExp(`\\b${blockName}\\s*\\{`, "g")),
+  ];
+  assert.equal(matches.length, 1, `expected one ${blockName} block`);
+
+  const openBrace = source.indexOf("{", matches[0].index);
+  let depth = 0;
+  for (let index = openBrace; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+    if (depth === 0) return source.slice(openBrace + 1, index);
+  }
+  assert.fail(`${blockName} block is not closed`);
+}
+
 test("electron-builder accepts the committed package configuration", async () => {
   const pkg = JSON.parse(
     readFileSync(path.join(desktopRoot, "package.json"), "utf8"),
@@ -147,7 +163,44 @@ test("Android Gradle and package scripts separate development from public releas
   assert.match(gradle, /ECHODESK_ANDROID_EXPECTED_LEGACY_CERT_SHA256/);
   assert.match(gradle, /ECHODESK_ANDROID_EXPECTED_CURRENT_CERT_SHA256/);
   assert.match(gradle, /ROTATION_MIN_SDK_VERSION"\) != "33/);
-  assert.doesNotMatch(gradle, /signingConfigs\s*\{/);
+  const signingConfigs = readSingleGradleBlock(gradle, "signingConfigs");
+  assert.match(
+    signingConfigs,
+    /if \(previewSigningRequested\)\s*\{\s*preview\s*\{/,
+  );
+  for (const variable of [
+    "ECHODESK_ANDROID_PREVIEW_KEYSTORE",
+    "ECHODESK_ANDROID_PREVIEW_KEYSTORE_PASSWORD",
+    "ECHODESK_ANDROID_PREVIEW_KEY_ALIAS",
+    "ECHODESK_ANDROID_PREVIEW_KEY_PASSWORD",
+  ]) {
+    assert.match(signingConfigs, new RegExp(`System\\.getenv\\("${variable}"\\)`));
+  }
+  assert.equal(
+    (signingConfigs.match(/System\.getenv\("ECHODESK_ANDROID_PREVIEW_/g) || [])
+      .length,
+    4,
+  );
+  assert.doesNotMatch(
+    signingConfigs,
+    /storeFile\s+file\(\s*["']|(?:storePassword|keyAlias|keyPassword)\s+["']/,
+  );
+  assert.doesNotMatch(
+    signingConfigs,
+    /ECHODESK_ANDROID_(?:LEGACY|CURRENT)_|signingConfigs\.(?:debug|development)/,
+  );
+
+  const buildTypes = readSingleGradleBlock(gradle, "buildTypes");
+  assert.match(
+    buildTypes,
+    /if \(previewSigningRequested\)\s*\{\s*signingConfig signingConfigs\.preview\s*\}/,
+  );
+  assert.equal((buildTypes.match(/\bsigningConfig\b/g) || []).length, 1);
+  assert.doesNotMatch(buildTypes, /signingConfigs\.(?:debug|development)/);
+  assert.match(
+    gradle,
+    /if \(releaseTaskRequested && !previewSigningRequested\) \{[\s\S]*if \(!externalSigningRequested\)/,
+  );
   assert.match(rootGradle, /kotlin-stdlib/);
   assert.match(rootGradle, /details\.useVersion '1\.8\.22'/);
   assert.match(rootGradle, /dependencyLocking/);
@@ -1359,7 +1412,7 @@ test("release SBOMs are deterministic and bind their serials to locked inputs", 
       assert.equal(document.bomFormat, "CycloneDX");
       assert.equal(document.specVersion, "1.5");
       assert.match(document.serialNumber, /^urn:uuid:[0-9a-f-]{36}$/);
-      assert.equal(document.metadata.component.version, "0.3.3");
+      assert.equal(document.metadata.component.version, "0.3.4");
       assert.ok(document.components.length > 0);
       const references = document.components.map((item) => item["bom-ref"]);
       assert.deepEqual(references, [...references].sort());

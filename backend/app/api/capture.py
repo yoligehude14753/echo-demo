@@ -10,7 +10,7 @@ M_diag_brake 新增：GET /capture/stats 返回进程级 7 道门处理结果计
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -41,7 +41,12 @@ from app.ports.asr import ASRRequestContext, ASRSchedulerPort, ASRTelemetryPort
 from app.ports.diarizer import DiarizerPort
 from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
-from app.schemas.capture import CaptureChunkResult
+from app.runtime.capture_selection import CaptureSelectionStore
+from app.schemas.capture import (
+    CaptureAuthorizeRequest,
+    CaptureChunkResult,
+    CaptureControlUpdate,
+)
 from app.security.context import current_principal
 from app.security.governor import PrincipalGovernor
 from app.security.public_projection import project_client_dict
@@ -53,6 +58,75 @@ from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
 
 router = APIRouter(prefix="/capture", tags=["capture"])
+
+
+def get_capture_selection_store(
+    settings: Settings = Depends(get_settings),
+) -> CaptureSelectionStore:
+    return CaptureSelectionStore(settings.db_path)
+
+
+@router.get("/devices")
+async def get_capture_devices(request: Request) -> dict[str, object]:
+    runtime = getattr(request.app.state, "hub_runtime", None)
+    raw_devices = await runtime.list_devices() if runtime is not None else []
+    return {
+        "devices": [
+            {
+                "deviceId": item.get("device_id"),
+                "displayName": item.get("name"),
+                "platform": item.get("platform"),
+                "online": item.get("status") == "online",
+                "lastSeenAt": item.get("last_seen_at"),
+            }
+            for item in raw_devices
+        ]
+    }
+
+
+@router.get("/control")
+async def get_capture_control(
+    store: CaptureSelectionStore = Depends(get_capture_selection_store),
+) -> dict[str, object]:
+    principal = current_principal()
+    return (await store.get(principal.tenant_id, principal.owner_id)).payload()
+
+
+@router.put("/control")
+async def put_capture_control(
+    body: CaptureControlUpdate,
+    store: CaptureSelectionStore = Depends(get_capture_selection_store),
+) -> dict[str, object]:
+    principal = current_principal()
+    try:
+        selection = await store.update(
+            principal.tenant_id,
+            principal.owner_id,
+            mode=body.mode,
+            selected_device_ids=body.selectedDeviceIds,
+            expected_revision=body.expectedRevision,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return selection.payload()
+
+
+@router.post("/control/authorize")
+async def authorize_capture(
+    body: CaptureAuthorizeRequest,
+    store: CaptureSelectionStore = Depends(get_capture_selection_store),
+) -> dict[str, object]:
+    principal = current_principal()
+    if body.deviceId != principal.device_id:
+        raise HTTPException(status_code=403, detail="device identity mismatch")
+    selection = await store.get(principal.tenant_id, principal.owner_id)
+    return {
+        "allowed": body.revision == selection.revision and selection.allows(body.deviceId),
+        "mode": selection.mode,
+        "revision": selection.revision,
+    }
 
 
 def get_capture_asr_scheduler(
@@ -134,9 +208,21 @@ async def capture_chunk(
     audio: UploadFile = File(...),
     sample_rate: int = Form(16_000),
     meeting_id: str | None = Form(None),
+    device_id: str = Form(..., alias="deviceId"),
+    segment_id: str = Form(..., alias="segmentId"),
+    capture_mode: Literal["free", "formal"] = Form("free"),
     settings: Settings = Depends(get_settings),
     governor: PrincipalGovernor = Depends(get_quota_governor),
+    selection_store: CaptureSelectionStore = Depends(get_capture_selection_store),
 ) -> CaptureChunkResult:
+    principal = current_principal()
+    if device_id != principal.device_id:
+        raise HTTPException(status_code=403, detail="device identity mismatch")
+    if not segment_id.strip():
+        raise HTTPException(status_code=422, detail="segmentId is required")
+    selection = await selection_store.get(principal.tenant_id, principal.owner_id)
+    if not selection.allows(principal.device_id):
+        raise HTTPException(status_code=409, detail="capture is not selected for this device")
     try:
         upload = await read_limited_upload(
             audio,
@@ -157,11 +243,12 @@ async def capture_chunk(
         audio_bytes,
         sample_rate=sample_rate,
         meeting_id=mid or None,
+        capture_mode=capture_mode,
         asr_context=_capture_asr_context(request, settings),
     )
-    return CaptureChunkResult.model_validate(
-        project_client_dict(result.model_dump(mode="json"), current_principal())
-    )
+    payload = project_client_dict(result.model_dump(mode="json"), principal)
+    payload["device_id"] = principal.device_id
+    return CaptureChunkResult.model_validate(payload)
 
 
 @router.get("/stats")
@@ -192,6 +279,7 @@ async def list_recent_ambient(
             "speaker_id": r.speaker_id,
             "speaker_label": r.speaker_label,
             "duration_ms": r.duration_ms,
+            "device_id": getattr(r, "device_id", None),
         }
         for r in recs_sorted
     ]
