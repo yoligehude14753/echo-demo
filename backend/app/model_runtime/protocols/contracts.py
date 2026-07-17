@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from app.model_runtime.types import RequestIdentity as RuntimeRequestIdentity
 
-MODEL_SCHEMA_VERSION = 1
+MODEL_SCHEMA_VERSION: Literal[1] = 1
 
 # Compatibility alias only: model_runtime.types.RequestIdentity is the sole
 # identity schema and remains the handoff type for compiler/snapshot callers.

@@ -17,6 +17,7 @@ from ..types import (
     CapabilityDecision,
     CapabilityName,
     CapabilityRequest,
+    DecisionOutcome,
     DenyCode,
     FrozenModel,
     GrantSnapshot,
@@ -182,7 +183,7 @@ class HostContext:
 
 def _decision(context: HostContext, capability: str, code: DenyCode) -> CapabilityDecision:
     return CapabilityDecision(
-        outcome="deny",
+        outcome=DecisionOutcome.DENY,
         code=code,
         capability=capability,
         task_id=context.invocation.task_id,
@@ -223,20 +224,20 @@ def receipt_for(
     )
     receipt_id = "receipt_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
     return OperationReceipt(
-        receipt_id=receipt_id,
-        occurred_at=occurred_at,
+        receiptId=receipt_id,
+        occurredAt=occurred_at,
         operation=operation,
         outcome="allow" if decision.allowed else "deny",
         result=result,
         code=decision.code,
         capability=decision.capability,
-        task_id=context.invocation.task_id,
-        operation_key=context.invocation.operation_key,
-        tool_use_id=context.invocation.tool_use_id,
-        grant_id=decision.grant_id,
-        grant_revision=decision.grant_revision,
-        policy_revision=decision.policy_revision,
-        workspace_id=context.invocation.workspace_identity.workspace_id,
+        taskId=context.invocation.task_id,
+        operationKey=context.invocation.operation_key,
+        toolUseId=context.invocation.tool_use_id,
+        grantId=decision.grant_id,
+        grantRevision=decision.grant_revision,
+        policyRevision=decision.policy_revision,
+        workspaceId=context.invocation.workspace_identity.workspace_id,
         metadata=_metadata(metadata),
     )
 

@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, cast
 
 from .catalog import freeze_grant
 from .policy import (
@@ -571,7 +571,9 @@ def _public_grant(
     allowed_executables = tuple(sorted({scope.argv[0] for scope in commands}))
     allowed_env_names = tuple(sorted({name for scope in commands for name in scope.env_names}))
     network_hosts = tuple(sorted({scope.target.host for scope in networks}))
-    network_schemes = tuple(sorted({scope.target.scheme for scope in networks}))
+    network_schemes = tuple(
+        sorted({cast(Literal["http", "https"], scope.target.scheme) for scope in networks})
+    )
     network_ports = tuple(sorted({scope.target.port for scope in networks}))
     skill_identities = tuple(sorted({scope.identity for scope in skills}))
     skill_versions = tuple(sorted({scope.version for scope in skills}))

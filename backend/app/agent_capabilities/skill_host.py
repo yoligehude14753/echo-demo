@@ -29,6 +29,7 @@ from .types import (
     CapabilityDecision,
     CapabilityName,
     CapabilityRequest,
+    DecisionOutcome,
     DenyCode,
     FrozenModel,
     GrantSnapshot,
@@ -586,7 +587,7 @@ class EchoSkillHost:
         request: CapabilityRequest, grant: GrantSnapshot, code: DenyCode
     ) -> CapabilityDecision:
         return CapabilityDecision(
-            outcome="deny",
+            outcome=DecisionOutcome.DENY,
             code=code,
             capability=CapabilityName.SKILL_USE.value,
             task_id=request.binding.task_id,

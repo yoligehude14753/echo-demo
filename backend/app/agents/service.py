@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote
 
 import aiosqlite
@@ -28,6 +28,7 @@ from app.adapters.repo.connection import (
 from app.agents.agentos import (
     AGENTOS_SUBMIT_MAX_WALL_S,
     AgentOSBackend,
+    EmbeddedRuntimeBackend,
     submit_operation_key,
 )
 from app.agents.artifact_transfer import (
@@ -68,6 +69,22 @@ _log = logging.getLogger("echodesk.agents")
 RUNNER_CLAUDE_CODE = "claude_code"
 PROFILE_FULL_ACCESS = "claude_code_full_access"
 PERMISSION_MODE_BYPASS = "bypassPermissions"
+
+
+class AgentTaskBackend(Protocol):
+    """Runtime boundary shared by HTTP compatibility and embedded backends."""
+
+    @property
+    def base_url(self) -> str: ...
+
+    @property
+    def enabled(self) -> bool: ...
+
+    async def submit(self, intent: AgentIntent) -> AgentSubmitResult: ...
+
+    async def cancel(self, runner_task_id: str, *, operation_key: str) -> bool: ...
+
+    async def get_task(self, runner_task_id: str) -> dict[str, object] | None: ...
 
 
 def _scope() -> tuple[str, str, str]:
@@ -326,7 +343,7 @@ class AgentTaskService:
     ) -> None:
         self.settings = settings
         self.event_bus = event_bus
-        self.backend = AgentOSBackend(settings)
+        self.backend: AgentTaskBackend = AgentOSBackend(settings)
         self.workflow = workflow or WorkflowService(settings, event_bus)
         self.artifact_repo = ArtifactRepository(settings)
         lease_ttl = (
@@ -2429,7 +2446,7 @@ class AgentTaskService:
                     lease_token=lease,
                 )
 
-            if not getattr(self.backend, "is_embedded", False):
+            if not isinstance(self.backend, EmbeddedRuntimeBackend):
                 raise RuntimeError("non-embedded agent runtime is not supported")
             bridge = EmbeddedTaskStreamBridge(
                 task_id=rec.task_id,
