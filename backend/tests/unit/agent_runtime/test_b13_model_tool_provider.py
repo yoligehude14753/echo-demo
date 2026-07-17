@@ -83,6 +83,17 @@ async def _transport(request: Any, resolver: Any) -> AsyncIterator[SSEFrame]:
     yield SSEFrame(done=True)
 
 
+def _freeze_host_clock(monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:
+    """Pin the host policy clock without weakening production grant expiry."""
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return now if tz is not None else now.replace(tzinfo=None)
+
+    monkeypatch.setattr("app.agent_capabilities.hosts.common.datetime", FrozenDateTime)
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_b13_binds_b05m_snapshot_and_runs_one_provider_turn(tmp_path: Path) -> None:
@@ -110,11 +121,14 @@ async def test_b13_binds_b05m_snapshot_and_runs_one_provider_turn(tmp_path: Path
 
 
 @pytest.mark.unit
-def test_b13_binds_real_b06p_file_host_and_emits_receipt(tmp_path: Path) -> None:
+def test_b13_binds_real_b06p_file_host_and_emits_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     note = tmp_path / "note.txt"
     note.write_text("b13-tool-value", encoding="utf-8")
     root_identity = PathVerifier.identity_for(tmp_path)
     now = datetime(2026, 7, 16, tzinfo=UTC)
+    _freeze_host_clock(monkeypatch, now)
     grant = freeze_grant(
         GrantInput(
             grant_id="grant-b13",

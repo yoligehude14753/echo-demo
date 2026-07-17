@@ -19,7 +19,7 @@ from app.agent_capabilities.hosts import PathVerifier
 from app.model_runtime import InMemoryCredentialResolver, ModelRuntimeConfigStore
 from app.runtime.b13_host_ipc import B13HostAdapter
 from app.runtime.b13_model_tool_provider import create_b13_provider_binding
-from test_b13_model_tool_provider import _model_config
+from test_b13_model_tool_provider import _freeze_host_clock, _model_config
 from yoli_llm import SSEFrame
 
 
@@ -65,7 +65,9 @@ class _Session:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_b13_host_ipc_binds_model_tool_receipt_and_session(tmp_path: Path) -> None:
+async def test_b13_host_ipc_binds_model_tool_receipt_and_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = ModelRuntimeConfigStore(tmp_path / "config.json")
     store.save(_model_config())
     provider = create_b13_provider_binding(
@@ -77,6 +79,7 @@ async def test_b13_host_ipc_binds_model_tool_receipt_and_session(tmp_path: Path)
     note = tmp_path / "host.txt"
     note.write_text("host-ipc-value", encoding="utf-8")
     now = datetime(2026, 7, 16, tzinfo=UTC)
+    _freeze_host_clock(monkeypatch, now)
     grant = freeze_grant(
         GrantInput(
             grant_id="grant-host-ipc",
