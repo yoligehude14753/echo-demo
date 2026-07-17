@@ -29,7 +29,8 @@
   --ed-border-strong: rgba(26, 28, 31, 0.15);
   --ed-accent: #0d8373;
   --ed-accent-soft: #e8f4f1;
-  --ed-focus: #3b82f6;
+  --ed-focus: #397f75;
+  --ed-focus-ring: rgba(13, 131, 115, 0.16);
   --ed-danger: #d94b45;
   --ed-danger-soft: #fdf0ef;
   --ed-warning: #a96619;
@@ -138,9 +139,6 @@ textarea,
 
 button:focus-visible,
 a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible,
 [role="button"]:focus-visible,
 [role="tab"]:focus-visible,
 .ant-btn:focus-visible,
@@ -148,6 +146,28 @@ select:focus-visible,
   outline: 2px solid var(--ed-focus);
   outline-offset: 2px;
   box-shadow: none;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+.ant-input:focus,
+.ant-input:focus-visible,
+.ant-input-affix-wrapper:focus-within {
+  outline: none !important;
+  border-color: rgba(13, 131, 115, 0.42) !important;
+  box-shadow: 0 0 0 3px var(--ed-focus-ring) !important;
+}
+
+.ant-input-affix-wrapper input:focus,
+.ant-input-affix-wrapper input:focus-visible {
+  box-shadow: none !important;
 }
 
 /* Ant Design shares the app typography and surface language. */
@@ -579,9 +599,44 @@ select:focus-visible,
   white-space: nowrap;
 }
 
-[data-testid="app-update-button"] {
-  border-radius: 7px !important;
-  box-shadow: none !important;
+.app-update-button {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 150px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--ed-border);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: var(--ed-surface-subtle);
+  color: var(--ed-ink-secondary);
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1;
+  box-shadow: none;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.app-update-button:hover:not(:disabled) {
+  border-color: var(--ed-border-strong);
+  background: var(--ed-surface-hover);
+  color: var(--ed-ink);
+}
+
+.app-update-button:disabled {
+  cursor: default;
+  opacity: 0.68;
+}
+
+.app-update-indicator {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--ed-accent);
+  box-shadow: 0 0 0 2px var(--ed-accent-soft);
 }
 
 /* Knowledge toolbar */
@@ -1070,8 +1125,8 @@ label:has([data-testid="meeting-search-input"]) svg {
 }
 
 .echodesk-command-row:focus-within {
-  border-color: rgba(26, 28, 31, 0.3);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
+  border-color: rgba(13, 131, 115, 0.34);
+  box-shadow: 0 0 0 3px var(--ed-focus-ring);
 }
 
 .echodesk-command-leading-icon {

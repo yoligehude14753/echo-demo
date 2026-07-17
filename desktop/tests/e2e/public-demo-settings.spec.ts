@@ -1162,6 +1162,34 @@ test("桌面端发现新版本后会在顶栏显示更新入口并可点击安�
 
   await expect(page.getByTestId("app-update-button")).toBeVisible();
   await expect(page.getByTestId("app-update-button")).toContainText("更新");
+  const updatePresentation = await page.getByTestId("app-update-button").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderRadius: style.borderRadius,
+      color: style.color,
+    };
+  });
+  expect(updatePresentation).toEqual({
+    backgroundColor: "rgb(248, 248, 246)",
+    borderRadius: "7px",
+    color: "rgb(95, 99, 105)",
+  });
+
+  const composer = page.getByTestId("command-bar").locator("textarea");
+  await composer.focus();
+  await expect
+    .poll(() =>
+      composer.evaluate((element) => ({
+        outline: getComputedStyle(element).outlineStyle,
+        ring: getComputedStyle(element.closest(".echodesk-command-row") as Element).boxShadow,
+      })),
+    )
+    .toEqual({
+      outline: "none",
+      ring: "rgba(13, 131, 115, 0.16) 0px 0px 0px 3px",
+    });
+
   await page.getByTestId("app-update-button").click();
   await expect
     .poll(() =>

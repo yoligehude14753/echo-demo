@@ -467,10 +467,11 @@ function AppUpdateButton({ status }: { status: AppUpdateStatus | null }): JSX.El
         type="button"
         onClick={() => void onClick()}
         disabled={disabled}
-        className="inline-flex min-h-7 max-w-[150px] items-center justify-center rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[12px] font-medium text-accent shadow-[0_0_0_1px_rgba(16,163,127,0.08)] transition hover:border-accent/50 hover:bg-accent/15 disabled:cursor-default disabled:opacity-70"
+        className="app-update-button"
         data-testid="app-update-button"
         aria-label={tooltip}
       >
+        <span className="app-update-indicator" aria-hidden="true" />
         <span className="truncate">{updateButtonLabel(status)}</span>
       </button>
     </Tooltip>

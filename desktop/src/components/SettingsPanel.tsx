@@ -67,6 +67,7 @@ import {
   type ModelRuntimeFallback,
   type ModelRuntimeIdentity,
 } from "@/modelRuntimeContract";
+import { modelDisplayName } from "@/lib/modelDisplay";
 
 interface DataDirBreakdown {
   db: number;
@@ -1407,7 +1408,7 @@ export default function SettingsPanel({
             data-testid="model-runtime-identity"
           >
             <div className="flex items-center justify-between">
-              <span className="font-medium text-[12px]">Kernel 模型身份</span>
+              <span className="font-medium text-[12px]">AI 模型</span>
               {modelIdentity ? (
                 <Tag color="green" className="mr-0">已绑定</Tag>
               ) : (
@@ -1417,12 +1418,8 @@ export default function SettingsPanel({
             {modelIdentity ? (
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
                 <span className="text-ink-400">模型</span>
-                <span className="font-mono text-ink-700 break-all" data-testid="model-runtime-model">
-                  {modelIdentity.model}
-                </span>
-                <span className="text-ink-400">路由</span>
-                <span className="font-mono text-ink-700" data-testid="model-runtime-route">
-                  {modelIdentity.routeId}
+                <span className="font-medium text-ink-700" data-testid="model-runtime-model">
+                  {modelDisplayName(modelIdentity.model)}
                 </span>
                 <span className="text-ink-400">Revision</span>
                 <span className="font-mono text-ink-700" data-testid="model-runtime-revision">
@@ -1433,7 +1430,7 @@ export default function SettingsPanel({
               </div>
             ) : (
               <div className="text-[11px] text-ink-500 leading-relaxed">
-                Kernel identity 尚未提供或合同校验失败；不会从设置字段猜测当前模型。
+                模型身份尚未验证；EchoDesk 不会从设置字段猜测当前运行状态。
               </div>
             )}
             {modelFallback && (
@@ -1441,7 +1438,7 @@ export default function SettingsPanel({
                 className="border-t border-paper-300 pt-2 text-[11px] text-orange-700"
                 data-testid="model-runtime-fallback"
               >
-                已发生显式 fallback：{modelFallback.fromRouteId} → {modelFallback.toRouteId}（{modelFallback.reason}）
+                AI 服务已自动切换到备用通道，当前任务可以继续。
               </div>
             )}
           </div>
