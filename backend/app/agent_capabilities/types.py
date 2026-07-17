@@ -8,6 +8,7 @@ redirect, and reparse-point facts again before performing a side effect.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Final, Literal, TypeAlias
@@ -104,15 +105,14 @@ def _non_blank(value: str) -> str:
 
 
 def _validate_string_tuple(value: object) -> tuple[str, ...]:
-    if isinstance(value, str) or value is None:
+    if isinstance(value, str) or not isinstance(value, Iterable):
         raise ValueError("value must be a sequence of strings")
-    try:
-        values = tuple(value)  # type: ignore[arg-type]
-    except TypeError as exc:
-        raise ValueError("value must be a sequence of strings") from exc
-    if any(not isinstance(item, str) or not item or "\x00" in item for item in values):
-        raise ValueError("values must be non-empty strings without NUL")
-    return values
+    values: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item or "\x00" in item:
+            raise ValueError("values must be non-empty strings without NUL")
+        values.append(item)
+    return tuple(values)
 
 
 def _validate_optional_string_tuple(value: object) -> tuple[str, ...] | None:

@@ -200,10 +200,15 @@ def _deadline(timeout_s: float) -> str:
 def _runtime_event_to_runner_event(frame: RuntimeFrame) -> dict[str, Any]:
     """Adapt KernelEventEnvelope to the existing Echo event adapter shape."""
 
-    payload = frame.get("payload") or {}
-    event = payload.get("event") if isinstance(payload.get("event"), dict) else payload
+    payload_value = frame.get("payload")
+    payload: dict[str, Any] = payload_value if isinstance(payload_value, dict) else {}
+    event_value = payload.get("event")
+    event: dict[str, Any] = event_value if isinstance(event_value, dict) else payload
     event_type = str(event.get("type") or "")
-    event_payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    event_payload_value = event.get("payload")
+    event_payload: dict[str, Any] = (
+        event_payload_value if isinstance(event_payload_value, dict) else {}
+    )
     raw: dict[str, Any] = {
         "task_id": frame.get("taskId"),
         "runtime_event_id": event.get("runtimeEventId") or frame.get("frameId"),

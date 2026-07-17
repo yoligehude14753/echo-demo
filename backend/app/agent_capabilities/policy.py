@@ -429,6 +429,9 @@ def network_is_authorized(authority: NetworkScope, request: NetworkRequest) -> D
 
 
 def normalize_skill_scope(scope: SkillScope | Mapping[str, Any]) -> SkillScope:
+    identity: object
+    version: object
+    provenance: object
     if isinstance(scope, SkillScope):
         identity, version, provenance = scope.identity, scope.version, scope.provenance
     elif isinstance(scope, Mapping):

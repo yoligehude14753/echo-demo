@@ -26,6 +26,7 @@ from .types import (
     SkillRequest,
     VerifiedWorkspaceBinding,
     WorkspaceCapability,
+    WorkspaceIdentity,
 )
 
 
@@ -33,6 +34,11 @@ class CapabilitySpec:
     """Frozen catalog metadata without a mutable dict or host callback."""
 
     __slots__ = ("destructive", "host_verification", "name", "scope_kind")
+
+    name: CapabilityName
+    scope_kind: str
+    destructive: bool
+    host_verification: bool
 
     def __init__(
         self,
@@ -109,7 +115,7 @@ def default_grant_input(
     grant_id: str,
     task_id: str,
     operation_key: str,
-    workspace_identity: object,
+    workspace_identity: WorkspaceIdentity,
     revision: int,
     policy_revision: int,
     issued_at: datetime,
