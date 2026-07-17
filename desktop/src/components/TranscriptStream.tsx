@@ -17,6 +17,7 @@ import {
   colorForDisplayIdx,
 } from "@/lib/speakerDisplay";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
+import { modelDisplayName } from "@/lib/modelDisplay";
 
 function fmtClockShort(iso: string): string {
   const d = new Date(iso);
@@ -92,7 +93,9 @@ function MemoryAssociationCard({ segment }: { segment: DisplaySegment }): JSX.El
             </span>
             <span>Echo Memory</span>
           </div>
-          <span className="text-[10px] text-ink-400">{segment.memoryModel ?? "qwen3 8b"}</span>
+          <span className="text-[10px] font-medium text-ink-400">
+            {modelDisplayName(segment.memoryModel)}
+          </span>
         </div>
         <div className="mt-2 text-[14px] text-ink-800">
           {segment.memoryLabel ?? `找到 ${sources.length} 条相关历史信息`}

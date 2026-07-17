@@ -23,6 +23,7 @@ import {
   type MicPermission,
 } from "@/hooks/useBackendHealth";
 import { compareVersions } from "@/runtime";
+import { PRODUCT_MODEL_NAME } from "@/lib/modelDisplay";
 
 export interface StatusBarProps {
   /** TTS 合成回环最新结果（来自 /tts/diag）。null = 尚未拉到 */
@@ -238,19 +239,13 @@ function ProbeRow({
 
 function ProbeMetaRow({
   name,
-  probe,
-  fallback,
 }: {
   name: string;
-  probe: ProbeResultDTO | undefined;
-  fallback?: string;
 }): JSX.Element {
-  const model = probe?.model?.trim();
-  const value = model || fallback || "—";
   return (
     <div className="flex items-center justify-between text-[11px]">
       <span className="text-ink-500">{name}</span>
-      <span className="font-mono text-ink-700 text-right">{value}</span>
+      <span className="font-medium text-ink-700 text-right">{PRODUCT_MODEL_NAME}</span>
     </div>
   );
 }
@@ -419,9 +414,9 @@ function AiEnginePopover({
         <Sparkles className="w-3.5 h-3.5" />
         AI 引擎
       </div>
-      <ProbeMetaRow name="主模型" probe={mainModel} fallback="deepseek-v4-flash" />
+      <ProbeMetaRow name="主模型" />
       <ProbeRow name="主模型连接" probe={mainModel} />
-      <ProbeMetaRow name="快速模型" probe={fastModel} fallback="gpt-5.4-nano" />
+      <ProbeMetaRow name="快速模型" />
       <ProbeRow name="快速模型连接" probe={fastModel} />
       <ProbeRow name="联网检索" probe={webSearch} />
       <div className="my-2 h-px bg-paper-300" />
