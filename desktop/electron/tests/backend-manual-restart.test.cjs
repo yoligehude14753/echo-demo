@@ -248,3 +248,20 @@ test("application shutdown waits for the shared backend process-tree stop", () =
   assert.match(handler, /stopBackendProcess\(proc, \{ graceMs: SIGKILL_GRACE_MS \}\)/);
   assert.doesNotMatch(handler, /proc\.kill\(/);
 });
+
+test("installed smoke can request graceful quit while normal window close stays in tray", () => {
+  const source = readFileSync(path.resolve(__dirname, "../main.cjs"), "utf8");
+  const smoke = readFileSync(
+    path.resolve(__dirname, "../../scripts/windows-installed-smoke.ps1"),
+    "utf8",
+  );
+  const closeHandler = source
+    .split('mainWindow.on("close"', 2)[1]
+    .split('mainWindow.on("closed"', 1)[0];
+
+  assert.match(source, /SMOKE_EXIT_ON_WINDOW_CLOSE/);
+  assert.match(closeHandler, /SMOKE_EXIT_ON_WINDOW_CLOSE/);
+  assert.match(closeHandler, /requestExplicitQuit\(\)/);
+  assert.match(closeHandler, /hideMainWindow\(\)/);
+  assert.match(smoke, /--smoke-exit-on-window-close/);
+});

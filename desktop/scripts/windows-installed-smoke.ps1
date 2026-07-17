@@ -309,7 +309,7 @@ function Start-InstalledApplication {
   $startParameters = @{
     PassThru               = $true
     FilePath               = $installedApp
-    ArgumentList           = $userDataArgument
+    ArgumentList           = @($userDataArgument, "--smoke-exit-on-window-close")
     RedirectStandardOutput = $StdoutPath
     RedirectStandardError  = $StderrPath
   }

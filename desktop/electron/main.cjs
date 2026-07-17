@@ -190,6 +190,7 @@ let updateCheckInFlight = false;
 let appUpdateManager = null;
 const activeArtifactDownloadSenders = new WeakSet();
 const START_HIDDEN = process.argv.includes("--hidden");
+const SMOKE_EXIT_ON_WINDOW_CLOSE = process.argv.includes("--smoke-exit-on-window-close");
 
 const singleInstanceLock = app.requestSingleInstanceLock();
 if (!singleInstanceLock) {
@@ -2724,6 +2725,11 @@ async function createWindow({ showOnReady = true } = {}) {
 
   mainWindow.on("close", (event) => {
     if (shuttingDown || quittingForReal) return;
+    if (SMOKE_EXIT_ON_WINDOW_CLOSE) {
+      event.preventDefault();
+      requestExplicitQuit();
+      return;
+    }
     event.preventDefault();
     hideMainWindow();
   });
