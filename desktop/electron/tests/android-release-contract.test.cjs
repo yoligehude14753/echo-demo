@@ -59,7 +59,7 @@ test("Android Gradle version contract rejects drift in either variant", () => {
       "currentAndroidRelease.versionCode as Integer",
       "303",
     ),
-    gradle.replace("previewSigningRequested\n            ?", "true\n            ?"),
+    gradle.replace(/previewSigningRequested\r?\n\s+\?/, "true\n            ?"),
     gradle.replace(
       "versionName previewSigningRequested",
       "versionName currentAndroidRelease.version.toString()\n        versionName previewSigningRequested",
@@ -67,6 +67,7 @@ test("Android Gradle version contract rejects drift in either variant", () => {
   ];
 
   for (const mutation of mutations) {
+    assert.notEqual(mutation, gradle);
     assert.notDeepEqual(validateAndroidGradleVersionContract(mutation), []);
   }
 });
