@@ -14,6 +14,23 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+# ``yoli_llm`` is a separately shipped platform package and is not part of the
+# public echo-demo checkout used by deterministic CI.  Expose the locked test
+# transport contract only when the real package is unavailable; production
+# environments continue to resolve the installed platform package normally.
+try:
+    import yoli_llm
+
+    _YOLI_TRANSPORT_CONTRACT = ("SSEFrame", "StreamingRequest", "stream_sse")
+    if not all(hasattr(yoli_llm, name) for name in _YOLI_TRANSPORT_CONTRACT):
+        raise ImportError("installed yoli_llm lacks the locked SSE transport contract")
+except (ImportError, ModuleNotFoundError):
+    for module_name in tuple(sys.modules):
+        if module_name == "yoli_llm" or module_name.startswith("yoli_llm."):
+            sys.modules.pop(module_name, None)
+    TEST_SUPPORT_ROOT = Path(__file__).resolve().parent / "support"
+    sys.path.insert(0, str(TEST_SUPPORT_ROOT))
+
 # Test modules import ``app.main`` during collection, before any fixture can run.
 # Isolate every import-time log/config/database path up front so collection can
 # never touch the developer's real ~/.echodesk or backend/.env.
