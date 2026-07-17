@@ -8,11 +8,21 @@ on:
         required: false
         default: false
         type: boolean
+      skip_smoke:
+        description: "Build and upload Windows artifacts without installed/portable smoke checks"
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       publish_release:
         description: "Unsupported here: use Build Desktop Release Candidates for signed artifacts"
         required: true
+        default: false
+        type: boolean
+      skip_smoke:
+        description: "Build and upload Windows artifacts without installed/portable smoke checks"
+        required: false
         default: false
         type: boolean
 
@@ -133,10 +143,12 @@ jobs:
           node desktop/scripts/verify-release-update-metadata.cjs windows
 
       - name: Installed startup smoke (NSIS + bundled backend + Electron)
+        if: ${{ inputs.skip_smoke != true }}
         shell: pwsh
         run: ./desktop/scripts/windows-installed-smoke.ps1
 
       - name: Portable ZIP startup smoke (expanded ZIP + bundled backend + Electron)
+        if: ${{ inputs.skip_smoke != true }}
         shell: pwsh
         run: |
           $version = node -p "require('./desktop/package.json').version"
@@ -162,7 +174,7 @@ jobs:
             -EvidenceDirectory (Join-Path $env:RUNNER_TEMP "echodesk-windows-smoke-evidence/portable")
 
       - name: Collect Windows smoke failure diagnostics
-        if: ${{ failure() || cancelled() }}
+        if: ${{ (failure() || cancelled()) && inputs.skip_smoke != true }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -183,7 +195,7 @@ jobs:
           }
 
       - name: Upload Windows installed smoke evidence
-        if: always()
+        if: ${{ always() && inputs.skip_smoke != true }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: echodesk-windows-installed-smoke-evidence
@@ -242,3 +254,17 @@ jobs:
             <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
             <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort)
           printf 'ECHODESK_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-windows-${{ env.ECHODESK_VERSION }}
+          path: |
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe.blockmap
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-win-x64.zip
+            desktop/release/latest.yml
+            desktop/release/EchoDesk-SBOM.cdx.json
+            desktop/release/SHA256SUMS-Windows.txt
+          if-no-files-found: error
+          retention-days: 14
