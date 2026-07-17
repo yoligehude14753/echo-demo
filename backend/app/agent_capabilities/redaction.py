@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 REDACTED = "[REDACTED]"
@@ -96,7 +96,7 @@ def redact_audit_value(value: Any, *, key: str | None = None) -> Any:
 def redact_audit_event(event: Mapping[str, Any]) -> dict[str, Any]:
     """Project a mapping into an audit-safe mapping; raw input is never mutated."""
 
-    return redact_audit_value(event)
+    return cast(dict[str, Any], redact_audit_value(event))
 
 
 redact_audit = redact_audit_event

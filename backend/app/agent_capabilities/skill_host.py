@@ -14,12 +14,12 @@ import hashlib
 import hmac
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol
+from typing import Any, Final, Literal, Protocol, cast
 
 from pydantic import Field, field_validator, model_validator
 
@@ -172,10 +172,12 @@ class SkillManifest(FrozenModel):
     def _safe_values(cls, value: object) -> tuple[str, ...]:
         if isinstance(value, str) or value is None:
             raise ValueError("manifest values must be a sequence")
-        values = tuple(value)  # type: ignore[arg-type]
+        if not isinstance(value, Iterable):
+            raise ValueError("manifest values must be a sequence")
+        values: tuple[object, ...] = tuple(value)
         if any(not isinstance(item, str) or not item for item in values):
             raise ValueError("manifest values must be non-empty strings")
-        return values
+        return cast(tuple[str, ...], values)
 
     @model_validator(mode="after")
     def _requires_skill_capability(self) -> SkillManifest:

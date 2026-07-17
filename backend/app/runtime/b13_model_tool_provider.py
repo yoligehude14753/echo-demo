@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Final, Literal
@@ -29,7 +29,13 @@ from app.agent_capabilities import (
     make_receipt,
 )
 from app.agent_capabilities.hosts import FileReadHost, HostContext, ToolInvocation
-from app.agent_capabilities.types import CapabilityDecision, DecisionOutcome, DenyCode
+from app.agent_capabilities.types import (
+    CapabilityDecision,
+    DecisionOutcome,
+    DenyCode,
+    PathRequest,
+    PermissionRight,
+)
 from app.model_runtime import (
     CredentialHandle,
     CredentialResolver,
@@ -84,7 +90,9 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-async def _b13_yoli_transport(request: Any, resolver: Callable[[str], str]) -> AsyncIterator[Any]:
+async def _b13_yoli_transport(
+    request: Any, resolver: Callable[[str], str | Awaitable[str]]
+) -> AsyncIterator[Any]:
     """Keep B05M's public yoli transport behind a JSON-safe body boundary."""
 
     normalized = replace(request, body=_jsonable(request.body))
@@ -217,12 +225,12 @@ def make_b13_file_read_invocation(
                 workspace_identity=grant.workspace_identity,
                 policy_revision=grant.policy_revision,
             ),
-            path={
-                "path": path,
-                "root_id": root_id,
-                "right": "read",
-                "host_verified": False,
-            },
+            path=PathRequest(
+                path=path,
+                root_id=root_id,
+                right=PermissionRight.READ,
+                host_verified=False,
+            ),
         ),
         toolUseId=tool_use_id,
         grantRevision=grant.revision,

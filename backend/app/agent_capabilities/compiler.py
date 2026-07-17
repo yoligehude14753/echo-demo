@@ -18,6 +18,7 @@ from .policy import (
     DecisionStatus,
     NetworkScope,
     NetworkTarget,
+    PathRequest,
     PathScope,
     PermissionFacts,
     PolicyInputError,
@@ -102,7 +103,7 @@ def compile_grant(  # noqa: PLR0911, PLR0912
             )
         if normalized_facts.stale:
             return _failure(ReasonCode.STALE_REVISION, "permission facts are marked stale")
-        expires_at = normalized_facts.expires_at
+        expires_at = _fact_time(normalized_facts.expires_at)
         if expires_at is not None:
             if now is None:
                 return _failure(
@@ -215,14 +216,14 @@ def _decide_with_rules(
         normalized_request = _normalize_request(canonical, request)
     except PolicyInputError as exc:
         return _failure(exc.reason_code, exc.detail, capability=capability).decision
-    rules = [item for item in rules if item.capability == canonical]
-    if not rules:
+    matching_rules = [item for item in rules if item.capability == canonical]
+    if not matching_rules:
         return _failure(
             _reason_for_capability(canonical),
             "no matching capability in immutable grant",
             capability=canonical,
         ).decision
-    for rule in rules:
+    for rule in matching_rules:
         if rule.effect == "deny" and _scope_matches(canonical, rule.scope, normalized_request):
             return _failure(
                 _reason_for_capability(canonical),
@@ -230,7 +231,7 @@ def _decide_with_rules(
                 capability=canonical,
             ).decision
     failed_match: Decision | None = None
-    for rule in rules:
+    for rule in matching_rules:
         if rule.effect != "allow":
             continue
         decision = _evaluate_rule(canonical, rule.scope, normalized_request)
@@ -338,7 +339,7 @@ def _normalize_request(capability: str, request: object) -> object:
 def _evaluate_rule(capability: str, scope: object, request: object) -> Decision:  # noqa: PLR0911
     if capability in {"path.read", "path.write"}:
         assert isinstance(scope, PathScope)
-        assert hasattr(request, "path")
+        assert isinstance(request, PathRequest)
         if any(path_is_within_root(root, request) for root in scope.roots):
             return Decision(
                 DecisionStatus.ALLOW, ReasonCode.ALLOWED, capability, normalized=request
@@ -436,7 +437,7 @@ def _normalize_requested_capabilities(values: tuple[str, ...] | None) -> frozens
 def _check_grant_freshness(
     grant: GrantSnapshot, *, expected_revision: int | None, now: datetime | None
 ) -> Decision | None:
-    if expected_revision is not None and grant.grant_revision != expected_revision:
+    if expected_revision is not None and grant.revision != expected_revision:
         return _failure(
             ReasonCode.STALE_REVISION, "grant revision does not match the expected revision"
         ).decision
@@ -455,6 +456,14 @@ def _normalize_now(now: datetime) -> datetime:
     if now.tzinfo is None:
         raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "now needs an explicit timezone")
     return now.astimezone(UTC)
+
+
+def _fact_time(value: datetime | str | None) -> datetime | None:
+    """Narrow the post-init invariant exposed by PermissionFacts' input type."""
+
+    if value is None or isinstance(value, datetime):
+        return value
+    raise PolicyInputError(ReasonCode.INVALID_INPUT, "permission fact time was not normalized")
 
 
 def _validate_task_id(task_id: str) -> None:
@@ -517,7 +526,11 @@ def _grant_id(
         "schema_version": 1,
         "task_id": task_id,
         "revision": facts.revision,
-        "expires_at": facts.expires_at.isoformat() if facts.expires_at else None,
+        "expires_at": (
+            expires_at.isoformat()
+            if (expires_at := _fact_time(facts.expires_at)) is not None
+            else None
+        ),
         "capabilities": [
             (item.capability, item.effect, _canonical(item.scope)) for item in capabilities
         ],
@@ -577,7 +590,7 @@ def _public_grant(
     network_ports = tuple(sorted({scope.target.port for scope in networks}))
     skill_identities = tuple(sorted({scope.identity for scope in skills}))
     skill_versions = tuple(sorted({scope.version for scope in skills}))
-    issued_at = facts.issued_at or datetime(1970, 1, 1, tzinfo=UTC)
+    issued_at = _fact_time(facts.issued_at) or datetime(1970, 1, 1, tzinfo=UTC)
     effective_expires_at = expires_at or datetime.max.replace(tzinfo=UTC)
     value = GrantInput(
         grant_id=_grant_id(facts, task_id, capabilities),

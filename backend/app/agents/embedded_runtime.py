@@ -17,7 +17,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, runtime_checkable
 
 from app.agents.base import AgentIntent, AgentSubmitResult
 
@@ -36,6 +36,7 @@ class RuntimeFrame(TypedDict, total=False):
     payload: dict[str, Any]
 
 
+@runtime_checkable
 class RuntimeTransport(Protocol):
     async def send(self, frame: RuntimeFrame) -> None: ...
 
@@ -284,7 +285,8 @@ class EmbeddedRuntimeBackend:
         # AgentTaskService historically passed Settings to the runner
         # constructor.  Consume that private compatibility shape only to select
         # the inherited runtime handle; never derive a URL or executable from it.
-        if transport is not None and hasattr(transport, "send") and hasattr(transport, "receive"):
+        self._transport: RuntimeTransport | None
+        if isinstance(transport, RuntimeTransport):
             self._transport = transport
         else:
             try:

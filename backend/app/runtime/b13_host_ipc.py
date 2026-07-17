@@ -77,7 +77,7 @@ def _string(value: Any, label: str) -> str:
 
 
 def _same_model_binding(snapshot: Any, public_model: Mapping[str, Any]) -> bool:
-    return snapshot.public_dict() == dict(public_model)
+    return bool(snapshot.public_dict() == dict(public_model))
 
 
 def _safe_value(value: Any) -> str:

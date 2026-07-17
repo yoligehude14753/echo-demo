@@ -38,7 +38,12 @@ class ProviderRequest:
 
     @property
     def identity(self) -> RequestIdentity:
-        return self.envelope.identity
+        identity = self.envelope.identity
+        if identity is None:
+            raise ProtocolAdapterError(
+                "MODEL_SCHEMA_VERSION_MISMATCH", "provider request identity is missing"
+            )
+        return identity
 
     @property
     def body(self) -> Mapping[str, Any]:
@@ -704,8 +709,8 @@ def _anthropic_chunk(state: _StreamState, chunk: Mapping[str, Any]) -> None:  # 
     if chunk_type == "message_start":
         if state.started:
             raise ProtocolAdapterError("MODEL_SCHEMA_VERSION_MISMATCH", "duplicate message_start")
-        message = _mapping(chunk.get("message"), "message_start.message")
-        usage = message.get("usage")
+        message_obj = _mapping(chunk.get("message"), "message_start.message")
+        usage = message_obj.get("usage")
         if usage is not None:
             usage_obj = _mapping(usage, "message_start.message.usage")
             if "input_tokens" in usage_obj:
