@@ -161,7 +161,9 @@ async def test_b13_composition_injects_concrete_backend_and_repositories(tmp_pat
 
 
 @pytest.mark.unit
-async def test_b13_composition_fails_closed_without_inherited_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_b13_composition_fails_closed_without_inherited_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv(B13_RUNTIME_FD_ENV, raising=False)
     settings = Settings(
         db_path=tmp_path / "b13-missing-runtime.db",

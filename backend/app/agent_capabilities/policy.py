@@ -195,14 +195,18 @@ def normalize_path_root(root: str, *, platform: str) -> PathRoot:
         raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "path contains expansion or glob syntax")
     if platform == "posix":
         if not root.startswith("/") or root.startswith("//") or "\\" in root:
-            raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "path is not an unambiguous POSIX absolute path")
+            raise PolicyInputError(
+                ReasonCode.AMBIGUOUS_INPUT, "path is not an unambiguous POSIX absolute path"
+            )
         normalized = posixpath.normpath(root)
         if not normalized.startswith("/"):
             raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "POSIX root escaped its anchor")
         return PathRoot(platform="posix", root=normalized, case_sensitive=True)
 
     if root.startswith(("\\\\?\\", "\\\\.\\")):
-        raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "Windows device paths are host dependent")
+        raise PolicyInputError(
+            ReasonCode.AMBIGUOUS_INPUT, "Windows device paths are host dependent"
+        )
     drive, tail = ntpath.splitdrive(root)
     if not drive or not tail.startswith(("\\", "/")):
         raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "path is not an absolute Windows root")
@@ -226,7 +230,9 @@ def normalize_path_scope(scope: PathScope | Mapping[str, Any]) -> PathScope:
         else:
             roots_value = None
     else:
-        raise PolicyInputError(ReasonCode.INVALID_INPUT, "path scope must be a mapping or PathScope")
+        raise PolicyInputError(
+            ReasonCode.INVALID_INPUT, "path scope must be a mapping or PathScope"
+        )
     if isinstance(roots_value, (str, PathRoot)) or roots_value is None:
         roots_value = (roots_value,)
     roots: list[PathRoot] = []
@@ -249,14 +255,22 @@ def normalize_path_request(path: str, *, platform: str) -> PathRequest:
 
 
 def path_is_within_root(root: PathRoot, path: PathRequest | str) -> bool:
-    request = path if isinstance(path, PathRequest) else normalize_path_request(path, platform=root.platform)
+    request = (
+        path
+        if isinstance(path, PathRequest)
+        else normalize_path_request(path, platform=root.platform)
+    )
     if request.platform != root.platform:
         return False
     candidate = request.path.casefold() if not root.case_sensitive else request.path
     anchor = root.root.casefold() if not root.case_sensitive else root.root
     if candidate == anchor:
         return True
-    prefix = anchor if anchor.endswith(("/", "\\")) else anchor + ("\\" if root.platform == "windows" else "/")
+    prefix = (
+        anchor
+        if anchor.endswith(("/", "\\"))
+        else anchor + ("\\" if root.platform == "windows" else "/")
+    )
     return candidate.startswith(prefix)
 
 
@@ -269,9 +283,14 @@ def normalize_command_scope(
 ) -> CommandScope:
     platform = _platform(platform)
     if isinstance(argv, str):
-        raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "command must be an argv sequence, not shell text")
+        raise PolicyInputError(
+            ReasonCode.AMBIGUOUS_INPUT, "command must be an argv sequence, not shell text"
+        )
     argv_tuple = tuple(argv)
-    if not argv_tuple or any(not isinstance(arg, str) or not arg or any(char in arg for char in _SHELL_AMBIGUOUS) for arg in argv_tuple):
+    if not argv_tuple or any(
+        not isinstance(arg, str) or not arg or any(char in arg for char in _SHELL_AMBIGUOUS)
+        for arg in argv_tuple
+    ):
         raise PolicyInputError(ReasonCode.INVALID_INPUT, "argv must contain non-empty strings")
     executable = argv_tuple[0]
     if any(char in executable for char in _WILDCARD) or any(char.isspace() for char in executable):
@@ -279,8 +298,12 @@ def normalize_command_scope(
     normalized_cwd = normalize_path_request(cwd, platform=platform).path
     normalized_env = tuple(sorted(set(env_names)))
     if any(not isinstance(name, str) or not _ENV_NAME.fullmatch(name) for name in normalized_env):
-        raise PolicyInputError(ReasonCode.INVALID_INPUT, "env_names must be variable names, not assignments")
-    return CommandScope(platform=platform, argv=argv_tuple, cwd=normalized_cwd, env_names=normalized_env)
+        raise PolicyInputError(
+            ReasonCode.INVALID_INPUT, "env_names must be variable names, not assignments"
+        )
+    return CommandScope(
+        platform=platform, argv=argv_tuple, cwd=normalized_cwd, env_names=normalized_env
+    )
 
 
 def command_is_authorized(authority: CommandScope, request: CommandScope) -> bool:
@@ -300,7 +323,9 @@ def normalize_network_target(
     verified_ips: Iterable[str] = (),
 ) -> NetworkTarget:
     if not isinstance(scheme, str) or scheme.strip().lower() not in {"http", "https"}:
-        raise PolicyInputError(ReasonCode.NETWORK_SCHEME_NOT_ALLOWED, "only http and https are supported")
+        raise PolicyInputError(
+            ReasonCode.NETWORK_SCHEME_NOT_ALLOWED, "only http and https are supported"
+        )
     scheme = scheme.strip().lower()
     host = _normalize_host(host)
     normalized_ips = _normalize_verified_ips(verified_ips)
@@ -310,10 +335,14 @@ def normalize_network_target(
         address = None
     if address is not None:
         if not address.is_global:
-            raise PolicyInputError(ReasonCode.NETWORK_SSRF_BLOCKED, "non-public literal address is blocked")
+            raise PolicyInputError(
+                ReasonCode.NETWORK_SSRF_BLOCKED, "non-public literal address is blocked"
+            )
         requires_verification = False
     else:
-        if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal", ".localhost")):
+        if host in {"localhost", "localhost.localdomain"} or host.endswith(
+            (".local", ".internal", ".localhost")
+        ):
             raise PolicyInputError(ReasonCode.NETWORK_SSRF_BLOCKED, "local hostname is blocked")
         requires_verification = not bool(normalized_ips)
     expected_port = 443 if scheme == "https" else 80
@@ -338,7 +367,9 @@ def normalize_network_scope(scope: NetworkScope | Mapping[str, Any]) -> NetworkS
         target_value = scope.get("target", scope)
         redirects_value = scope.get("allowed_redirects", ())
     else:
-        raise PolicyInputError(ReasonCode.INVALID_INPUT, "network scope must be a mapping or NetworkScope")
+        raise PolicyInputError(
+            ReasonCode.INVALID_INPUT, "network scope must be a mapping or NetworkScope"
+        )
     target = _normalize_network_value(target_value)
     redirects = tuple(_normalize_network_value(value) for value in redirects_value)
     return NetworkScope(target=target, allowed_redirects=redirects)
@@ -352,20 +383,48 @@ def normalize_network_request(request: NetworkRequest | Mapping[str, Any]) -> Ne
         target = _normalize_network_value(request.get("target", request))
         redirects_value = request.get("redirects", ())
     else:
-        raise PolicyInputError(ReasonCode.INVALID_INPUT, "network request must be a mapping or NetworkRequest")
-    return NetworkRequest(target=target, redirects=tuple(_normalize_network_value(value) for value in redirects_value))
+        raise PolicyInputError(
+            ReasonCode.INVALID_INPUT, "network request must be a mapping or NetworkRequest"
+        )
+    return NetworkRequest(
+        target=target, redirects=tuple(_normalize_network_value(value) for value in redirects_value)
+    )
 
 
 def network_is_authorized(authority: NetworkScope, request: NetworkRequest) -> Decision:
     if request.target.host_verification_required:
-        return Decision(DecisionStatus.HOST_VERIFICATION_REQUIRED, ReasonCode.AMBIGUOUS_INPUT, "network.connect", "hostname resolution evidence is required", request)
+        return Decision(
+            DecisionStatus.HOST_VERIFICATION_REQUIRED,
+            ReasonCode.AMBIGUOUS_INPUT,
+            "network.connect",
+            "hostname resolution evidence is required",
+            request,
+        )
     if authority.target != request.target:
-        return Decision(DecisionStatus.DENY, ReasonCode.NETWORK_NOT_AUTHORIZED, "network.connect", "scheme, host, port, or verification differs", request)
+        return Decision(
+            DecisionStatus.DENY,
+            ReasonCode.NETWORK_NOT_AUTHORIZED,
+            "network.connect",
+            "scheme, host, port, or verification differs",
+            request,
+        )
     if request.redirects:
         if not authority.allowed_redirects:
-            return Decision(DecisionStatus.DENY, ReasonCode.REDIRECT_NOT_AUTHORIZED, "network.connect", "redirect targets require explicit grant scope", request)
+            return Decision(
+                DecisionStatus.DENY,
+                ReasonCode.REDIRECT_NOT_AUTHORIZED,
+                "network.connect",
+                "redirect targets require explicit grant scope",
+                request,
+            )
         if any(redirect not in authority.allowed_redirects for redirect in request.redirects):
-            return Decision(DecisionStatus.DENY, ReasonCode.REDIRECT_NOT_AUTHORIZED, "network.connect", "redirect target is outside the explicit grant scope", request)
+            return Decision(
+                DecisionStatus.DENY,
+                ReasonCode.REDIRECT_NOT_AUTHORIZED,
+                "network.connect",
+                "redirect target is outside the explicit grant scope",
+                request,
+            )
     return Decision(DecisionStatus.ALLOW, ReasonCode.ALLOWED, "network.connect", normalized=request)
 
 
@@ -377,27 +436,49 @@ def normalize_skill_scope(scope: SkillScope | Mapping[str, Any]) -> SkillScope:
         version = scope.get("version")
         provenance = scope.get("provenance", "")
     else:
-        raise PolicyInputError(ReasonCode.INVALID_INPUT, "skill scope must be a mapping or SkillScope")
-    if not isinstance(identity, str) or not identity or any(char.isspace() or char in "\\\x00" for char in identity):
+        raise PolicyInputError(
+            ReasonCode.INVALID_INPUT, "skill scope must be a mapping or SkillScope"
+        )
+    if (
+        not isinstance(identity, str)
+        or not identity
+        or any(char.isspace() or char in "\\\x00" for char in identity)
+    ):
         raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "skill identity is not canonical")
     if not isinstance(version, str) or not _SEMVER.fullmatch(version):
-        raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "skill version must be an exact semantic version")
-    if not isinstance(provenance, str) or not provenance or any(char in provenance for char in "\r\n\x00"):
+        raise PolicyInputError(
+            ReasonCode.AMBIGUOUS_INPUT, "skill version must be an exact semantic version"
+        )
+    if (
+        not isinstance(provenance, str)
+        or not provenance
+        or any(char in provenance for char in "\r\n\x00")
+    ):
         raise PolicyInputError(ReasonCode.SKILL_PROVENANCE_REQUIRED, "skill provenance is required")
     return SkillScope(identity=identity, version=version, provenance=provenance)
 
 
 def skill_is_authorized(authority: SkillScope, request: SkillScope) -> Decision:
     if authority != request:
-        return Decision(DecisionStatus.DENY, ReasonCode.SKILL_NOT_AUTHORIZED, "skill.use", "skill identity, version, or provenance differs", request)
+        return Decision(
+            DecisionStatus.DENY,
+            ReasonCode.SKILL_NOT_AUTHORIZED,
+            "skill.use",
+            "skill identity, version, or provenance differs",
+            request,
+        )
     return Decision(DecisionStatus.ALLOW, ReasonCode.ALLOWED, "skill.use", normalized=request)
 
 
 def _normalize_network_value(value: NetworkTarget | Mapping[str, Any]) -> NetworkTarget:
     if isinstance(value, NetworkTarget):
-        return normalize_network_target(value.scheme, value.host, value.port, verified_ips=value.verified_ips)
+        return normalize_network_target(
+            value.scheme, value.host, value.port, verified_ips=value.verified_ips
+        )
     if not isinstance(value, Mapping):
-        raise PolicyInputError(ReasonCode.INVALID_INPUT, "network target must be a mapping or NetworkTarget")
+        raise PolicyInputError(
+            ReasonCode.INVALID_INPUT, "network target must be a mapping or NetworkTarget"
+        )
     return normalize_network_target(
         str(value.get("scheme", "")),
         str(value.get("host", "")),
@@ -407,8 +488,14 @@ def _normalize_network_value(value: NetworkTarget | Mapping[str, Any]) -> Networ
 
 
 def _normalize_host(host: str) -> str:
-    if not isinstance(host, str) or not host or any(char.isspace() or char in "/?#@" for char in host):
-        raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "host contains URL syntax outside scheme/host/port")
+    if (
+        not isinstance(host, str)
+        or not host
+        or any(char.isspace() or char in "/?#@" for char in host)
+    ):
+        raise PolicyInputError(
+            ReasonCode.AMBIGUOUS_INPUT, "host contains URL syntax outside scheme/host/port"
+        )
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
     if host.endswith("."):
@@ -419,7 +506,9 @@ def _normalize_host(host: str) -> str:
         try:
             return host.encode("idna").decode("ascii").lower()
         except UnicodeError as exc:
-            raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "host cannot be IDNA-normalized") from exc
+            raise PolicyInputError(
+                ReasonCode.AMBIGUOUS_INPUT, "host cannot be IDNA-normalized"
+            ) from exc
 
 
 def _normalize_verified_ips(values: Iterable[str]) -> tuple[str, ...]:
@@ -430,22 +519,31 @@ def _normalize_verified_ips(values: Iterable[str]) -> tuple[str, ...]:
         try:
             address = ipaddress.ip_address(value)
         except ValueError as exc:
-            raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "verified_ips contains a non-IP value") from exc
+            raise PolicyInputError(
+                ReasonCode.AMBIGUOUS_INPUT, "verified_ips contains a non-IP value"
+            ) from exc
         if not address.is_global:
-            raise PolicyInputError(ReasonCode.NETWORK_SSRF_BLOCKED, "verified hostname resolved to a non-public address")
+            raise PolicyInputError(
+                ReasonCode.NETWORK_SSRF_BLOCKED,
+                "verified hostname resolved to a non-public address",
+            )
         result.append(address.compressed)
     return tuple(sorted(set(result)))
 
 
 def _platform(value: str) -> str:
     if value not in {"posix", "windows"}:
-        raise PolicyInputError(ReasonCode.AMBIGUOUS_INPUT, "platform must be explicitly posix or windows")
+        raise PolicyInputError(
+            ReasonCode.AMBIGUOUS_INPUT, "platform must be explicitly posix or windows"
+        )
     return value
 
 
 def _validate_path_text(value: str) -> None:
     if not isinstance(value, str) or not value or any(char in value for char in _SHELL_AMBIGUOUS):
-        raise PolicyInputError(ReasonCode.INVALID_INPUT, "path must be a non-empty string without NUL/control breaks")
+        raise PolicyInputError(
+            ReasonCode.INVALID_INPUT, "path must be a non-empty string without NUL/control breaks"
+        )
 
 
 def _parse_time(value: datetime | str) -> datetime:
@@ -470,5 +568,13 @@ def deny(capability: str | None, reason: ReasonCode, detail: str) -> Decision:
     return Decision(DecisionStatus.DENY, reason, capability, detail)
 
 
-def host_verification_required(capability: str, detail: str, normalized: object | None = None) -> Decision:
-    return Decision(DecisionStatus.HOST_VERIFICATION_REQUIRED, ReasonCode.AMBIGUOUS_INPUT, capability, detail, normalized)
+def host_verification_required(
+    capability: str, detail: str, normalized: object | None = None
+) -> Decision:
+    return Decision(
+        DecisionStatus.HOST_VERIFICATION_REQUIRED,
+        ReasonCode.AMBIGUOUS_INPUT,
+        capability,
+        detail,
+        normalized,
+    )

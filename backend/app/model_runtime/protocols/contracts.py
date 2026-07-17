@@ -77,7 +77,9 @@ def _validated_identity(fields: Mapping[str, Any]) -> RequestIdentity:
     try:
         return RuntimeRequestIdentity.model_validate(fields)
     except Exception as exc:  # Pydantic error text may contain caller input.
-        raise ProtocolAdapterError("MODEL_SCHEMA_VERSION_MISMATCH", "request identity is incomplete or invalid") from exc
+        raise ProtocolAdapterError(
+            "MODEL_SCHEMA_VERSION_MISMATCH", "request identity is incomplete or invalid"
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,9 +150,13 @@ class ModelRequestEnvelope:
             or not all(fields.values())
             or not isinstance(self.config_revision, int)
         ):
-            raise ProtocolAdapterError("MODEL_SCHEMA_VERSION_MISMATCH", "request envelope is incomplete")
+            raise ProtocolAdapterError(
+                "MODEL_SCHEMA_VERSION_MISMATCH", "request envelope is incomplete"
+            )
         if not _identity_matches(self.identity, fields):
-            raise ProtocolAdapterError("MODEL_REQUEST_IDENTITY_MISMATCH", "request envelope identity mismatch")
+            raise ProtocolAdapterError(
+                "MODEL_REQUEST_IDENTITY_MISMATCH", "request envelope identity mismatch"
+            )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -193,9 +199,13 @@ class ModelEventEnvelope:
             or not self.type
             or not isinstance(self.config_revision, int)
         ):
-            raise ProtocolAdapterError("MODEL_SCHEMA_VERSION_MISMATCH", "event envelope is incomplete")
+            raise ProtocolAdapterError(
+                "MODEL_SCHEMA_VERSION_MISMATCH", "event envelope is incomplete"
+            )
         if not _identity_matches(self.identity, fields):
-            raise ProtocolAdapterError("MODEL_REQUEST_IDENTITY_MISMATCH", "event envelope identity mismatch")
+            raise ProtocolAdapterError(
+                "MODEL_REQUEST_IDENTITY_MISMATCH", "event envelope identity mismatch"
+            )
 
     @property
     def request_id_value(self) -> str:
@@ -219,7 +229,9 @@ class ModelEventEnvelope:
 NormalizedEvent = ModelEventEnvelope
 
 
-def event(identity: RequestIdentity, event_type: str, payload: Mapping[str, Any] | None = None) -> ModelEventEnvelope:
+def event(
+    identity: RequestIdentity, event_type: str, payload: Mapping[str, Any] | None = None
+) -> ModelEventEnvelope:
     identity_fields = _identity_dict(identity)
     return ModelEventEnvelope(
         identity=identity,
@@ -246,7 +258,9 @@ def json_object(value: str, *, field: str = "tool input") -> Mapping[str, Any]:
     try:
         parsed = json.loads(value)
     except (TypeError, ValueError) as exc:
-        raise ProtocolAdapterError("MODEL_TOOL_ARGUMENTS_INVALID", f"{field} is not valid JSON") from exc
+        raise ProtocolAdapterError(
+            "MODEL_TOOL_ARGUMENTS_INVALID", f"{field} is not valid JSON"
+        ) from exc
     if not isinstance(parsed, dict):
         raise ProtocolAdapterError("MODEL_TOOL_ARGUMENTS_INVALID", f"{field} must be a JSON object")
     return freeze_mapping(parsed)

@@ -131,12 +131,10 @@ export function createProductionEmbeddedRuntimePort(
   options: ProductionCompositionOptions,
 ): EmbeddedRuntimePortServer {
   if (!nonce) throw new Error("PRODUCTION_RUNTIME_NONCE_REQUIRED");
-  let server: EmbeddedRuntimePortServer | undefined;
-  server = new EmbeddedRuntimePortServer(
+  const server = new EmbeddedRuntimePortServer(
     duplex,
     nonce,
     createProductionEmbeddedRuntimeCommandHandler(options, (request) => {
-      if (!server) return Promise.reject(new Error("B13_HOST_IPC_UNAVAILABLE"));
       return server.requestHost(request);
     }),
   );

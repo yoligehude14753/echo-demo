@@ -26,7 +26,6 @@ from ..types import (
     WorkspaceIdentity,
 )
 
-
 SnapshotProvider = Callable[[], GrantSnapshot | None]
 CancelChecker = Callable[[], bool]
 T = TypeVar("T")
@@ -114,7 +113,7 @@ class HostContext:
     active_policy_revision: int | None = None
     now: datetime | None = None
 
-    def _control_decision(self, capability: str) -> CapabilityDecision | None:
+    def _control_decision(self, capability: str) -> CapabilityDecision | None:  # noqa: PLR0911
         current = self.current_grant() if self.current_grant is not None else None
         if current is None:
             return _decision(self, capability, DenyCode.GRANT_REVOKED)
@@ -131,14 +130,21 @@ class HostContext:
             return _decision(self, capability, DenyCode.GRANT_REVISION_MISMATCH)
         if self.invocation.policy_revision != current.policy_revision:
             return _decision(self, capability, DenyCode.GRANT_REVISION_MISMATCH)
-        if self.active_policy_revision is not None and current.policy_revision != self.active_policy_revision:
+        if (
+            self.active_policy_revision is not None
+            and current.policy_revision != self.active_policy_revision
+        ):
             return _decision(self, capability, DenyCode.GRANT_STALE)
         return None
 
     def authorize(self, request: CapabilityRequest) -> CapabilityDecision:
         """Recheck task controls, then delegate the decision to B03 pure policy."""
 
-        capability = request.capability.value if isinstance(request.capability, CapabilityName) else request.capability
+        capability = (
+            request.capability.value
+            if isinstance(request.capability, CapabilityName)
+            else request.capability
+        )
         control_failure = self._control_decision(capability)
         if control_failure is not None:
             return control_failure
@@ -244,7 +250,13 @@ def denied(
     metadata: Mapping[str, Any] = {},
 ) -> HostResult[Any]:
     decision = _decision(context, capability, code)
-    return HostResult(None, decision, receipt_for(context, operation=operation, decision=decision, result="denied", metadata=metadata))
+    return HostResult(
+        None,
+        decision,
+        receipt_for(
+            context, operation=operation, decision=decision, result="denied", metadata=metadata
+        ),
+    )
 
 
 def failed(
@@ -258,7 +270,9 @@ def failed(
     return HostResult(
         None,
         decision,
-        receipt_for(context, operation=operation, decision=decision, result="failed", metadata=metadata),
+        receipt_for(
+            context, operation=operation, decision=decision, result="failed", metadata=metadata
+        ),
         error_code=error_code,
     )
 
@@ -274,7 +288,9 @@ def succeeded(
     return HostResult(
         value,
         decision,
-        receipt_for(context, operation=operation, decision=decision, result="succeeded", metadata=metadata),
+        receipt_for(
+            context, operation=operation, decision=decision, result="succeeded", metadata=metadata
+        ),
     )
 
 

@@ -121,10 +121,9 @@ def _preflight_raw_config(raw: Mapping[str, object]) -> None:
         )
         if credential is _MISSING or not isinstance(credential, str) or not credential.strip():
             raise _config_error(MODEL_AUTH_MISSING, field="credential_handle")
-        if (
-            not _OPAQUE_HANDLE_RE.fullmatch(credential.strip())
-            or credential.strip().lower().startswith(("http:", "https:"))
-        ):
+        if not _OPAQUE_HANDLE_RE.fullmatch(
+            credential.strip()
+        ) or credential.strip().lower().startswith(("http:", "https:")):
             raise _config_error(MODEL_AUTH_INVALID, field="credential_handle")
 
         auth_mode = _read_aliases(
@@ -140,12 +139,15 @@ def _preflight_raw_config(raw: Mapping[str, object]) -> None:
         if not isinstance(capabilities, Mapping):
             raise _config_error(MODEL_CAPABILITY_MISSING, field="capabilities")
         for capability, aliases in _CAPABILITY_ALIASES.items():
-            if _read_aliases(
-                capabilities,
-                aliases,
-                conflict_code="MODEL_CAPABILITY_CONFLICT",
-                field=capability,
-            ) is _MISSING:
+            if (
+                _read_aliases(
+                    capabilities,
+                    aliases,
+                    conflict_code="MODEL_CAPABILITY_CONFLICT",
+                    field=capability,
+                )
+                is _MISSING
+            ):
                 raise _config_error(MODEL_CAPABILITY_MISSING, field=capability)
 
 
@@ -404,7 +406,9 @@ def compile_route_snapshot(
     config = normalize_model_runtime_config(value)
     if expected_revision is not None and config.revision != expected_revision:
         raise ModelRuntimeStaleRevisionError(MODEL_CONFIG_STALE_REVISION, field="revision")
-    route = next((candidate for candidate in config.routes.values() if candidate.route_id == route_id), None)
+    route = next(
+        (candidate for candidate in config.routes.values() if candidate.route_id == route_id), None
+    )
     if route is None:
         raise _config_error(MODEL_CONFIG_INVALID, field="route_id")
     return ModelRuntimeSnapshot(

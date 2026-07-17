@@ -180,7 +180,9 @@ class SkillManifest(FrozenModel):
     def _requires_skill_capability(self) -> SkillManifest:
         if CapabilityName.SKILL_USE.value not in self.required_capabilities:
             raise ValueError("bundled skill must declare skill.use")
-        if not self.platforms or any(item not in {"any", "macos", "windows", "linux"} for item in self.platforms):
+        if not self.platforms or any(
+            item not in {"any", "macos", "windows", "linux"} for item in self.platforms
+        ):
             raise ValueError("manifest platform is unsupported")
         return self
 
@@ -210,7 +212,9 @@ class SkillResolutionError(ValueError):
 class SkillResolver:
     """Resolve only resources below an explicit, caller-owned bundle root."""
 
-    def __init__(self, bundle_root: Path, verifier: ManifestSignatureVerifier, *, platform: str) -> None:
+    def __init__(
+        self, bundle_root: Path, verifier: ManifestSignatureVerifier, *, platform: str
+    ) -> None:
         self._root = bundle_root.resolve(strict=True)
         if not self._root.is_dir():
             raise ValueError("bundle root must be a directory")
@@ -281,7 +285,9 @@ class SkillExecutionContext:
         self.operation_key = grant.operation_key
         self.tool_use_id = tool_use_id
 
-    def authorize(self, request: CapabilityRequest, *, now: datetime | None = None) -> CapabilityDecision:
+    def authorize(
+        self, request: CapabilityRequest, *, now: datetime | None = None
+    ) -> CapabilityDecision:
         """Delegate every additional capability decision to the B03 source."""
 
         return evaluate_capability(self.grant, request, now=now)
@@ -389,14 +395,38 @@ class EchoSkillHost:
             return self._result(manifest, denied, "denied", exc.code, tool_use_id, started_at)
         if any(item != CapabilityName.SKILL_USE.value for item in manifest.required_capabilities):
             denied = self._deny(decision, DenyCode.TOOL_SKILL_DENIED)
-            return self._result(manifest, denied, "denied", SKILL_CAPABILITY_DEFERRED, tool_use_id, started_at, resolved)
+            return self._result(
+                manifest,
+                denied,
+                "denied",
+                SKILL_CAPABILITY_DEFERRED,
+                tool_use_id,
+                started_at,
+                resolved,
+            )
         handler = self._handlers.get(manifest.entrypoint)
         if handler is None:
             denied = self._deny(decision, DenyCode.TOOL_SKILL_DENIED)
-            return self._result(manifest, denied, "denied", SKILL_HANDLER_NOT_REGISTERED, tool_use_id, started_at, resolved)
+            return self._result(
+                manifest,
+                denied,
+                "denied",
+                SKILL_HANDLER_NOT_REGISTERED,
+                tool_use_id,
+                started_at,
+                resolved,
+            )
         if not isinstance(payload, Mapping):
             denied = self._deny(decision, DenyCode.TOOL_SKILL_DENIED)
-            return self._result(manifest, denied, "denied", SKILL_MANIFEST_INVALID, tool_use_id, started_at, resolved)
+            return self._result(
+                manifest,
+                denied,
+                "denied",
+                SKILL_MANIFEST_INVALID,
+                tool_use_id,
+                started_at,
+                resolved,
+            )
         return self._run_handler(
             handler,
             manifest=manifest,
@@ -468,12 +498,41 @@ class EchoSkillHost:
             output = handler(payload, SkillExecutionContext(grant=grant, tool_use_id=tool_use_id))
             output_bytes = _canonical_json(output)
         except Exception:
-            return self._result(manifest, decision, "failed", SKILL_HANDLER_FAILED, tool_use_id, started_at, resolved, payload)
+            return self._result(
+                manifest,
+                decision,
+                "failed",
+                SKILL_HANDLER_FAILED,
+                tool_use_id,
+                started_at,
+                resolved,
+                payload,
+            )
         current = current_grant() if current_grant is not None else grant
         if current is None or current != grant or (is_cancelled is not None and is_cancelled()):
             denied = self._deny(decision, DenyCode.GRANT_REVOKED)
-            return self._result(manifest, denied, "denied", DenyCode.GRANT_REVOKED.value, tool_use_id, started_at, resolved, payload)
-        return self._result(manifest, decision, "succeeded", "ALLOWED", tool_use_id, started_at, resolved, payload, output_bytes, output)
+            return self._result(
+                manifest,
+                denied,
+                "denied",
+                DenyCode.GRANT_REVOKED.value,
+                tool_use_id,
+                started_at,
+                resolved,
+                payload,
+            )
+        return self._result(
+            manifest,
+            decision,
+            "succeeded",
+            "ALLOWED",
+            tool_use_id,
+            started_at,
+            resolved,
+            payload,
+            output_bytes,
+            output,
+        )
 
     def _result(
         self,
@@ -489,8 +548,10 @@ class EchoSkillHost:
         output: Mapping[str, Any] | None = None,
     ) -> SkillResult:
         manifest_hash = resolved.manifest_sha256 if resolved else manifest.manifest_sha256
-        resource_hashes = resolved.resource_hashes if resolved else tuple(
-            f"sha256:{resource.sha256}" for resource in manifest.resources
+        resource_hashes = (
+            resolved.resource_hashes
+            if resolved
+            else tuple(f"sha256:{resource.sha256}" for resource in manifest.resources)
         )
         identity = ":".join((manifest.identity, manifest.version, tool_use_id, manifest_hash, code))
         receipt = SkillReceipt(
@@ -521,7 +582,9 @@ class EchoSkillHost:
         return decision.model_copy(update={"outcome": "deny", "code": code})
 
     @staticmethod
-    def _deny_for(request: CapabilityRequest, grant: GrantSnapshot, code: DenyCode) -> CapabilityDecision:
+    def _deny_for(
+        request: CapabilityRequest, grant: GrantSnapshot, code: DenyCode
+    ) -> CapabilityDecision:
         return CapabilityDecision(
             outcome="deny",
             code=code,

@@ -166,9 +166,7 @@ async def tts_suggest(
 class DiagResult(BaseModel):
     """TTS 子系统健康快照。前端 StatusBar 直接渲染这套字段。"""
 
-    ok: bool | None = Field(
-        description="True 表示可用，False 表示故障，None 表示可选能力未配置"
-    )
+    ok: bool | None = Field(description="True 表示可用，False 表示故障，None 表示可选能力未配置")
     state: Literal[
         "ok",
         "not_configured",
@@ -176,9 +174,7 @@ class DiagResult(BaseModel):
         "upstream_error",
         "silent_output",
         "empty",
-    ] = Field(
-        description="UI 取 state 走分支：ok 显绿、not_configured/disabled 灰、其它红/橙"
-    )
+    ] = Field(description="UI 取 state 走分支：ok 显绿、not_configured/disabled 灰、其它红/橙")
     detail: str | None = Field(default=None, description="人类可读说明；用于 Popover tooltip")
     latency_ms: float | None = None
     pcm_bytes: int | None = None

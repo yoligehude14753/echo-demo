@@ -118,7 +118,9 @@ class ModelRuntimeConfigStore:
         if self._path == _default_config_path():
             from app.config_io import write_user_config_json
 
-            write_user_config_json({MODEL_RUNTIME_CONFIG_KEY: dict(document[MODEL_RUNTIME_CONFIG_KEY])})
+            write_user_config_json(
+                {MODEL_RUNTIME_CONFIG_KEY: dict(document[MODEL_RUNTIME_CONFIG_KEY])}
+            )
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(
@@ -179,7 +181,9 @@ class ModelRuntimeConfigStore:
         """Compile and atomically save a strictly newer config revision."""
 
         compiled = compile_model_runtime_config(
-            migrate_model_runtime_config(value) if isinstance(value, Mapping) else value.model_dump()
+            migrate_model_runtime_config(value)
+            if isinstance(value, Mapping)
+            else value.model_dump()
         )
         with self._lock:
             current = self.read_or_none()

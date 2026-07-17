@@ -65,7 +65,9 @@ def _read_exact(fd: int, size: int) -> bytes:
     while remaining:
         chunk = os.read(fd, remaining)
         if not chunk:
-            raise EmbeddedRuntimeError("RUNTIME_EOF", "embedded runtime closed the inherited handle")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_EOF", "embedded runtime closed the inherited handle"
+            )
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)
@@ -76,7 +78,9 @@ def _write_all(fd: int, data: bytes) -> None:
     while view:
         written = os.write(fd, view)
         if written <= 0:
-            raise EmbeddedRuntimeError("RUNTIME_WRITE_FAILED", "embedded runtime handle rejected a frame")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_WRITE_FAILED", "embedded runtime handle rejected a frame"
+            )
         view = view[written:]
 
 
@@ -99,21 +103,29 @@ class InheritedDuplexTransport:
         try:
             fd = int(raw_fd, 10)
         except ValueError as exc:
-            raise EmbeddedRuntimeError("RUNTIME_HANDLE_INVALID", "ECHODESK_RUNTIME_FD is not an integer") from exc
+            raise EmbeddedRuntimeError(
+                "RUNTIME_HANDLE_INVALID", "ECHODESK_RUNTIME_FD is not an integer"
+            ) from exc
         if fd < 0:
-            raise EmbeddedRuntimeError("RUNTIME_HANDLE_INVALID", "ECHODESK_RUNTIME_FD must be non-negative")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_HANDLE_INVALID", "ECHODESK_RUNTIME_FD must be non-negative"
+            )
         # A duplicated descriptor lets the read and write lifecycle close cleanly
         # without assuming whether Electron passed a pipe or a socketpair.
         try:
             write_fd = os.dup(fd)
         except OSError as exc:
-            raise EmbeddedRuntimeError("RUNTIME_HANDLE_INVALID", "inherited runtime handle cannot be duplicated") from exc
+            raise EmbeddedRuntimeError(
+                "RUNTIME_HANDLE_INVALID", "inherited runtime handle cannot be duplicated"
+            ) from exc
         return cls(read_fd=fd, write_fd=write_fd, _write_lock=asyncio.Lock())
 
     async def send(self, frame: RuntimeFrame) -> None:
         encoded = json.dumps(frame, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > MAX_RUNTIME_FRAME_BYTES:
-            raise EmbeddedRuntimeError("RUNTIME_FRAME_TOO_LARGE", "runtime frame exceeds the 16 MiB limit")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_FRAME_TOO_LARGE", "runtime frame exceeds the 16 MiB limit"
+            )
         prefix = len(encoded).to_bytes(4, "big", signed=False)
         async with self._write_lock:
             await asyncio.to_thread(_write_all, self.write_fd, prefix + encoded)
@@ -122,22 +134,32 @@ class InheritedDuplexTransport:
         prefix = await asyncio.to_thread(_read_exact, self.read_fd, 4)
         size = int.from_bytes(prefix, "big", signed=False)
         if size <= 0 or size > MAX_RUNTIME_FRAME_BYTES:
-            raise EmbeddedRuntimeError("RUNTIME_FRAME_INVALID", "runtime frame length is outside the contract")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_FRAME_INVALID", "runtime frame length is outside the contract"
+            )
         raw = await asyncio.to_thread(_read_exact, self.read_fd, size)
         try:
             value = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise EmbeddedRuntimeError("RUNTIME_FRAME_INVALID", "runtime frame is not valid UTF-8 JSON") from exc
+            raise EmbeddedRuntimeError(
+                "RUNTIME_FRAME_INVALID", "runtime frame is not valid UTF-8 JSON"
+            ) from exc
         if not isinstance(value, dict):
-            raise EmbeddedRuntimeError("RUNTIME_FRAME_INVALID", "runtime frame must be a JSON object")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_FRAME_INVALID", "runtime frame must be a JSON object"
+            )
         if value.get("protocolVersion") != RUNTIME_PROTOCOL_VERSION:
-            raise EmbeddedRuntimeError("RUNTIME_PROTOCOL_MISMATCH", "runtime protocol version is unsupported")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_PROTOCOL_MISMATCH", "runtime protocol version is unsupported"
+            )
         for field in ("frameId", "type", "sentAt", "payload"):
             if field not in value:
                 raise EmbeddedRuntimeError("RUNTIME_FRAME_INVALID", f"runtime frame misses {field}")
         if not isinstance(value["payload"], dict):
-            raise EmbeddedRuntimeError("RUNTIME_FRAME_INVALID", "runtime frame payload must be an object")
-        return value  # type: ignore[return-value]
+            raise EmbeddedRuntimeError(
+                "RUNTIME_FRAME_INVALID", "runtime frame payload must be an object"
+            )
+        return value  # type: ignore
 
     async def close(self) -> None:
         for fd in {self.read_fd, self.write_fd}:
@@ -190,19 +212,55 @@ def _runtime_event_to_runner_event(frame: RuntimeFrame) -> dict[str, Any]:
     if event_type == "agent.turn.started":
         raw.update({"kind": "system", "payload": {"payload": {"subtype": "init"}}})
     elif event_type in {"agent.message.delta", "agent.message.completed"}:
-        raw.update({"kind": "assistant_text", "payload": {"text": str(event_payload.get("text") or ""), "stream": event_type.endswith("delta")}})
+        raw.update(
+            {
+                "kind": "assistant_text",
+                "payload": {
+                    "text": str(event_payload.get("text") or ""),
+                    "stream": event_type.endswith("delta"),
+                },
+            }
+        )
     elif event_type == "agent.tool.requested":
-        raw.update({"kind": "tool_use", "payload": {"tool_use_id": event_payload.get("toolUseId"), "name": event_payload.get("name")}})
+        raw.update(
+            {
+                "kind": "tool_use",
+                "payload": {
+                    "tool_use_id": event_payload.get("toolUseId"),
+                    "name": event_payload.get("name"),
+                },
+            }
+        )
     elif event_type in {"agent.tool.completed", "agent.tool.failed", "agent.tool.denied"}:
-        raw.update({"kind": "tool_result", "payload": {"tool_use_id": event_payload.get("toolUseId"), "is_error": event_type != "agent.tool.completed"}})
+        raw.update(
+            {
+                "kind": "tool_result",
+                "payload": {
+                    "tool_use_id": event_payload.get("toolUseId"),
+                    "is_error": event_type != "agent.tool.completed",
+                },
+            }
+        )
     elif event_type in {"agent.turn.completed", "agent.turn.failed"}:
-        raw.update({"kind": "result", "payload": {"result_text": str(event_payload.get("text") or event_payload.get("message") or ""), "is_error": event_type.endswith("failed")}})
+        raw.update(
+            {
+                "kind": "result",
+                "payload": {
+                    "result_text": str(
+                        event_payload.get("text") or event_payload.get("message") or ""
+                    ),
+                    "is_error": event_type.endswith("failed"),
+                },
+            }
+        )
     elif event_type == "agent.turn.cancelled":
         raw.update({"kind": "task_state", "payload": {"status": "cancelled"}})
     elif event_type == "agent.turn.timeout":
         raw.update({"kind": "task_state", "payload": {"status": "timeout"}})
     else:
-        raw.update({"kind": "system", "payload": {"payload": {"type": event_type or "runtime_event"}}})
+        raw.update(
+            {"kind": "system", "payload": {"payload": {"type": event_type or "runtime_event"}}}
+        )
     return raw
 
 
@@ -222,7 +280,7 @@ class EmbeddedRuntimeBackend:
         # constructor.  Consume that private compatibility shape only to select
         # the inherited runtime handle; never derive a URL or executable from it.
         if transport is not None and hasattr(transport, "send") and hasattr(transport, "receive"):
-            self._transport = transport  # type: ignore[assignment]
+            self._transport = transport
         else:
             try:
                 self._transport = InheritedDuplexTransport.from_environment()
@@ -237,7 +295,9 @@ class EmbeddedRuntimeBackend:
         self._closed = False
 
     @classmethod
-    def from_environment(cls, *, host_handler: HostRequestHandler | None = None) -> EmbeddedRuntimeBackend:
+    def from_environment(
+        cls, *, host_handler: HostRequestHandler | None = None
+    ) -> EmbeddedRuntimeBackend:
         try:
             transport: RuntimeTransport | None = InheritedDuplexTransport.from_environment()
         except EmbeddedRuntimeError:
@@ -254,13 +314,17 @@ class EmbeddedRuntimeBackend:
 
     async def _ensure_ready(self) -> None:
         if not self.enabled:
-            raise EmbeddedRuntimeError("EMBEDDED_RUNTIME_UNAVAILABLE", "embedded runtime handle is unavailable")
+            raise EmbeddedRuntimeError(
+                "EMBEDDED_RUNTIME_UNAVAILABLE", "embedded runtime handle is unavailable"
+            )
         if self._ready:
             return
         assert self._transport is not None
         nonce = os.environ.get("ECHODESK_RUNTIME_NONCE")
         if not nonce:
-            raise EmbeddedRuntimeError("RUNTIME_HANDSHAKE_FAILED", "ECHODESK_RUNTIME_NONCE is required")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_HANDSHAKE_FAILED", "ECHODESK_RUNTIME_NONCE is required"
+            )
         await self._transport.send(
             _frame(
                 "runtime.hello",
@@ -273,7 +337,9 @@ class EmbeddedRuntimeBackend:
         )
         ready = await asyncio.wait_for(self._transport.receive(), timeout=10.0)
         if ready.get("type") != "runtime.ready":
-            raise EmbeddedRuntimeError("RUNTIME_HANDSHAKE_FAILED", "embedded runtime did not become ready")
+            raise EmbeddedRuntimeError(
+                "RUNTIME_HANDSHAKE_FAILED", "embedded runtime did not become ready"
+            )
         self._ready = True
         self._reader_task = asyncio.create_task(self._read_frames(), name="embedded-runtime-reader")
 
@@ -284,7 +350,9 @@ class EmbeddedRuntimeBackend:
                 frame = await self._transport.receive()
                 task_id = str(frame.get("taskId") or "")
                 if frame.get("type") == "runtime.host.request":
-                    task = asyncio.create_task(self._handle_host_request(frame), name="embedded-runtime-host-request")
+                    task = asyncio.create_task(
+                        self._handle_host_request(frame), name="embedded-runtime-host-request"
+                    )
                     self._host_tasks.add(task)
                     task.add_done_callback(self._host_tasks.discard)
                     continue
@@ -298,7 +366,11 @@ class EmbeddedRuntimeBackend:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            error = exc if isinstance(exc, EmbeddedRuntimeError) else EmbeddedRuntimeError("RUNTIME_READ_FAILED", str(exc))
+            error = (
+                exc
+                if isinstance(exc, EmbeddedRuntimeError)
+                else EmbeddedRuntimeError("RUNTIME_READ_FAILED", str(exc))
+            )
             for future in self._pending.values():
                 if not future.done():
                     future.set_exception(error)
@@ -333,7 +405,9 @@ class EmbeddedRuntimeBackend:
                 or not isinstance(request.get("payload"), dict)
                 or not request_id
             ):
-                raise EmbeddedRuntimeError("B13_HOST_PROTOCOL_INVALID", "host request identity or schema is invalid")
+                raise EmbeddedRuntimeError(
+                    "B13_HOST_PROTOCOL_INVALID", "host request identity or schema is invalid"
+                )
             response["payload"] = await self._host_handler(
                 task_id,
                 operation_key,
@@ -375,14 +449,26 @@ class EmbeddedRuntimeBackend:
         finally:
             self._pending.pop(frame_id, None)
         if result.get("type") == "runtime.degraded":
-            raise EmbeddedRuntimeError("EMBEDDED_RUNTIME_DEGRADED", "embedded runtime rejected the command")
+            raise EmbeddedRuntimeError(
+                "EMBEDDED_RUNTIME_DEGRADED", "embedded runtime rejected the command"
+            )
         return result
 
     async def submit(self, intent: AgentIntent) -> AgentSubmitResult:
         if not intent.echo_task_id:
-            return AgentSubmitResult(task_id="", accepted=False, provider=self.name, error="embedded submit requires a stable Echo task id")
+            return AgentSubmitResult(
+                task_id="",
+                accepted=False,
+                provider=self.name,
+                error="embedded submit requires a stable Echo task id",
+            )
         if not intent.runner_operation_key:
-            return AgentSubmitResult(task_id=intent.echo_task_id, accepted=False, provider=self.name, error="embedded submit requires an operation key")
+            return AgentSubmitResult(
+                task_id=intent.echo_task_id,
+                accepted=False,
+                provider=self.name,
+                error="embedded submit requires an operation key",
+            )
         try:
             response = await self._request(
                 "task.submit",
@@ -405,14 +491,23 @@ class EmbeddedRuntimeBackend:
                 timeout_s=min(max(intent.timeout_s, 5.0), AGENTOS_SUBMIT_MAX_WALL_S),
             )
         except EmbeddedRuntimeError as exc:
-            return AgentSubmitResult(task_id=intent.echo_task_id, accepted=False, provider=self.name, error=f"{exc.code}: {exc}")
+            return AgentSubmitResult(
+                task_id=intent.echo_task_id,
+                accepted=False,
+                provider=self.name,
+                error=f"{exc.code}: {exc}",
+            )
         accepted = response.get("type") == "task.accepted"
         return AgentSubmitResult(
             task_id=intent.echo_task_id,
             accepted=accepted,
             provider=self.name,
             runner_task_id=intent.echo_task_id if accepted else None,
-            error=None if accepted else str((response.get("payload") or {}).get("error") or "embedded runtime rejected task"),
+            error=None
+            if accepted
+            else str(
+                (response.get("payload") or {}).get("error") or "embedded runtime rejected task"
+            ),
         )
 
     async def cancel(self, runner_task_id: str, *, operation_key: str) -> bool:
@@ -455,7 +550,8 @@ class EmbeddedRuntimeBackend:
             yield raw
             if raw.get("kind") == "result" or (
                 raw.get("kind") == "task_state"
-                and str((raw.get("payload") or {}).get("status")) in {"cancelled", "timeout", "failed"}
+                and str((raw.get("payload") or {}).get("status"))
+                in {"cancelled", "timeout", "failed"}
             ):
                 return
 

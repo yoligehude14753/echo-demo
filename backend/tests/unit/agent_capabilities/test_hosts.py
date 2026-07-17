@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-
 from app.agent_capabilities.hosts import (
     AtomicMutationHost,
     FileReadHost,
@@ -45,7 +44,9 @@ def _grant(root: Path, *, revision: int = 7) -> tuple[GrantSnapshot, str]:
             policy_revision=revision,
             task_id="task-test",
             operation_key="op-test",
-            workspace_identity=WorkspaceIdentity(workspace_id="workspace-test", identity="workspace-1"),
+            workspace_identity=WorkspaceIdentity(
+                workspace_id="workspace-test", identity="workspace-1"
+            ),
             issued_at=NOW - timedelta(minutes=1),
             expires_at=NOW + timedelta(hours=1),
             workspace_roots=(
@@ -61,7 +62,9 @@ def _grant(root: Path, *, revision: int = 7) -> tuple[GrantSnapshot, str]:
     return grant, root_id
 
 
-def _context(grant: GrantSnapshot, control: Control, *, grant_revision: int | None = None) -> HostContext:
+def _context(
+    grant: GrantSnapshot, control: Control, *, grant_revision: int | None = None
+) -> HostContext:
     return HostContext(
         grant=grant,
         invocation=ToolInvocation(
@@ -115,7 +118,9 @@ def test_contract_rechecks_snapshot_binding_and_cancel_before_read(
 
 
 @pytest.mark.unit
-def test_contract_rejects_outside_and_symlink_paths_and_receipt_is_value_free(tmp_path: Path) -> None:
+def test_contract_rejects_outside_and_symlink_paths_and_receipt_is_value_free(
+    tmp_path: Path,
+) -> None:
     inside = tmp_path / "inside.txt"
     inside.write_text("super-secret-content", encoding="utf-8")
     outside = tmp_path.parent / "outside-b06p.txt"
@@ -201,7 +206,9 @@ def test_real_mutation_harness_rechecks_revoke_after_staging(tmp_path: Path) -> 
 
 
 @pytest.mark.unit
-def test_real_mutation_harness_rejects_symlink_and_deletes_only_verified_file(tmp_path: Path) -> None:
+def test_real_mutation_harness_rejects_symlink_and_deletes_only_verified_file(
+    tmp_path: Path,
+) -> None:
     grant, root_id = _grant(tmp_path)
     control = Control(grant)
     outside = tmp_path.parent / "delete-outside-b06p.txt"

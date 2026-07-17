@@ -144,27 +144,36 @@ async def test_completed_cancel_outbox_rejects_late_submit_requeue(tmp_path: Pat
     )
     assert lease is not None
     try:
-        assert await service._command_outbox.mark_completed(
-            command,
-            lease,
-            outcome="terminal_won",
-        ) is True
+        assert (
+            await service._command_outbox.mark_completed(
+                command,
+                lease,
+                outcome="terminal_won",
+            )
+            is True
+        )
         async with open_aiosqlite_connection(db_path) as conn:
             await configure_aiosqlite_connection(conn)
             await conn.execute("BEGIN IMMEDIATE")
-            assert await service._command_outbox.attach_runner_and_requeue_cancel_in_transaction(
-                conn,
-                tenant_id=command.tenant_id,
-                owner_id=command.owner_id,
-                task_id=command.task_id,
-                runner_task_id="late-runner",
-            ) is False
+            assert (
+                await service._command_outbox.attach_runner_and_requeue_cancel_in_transaction(
+                    conn,
+                    tenant_id=command.tenant_id,
+                    owner_id=command.owner_id,
+                    task_id=command.task_id,
+                    runner_task_id="late-runner",
+                )
+                is False
+            )
             await conn.commit()
     finally:
         await service._lease_store.release(lease)
 
-    assert await service._command_outbox.list_due(
-        tenant_id=command.tenant_id,
-        owner_id=command.owner_id,
-        task_id=command.task_id,
-    ) == []
+    assert (
+        await service._command_outbox.list_due(
+            tenant_id=command.tenant_id,
+            owner_id=command.owner_id,
+            task_id=command.task_id,
+        )
+        == []
+    )

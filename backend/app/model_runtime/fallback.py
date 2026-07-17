@@ -87,10 +87,10 @@ class ExplicitFallbackRouter:
             report = health.get(route_id)
             if report is not None and report.status == "healthy":
                 candidate = binding.snapshot_for_route(route_id)
-                if (
-                    all(getattr(candidate.capabilities, capability, False) for capability in required_capabilities)
-                    and (report.capability_probe is None or not report.capability_probe.missing)
-                ):
+                if all(
+                    getattr(candidate.capabilities, capability, False)
+                    for capability in required_capabilities
+                ) and (report.capability_probe is None or not report.capability_probe.missing):
                     return FallbackDecision(
                         snapshot=candidate,
                         event=_event(

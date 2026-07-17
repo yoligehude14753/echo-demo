@@ -36,7 +36,9 @@ class CredentialHandle:
 
     def __post_init__(self) -> None:
         normalized = self.value.strip()
-        if not _HANDLE_RE.fullmatch(normalized) or normalized.lower().startswith(("http:", "https:")):
+        if not _HANDLE_RE.fullmatch(normalized) or normalized.lower().startswith(
+            ("http:", "https:")
+        ):
             raise CredentialHandleError(MODEL_CREDENTIAL_HANDLE_INVALID, field="credential_handle")
         object.__setattr__(self, "value", normalized)
 
@@ -105,7 +107,9 @@ def validate_credential_handle(value: str) -> CredentialHandle:
     except CredentialHandleError:
         raise
     except (AttributeError, TypeError):
-        raise CredentialHandleError(MODEL_CREDENTIAL_HANDLE_INVALID, field="credential_handle") from None
+        raise CredentialHandleError(
+            MODEL_CREDENTIAL_HANDLE_INVALID, field="credential_handle"
+        ) from None
 
 
 __all__ = [

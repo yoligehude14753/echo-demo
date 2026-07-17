@@ -1376,10 +1376,13 @@ def test_public_owner_can_generate_safe_artifact_without_cross_owner_access(
     assert denied_kind.status_code == 403
     assert denied_kind.json()["detail"] == "artifact type is not available to owner sessions"
 
-    assert public_client.post(
-        "/meetings/owner-a-meeting/start",
-        headers=headers_a,
-    ).status_code == 200
+    assert (
+        public_client.post(
+            "/meetings/owner-a-meeting/start",
+            headers=headers_a,
+        ).status_code
+        == 200
+    )
     cross_owner = public_client.post(
         "/artifacts/generate",
         headers=headers_b,
@@ -1406,15 +1409,21 @@ def test_public_owner_can_generate_safe_artifact_without_cross_owner_access(
     assert payload["file_path"] is None
     assert runner.calls == 1
 
-    assert [item["artifact_id"] for item in public_client.get(
-        "/artifacts",
-        headers=headers_a,
-    ).json()] == [payload["artifact_id"]]
+    assert [
+        item["artifact_id"]
+        for item in public_client.get(
+            "/artifacts",
+            headers=headers_a,
+        ).json()
+    ] == [payload["artifact_id"]]
     assert public_client.get("/artifacts", headers=headers_b).json() == []
-    assert public_client.get(
-        f"/artifacts/{payload['artifact_id']}/download",
-        headers=headers_b,
-    ).status_code == 404
+    assert (
+        public_client.get(
+            f"/artifacts/{payload['artifact_id']}/download",
+            headers=headers_b,
+        ).status_code
+        == 404
+    )
 
 
 @pytest.mark.unit

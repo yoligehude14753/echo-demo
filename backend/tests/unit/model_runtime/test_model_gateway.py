@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-
 from app.model_runtime import ModelRuntimeSnapshot, compile_snapshot
 from app.services.model_gateway import (
     AgentModelEvent,
@@ -96,7 +95,13 @@ async def test_openai_gateway_stream_projects_text_usage_and_stop() -> None:
         seen["protocol"] = request.protocol
         seen["body"] = dict(request.body)
         seen["credential"] = resolver(request.credential_handle)
-        yield SSEFrame(data={"choices": [{"delta": {"role": "assistant", "content": "hello"}, "finish_reason": None}]})
+        yield SSEFrame(
+            data={
+                "choices": [
+                    {"delta": {"role": "assistant", "content": "hello"}, "finish_reason": None}
+                ]
+            }
+        )
         yield SSEFrame(data={"choices": [{"delta": {}, "finish_reason": "stop"}]})
         yield SSEFrame(data={"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 2}})
         yield SSEFrame(done=True)
@@ -108,7 +113,12 @@ async def test_openai_gateway_stream_projects_text_usage_and_stop() -> None:
         transport=transport,
     )
     events = [event async for event in gateway.stream(_request())]
-    assert [event.type for event in events] == ["message_start", "text_delta", "usage", "message_stop"]
+    assert [event.type for event in events] == [
+        "message_start",
+        "text_delta",
+        "usage",
+        "message_stop",
+    ]
     assert events[1].payload == {"text": "hello"}
     assert events[2].payload["inputTokens"] == 3
     assert events[-1].payload["stopReason"] == "end_turn"
@@ -123,10 +133,28 @@ async def test_openai_gateway_stream_projects_text_usage_and_stop() -> None:
 async def test_anthropic_gateway_maps_tool_arguments_usage_and_stop() -> None:
     async def transport(request: Any, resolver: Any) -> AsyncIterator[SSEFrame]:
         yield SSEFrame(data={"type": "message_start", "message": {"usage": {"input_tokens": 4}}})
-        yield SSEFrame(data={"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "tool-redacted", "name": "lookup"}})
-        yield SSEFrame(data={"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"q":"paris"}'}})
+        yield SSEFrame(
+            data={
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "tool-redacted", "name": "lookup"},
+            }
+        )
+        yield SSEFrame(
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"q":"paris"}'},
+            }
+        )
         yield SSEFrame(data={"type": "content_block_stop", "index": 0})
-        yield SSEFrame(data={"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 3}})
+        yield SSEFrame(
+            data={
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 3},
+            }
+        )
         yield SSEFrame(data={"type": "message_stop"})
 
     gateway = AgentModelGateway(

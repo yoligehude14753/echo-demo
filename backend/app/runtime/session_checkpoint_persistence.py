@@ -225,7 +225,9 @@ def _identity_from_mapping(value: ResumeIdentity | Mapping[str, Any]) -> ResumeI
     grant_task = _lookup(grant, "taskId", "task_id")
     grant_operation = _lookup(grant, "operationKey", "operation_key")
     if grant_task != identity.task_id or grant_operation != identity.operation_key:
-        raise PersistenceError("CHECKPOINT_TASK_MISMATCH", "grant snapshot is not bound to the task")
+        raise PersistenceError(
+            "CHECKPOINT_TASK_MISMATCH", "grant snapshot is not bound to the task"
+        )
     grant_revision = _lookup(grant, "revision", "grant_revision")
     _required_revision(grant_revision, "grant revision")
     if not build:
@@ -267,7 +269,9 @@ def _checkpoint_grant_snapshot(
         or persisted_revision != grant_revision
         or not grant_id
     ):
-        raise PersistenceError("CHECKPOINT_IDENTITY_MISMATCH", "checkpoint grantSnapshot identity does not match")
+        raise PersistenceError(
+            "CHECKPOINT_IDENTITY_MISMATCH", "checkpoint grantSnapshot identity does not match"
+        )
     return grant
 
 
@@ -306,8 +310,13 @@ def _validate_checkpoint_identity(
     stored_grant_snapshot = _json_object(stored.grant_snapshot, "session grant snapshot")
     expected_grant_snapshot = _json_object(expected.grant_snapshot, "current grant snapshot")
     if payload_task_id != stored.task_id or payload_task_id != expected.task_id:
-        raise PersistenceError("CHECKPOINT_TASK_MISMATCH", "checkpoint task identity does not match")
-    if payload_operation_key != stored.operation_key or payload_operation_key != expected.operation_key:
+        raise PersistenceError(
+            "CHECKPOINT_TASK_MISMATCH", "checkpoint task identity does not match"
+        )
+    if (
+        payload_operation_key != stored.operation_key
+        or payload_operation_key != expected.operation_key
+    ):
         raise PersistenceError(
             "CHECKPOINT_OPERATION_MISMATCH",
             "checkpoint operation identity does not match",
@@ -332,8 +341,13 @@ def _validate_checkpoint_identity(
         payload_grant_revision != stored_grant_revision
         or payload_grant_revision != expected_grant_revision
     ):
-        raise PersistenceError("GRANT_REVISION_MISMATCH", "checkpoint grant revision does not match")
-    if payload_grant_snapshot != stored_grant_snapshot or payload_grant_snapshot != expected_grant_snapshot:
+        raise PersistenceError(
+            "GRANT_REVISION_MISMATCH", "checkpoint grant revision does not match"
+        )
+    if (
+        payload_grant_snapshot != stored_grant_snapshot
+        or payload_grant_snapshot != expected_grant_snapshot
+    ):
         raise PersistenceError(
             "CHECKPOINT_IDENTITY_MISMATCH",
             "checkpoint grantSnapshot does not match the current identity",
@@ -345,7 +359,9 @@ def serialize_checkpoint(checkpoint: Mapping[str, Any]) -> tuple[JsonObject, str
 
     payload = _json_object(checkpoint, "checkpoint")
     if payload.get("schemaVersion", payload.get("schema_version")) != PERSISTENCE_SCHEMA_VERSION:
-        raise PersistenceError("PERSISTENCE_SCHEMA_UNSUPPORTED", "checkpoint schema version is unsupported")
+        raise PersistenceError(
+            "PERSISTENCE_SCHEMA_UNSUPPORTED", "checkpoint schema version is unsupported"
+        )
     for camel, snake in (
         ("checkpointId", "checkpoint_id"),
         ("taskId", "task_id"),
@@ -353,7 +369,9 @@ def serialize_checkpoint(checkpoint: Mapping[str, Any]) -> tuple[JsonObject, str
         ("createdAt", "created_at"),
     ):
         _required_string(_lookup(payload, camel, snake), camel)
-    _required_revision(_lookup(payload, "modelConfigRevision", "model_config_revision"), "model revision")
+    _required_revision(
+        _lookup(payload, "modelConfigRevision", "model_config_revision"), "model revision"
+    )
     grant_revision = _required_revision(
         _lookup(payload, "grantRevision", "grant_revision"), "grant revision"
     )
@@ -457,7 +475,9 @@ class SessionCheckpointRepository:
         grant = bound.as_json()["grantSnapshot"]
         assert isinstance(grant, dict)
         grant_id = _lookup(grant, "grantId", "grant_id")
-        grant_revision = _required_revision(_lookup(grant, "revision", "grant_revision"), "grant revision")
+        grant_revision = _required_revision(
+            _lookup(grant, "revision", "grant_revision"), "grant revision"
+        )
         build = bound.as_json()["kernelBuildIdentity"]
         assert isinstance(build, dict)
         build_id = _lookup(build, "buildId", "build_id")
@@ -508,7 +528,9 @@ class SessionCheckpointRepository:
                     kernel_build_identity=json.loads(row["kernel_build_identity_json"]),
                 )
                 if stored.as_json() != bound.as_json():
-                    raise PersistenceError("CHECKPOINT_IDENTITY_MISMATCH", "session identity is already bound")
+                    raise PersistenceError(
+                        "CHECKPOINT_IDENTITY_MISMATCH", "session identity is already bound"
+                    )
                 await conn.commit()
             except Exception:
                 await self._rollback(conn)
@@ -529,7 +551,9 @@ class SessionCheckpointRepository:
         if event_seq < 1:
             raise PersistenceError("PERSISTENCE_INVALID_INPUT", "event sequence must be positive")
         if event_type not in SUPPORTED_EVENT_TYPES:
-            raise PersistenceError("PERSISTENCE_EVENT_UNSUPPORTED", "event type is not durable in B11")
+            raise PersistenceError(
+                "PERSISTENCE_EVENT_UNSUPPORTED", "event type is not durable in B11"
+            )
         event_payload = _json_object(payload, "event payload")
         timestamp = occurred_at or datetime.now(UTC).isoformat()
         _parse_timestamp(timestamp, "occurred_at")
@@ -558,7 +582,9 @@ class SessionCheckpointRepository:
                 await existing_cursor.close()
                 if existing is not None:
                     if existing["checksum"] != event_checksum:
-                        raise PersistenceError("PERSISTENCE_CONFLICT", "event sequence is already bound")
+                        raise PersistenceError(
+                            "PERSISTENCE_CONFLICT", "event sequence is already bound"
+                        )
                     result = PersistedEvent(
                         session_id=session_id,
                         event_seq=event_seq,
@@ -646,18 +672,19 @@ class SessionCheckpointRepository:
                 session = await self._session_row(conn, session_id)
                 if session is None:
                     raise PersistenceError("SESSION_NOT_FOUND", "session does not exist")
-                if (
-                    session["task_id"] != task_id
-                    or session["operation_key"] != operation_key
-                ):
-                    raise PersistenceError("CHECKPOINT_TASK_MISMATCH", "checkpoint task identity does not match")
+                if session["task_id"] != task_id or session["operation_key"] != operation_key:
+                    raise PersistenceError(
+                        "CHECKPOINT_TASK_MISMATCH", "checkpoint task identity does not match"
+                    )
                 if session["model_config_revision"] != model_revision:
                     raise PersistenceError(
                         "CHECKPOINT_MODEL_REVISION_MISSING",
                         "checkpoint model revision does not match",
                     )
                 if session["grant_revision"] != grant_revision:
-                    raise PersistenceError("GRANT_REVISION_MISMATCH", "checkpoint grant revision does not match")
+                    raise PersistenceError(
+                        "GRANT_REVISION_MISMATCH", "checkpoint grant revision does not match"
+                    )
                 stored_grant_snapshot = _stored_json_object(
                     session["grant_snapshot_json"], "session grant snapshot"
                 )
@@ -728,12 +755,16 @@ class SessionCheckpointRepository:
     ) -> JsonObject:
         expected = _identity_from_mapping(current_identity)
         if expected.session_id != session_id:
-            raise PersistenceError("CHECKPOINT_TASK_MISMATCH", "resume session identity does not match")
+            raise PersistenceError(
+                "CHECKPOINT_TASK_MISMATCH", "resume session identity does not match"
+            )
         _required_non_negative_int(current_durable_event_seq, "current durable event sequence")
         raw_now = now or datetime.now(UTC).isoformat()
         now_dt = _parse_timestamp(raw_now, "now")
         if max_age_seconds is not None and (
-            not isinstance(max_age_seconds, int) or isinstance(max_age_seconds, bool) or max_age_seconds < 1
+            not isinstance(max_age_seconds, int)
+            or isinstance(max_age_seconds, bool)
+            or max_age_seconds < 1
         ):
             raise PersistenceError("PERSISTENCE_INVALID_INPUT", "max checkpoint age is invalid")
         async with self._conn() as conn:
@@ -755,7 +786,9 @@ class SessionCheckpointRepository:
                 ),
             )
             if stored.as_json() != expected.as_json():
-                raise PersistenceError("CHECKPOINT_IDENTITY_MISMATCH", "resume identity does not match")
+                raise PersistenceError(
+                    "CHECKPOINT_IDENTITY_MISMATCH", "resume identity does not match"
+                )
             if session["latest_checkpoint_id"] is None:
                 raise PersistenceError("CHECKPOINT_NOT_FOUND", "session has no checkpoint")
             cursor = await conn.execute(
@@ -774,7 +807,9 @@ class SessionCheckpointRepository:
             "last durable event sequence",
         )
         if event_seq > current_durable_event_seq:
-            raise PersistenceError("CHECKPOINT_EVENT_SEQ_AHEAD", "checkpoint durable sequence is ahead")
+            raise PersistenceError(
+                "CHECKPOINT_EVENT_SEQ_AHEAD", "checkpoint durable sequence is ahead"
+            )
         created = _parse_timestamp(_lookup(payload, "createdAt", "created_at"), "created_at")
         if max_age_seconds is not None and (now_dt - created).total_seconds() > max_age_seconds:
             raise PersistenceError("CHECKPOINT_STALE", "checkpoint is stale")
@@ -783,7 +818,9 @@ class SessionCheckpointRepository:
             raise PersistenceError("GRANT_EXPIRED", "grant snapshot is expired")
         return payload
 
-    async def set_session_state(self, session_id: str, state: str, *, updated_at: str | None = None) -> None:
+    async def set_session_state(
+        self, session_id: str, state: str, *, updated_at: str | None = None
+    ) -> None:
         _required_string(session_id, "session_id")
         if state not in {"open", "paused", "closed", "stale"}:
             raise PersistenceError("PERSISTENCE_INVALID_INPUT", "session state is invalid")

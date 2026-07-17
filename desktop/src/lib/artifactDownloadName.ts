@@ -20,8 +20,12 @@ const MAX_DOWNLOAD_BASENAME_LENGTH = 160;
 function safeArtifactBasename(rawTitle: string): string {
   const normalized = rawTitle.normalize("NFKC");
   const basename = normalized.split(/[\\/]/).at(-1) ?? "";
-  return basename
-    .replace(/[\u0000-\u001f\u007f<>:"|?*]/g, "-")
+  const printable = Array.from(basename, (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint < 32 || codePoint === 127 ? "-" : character;
+  }).join("");
+  return printable
+    .replace(/[<>:"|?*]/g, "-")
     .replace(/[. ]+$/g, "")
     .trim();
 }

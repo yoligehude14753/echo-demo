@@ -370,10 +370,7 @@ def _cli() -> int:
         print(f"status={EXTERNAL_CREDENTIAL_PENDING} code={exc.code}")
         return 0
     result = asyncio.run(run_short_provider_smoke(binding))
-    print(
-        f"status={result.status} code={result.code} "
-        f"model_events={result.model_events}"
-    )
+    print(f"status={result.status} code={result.code} model_events={result.model_events}")
     return 0
 
 

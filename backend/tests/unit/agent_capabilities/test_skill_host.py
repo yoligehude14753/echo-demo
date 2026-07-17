@@ -57,7 +57,9 @@ def _grant(*, task_id: str = "task-1", operation_key: str = "op-1", revision: in
     )
 
 
-def _manifest(content: bytes = b"prompt content\n", *, capabilities: tuple[str, ...] = ("skill.use",)):
+def _manifest(
+    content: bytes = b"prompt content\n", *, capabilities: tuple[str, ...] = ("skill.use",)
+):
     resource = SkillResource(path="prompt.txt", sha256=hashlib.sha256(content).hexdigest())
     unsigned = SkillManifest(
         identity="bundled.echo",
@@ -75,7 +77,13 @@ def _manifest(content: bytes = b"prompt content\n", *, capabilities: tuple[str, 
     return unsigned.model_copy(update={"signature": "hmac-sha256:" + encoded})
 
 
-def _request(grant, *, task_id: str | None = None, operation_key: str | None = None, skill: SkillRequest | None = None):
+def _request(
+    grant,
+    *,
+    task_id: str | None = None,
+    operation_key: str | None = None,
+    skill: SkillRequest | None = None,
+):
     return CapabilityRequest(
         capability=CapabilityName.SKILL_USE,
         binding=InvocationBinding(
@@ -140,25 +148,36 @@ def test_cross_platform_signed_hash_and_provenance_allow(tmp_path: Path, platfor
 @pytest.mark.parametrize(
     ("label", "manifest", "expected"),
     (
-        ("signature", _manifest().model_copy(update={"signature": "hmac-sha256:" + "00" * 32}), SKILL_MANIFEST_SIGNATURE_INVALID),
+        (
+            "signature",
+            _manifest().model_copy(update={"signature": "hmac-sha256:" + "00" * 32}),
+            SKILL_MANIFEST_SIGNATURE_INVALID,
+        ),
         ("p0 npm", _manifest(b"npm install attacker\n"), UNSUPPORTED_P0_FAIL_CLOSED),
         ("p0 home", _manifest(b"HOME=/tmp\n"), UNSUPPORTED_P0_FAIL_CLOSED),
         ("p0 hooks", _manifest(b"hooks/post-run\n"), UNSUPPORTED_P0_FAIL_CLOSED),
     ),
 )
-def test_manifest_security_matrix(tmp_path: Path, label: str, manifest: SkillManifest, expected: str) -> None:
+def test_manifest_security_matrix(
+    tmp_path: Path, label: str, manifest: SkillManifest, expected: str
+) -> None:
     del label
     bundle = tmp_path / "bundle"
     bundle.mkdir()
     (bundle / "prompt.txt").write_bytes(
-        b"npm install attacker\n" if expected == UNSUPPORTED_P0_FAIL_CLOSED and manifest.resources[0].sha256 == hashlib.sha256(b"npm install attacker\n").hexdigest() else b"prompt content\n"
+        b"npm install attacker\n"
+        if expected == UNSUPPORTED_P0_FAIL_CLOSED
+        and manifest.resources[0].sha256 == hashlib.sha256(b"npm install attacker\n").hexdigest()
+        else b"prompt content\n"
     )
     if manifest.resources[0].sha256 == hashlib.sha256(b"HOME=/tmp\n").hexdigest():
         (bundle / "prompt.txt").write_bytes(b"HOME=/tmp\n")
     if manifest.resources[0].sha256 == hashlib.sha256(b"hooks/post-run\n").hexdigest():
         (bundle / "prompt.txt").write_bytes(b"hooks/post-run\n")
     host = EchoSkillHost(
-        SkillResolver(bundle, HmacSha256ManifestVerifier({"echo-test-signer": KEY}), platform="macos"),
+        SkillResolver(
+            bundle, HmacSha256ManifestVerifier({"echo-test-signer": KEY}), platform="macos"
+        ),
         {"echo.handler": lambda payload, context: {"ok": True}},
     )
     grant = _grant()
@@ -178,11 +197,7 @@ def test_manifest_security_matrix(tmp_path: Path, label: str, manifest: SkillMan
 def test_resource_hash_mismatch_is_denied_without_handler(tmp_path: Path) -> None:
     host, calls = _host(tmp_path)
     manifest = _manifest().model_copy(
-        update={
-            "resources": (
-                SkillResource(path="prompt.txt", sha256="f" * 64),
-            )
-        }
+        update={"resources": (SkillResource(path="prompt.txt", sha256="f" * 64),)}
     )
     signature = hmac.new(KEY, manifest.signed_payload(), hashlib.sha256).digest()
     manifest = manifest.model_copy(
@@ -207,10 +222,16 @@ def test_resource_hash_mismatch_is_denied_without_handler(tmp_path: Path) -> Non
     (
         ("task mismatch", {"task_id": "other"}, DenyCode.GRANT_BINDING_MISMATCH.value),
         ("operation mismatch", {"operation_key": "other"}, DenyCode.GRANT_BINDING_MISMATCH.value),
-        ("skill mismatch", {"skill": SkillRequest(identity="other", version="1.0.0")}, DenyCode.TOOL_SKILL_DENIED.value),
+        (
+            "skill mismatch",
+            {"skill": SkillRequest(identity="other", version="1.0.0")},
+            DenyCode.TOOL_SKILL_DENIED.value,
+        ),
     ),
 )
-def test_binding_and_skill_mismatch_matrix(tmp_path: Path, name: str, kwargs: dict[str, Any], expected: str) -> None:
+def test_binding_and_skill_mismatch_matrix(
+    tmp_path: Path, name: str, kwargs: dict[str, Any], expected: str
+) -> None:
     del name
     host, calls = _host(tmp_path)
     grant = _grant()
@@ -237,7 +258,12 @@ def test_binding_and_skill_mismatch_matrix(tmp_path: Path, name: str, kwargs: di
     ),
 )
 def test_tool_revision_revoke_cancel_matrix(
-    tmp_path: Path, tool_use_id: str, grant_revision: int, current_grant, cancelled: bool, expected: str
+    tmp_path: Path,
+    tool_use_id: str,
+    grant_revision: int,
+    current_grant,
+    cancelled: bool,
+    expected: str,
 ) -> None:
     host, calls = _host(tmp_path)
     grant = _grant()

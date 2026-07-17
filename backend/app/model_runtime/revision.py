@@ -68,7 +68,9 @@ class TaskModelRevisionRegistry:
         self._bindings: dict[str, TaskModelBinding] = {}
         self._lock = RLock()
 
-    def begin_task(self, task_id: str, purpose: ModelPurpose = "agent_main") -> ModelRuntimeSnapshot:
+    def begin_task(
+        self, task_id: str, purpose: ModelPurpose = "agent_main"
+    ) -> ModelRuntimeSnapshot:
         normalized_task_id = task_id.strip()
         if not normalized_task_id:
             raise ModelRuntimeConfigError(MODEL_TASK_NOT_PINNED, field="task_id")
@@ -119,7 +121,9 @@ class TaskModelRevisionRegistry:
             del self._bindings[task_id]
 
 
-def _snapshot_for_purpose(config: ModelRuntimeConfig, purpose: ModelPurpose) -> ModelRuntimeSnapshot:
+def _snapshot_for_purpose(
+    config: ModelRuntimeConfig, purpose: ModelPurpose
+) -> ModelRuntimeSnapshot:
     # Keep the registry dependent on the public compiler API, not a duplicated
     # route/config interpretation.  The store returns ModelRuntimeConfig here.
     from app.model_runtime.config import compile_snapshot

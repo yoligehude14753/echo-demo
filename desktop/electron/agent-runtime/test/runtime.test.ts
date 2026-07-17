@@ -144,8 +144,9 @@ test("worker crash fails the turn and restart opens the same task/operation", as
   const session = await runtime.open(input);
   await assert.rejects(
     (async () => {
-      for await (const _event of session.runTurn(turn(input, { crash: true }))) {
+      for await (const event of session.runTurn(turn(input, { crash: true }))) {
         // The fixture exits before it can emit a terminal event.
+        void event;
       }
     })(),
     (error: unknown) => error instanceof WorkerRuntimeError && error.code === "RUNTIME_WORKER_CRASHED",

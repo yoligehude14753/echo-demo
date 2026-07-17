@@ -10,7 +10,9 @@ async def test_single_allows_only_selected_device(tmp_path) -> None:
     db = tmp_path / "capture.db"
     assert not (await run_migrations(db)).errors
     store = CaptureSelectionStore(db)
-    selected = await store.update("t", "u", mode="single", selected_device_ids=["a"], expected_revision=0)
+    selected = await store.update(
+        "t", "u", mode="single", selected_device_ids=["a"], expected_revision=0
+    )
     assert selected.revision == 1
     assert selected.allows("a")
     assert not selected.allows("b")
@@ -45,7 +47,9 @@ async def test_single_requires_exactly_one_device(tmp_path) -> None:
     assert not (await run_migrations(db)).errors
     store = CaptureSelectionStore(db)
     with pytest.raises(ValueError, match="exactly one"):
-        await store.update("t", "u", mode="single", selected_device_ids=["a", "b"], expected_revision=0)
+        await store.update(
+            "t", "u", mode="single", selected_device_ids=["a", "b"], expected_revision=0
+        )
 
 
 @pytest.mark.asyncio

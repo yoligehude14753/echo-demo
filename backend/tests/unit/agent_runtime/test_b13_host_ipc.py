@@ -26,7 +26,11 @@ from yoli_llm import SSEFrame
 async def _transport(request: Any, resolver: Any) -> AsyncIterator[SSEFrame]:
     assert request.protocol == "openai_chat"
     assert resolver(request.credential_handle) == "host-ipc-secret"
-    yield SSEFrame(data={"choices": [{"delta": {"role": "assistant", "content": "host"}, "finish_reason": None}]})
+    yield SSEFrame(
+        data={
+            "choices": [{"delta": {"role": "assistant", "content": "host"}, "finish_reason": None}]
+        }
+    )
     yield SSEFrame(data={"choices": [{"delta": {}, "finish_reason": "stop"}]})
     yield SSEFrame(done=True)
 
@@ -51,7 +55,9 @@ class _Session:
     async def close(self) -> None:
         return None
 
-    async def append_durable_event(self, *, event_type: str, payload: Mapping[str, Any], occurred_at: str) -> int:
+    async def append_durable_event(
+        self, *, event_type: str, payload: Mapping[str, Any], occurred_at: str
+    ) -> int:
         del occurred_at
         self.events.append((event_type, payload))
         return len(self.events)
@@ -78,7 +84,9 @@ async def test_b13_host_ipc_binds_model_tool_receipt_and_session(tmp_path: Path)
             policy_revision=4,
             task_id="task-host-ipc",
             operation_key="op-host-ipc",
-            workspace_identity=WorkspaceIdentity(workspace_id="ws-host-ipc", identity="workspace-host-ipc"),
+            workspace_identity=WorkspaceIdentity(
+                workspace_id="ws-host-ipc", identity="workspace-host-ipc"
+            ),
             issued_at=now - timedelta(minutes=1),
             expires_at=now + timedelta(minutes=5),
             workspace_roots=(
@@ -106,7 +114,12 @@ async def test_b13_host_ipc_binds_model_tool_receipt_and_session(tmp_path: Path)
             "kernelBuildIdentity": {"buildId": "b13-host-ipc"},
         },
     )
-    await adapter.handle("task-host-ipc", "op-host-ipc", "session.startup", {"kernelIdentity": {"buildId": "b13-host-ipc"}})
+    await adapter.handle(
+        "task-host-ipc",
+        "op-host-ipc",
+        "session.startup",
+        {"kernelIdentity": {"buildId": "b13-host-ipc"}},
+    )
     stream = await adapter.handle(
         "task-host-ipc",
         "op-host-ipc",
@@ -127,7 +140,11 @@ async def test_b13_host_ipc_binds_model_tool_receipt_and_session(tmp_path: Path)
             }
         },
     )
-    assert [event["type"] for event in stream["events"]] == ["message_start", "text_delta", "message_stop"]
+    assert [event["type"] for event in stream["events"]] == [
+        "message_start",
+        "text_delta",
+        "message_stop",
+    ]
     tool = await adapter.handle(
         "task-host-ipc",
         "op-host-ipc",

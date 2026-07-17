@@ -44,7 +44,8 @@ function array(value: unknown, label: string): JsonObject[] {
 }
 
 function publicOpen(open: OpenSessionInput): JsonObject {
-  const { credentialHandle: _credentialHandle, ...model } = open.model;
+  const model = { ...open.model } as Partial<OpenSessionInput["model"]>;
+  delete model.credentialHandle;
   return {
     taskId: open.taskId,
     operationKey: open.operationKey,

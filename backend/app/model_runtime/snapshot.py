@@ -86,10 +86,7 @@ def validate_request_identity(
 ) -> RequestIdentity:
     """确认 request identity 仍绑定同一 config revision 和 route。"""
 
-    if (
-        identity.config_revision != snapshot.revision
-        or identity.route_id != snapshot.route_id
-    ):
+    if identity.config_revision != snapshot.revision or identity.route_id != snapshot.route_id:
         raise ModelRuntimeRequestIdentityError(
             MODEL_REQUEST_IDENTITY_MISMATCH,
             field="config_revision_or_route_id",

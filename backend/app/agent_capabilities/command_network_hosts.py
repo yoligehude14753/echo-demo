@@ -126,11 +126,17 @@ def _now(value: datetime | None) -> datetime:
     return (value or datetime.now(UTC)).astimezone(UTC)
 
 
-def _invocation_fields(invocation: HostInvocation) -> tuple[str, str, str, str, str | None, int | None, int | None]:
+def _invocation_fields(
+    invocation: HostInvocation,
+) -> tuple[str, str, str, str, str | None, int | None, int | None]:
     request = invocation.request
     grant = invocation.grant
     binding = request.binding
-    capability = request.capability.value if isinstance(request.capability, CapabilityName) else str(request.capability)
+    capability = (
+        request.capability.value
+        if isinstance(request.capability, CapabilityName)
+        else str(request.capability)
+    )
     return (
         capability,
         binding.task_id,
@@ -156,7 +162,9 @@ def _receipt(
     redirects_verified: int = 0,
     cleanup_verified: bool | None = None,
 ) -> OperationReceipt:
-    capability, task_id, operation_key, tool_use_id, grant_id, grant_revision, policy_revision = _invocation_fields(invocation)
+    capability, task_id, operation_key, tool_use_id, grant_id, grant_revision, policy_revision = (
+        _invocation_fields(invocation)
+    )
     return OperationReceipt(
         receipt_id=f"receipt_{uuid.uuid4().hex}",
         occurred_at=_now(occurred_at),
@@ -181,7 +189,11 @@ def _receipt(
 
 def _denied_decision(invocation: HostInvocation, code: DenyCode) -> CapabilityDecision:
     request = invocation.request
-    capability = request.capability.value if isinstance(request.capability, CapabilityName) else str(request.capability)
+    capability = (
+        request.capability.value
+        if isinstance(request.capability, CapabilityName)
+        else str(request.capability)
+    )
     return CapabilityDecision(
         outcome=DecisionOutcome.DENY,
         code=code,
@@ -205,8 +217,10 @@ def _preflight(
 
     grant = invocation.grant
     request = invocation.request
-    if not isinstance(invocation.tool_use_id, str) or not invocation.tool_use_id or any(
-        char in invocation.tool_use_id for char in "\x00\r\n"
+    if (
+        not isinstance(invocation.tool_use_id, str)
+        or not invocation.tool_use_id
+        or any(char in invocation.tool_use_id for char in "\x00\r\n")
     ):
         return _denied_decision(invocation, DenyCode.TOOL_CAPABILITY_DENIED)
     if invocation.grant_revision != grant.revision:
@@ -232,7 +246,11 @@ def _p0_reason(argv: Sequence[str], env_names: Sequence[str]) -> str | None:  # 
     lowered = tuple(token.casefold() for token in argv)
     if any(name.upper() in _P0_ENV_NAMES for name in env_names):
         return "HOME_OR_PATH_DISCOVERY"
-    if any(token in {"~", "$home", "%userprofile%"} or token.startswith(("~/", "$home/", "%userprofile%")) for token in lowered):
+    if any(
+        token in {"~", "$home", "%userprofile%"}
+        or token.startswith(("~/", "$home/", "%userprofile%"))
+        for token in lowered
+    ):
         return "HOME_DISCOVERY"
     if any(token in {"--global", "-g"} for token in lowered):
         return "GLOBAL_CONFIG_OR_INSTALL"
@@ -250,7 +268,12 @@ def _verify_cwd(cwd: str) -> bool:
         return False
     path = Path(cwd)
     try:
-        return path.exists() and path.is_dir() and not path.is_symlink() and path.resolve(strict=True) == path.absolute()
+        return (
+            path.exists()
+            and path.is_dir()
+            and not path.is_symlink()
+            and path.resolve(strict=True) == path.absolute()
+        )
     except OSError:
         return False
 
@@ -312,7 +335,13 @@ def terminate_process_tree(process: subprocess.Popen[bytes], *, grace_seconds: f
     # invoked by argv only, with an absolute system path and no shell.
     taskkill = os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "taskkill.exe")
     try:
-        subprocess.run([taskkill, "/PID", str(pid), "/T", "/F"], check=False, shell=False, capture_output=True, timeout=grace_seconds)
+        subprocess.run(
+            [taskkill, "/PID", str(pid), "/T", "/F"],
+            check=False,
+            shell=False,
+            capture_output=True,
+            timeout=grace_seconds,
+        )
         process.wait(timeout=grace_seconds)
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -347,26 +376,65 @@ class CommandHost:
             denied = _denied_decision(invocation, DenyCode.TOOL_COMMAND_DENIED)
             return HostResult(
                 denied,
-                _receipt(invocation, decision=denied, phase="preflight_denied", code=UNSUPPORTED_P0_FAIL_CLOSED if reason else None, argv_digest=argv_digest),
+                _receipt(
+                    invocation,
+                    decision=denied,
+                    phase="preflight_denied",
+                    code=UNSUPPORTED_P0_FAIL_CLOSED if reason else None,
+                    argv_digest=argv_digest,
+                ),
             )
         if not self._executable_verifier(command.argv[0]) or not _verify_cwd(command.cwd):
             denied = _denied_decision(invocation, DenyCode.HOST_VERIFICATION_REQUIRED)
-            return HostResult(denied, _receipt(invocation, decision=denied, phase="host_verification_denied", argv_digest=argv_digest))
+            return HostResult(
+                denied,
+                _receipt(
+                    invocation,
+                    decision=denied,
+                    phase="host_verification_denied",
+                    argv_digest=argv_digest,
+                ),
+            )
         supplied_environment = dict(environment or {})
         if set(supplied_environment) - set(command.env_names) or any(
             not isinstance(name, str) or not isinstance(value, str) or "\x00" in value
             for name, value in supplied_environment.items()
         ):
             denied = _denied_decision(invocation, DenyCode.TOOL_COMMAND_DENIED)
-            return HostResult(denied, _receipt(invocation, decision=denied, phase="preflight_denied", argv_digest=argv_digest))
+            return HostResult(
+                denied,
+                _receipt(
+                    invocation, decision=denied, phase="preflight_denied", argv_digest=argv_digest
+                ),
+            )
         if any(name not in supplied_environment for name in command.env_names):
             denied = _denied_decision(invocation, DenyCode.TOOL_COMMAND_DENIED)
-            return HostResult(denied, _receipt(invocation, decision=denied, phase="preflight_denied", argv_digest=argv_digest))
+            return HostResult(
+                denied,
+                _receipt(
+                    invocation, decision=denied, phase="preflight_denied", argv_digest=argv_digest
+                ),
+            )
 
         if _is_set(cancel_event) or (revoked is not None and revoked()):
-            cancelled = _denied_decision(invocation, DenyCode.GRANT_REVOKED if revoked and revoked() else DenyCode.TOOL_CAPABILITY_DENIED)
+            cancelled = _denied_decision(
+                invocation,
+                DenyCode.GRANT_REVOKED
+                if revoked and revoked()
+                else DenyCode.TOOL_CAPABILITY_DENIED,
+            )
             code = "GRANT_REVOKED" if revoked is not None and revoked() else COMMAND_CANCELLED
-            return HostResult(cancelled, _receipt(invocation, decision=cancelled, phase="cancelled", code=code, argv_digest=argv_digest, cleanup_verified=True))
+            return HostResult(
+                cancelled,
+                _receipt(
+                    invocation,
+                    decision=cancelled,
+                    phase="cancelled",
+                    code=code,
+                    argv_digest=argv_digest,
+                    cleanup_verified=True,
+                ),
+            )
 
         process: subprocess.Popen[bytes] | None = None
         try:
@@ -379,20 +447,51 @@ class CommandHost:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=(os.name == "posix"),
-                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                if os.name == "nt"
+                else 0,
             )
-            deadline = time.monotonic() + min(float(invocation.grant.command.max_wall_seconds), 7200.0)
+            deadline = time.monotonic() + min(
+                float(invocation.grant.command.max_wall_seconds), 7200.0
+            )
             while True:
                 if _is_set(cancel_event) or (revoked is not None and revoked()):
                     cleanup = terminate_process_tree(process)
-                    code = "GRANT_REVOKED" if revoked is not None and revoked() else COMMAND_CANCELLED
-                    cancelled = _denied_decision(invocation, DenyCode.GRANT_REVOKED if code == "GRANT_REVOKED" else DenyCode.TOOL_CAPABILITY_DENIED)
-                    return HostResult(cancelled, _receipt(invocation, decision=cancelled, phase="cancelled", code=code if cleanup else PROCESS_CLEANUP_FAILED, argv_digest=argv_digest, cleanup_verified=cleanup))
+                    code = (
+                        "GRANT_REVOKED" if revoked is not None and revoked() else COMMAND_CANCELLED
+                    )
+                    cancelled = _denied_decision(
+                        invocation,
+                        DenyCode.GRANT_REVOKED
+                        if code == "GRANT_REVOKED"
+                        else DenyCode.TOOL_CAPABILITY_DENIED,
+                    )
+                    return HostResult(
+                        cancelled,
+                        _receipt(
+                            invocation,
+                            decision=cancelled,
+                            phase="cancelled",
+                            code=code if cleanup else PROCESS_CLEANUP_FAILED,
+                            argv_digest=argv_digest,
+                            cleanup_verified=cleanup,
+                        ),
+                    )
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     cleanup = terminate_process_tree(process)
                     timed_out = _denied_decision(invocation, DenyCode.TOOL_CAPABILITY_DENIED)
-                    return HostResult(timed_out, _receipt(invocation, decision=timed_out, phase="timed_out", code=COMMAND_TIMEOUT if cleanup else PROCESS_CLEANUP_FAILED, argv_digest=argv_digest, cleanup_verified=cleanup))
+                    return HostResult(
+                        timed_out,
+                        _receipt(
+                            invocation,
+                            decision=timed_out,
+                            phase="timed_out",
+                            code=COMMAND_TIMEOUT if cleanup else PROCESS_CLEANUP_FAILED,
+                            argv_digest=argv_digest,
+                            cleanup_verified=cleanup,
+                        ),
+                    )
                 try:
                     stdout, stderr = process.communicate(timeout=min(remaining, 0.1))
                     break
@@ -401,12 +500,30 @@ class CommandHost:
             max_bytes = invocation.grant.command.max_output_bytes
             stdout = stdout[:max_bytes]
             stderr = stderr[:max_bytes]
-            completed = _receipt(invocation, decision=decision, phase="completed", argv_digest=argv_digest, output_bytes=len(stdout), error_bytes=len(stderr), cleanup_verified=True)
+            completed = _receipt(
+                invocation,
+                decision=decision,
+                phase="completed",
+                argv_digest=argv_digest,
+                output_bytes=len(stdout),
+                error_bytes=len(stderr),
+                cleanup_verified=True,
+            )
             return HostResult(decision, completed, stdout, stderr)
         except (OSError, ValueError):
             cleanup = terminate_process_tree(process) if process is not None else True
             failed = _denied_decision(invocation, DenyCode.TOOL_COMMAND_DENIED)
-            return HostResult(failed, _receipt(invocation, decision=failed, phase="failed", code=PROCESS_CLEANUP_FAILED if not cleanup else "COMMAND_EXECUTION_FAILED", argv_digest=argv_digest, cleanup_verified=cleanup))
+            return HostResult(
+                failed,
+                _receipt(
+                    invocation,
+                    decision=failed,
+                    phase="failed",
+                    code=PROCESS_CLEANUP_FAILED if not cleanup else "COMMAND_EXECUTION_FAILED",
+                    argv_digest=argv_digest,
+                    cleanup_verified=cleanup,
+                ),
+            )
 
 
 class NetworkTransport(Protocol):
@@ -439,7 +556,12 @@ def _is_public_address(value: str, *, allow_private: bool) -> bool:
     except ValueError:
         return False
     if allow_private:
-        return not (address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast)
+        return not (
+            address.is_loopback
+            or address.is_link_local
+            or address.is_unspecified
+            or address.is_multicast
+        )
     return not (
         address.is_private
         or address.is_loopback
@@ -504,7 +626,13 @@ def _default_transport(
 
 def _target_from_url(url: str) -> tuple[str, str, int, str] | None:
     parts = urlsplit(url)
-    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password or parts.fragment:
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.fragment
+    ):
         return None
     try:
         port = parts.port or (443 if parts.scheme == "https" else 80)
@@ -542,25 +670,47 @@ class NetworkHost:
     ) -> HostResult:
         decision = _preflight(invocation, now=now, active_policy_revision=active_policy_revision)
         network = invocation.request.network
-        if network is None or (not decision.allowed and decision.code is not DenyCode.HOST_VERIFICATION_REQUIRED):
+        if network is None or (
+            not decision.allowed and decision.code is not DenyCode.HOST_VERIFICATION_REQUIRED
+        ):
             return HostResult(decision, _receipt(invocation, decision=decision, phase="denied"))
         if invocation.grant.network.mode == "deny":
             return HostResult(decision, _receipt(invocation, decision=decision, phase="denied"))
         if not isinstance(method, str) or not method or any(char in method for char in "\x00\r\n"):
             denied = _denied_decision(invocation, DenyCode.TOOL_NETWORK_DENIED)
-            return HostResult(denied, _receipt(invocation, decision=denied, phase="preflight_denied"))
+            return HostResult(
+                denied, _receipt(invocation, decision=denied, phase="preflight_denied")
+            )
         if not path.startswith("/") or any(char in path for char in "\x00\r\n"):
             denied = _denied_decision(invocation, DenyCode.TOOL_NETWORK_DENIED)
-            return HostResult(denied, _receipt(invocation, decision=denied, phase="preflight_denied"))
+            return HostResult(
+                denied, _receipt(invocation, decision=denied, phase="preflight_denied")
+            )
         if _p0_reason((network.host, path), ()) is not None:
             denied = _denied_decision(invocation, DenyCode.TOOL_NETWORK_DENIED)
-            return HostResult(denied, _receipt(invocation, decision=denied, phase="preflight_denied", code=UNSUPPORTED_P0_FAIL_CLOSED))
+            return HostResult(
+                denied,
+                _receipt(
+                    invocation,
+                    decision=denied,
+                    phase="preflight_denied",
+                    code=UNSUPPORTED_P0_FAIL_CLOSED,
+                ),
+            )
         target_url = f"{network.scheme}://{network.host}:{network.port}{path}"
         target = _target_from_url(target_url)
         target_digest = _digest(target_url)
         if target is None:
             denied = _denied_decision(invocation, DenyCode.TOOL_NETWORK_DENIED)
-            return HostResult(denied, _receipt(invocation, decision=denied, phase="host_verification_denied", target_digest=target_digest))
+            return HostResult(
+                denied,
+                _receipt(
+                    invocation,
+                    decision=denied,
+                    phase="host_verification_denied",
+                    target_digest=target_digest,
+                ),
+            )
 
         current_scheme, current_host, current_port, current_path = target
         redirects_verified = 0
@@ -568,14 +718,43 @@ class NetworkHost:
         while True:
             if revoked is not None and revoked():
                 cancelled = _denied_decision(invocation, DenyCode.GRANT_REVOKED)
-                return HostResult(cancelled, _receipt(invocation, decision=cancelled, phase="cancelled", code="GRANT_REVOKED", target_digest=target_digest, redirects_verified=redirects_verified))
+                return HostResult(
+                    cancelled,
+                    _receipt(
+                        invocation,
+                        decision=cancelled,
+                        phase="cancelled",
+                        code="GRANT_REVOKED",
+                        target_digest=target_digest,
+                        redirects_verified=redirects_verified,
+                    ),
+                )
             try:
-                resolved = tuple(dict.fromkeys(str(value) for value in self._resolver(current_host, current_port)))
+                resolved = tuple(
+                    dict.fromkeys(
+                        str(value) for value in self._resolver(current_host, current_port)
+                    )
+                )
             except (OSError, socket.gaierror, ValueError):
                 resolved = ()
-            if not resolved or not all(_is_public_address(value, allow_private=invocation.grant.network.allow_private_addresses) for value in resolved):
+            if not resolved or not all(
+                _is_public_address(
+                    value, allow_private=invocation.grant.network.allow_private_addresses
+                )
+                for value in resolved
+            ):
                 denied = _denied_decision(invocation, DenyCode.TOOL_NETWORK_DENIED)
-                return HostResult(denied, _receipt(invocation, decision=denied, phase="host_verification_denied", code=NETWORK_TARGET_INVALID, target_digest=target_digest, redirects_verified=redirects_verified))
+                return HostResult(
+                    denied,
+                    _receipt(
+                        invocation,
+                        decision=denied,
+                        phase="host_verification_denied",
+                        code=NETWORK_TARGET_INVALID,
+                        target_digest=target_digest,
+                        redirects_verified=redirects_verified,
+                    ),
+                )
             current_request = invocation.request.model_copy(
                 update={
                     "network": NetworkRequest(
@@ -586,10 +765,23 @@ class NetworkHost:
                     )
                 }
             )
-            current_invocation = HostInvocation(invocation.grant, current_request, invocation.tool_use_id, invocation.grant_revision)
-            current_decision = _preflight(current_invocation, now=now, active_policy_revision=active_policy_revision)
+            current_invocation = HostInvocation(
+                invocation.grant, current_request, invocation.tool_use_id, invocation.grant_revision
+            )
+            current_decision = _preflight(
+                current_invocation, now=now, active_policy_revision=active_policy_revision
+            )
             if not current_decision.allowed:
-                return HostResult(current_decision, _receipt(current_invocation, decision=current_decision, phase="denied", target_digest=target_digest, redirects_verified=redirects_verified))
+                return HostResult(
+                    current_decision,
+                    _receipt(
+                        current_invocation,
+                        decision=current_decision,
+                        phase="denied",
+                        target_digest=target_digest,
+                        redirects_verified=redirects_verified,
+                    ),
+                )
             try:
                 response = self._transport(
                     method,
@@ -602,24 +794,63 @@ class NetworkHost:
                 )
             except (OSError, ValueError, http.client.HTTPException):
                 failed = _denied_decision(current_invocation, DenyCode.TOOL_NETWORK_DENIED)
-                return HostResult(failed, _receipt(current_invocation, decision=failed, phase="failed", code="NETWORK_REQUEST_FAILED", target_digest=target_digest, redirects_verified=redirects_verified))
+                return HostResult(
+                    failed,
+                    _receipt(
+                        current_invocation,
+                        decision=failed,
+                        phase="failed",
+                        code="NETWORK_REQUEST_FAILED",
+                        target_digest=target_digest,
+                        redirects_verified=redirects_verified,
+                    ),
+                )
             if response.status not in {301, 302, 303, 307, 308}:
                 payload = response.body[:max_bytes]
                 return HostResult(
                     current_decision,
-                    _receipt(current_invocation, decision=current_decision, phase="completed", target_digest=target_digest, output_bytes=len(payload), redirects_verified=redirects_verified),
+                    _receipt(
+                        current_invocation,
+                        decision=current_decision,
+                        phase="completed",
+                        target_digest=target_digest,
+                        output_bytes=len(payload),
+                        redirects_verified=redirects_verified,
+                    ),
                     stdout=payload,
                     response_headers=response.headers,
                 )
             location = response.header("location")
             if location is None or redirects_verified >= _MAX_REDIRECTS:
                 failed = _denied_decision(current_invocation, DenyCode.TOOL_NETWORK_DENIED)
-                return HostResult(failed, _receipt(current_invocation, decision=failed, phase="redirect_denied", code=REDIRECT_LIMIT_EXCEEDED if location else NETWORK_TARGET_INVALID, target_digest=target_digest, redirects_verified=redirects_verified))
-            next_url = urljoin(f"{current_scheme}://{current_host}:{current_port}{current_path}", location)
+                return HostResult(
+                    failed,
+                    _receipt(
+                        current_invocation,
+                        decision=failed,
+                        phase="redirect_denied",
+                        code=REDIRECT_LIMIT_EXCEEDED if location else NETWORK_TARGET_INVALID,
+                        target_digest=target_digest,
+                        redirects_verified=redirects_verified,
+                    ),
+                )
+            next_url = urljoin(
+                f"{current_scheme}://{current_host}:{current_port}{current_path}", location
+            )
             next_target = _target_from_url(next_url)
             if next_target is None:
                 failed = _denied_decision(current_invocation, DenyCode.TOOL_NETWORK_DENIED)
-                return HostResult(failed, _receipt(current_invocation, decision=failed, phase="redirect_denied", code=NETWORK_TARGET_INVALID, target_digest=target_digest, redirects_verified=redirects_verified))
+                return HostResult(
+                    failed,
+                    _receipt(
+                        current_invocation,
+                        decision=failed,
+                        phase="redirect_denied",
+                        code=NETWORK_TARGET_INVALID,
+                        target_digest=target_digest,
+                        redirects_verified=redirects_verified,
+                    ),
+                )
             current_scheme, current_host, current_port, current_path = next_target
             redirects_verified += 1
 

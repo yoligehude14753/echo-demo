@@ -34,7 +34,9 @@ def _identity() -> CanonicalRequestIdentity:
 
 
 def _jsonl(name: str) -> list[str]:
-    return [line for line in (FIXTURES / name).read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        line for line in (FIXTURES / name).read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
 
 
 def _error_code(events: tuple[Any, ...]) -> str:
@@ -128,7 +130,9 @@ def test_stream_replay_has_common_text_tool_usage_stop_contract(
     assert all(event.identity is identity for event in events)
 
     summary = _semantic_summary(events)
-    expected_text = "Hello from model." if fixture.startswith("anthropic") else "Hello from compatible model."
+    expected_text = (
+        "Hello from model." if fixture.startswith("anthropic") else "Hello from compatible model."
+    )
     expected_tool_ids = (
         ["toolu_redacted_1", "toolu_redacted_2"]
         if fixture.startswith("anthropic")
@@ -211,9 +215,18 @@ def test_tool_arguments_are_typed_only_and_never_executed() -> None:
             {
                 "type": "content_block_start",
                 "index": 0,
-                "content_block": {"type": "tool_use", "id": "toolu-redacted", "name": "lookup", "input": {}},
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu-redacted",
+                    "name": "lookup",
+                    "input": {},
+                },
             },
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"q\":"}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"q":'},
+            },
             {"type": "content_block_stop", "index": 0},
         ],
         _identity(),
@@ -272,9 +285,12 @@ def test_http_error_mapping_uses_stable_codes_without_provider_messages() -> Non
         assert events[0].type == "error"
         assert events[0].payload["code"] == case["expected"]["code"]
         assert events[0].payload["retryable"] is case["expected"]["retryable"]
-        assert events[0].payload["message"] == {
-            "MODEL_CREDENTIAL_MISSING": "model credential is missing or rejected",
-            "MODEL_CREDENTIAL_REVOKED": "model credential was revoked",
-            "MODEL_TIMEOUT": "model provider timed out",
-            "MODEL_UPSTREAM_ERROR": "model provider returned an error",
-        }[case["expected"]["code"]]
+        assert (
+            events[0].payload["message"]
+            == {
+                "MODEL_CREDENTIAL_MISSING": "model credential is missing or rejected",
+                "MODEL_CREDENTIAL_REVOKED": "model credential was revoked",
+                "MODEL_TIMEOUT": "model provider timed out",
+                "MODEL_UPSTREAM_ERROR": "model provider returned an error",
+            }[case["expected"]["code"]]
+        )

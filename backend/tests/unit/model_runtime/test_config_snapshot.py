@@ -73,7 +73,9 @@ def _route(
     }
 
 
-def _config(*, credential_handle: str = "credential://primary", revision: int = 7) -> dict[str, object]:
+def _config(
+    *, credential_handle: str = "credential://primary", revision: int = 7
+) -> dict[str, object]:
     return {
         "schema_version": 1,
         "revision": revision,
@@ -119,7 +121,9 @@ def test_snapshot_and_nested_contract_values_are_immutable() -> None:
         snapshot.revision = 8  # type: ignore[misc]
     with pytest.raises(ValidationError):
         snapshot.capabilities.streaming = False  # type: ignore[misc]
-    assert isinstance(normalize_model_runtime_config(_config()).routes["agent_main"].fallback_route_ids, tuple)
+    assert isinstance(
+        normalize_model_runtime_config(_config()).routes["agent_main"].fallback_route_ids, tuple
+    )
 
 
 @pytest.mark.unit

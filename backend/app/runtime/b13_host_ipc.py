@@ -188,7 +188,10 @@ class B13HostAdapter:
     async def _bind(self, key: tuple[str, str], payload: Mapping[str, Any]) -> dict[str, Any]:
         task_id, operation_key = key
         public_open = _obj(payload, "open") if "open" in payload else dict(payload)
-        if _string(public_open.get("taskId"), "taskId") != task_id or _string(public_open.get("operationKey"), "operationKey") != operation_key:
+        if (
+            _string(public_open.get("taskId"), "taskId") != task_id
+            or _string(public_open.get("operationKey"), "operationKey") != operation_key
+        ):
             raise B13HostBindingError("B13_HOST_IDENTITY_MISMATCH")
         public_model = _obj(public_open.get("model"), "model")
         public_grant = _obj(public_open.get("grant"), "grant")
@@ -209,7 +212,9 @@ class B13HostAdapter:
             },
             kernel_identity,
         )
-        self._bindings[key] = _Binding(task_id, operation_key, provider, session, grant, kernel_identity)
+        self._bindings[key] = _Binding(
+            task_id, operation_key, provider, session, grant, kernel_identity
+        )
         return {"tools": _tool_definitions()}
 
     async def _count_tokens(self, binding: _Binding, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -224,9 +229,14 @@ class B13HostAdapter:
             events.append(event.as_dict())
         return {"events": events}
 
-    def _context(self, binding: _Binding, payload: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    def _context(
+        self, binding: _Binding, payload: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
         context = _obj(payload.get("context"), "context")
-        if _string(context.get("taskId"), "context.taskId") != binding.task_id or _string(context.get("operationKey"), "context.operationKey") != binding.operation_key:
+        if (
+            _string(context.get("taskId"), "context.taskId") != binding.task_id
+            or _string(context.get("operationKey"), "context.operationKey") != binding.operation_key
+        ):
             raise B13HostBindingError("B13_HOST_IDENTITY_MISMATCH")
         tool_name = _string(payload.get("toolName"), "toolName")
         tool_input = _obj(payload.get("input"), "input")
@@ -235,14 +245,23 @@ class B13HostAdapter:
     def _validate_tool(self, binding: _Binding, payload: Mapping[str, Any]) -> dict[str, Any]:
         context, _tool_input, tool_name, _tool_use_id = self._context(binding, payload)
         if tool_name != "path.read":
-            return {"allowed": False, "reasonCode": DenyCode.TOOL_NOT_REGISTERED.value, "message": "tool is not registered"}
+            return {
+                "allowed": False,
+                "reasonCode": DenyCode.TOOL_NOT_REGISTERED.value,
+                "message": "tool is not registered",
+            }
         grant = _obj(context.get("grant"), "context.grant")
         if (
             grant.get("taskId", grant.get("task_id")) != binding.task_id
-            or grant.get("operationKey", grant.get("operation_key", binding.operation_key)) != binding.operation_key
+            or grant.get("operationKey", grant.get("operation_key", binding.operation_key))
+            != binding.operation_key
             or grant.get("revision") != binding.grant.revision
         ):
-            return {"allowed": False, "reasonCode": DenyCode.GRANT_BINDING_MISMATCH.value, "message": "grant binding mismatch"}
+            return {
+                "allowed": False,
+                "reasonCode": DenyCode.GRANT_BINDING_MISMATCH.value,
+                "message": "grant binding mismatch",
+            }
         return {"allowed": True}
 
     def _invoke_tool(self, binding: _Binding, payload: Mapping[str, Any]) -> dict[str, Any]:

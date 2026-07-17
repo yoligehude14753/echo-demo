@@ -97,13 +97,18 @@ def compile_grant(  # noqa: PLR0911, PLR0912
         if normalized_facts.revision <= 0:
             return _failure(ReasonCode.STALE_REVISION, "grant revision must be positive")
         if expected_revision is not None and normalized_facts.revision != expected_revision:
-            return _failure(ReasonCode.STALE_REVISION, "grant revision does not match the expected revision")
+            return _failure(
+                ReasonCode.STALE_REVISION, "grant revision does not match the expected revision"
+            )
         if normalized_facts.stale:
             return _failure(ReasonCode.STALE_REVISION, "permission facts are marked stale")
         expires_at = normalized_facts.expires_at
         if expires_at is not None:
             if now is None:
-                return _failure(ReasonCode.REVISION_FRESHNESS_UNVERIFIED, "explicit now is required for expiring facts")
+                return _failure(
+                    ReasonCode.REVISION_FRESHNESS_UNVERIFIED,
+                    "explicit now is required for expiring facts",
+                )
             checked_now = _normalize_now(now)
             if checked_now >= expires_at:
                 return _failure(ReasonCode.EXPIRED_REVISION, "permission facts have expired")
@@ -112,7 +117,9 @@ def compile_grant(  # noqa: PLR0911, PLR0912
         for fact in normalized_facts.capabilities:
             capability = canonical_capability(fact.capability)
             if capability not in SUPPORTED_CAPABILITIES:
-                return _failure(ReasonCode.UNKNOWN_CAPABILITY, f"unsupported capability: {capability}")
+                return _failure(
+                    ReasonCode.UNKNOWN_CAPABILITY, f"unsupported capability: {capability}"
+                )
             if required is not None and capability not in required:
                 continue
             scope = _normalize_scope(capability, fact.scope)
@@ -130,9 +137,13 @@ def compile_grant(  # noqa: PLR0911, PLR0912
         if conflict is not None:
             return _failure(ReasonCode.CONFLICTING_SCOPE, conflict)
         immutable_capabilities = tuple(
-            sorted(compiled, key=lambda item: (item.capability, item.effect, _canonical(item.scope)))
+            sorted(
+                compiled, key=lambda item: (item.capability, item.effect, _canonical(item.scope))
+            )
         )
-        grant = _public_grant(normalized_facts, task_id, immutable_capabilities, expires_at=expires_at)
+        grant = _public_grant(
+            normalized_facts, task_id, immutable_capabilities, expires_at=expires_at
+        )
         return CompileResult(
             Decision(DecisionStatus.ALLOW, ReasonCode.ALLOWED, detail="immutable grant compiled"),
             grant,
@@ -172,9 +183,13 @@ def decide(  # noqa: PLR0911
         freshness = _check_grant_freshness(grant, expected_revision=expected_revision, now=now)
         if freshness is not None:
             return freshness
-        return _failure(ReasonCode.INVALID_INPUT, "direct public snapshots require typed catalog requests").decision
+        return _failure(
+            ReasonCode.INVALID_INPUT, "direct public snapshots require typed catalog requests"
+        ).decision
     else:
-        result = compile_grant(source, task_id=task_id, expected_revision=expected_revision, now=now)
+        result = compile_grant(
+            source, task_id=task_id, expected_revision=expected_revision, now=now
+        )
         if not result.allowed:
             return result.decision
         assert result.grant is not None
@@ -184,7 +199,9 @@ def decide(  # noqa: PLR0911
 
 
 def decide_against_grant(grant: GrantSnapshot, capability: str, request: object) -> Decision:
-    return _failure(ReasonCode.INVALID_INPUT, "direct public snapshots require typed catalog requests").decision
+    return _failure(
+        ReasonCode.INVALID_INPUT, "direct public snapshots require typed catalog requests"
+    ).decision
 
 
 def _decide_with_rules(
@@ -200,10 +217,18 @@ def _decide_with_rules(
         return _failure(exc.reason_code, exc.detail, capability=capability).decision
     rules = [item for item in rules if item.capability == canonical]
     if not rules:
-        return _failure(_reason_for_capability(canonical), "no matching capability in immutable grant", capability=canonical).decision
+        return _failure(
+            _reason_for_capability(canonical),
+            "no matching capability in immutable grant",
+            capability=canonical,
+        ).decision
     for rule in rules:
         if rule.effect == "deny" and _scope_matches(canonical, rule.scope, normalized_request):
-            return _failure(_reason_for_capability(canonical), "explicit deny rule matched", capability=canonical).decision
+            return _failure(
+                _reason_for_capability(canonical),
+                "explicit deny rule matched",
+                capability=canonical,
+            ).decision
     failed_match: Decision | None = None
     for rule in rules:
         if rule.effect != "allow":
@@ -214,23 +239,40 @@ def _decide_with_rules(
         if decision.host_verification_required:
             return decision
         failed_match = decision
-    return failed_match or _failure(_reason_for_capability(canonical), "request is outside immutable grant scope", capability=canonical).decision
+    return (
+        failed_match
+        or _failure(
+            _reason_for_capability(canonical),
+            "request is outside immutable grant scope",
+            capability=canonical,
+        ).decision
+    )
 
 
 def _normalize_facts(facts: PermissionFacts | Mapping[str, Any]) -> PermissionFacts:
     if isinstance(facts, PermissionFacts):
         return facts
     if not isinstance(facts, Mapping):
-        raise PolicyInputError(ReasonCode.INVALID_INPUT, "permission facts must be a mapping or PermissionFacts")
+        raise PolicyInputError(
+            ReasonCode.INVALID_INPUT, "permission facts must be a mapping or PermissionFacts"
+        )
     raw_capabilities = facts.get("capabilities", facts.get("facts", ()))
     capabilities: list[CapabilityFact] = []
     for raw in raw_capabilities:
         if isinstance(raw, CapabilityFact):
             capabilities.append(raw)
         elif isinstance(raw, Mapping):
-            capabilities.append(CapabilityFact(str(raw.get("capability", "")), raw.get("scope", {}), str(raw.get("effect", "allow"))))
+            capabilities.append(
+                CapabilityFact(
+                    str(raw.get("capability", "")),
+                    raw.get("scope", {}),
+                    str(raw.get("effect", "allow")),
+                )
+            )
         else:
-            raise PolicyInputError(ReasonCode.INVALID_INPUT, "each permission fact must be a mapping")
+            raise PolicyInputError(
+                ReasonCode.INVALID_INPUT, "each permission fact must be a mapping"
+            )
     return PermissionFacts(
         revision=int(facts.get("revision", 0)),
         capabilities=tuple(capabilities),
@@ -245,7 +287,9 @@ def _normalize_scope(capability: str, scope: object) -> object:
         return normalize_path_scope(scope)  # type: ignore[arg-type]
     if capability == "command.execute":
         if isinstance(scope, CommandScope):
-            return normalize_command_scope(scope.argv, cwd=scope.cwd, env_names=scope.env_names, platform=scope.platform)
+            return normalize_command_scope(
+                scope.argv, cwd=scope.cwd, env_names=scope.env_names, platform=scope.platform
+            )
         if not isinstance(scope, Mapping):
             raise PolicyInputError(ReasonCode.INVALID_INPUT, "command scope must be a mapping")
         return normalize_command_scope(
@@ -264,11 +308,18 @@ def _normalize_scope(capability: str, scope: object) -> object:
 def _normalize_request(capability: str, request: object) -> object:
     if capability in {"path.read", "path.write"}:
         if isinstance(request, Mapping):
-            return normalize_path_request(request.get("path", ""), platform=request.get("platform", ""))
+            return normalize_path_request(
+                request.get("path", ""), platform=request.get("platform", "")
+            )
         raise PolicyInputError(ReasonCode.INVALID_INPUT, "path request needs path and platform")
     if capability == "command.execute":
         if isinstance(request, CommandScope):
-            return normalize_command_scope(request.argv, cwd=request.cwd, env_names=request.env_names, platform=request.platform)
+            return normalize_command_scope(
+                request.argv,
+                cwd=request.cwd,
+                env_names=request.env_names,
+                platform=request.platform,
+            )
         if isinstance(request, Mapping):
             return normalize_command_scope(
                 request.get("argv", ()),
@@ -289,20 +340,34 @@ def _evaluate_rule(capability: str, scope: object, request: object) -> Decision:
         assert isinstance(scope, PathScope)
         assert hasattr(request, "path")
         if any(path_is_within_root(root, request) for root in scope.roots):
-            return Decision(DecisionStatus.ALLOW, ReasonCode.ALLOWED, capability, normalized=request)
-        return _failure(ReasonCode.PATH_OUTSIDE_ROOT, "path is outside every granted root", capability=capability).decision
+            return Decision(
+                DecisionStatus.ALLOW, ReasonCode.ALLOWED, capability, normalized=request
+            )
+        return _failure(
+            ReasonCode.PATH_OUTSIDE_ROOT,
+            "path is outside every granted root",
+            capability=capability,
+        ).decision
     if capability == "command.execute":
         assert isinstance(scope, CommandScope) and isinstance(request, CommandScope)
         if command_is_authorized(scope, request):
-            return Decision(DecisionStatus.ALLOW, ReasonCode.ALLOWED, capability, normalized=request)
-        return _failure(ReasonCode.COMMAND_NOT_AUTHORIZED, "argv, cwd, or env names differ", capability=capability).decision
+            return Decision(
+                DecisionStatus.ALLOW, ReasonCode.ALLOWED, capability, normalized=request
+            )
+        return _failure(
+            ReasonCode.COMMAND_NOT_AUTHORIZED,
+            "argv, cwd, or env names differ",
+            capability=capability,
+        ).decision
     if capability == "network.connect":
         assert isinstance(scope, NetworkScope)
         return network_is_authorized(scope, request)  # type: ignore[arg-type]
     if capability == "skill.use":
         assert isinstance(scope, SkillScope) and isinstance(request, SkillScope)
         return skill_is_authorized(scope, request)
-    return _failure(ReasonCode.UNKNOWN_CAPABILITY, "unsupported capability", capability=capability).decision
+    return _failure(
+        ReasonCode.UNKNOWN_CAPABILITY, "unsupported capability", capability=capability
+    ).decision
 
 
 def _scope_matches(capability: str, scope: object, request: object) -> bool:
@@ -323,10 +388,23 @@ def _find_conflict(capabilities: list[CompiledCapability]) -> str | None:
 def _scopes_overlap(capability: str, left: object, right: object) -> bool:
     if capability in {"path.read", "path.write"}:
         assert isinstance(left, PathScope) and isinstance(right, PathScope)
-        return any(path_is_within_root(a, b.root) or path_is_within_root(b, a.root) for a in left.roots for b in right.roots)
+        return any(
+            path_is_within_root(a, b.root) or path_is_within_root(b, a.root)
+            for a in left.roots
+            for b in right.roots
+        )
     if capability == "command.execute":
         assert isinstance(left, CommandScope) and isinstance(right, CommandScope)
-        return left.platform == right.platform and left.argv == right.argv and left.cwd == right.cwd and bool(set(left.env_names) & set(right.env_names) or not left.env_names or not right.env_names)
+        return (
+            left.platform == right.platform
+            and left.argv == right.argv
+            and left.cwd == right.cwd
+            and bool(
+                set(left.env_names) & set(right.env_names)
+                or not left.env_names
+                or not right.env_names
+            )
+        )
     if capability == "network.connect":
         assert isinstance(left, NetworkScope) and isinstance(right, NetworkScope)
         return left.target == right.target
@@ -338,7 +416,9 @@ def _scopes_overlap(capability: str, left: object, right: object) -> bool:
 
 def _network_needs_host_verification(scope: object) -> bool:
     assert isinstance(scope, NetworkScope)
-    return scope.target.host_verification_required or any(item.host_verification_required for item in scope.allowed_redirects)
+    return scope.target.host_verification_required or any(
+        item.host_verification_required for item in scope.allowed_redirects
+    )
 
 
 def _normalize_effect(effect: str) -> str:
@@ -353,12 +433,19 @@ def _normalize_requested_capabilities(values: tuple[str, ...] | None) -> frozens
     return frozenset(canonical_capability(value) for value in values)
 
 
-def _check_grant_freshness(grant: GrantSnapshot, *, expected_revision: int | None, now: datetime | None) -> Decision | None:
+def _check_grant_freshness(
+    grant: GrantSnapshot, *, expected_revision: int | None, now: datetime | None
+) -> Decision | None:
     if expected_revision is not None and grant.grant_revision != expected_revision:
-        return _failure(ReasonCode.STALE_REVISION, "grant revision does not match the expected revision").decision
+        return _failure(
+            ReasonCode.STALE_REVISION, "grant revision does not match the expected revision"
+        ).decision
     if grant.expires_at is not None:
         if now is None:
-            return _failure(ReasonCode.REVISION_FRESHNESS_UNVERIFIED, "explicit now is required for expiring grants").decision
+            return _failure(
+                ReasonCode.REVISION_FRESHNESS_UNVERIFIED,
+                "explicit now is required for expiring grants",
+            ).decision
         if _normalize_now(now) >= grant.expires_at:
             return _failure(ReasonCode.EXPIRED_REVISION, "grant has expired").decision
     return None
@@ -393,25 +480,47 @@ def _failure(reason: ReasonCode, detail: str, *, capability: str | None = None) 
 
 def _canonical(value: object) -> str:
     if isinstance(value, PathScope):
-        return json.dumps({"roots": [(item.platform, item.root) for item in value.roots]}, separators=(",", ":"))
+        return json.dumps(
+            {"roots": [(item.platform, item.root) for item in value.roots]}, separators=(",", ":")
+        )
     if isinstance(value, CommandScope):
-        return json.dumps({"platform": value.platform, "argv": value.argv, "cwd": value.cwd, "env_names": value.env_names}, separators=(",", ":"))
+        return json.dumps(
+            {
+                "platform": value.platform,
+                "argv": value.argv,
+                "cwd": value.cwd,
+                "env_names": value.env_names,
+            },
+            separators=(",", ":"),
+        )
     if isinstance(value, NetworkScope):
-        return json.dumps({"target": _canonical(value.target), "redirects": [_canonical(item) for item in value.allowed_redirects]}, separators=(",", ":"))
+        return json.dumps(
+            {
+                "target": _canonical(value.target),
+                "redirects": [_canonical(item) for item in value.allowed_redirects],
+            },
+            separators=(",", ":"),
+        )
     if isinstance(value, NetworkTarget):
-        return json.dumps((value.scheme, value.host, value.port, value.verified_ips), separators=(",", ":"))
+        return json.dumps(
+            (value.scheme, value.host, value.port, value.verified_ips), separators=(",", ":")
+        )
     if isinstance(value, SkillScope):
         return json.dumps((value.identity, value.version, value.provenance), separators=(",", ":"))
     return repr(value)
 
 
-def _grant_id(facts: PermissionFacts, task_id: str, capabilities: tuple[CompiledCapability, ...]) -> str:
+def _grant_id(
+    facts: PermissionFacts, task_id: str, capabilities: tuple[CompiledCapability, ...]
+) -> str:
     payload = {
         "schema_version": 1,
         "task_id": task_id,
         "revision": facts.revision,
         "expires_at": facts.expires_at.isoformat() if facts.expires_at else None,
-        "capabilities": [(item.capability, item.effect, _canonical(item.scope)) for item in capabilities],
+        "capabilities": [
+            (item.capability, item.effect, _canonical(item.scope)) for item in capabilities
+        ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return "grant_" + hashlib.sha256(encoded).hexdigest()[:32]
@@ -434,7 +543,9 @@ def _public_grant(
         if item.effect != "allow":
             continue
         if item.capability in {"path.read", "path.write"}:
-            right = PermissionRight.READ if item.capability == "path.read" else PermissionRight.WRITE
+            right = (
+                PermissionRight.READ if item.capability == "path.read" else PermissionRight.WRITE
+            )
             assert isinstance(item.scope, PathScope)
             for root in item.scope.roots:
                 roots.setdefault((root.platform, root.root), set()).add(right)

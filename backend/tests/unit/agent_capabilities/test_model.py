@@ -113,11 +113,15 @@ def test_binding_expiry_and_stale_revision_fail_closed() -> None:
     wrong_operation = base.model_copy(
         update={"binding": _binding().model_copy(update={"operation_key": "other"})}
     )
-    assert evaluate_capability(snapshot, wrong_operation, now=NOW).code is DenyCode.GRANT_BINDING_MISMATCH
-    assert evaluate_capability(snapshot, base, now=NOW, active_policy_revision=12).code is DenyCode.GRANT_STALE
     assert (
-        evaluate_capability(_grant(expires_at=NOW), base, now=NOW).code is DenyCode.GRANT_EXPIRED
+        evaluate_capability(snapshot, wrong_operation, now=NOW).code
+        is DenyCode.GRANT_BINDING_MISMATCH
     )
+    assert (
+        evaluate_capability(snapshot, base, now=NOW, active_policy_revision=12).code
+        is DenyCode.GRANT_STALE
+    )
+    assert evaluate_capability(_grant(expires_at=NOW), base, now=NOW).code is DenyCode.GRANT_EXPIRED
 
 
 def test_catalog_is_frozen_and_unknown_capability_is_denied() -> None:
@@ -133,12 +137,20 @@ def test_catalog_is_frozen_and_unknown_capability_is_denied() -> None:
 def test_path_ambiguity_matrix_is_pure_and_host_boundary_is_explicit() -> None:
     inside = _request(
         CapabilityName.PATH_READ,
-        path=PathRequest(path="/workspace/project/notes.txt", root_id="root-1", right=PermissionRight.READ),
+        path=PathRequest(
+            path="/workspace/project/notes.txt", root_id="root-1", right=PermissionRight.READ
+        ),
     )
-    assert evaluate_capability(_grant(), inside, now=NOW).code is DenyCode.HOST_VERIFICATION_REQUIRED
+    assert (
+        evaluate_capability(_grant(), inside, now=NOW).code is DenyCode.HOST_VERIFICATION_REQUIRED
+    )
 
     verified = inside.model_copy(
-        update={"path": inside.path.model_copy(update={"host_verified": True, "observed_identity": "root-identity-1"})}
+        update={
+            "path": inside.path.model_copy(
+                update={"host_verified": True, "observed_identity": "root-identity-1"}
+            )
+        }
     )
     assert evaluate_capability(_grant(), verified, now=NOW).code is DenyCode.ALLOWED
 
@@ -150,7 +162,9 @@ def test_path_ambiguity_matrix_is_pure_and_host_boundary_is_explicit() -> None:
     outside = inside.model_copy(
         update={"path": inside.path.model_copy(update={"path": "/tmp/secret.txt"})}
     )
-    assert evaluate_capability(_grant(), outside, now=NOW).code is DenyCode.TOOL_PATH_OUTSIDE_WORKSPACE
+    assert (
+        evaluate_capability(_grant(), outside, now=NOW).code is DenyCode.TOOL_PATH_OUTSIDE_WORKSPACE
+    )
 
 
 def test_command_matrix_uses_argv_and_never_shell_or_raw_env_values() -> None:
@@ -165,12 +179,18 @@ def test_command_matrix_uses_argv_and_never_shell_or_raw_env_values() -> None:
     )
     assert evaluate_capability(_grant(), allowed, now=NOW).code is DenyCode.ALLOWED
 
-    shell = allowed.model_copy(update={"command": allowed.command.model_copy(update={"shell": True})})
+    shell = allowed.model_copy(
+        update={"command": allowed.command.model_copy(update={"shell": True})}
+    )
     assert evaluate_capability(_grant(), shell, now=NOW).code is DenyCode.TOOL_COMMAND_DENIED
     env_injection = allowed.model_copy(
-        update={"command": allowed.command.model_copy(update={"env_names": ("LANG", "SECRET_VALUE")})}
+        update={
+            "command": allowed.command.model_copy(update={"env_names": ("LANG", "SECRET_VALUE")})
+        }
     )
-    assert evaluate_capability(_grant(), env_injection, now=NOW).code is DenyCode.TOOL_COMMAND_DENIED
+    assert (
+        evaluate_capability(_grant(), env_injection, now=NOW).code is DenyCode.TOOL_COMMAND_DENIED
+    )
 
 
 def test_network_matrix_denies_private_and_requires_dns_host_verification() -> None:
@@ -178,32 +198,56 @@ def test_network_matrix_denies_private_and_requires_dns_host_verification() -> N
         CapabilityName.NETWORK_CONNECT,
         network=NetworkRequest(scheme="https", host="api.example.com", port=443),
     )
-    assert evaluate_capability(_grant(), unresolved, now=NOW).code is DenyCode.HOST_VERIFICATION_REQUIRED
+    assert (
+        evaluate_capability(_grant(), unresolved, now=NOW).code
+        is DenyCode.HOST_VERIFICATION_REQUIRED
+    )
 
-    public = unresolved.model_copy(update={"network": unresolved.network.model_copy(update={"resolved_addresses": ("8.8.8.8",)})})
+    public = unresolved.model_copy(
+        update={
+            "network": unresolved.network.model_copy(update={"resolved_addresses": ("8.8.8.8",)})
+        }
+    )
     assert evaluate_capability(_grant(), public, now=NOW).code is DenyCode.ALLOWED
 
-    private = unresolved.model_copy(update={"network": unresolved.network.model_copy(update={"resolved_addresses": ("127.0.0.1",)})})
+    private = unresolved.model_copy(
+        update={
+            "network": unresolved.network.model_copy(update={"resolved_addresses": ("127.0.0.1",)})
+        }
+    )
     assert evaluate_capability(_grant(), private, now=NOW).code is DenyCode.TOOL_NETWORK_DENIED
 
 
 def test_skill_allowlist_and_audit_schema_never_store_secret_values() -> None:
     decision = evaluate_capability(
         _grant(),
-        _request(CapabilityName.SKILL_USE, skill=SkillRequest(identity="bundled.summarize", version="1.0.0")),
+        _request(
+            CapabilityName.SKILL_USE,
+            skill=SkillRequest(identity="bundled.summarize", version="1.0.0"),
+        ),
         now=NOW,
     )
-    event = CapabilityAuditEvent.from_decision(
-        decision, event_id="audit-1", occurred_at=NOW
-    )
+    event = CapabilityAuditEvent.from_decision(decision, event_id="audit-1", occurred_at=NOW)
     payload = event.model_dump_json()
     assert event.code is DenyCode.ALLOWED
     assert "secret-value" not in payload
     assert "token-value" not in payload
     assert set(event.model_dump()) == {
-        "schema_version", "event_type", "event_id", "occurred_at", "outcome", "code",
-        "capability", "task_id", "operation_key", "grant_id", "grant_revision",
-        "policy_revision", "workspace_id", "workspace_identity", "host_verification_required",
+        "schema_version",
+        "event_type",
+        "event_id",
+        "occurred_at",
+        "outcome",
+        "code",
+        "capability",
+        "task_id",
+        "operation_key",
+        "grant_id",
+        "grant_revision",
+        "policy_revision",
+        "workspace_id",
+        "workspace_identity",
+        "host_verification_required",
     }
     with pytest.raises(ValidationError):
         CapabilityAuditEvent.model_validate({**event.model_dump(), "secret_value": "secret-value"})

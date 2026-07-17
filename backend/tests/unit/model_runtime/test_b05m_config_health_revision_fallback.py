@@ -60,7 +60,10 @@ def test_b05m_save_read_uses_one_atomic_model_runtime_path_and_round_trips() -> 
         document = json.loads(store.path.read_text(encoding="utf-8"))
         assert set(document) == {"model_runtime"}
         assert document["model_runtime"]["configHash"] == saved.config_hash
-        assert document["model_runtime"]["routes"]["agent_main"]["credentialHandle"] == "credential://primary"
+        assert (
+            document["model_runtime"]["routes"]["agent_main"]["credentialHandle"]
+            == "credential://primary"
+        )
 
 
 @pytest.mark.unit
@@ -90,7 +93,9 @@ def test_b05m_revision_is_monotonic_and_expected_revision_is_checked(tmp_path: P
 
 
 @pytest.mark.unit
-def test_b05m_task_snapshot_is_immutable_and_new_revision_applies_to_next_task(tmp_path: Path) -> None:
+def test_b05m_task_snapshot_is_immutable_and_new_revision_applies_to_next_task(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     registry = TaskModelRevisionRegistry(store)
     first = registry.begin_task("task-old")
@@ -137,7 +142,9 @@ def test_b05m_health_capability_probe_and_secret_safe_diagnostics(tmp_path: Path
 @pytest.mark.unit
 def test_b05m_missing_external_credential_is_typed_and_non_blocking(tmp_path: Path) -> None:
     route = _store(tmp_path).read().routes["agent_main"]
-    report = ModelHealthChecker(InMemoryCredentialResolver(), lambda *_: {"ok": True}).probe_sync(route)
+    report = ModelHealthChecker(InMemoryCredentialResolver(), lambda *_: {"ok": True}).probe_sync(
+        route
+    )
 
     assert report.status == "unavailable"
     assert report.error_code == MODEL_CREDENTIAL_UNAVAILABLE
@@ -179,15 +186,17 @@ def test_b05m_fallback_event_is_typed_and_keeps_task_revision(tmp_path: Path) ->
         "task-fallback",
         identity,
         "health_unhealthy",
-        {"backup": report.__class__(
-            route_id="backup",
-            status="unhealthy",
-            capability_probe=report.capability_probe,
-            error_code="MODEL_HEALTH_PROBE_FAILED",
-            diagnostic=None,
-            checked_at=report.checked_at,
-            latency_ms=report.latency_ms,
-        )},
+        {
+            "backup": report.__class__(
+                route_id="backup",
+                status="unhealthy",
+                capability_probe=report.capability_probe,
+                error_code="MODEL_HEALTH_PROBE_FAILED",
+                diagnostic=None,
+                checked_at=report.checked_at,
+                latency_ms=report.latency_ms,
+            )
+        },
     )
     assert exhausted.snapshot is None
     assert exhausted.event.outcome == "exhausted"

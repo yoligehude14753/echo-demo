@@ -169,14 +169,24 @@ def _snapshot(fixture: dict[str, Any]) -> ModelRuntimeSnapshot:
 
 
 def _event_dicts(events: tuple[ModelEventEnvelope, ...]) -> list[dict[str, Any]]:
-    identity_fields = {"schemaVersion", "taskId", "operationKey", "requestId", "configRevision", "routeId", "type"}
+    identity_fields = {
+        "schemaVersion",
+        "taskId",
+        "operationKey",
+        "requestId",
+        "configRevision",
+        "routeId",
+        "type",
+    }
     normalized: list[dict[str, Any]] = []
     for item in events:
         raw = item.as_dict()
         normalized.append(
             {
                 **{field: raw[field] for field in identity_fields if field in raw},
-                "payload": {field: value for field, value in raw.items() if field not in identity_fields},
+                "payload": {
+                    field: value for field, value in raw.items() if field not in identity_fields
+                },
             }
         )
     return normalized
@@ -237,13 +247,21 @@ def test_anthropic_golden_replays_parallel_tool_use_usage_and_finish_reason() ->
 
     assert tool_calls == expected["tool_calls"]
     assert "".join(text_parts) == expected["text"]
-    assert {**expected["usage"], "input_tokens": input_tokens, "output_tokens": output_tokens} == expected["usage"]
+    assert {
+        **expected["usage"],
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+    } == expected["usage"]
     assert finish_reason == expected["finish_reason"]
     assert expected["tool_invocations"] == 0
 
-    events = normalize_anthropic_stream([item["data"] for item in stream], _request_identity(fixture))
+    events = normalize_anthropic_stream(
+        [item["data"] for item in stream], _request_identity(fixture)
+    )
     event_dicts = _event_dicts(events)
-    assert all(event["requestId"] == fixture["request_identity"]["request_id"] for event in event_dicts)
+    assert all(
+        event["requestId"] == fixture["request_identity"]["request_id"] for event in event_dicts
+    )
     assert [event["type"] for event in event_dicts][-1] == "message_stop"
     assert [event["payload"]["text"] for event in event_dicts if event["type"] == "text_delta"] == [
         expected["text"]
@@ -253,7 +271,9 @@ def test_anthropic_golden_replays_parallel_tool_use_usage_and_finish_reason() ->
         call["input"] for call in expected["tool_calls"]
     ]
     usage_events = [event["payload"] for event in event_dicts if event["type"] == "usage"]
-    assert usage_events == [{"inputTokens": 21, "outputTokens": 14, "cacheReadTokens": 0, "estimated": False}]
+    assert usage_events == [
+        {"inputTokens": 21, "outputTokens": 14, "cacheReadTokens": 0, "estimated": False}
+    ]
     assert not [event for event in event_dicts if event["type"] == "tool_invoke"]
 
 
@@ -304,19 +324,24 @@ def test_openai_golden_replays_parallel_tool_calls_usage_and_finish_reason() -> 
     assert finish_reason == expected["finish_reason"]
     assert expected["tool_invocations"] == 0
 
-    events = normalize_openai_compatible_stream(
-        fixture["stream"], _request_identity(fixture)
-    )
+    events = normalize_openai_compatible_stream(fixture["stream"], _request_identity(fixture))
     event_dicts = _event_dicts(events)
-    assert all(event["requestId"] == fixture["request_identity"]["request_id"] for event in event_dicts)
+    assert all(
+        event["requestId"] == fixture["request_identity"]["request_id"] for event in event_dicts
+    )
     assert [event["type"] for event in event_dicts][-1] == "message_stop"
-    assert "".join(event["payload"]["text"] for event in event_dicts if event["type"] == "text_delta") == expected["text"]
+    assert (
+        "".join(event["payload"]["text"] for event in event_dicts if event["type"] == "text_delta")
+        == expected["text"]
+    )
     actual_tool_stops = [event["payload"] for event in event_dicts if event["type"] == "tool_stop"]
     assert [payload["input"] for payload in actual_tool_stops] == [
         call["input"] for call in expected["tool_calls"]
     ]
     usage_events = [event["payload"] for event in event_dicts if event["type"] == "usage"]
-    assert usage_events == [{"inputTokens": 21, "outputTokens": 14, "cacheReadTokens": 0, "estimated": False}]
+    assert usage_events == [
+        {"inputTokens": 21, "outputTokens": 14, "cacheReadTokens": 0, "estimated": False}
+    ]
     assert not [event for event in event_dicts if event["type"] == "tool_invoke"]
 
 

@@ -61,6 +61,8 @@ def _sanitize_text(value: str) -> str:
     text = _QUERY_RE.sub(lambda match: f"{match.group('prefix')}[REDACTED]", text)
     text = _AUTH_RE.sub(lambda match: f"{match.group('prefix')}[REDACTED]", text)
     return _TOKEN_RE.sub("[REDACTED]", text)
+
+
 _CAPABILITY_ALIASES: dict[str, tuple[str, ...]] = {
     "streaming": ("streaming",),
     "tool_use": ("tool_use", "toolUse"),
@@ -243,7 +245,9 @@ def build_capability_probe_result(
         if not getattr(capabilities, capability, False)
     )
     if missing:
-        status: CapabilityProbeStatus = "partial" if len(missing) < len(required_capabilities) else "unsupported"
+        status: CapabilityProbeStatus = (
+            "partial" if len(missing) < len(required_capabilities) else "unsupported"
+        )
         error_code: str | None = MODEL_CAPABILITY_UNSUPPORTED
     else:
         status = "supported" if ok else "unavailable"

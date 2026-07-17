@@ -76,7 +76,9 @@ def _model_config() -> dict[str, object]:
 async def _transport(request: Any, resolver: Any) -> AsyncIterator[SSEFrame]:
     assert request.protocol == "openai_chat"
     assert resolver(request.credential_handle) == "provider-secret-held-at-transport"
-    yield SSEFrame(data={"choices": [{"delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}]})
+    yield SSEFrame(
+        data={"choices": [{"delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}]}
+    )
     yield SSEFrame(data={"choices": [{"delta": {}, "finish_reason": "stop"}]})
     yield SSEFrame(done=True)
 
@@ -95,7 +97,9 @@ async def test_b13_binds_b05m_snapshot_and_runs_one_provider_turn(tmp_path: Path
         transport=_transport,
     )
 
-    result = [event async for event in binding.model_gateway.stream(make_b13_model_request(binding))]
+    result = [
+        event async for event in binding.model_gateway.stream(make_b13_model_request(binding))
+    ]
 
     assert binding.transport_sha == B13_YOLI_TRANSPORT_SHA
     assert binding.snapshot.revision == 7

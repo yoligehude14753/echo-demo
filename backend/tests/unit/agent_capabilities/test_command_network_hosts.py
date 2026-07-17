@@ -113,7 +113,9 @@ def _network_invocation(grant: object, host: str = "api.example") -> HostInvocat
 def test_command_uses_absolute_argv_no_shell_and_redacted_receipt(tmp_path: Path) -> None:
     executable = str(Path(sys.executable).resolve())
     grant = _grant(tmp_path, executable=executable)
-    invocation = _command_invocation(grant, tmp_path, (executable, "-c", "print('ok')", "token=super-secret"))
+    invocation = _command_invocation(
+        grant, tmp_path, (executable, "-c", "print('ok')", "token=super-secret")
+    )
 
     result = CommandHost().execute(invocation, now=NOW)
 
@@ -130,7 +132,9 @@ def test_command_uses_absolute_argv_no_shell_and_redacted_receipt(tmp_path: Path
 @pytest.mark.unit
 def test_command_rejects_path_fallback_and_p0_install_config_markers(tmp_path: Path) -> None:
     fallback_grant = _grant(tmp_path, executable="python3")
-    fallback = CommandHost().execute(_command_invocation(fallback_grant, tmp_path, ("python3", "-c", "print('x')")), now=NOW)
+    fallback = CommandHost().execute(
+        _command_invocation(fallback_grant, tmp_path, ("python3", "-c", "print('x')")), now=NOW
+    )
     assert fallback.decision.code is DenyCode.TOOL_COMMAND_DENIED
     assert fallback.receipt.code == UNSUPPORTED_P0_FAIL_CLOSED
     assert fallback.stdout == b""
@@ -179,7 +183,9 @@ def test_command_cancel_kills_task_owned_process_group(tmp_path: Path) -> None:
 def test_command_timeout_and_revoke_kill_task_owned_processes(tmp_path: Path) -> None:
     executable = str(Path(sys.executable).resolve())
     grant = _grant(tmp_path, executable=executable)
-    long_running = _command_invocation(grant, tmp_path, (executable, "-c", "import time; time.sleep(30)"))
+    long_running = _command_invocation(
+        grant, tmp_path, (executable, "-c", "import time; time.sleep(30)")
+    )
 
     timeout_result = CommandHost().execute(long_running, now=NOW, active_policy_revision=11)
     assert timeout_result.receipt.code == COMMAND_TIMEOUT

@@ -29,6 +29,8 @@ from .types import (
 )
 
 UNSUPPORTED_P0_FAIL_CLOSED: Final[str] = "UNSUPPORTED_P0_FAIL_CLOSED"
+
+
 def _identifier(value: str) -> str:
     if not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n"):
         raise ValueError("identifier must be non-empty and control-character free")
@@ -239,7 +241,8 @@ class CapabilityHostRegistry:
             if (
                 invocation.request.binding.task_id != invocation.grant.task_id
                 or invocation.request.binding.operation_key != invocation.grant.operation_key
-                or invocation.request.binding.workspace_identity != invocation.grant.workspace_identity
+                or invocation.request.binding.workspace_identity
+                != invocation.grant.workspace_identity
             ):
                 decision = _registry_decision(invocation, DenyCode.GRANT_BINDING_MISMATCH)
                 return HostOutcome(
@@ -259,7 +262,11 @@ class CapabilityHostRegistry:
         try:
             if token.is_cancelled():
                 decision = _registry_decision(invocation, DenyCode.GRANT_REVOKED)
-                return HostOutcome(None, decision, make_receipt(invocation, operation=name, decision=decision, result="denied"))
+                return HostOutcome(
+                    None,
+                    decision,
+                    make_receipt(invocation, operation=name, decision=decision, result="denied"),
+                )
             return handler(invocation, token)
         finally:
             with self._lock:

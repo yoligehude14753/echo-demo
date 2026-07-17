@@ -133,7 +133,8 @@ function validateBody(body: ContextCheckpointBody): void {
 }
 
 function checkpointBody(payload: ContextCheckpointPayload): ContextCheckpointBody {
-  const { checksum: _checksum, ...body } = payload;
+  const body = { ...payload } as Partial<ContextCheckpointPayload>;
+  delete body.checksum;
   return body;
 }
 

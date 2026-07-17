@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- selection helpers are shared with capture contract tests */
 import { Button, Checkbox, Modal, Radio, message } from "antd";
 import { useCallback, useEffect, useState } from "react";
 import { isNativeMobile } from "@/runtime";

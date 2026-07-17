@@ -156,7 +156,10 @@ def bind_verified_workspace(
         raise ValueError("grant is already host-bound")
     if evidence.workspace_id != grant.workspace_identity.workspace_id:
         raise ValueError("workspace_id does not match grant")
-    if not evidence.workspace_identity or evidence.workspace_identity in _UNBOUND_WORKSPACE_IDENTITIES:
+    if (
+        not evidence.workspace_identity
+        or evidence.workspace_identity in _UNBOUND_WORKSPACE_IDENTITIES
+    ):
         raise ValueError("workspace identity is missing or still a placeholder")
 
     expected = {(root.root_id, root.canonical_path): root for root in grant.workspace_roots}
@@ -173,7 +176,10 @@ def bind_verified_workspace(
             raise ValueError("workspace root reparse proof is unsafe")
         if verified.observed_identity != verified.reparse_identity:
             raise ValueError("workspace root identity changed across reparse verification")
-        if not verified.observed_identity or verified.observed_identity in _UNBOUND_WORKSPACE_IDENTITIES:
+        if (
+            not verified.observed_identity
+            or verified.observed_identity in _UNBOUND_WORKSPACE_IDENTITIES
+        ):
             raise ValueError("workspace root identity is missing or a placeholder")
         bound_roots.append(
             WorkspaceCapability(
@@ -199,9 +205,9 @@ def bind_verified_workspace(
         ],
     }
     identity_digest = hashlib.sha256(
-        json.dumps(digest_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        json.dumps(
+            digest_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
     ).hexdigest()
     suffix = f":verified:{identity_digest}"
     grant_id = f"{grant.grant_id[: 256 - len(suffix)]}{suffix}"
@@ -227,17 +233,30 @@ def evaluate_capability(  # noqa: PLR0911
 ) -> CapabilityDecision:
     """Evaluate a request without filesystem, process, DNS, or network access."""
 
-    capability = request.capability.value if isinstance(request.capability, CapabilityName) else request.capability
+    capability = (
+        request.capability.value
+        if isinstance(request.capability, CapabilityName)
+        else request.capability
+    )
     if capability not in _CAPABILITY_VALUES:
         return _decision(request, DenyCode.CAPABILITY_UNKNOWN, capability=capability)
     if grant is None:
         return _decision(request, DenyCode.GRANT_MISSING, capability=capability)
-    if grant.task_id != request.binding.task_id or grant.operation_key != request.binding.operation_key:
-        return _decision(request, DenyCode.GRANT_BINDING_MISMATCH, capability=capability, grant=grant)
+    if (
+        grant.task_id != request.binding.task_id
+        or grant.operation_key != request.binding.operation_key
+    ):
+        return _decision(
+            request, DenyCode.GRANT_BINDING_MISMATCH, capability=capability, grant=grant
+        )
     if grant.workspace_identity != request.binding.workspace_identity:
-        return _decision(request, DenyCode.GRANT_BINDING_MISMATCH, capability=capability, grant=grant)
+        return _decision(
+            request, DenyCode.GRANT_BINDING_MISMATCH, capability=capability, grant=grant
+        )
     if grant.policy_revision != request.binding.policy_revision:
-        return _decision(request, DenyCode.GRANT_REVISION_MISMATCH, capability=capability, grant=grant)
+        return _decision(
+            request, DenyCode.GRANT_REVISION_MISMATCH, capability=capability, grant=grant
+        )
     if active_policy_revision is not None and grant.policy_revision != active_policy_revision:
         return _decision(request, DenyCode.GRANT_STALE, capability=capability, grant=grant)
     check_time = (now or datetime.now(UTC)).astimezone(UTC)
@@ -269,7 +288,9 @@ def _evaluate_path(  # noqa: PLR0911
 ) -> CapabilityDecision:
     target = request.path
     if target is None:
-        return _decision(request, DenyCode.TOOL_CAPABILITY_DENIED, capability=capability, grant=grant)
+        return _decision(
+            request, DenyCode.TOOL_CAPABILITY_DENIED, capability=capability, grant=grant
+        )
     required = {
         CapabilityName.PATH_READ: PermissionRight.READ,
         CapabilityName.PATH_WRITE: PermissionRight.WRITE,
@@ -277,11 +298,15 @@ def _evaluate_path(  # noqa: PLR0911
     }[capability]
     root = next((item for item in grant.workspace_roots if item.root_id == target.root_id), None)
     if root is None or required not in root.rights:
-        return _decision(request, DenyCode.TOOL_PATH_OUTSIDE_WORKSPACE, capability=capability, grant=grant)
+        return _decision(
+            request, DenyCode.TOOL_PATH_OUTSIDE_WORKSPACE, capability=capability, grant=grant
+        )
     if _has_parent_segment(target.path) or "\x00" in target.path:
         return _decision(request, DenyCode.TOOL_PATH_AMBIGUOUS, capability=capability, grant=grant)
     if not _is_lexically_within(root.canonical_path, target.path):
-        return _decision(request, DenyCode.TOOL_PATH_OUTSIDE_WORKSPACE, capability=capability, grant=grant)
+        return _decision(
+            request, DenyCode.TOOL_PATH_OUTSIDE_WORKSPACE, capability=capability, grant=grant
+        )
     if not target.host_verified or target.observed_identity is None:
         return _decision(
             request,
@@ -291,7 +316,9 @@ def _evaluate_path(  # noqa: PLR0911
             host_verification_required=True,
         )
     if target.observed_identity != root.identity:
-        return _decision(request, DenyCode.TOOL_PATH_IDENTITY_CHANGED, capability=capability, grant=grant)
+        return _decision(
+            request, DenyCode.TOOL_PATH_IDENTITY_CHANGED, capability=capability, grant=grant
+        )
     return _decision(request, DenyCode.ALLOWED, capability=capability, grant=grant)
 
 
@@ -305,7 +332,11 @@ def _evaluate_command(  # noqa: PLR0911
     if any(name not in policy.allowed_env_names for name in target.env_names):
         return _decision(request, DenyCode.TOOL_COMMAND_DENIED, capability=capability, grant=grant)
     executable = target.argv[0]
-    if any(fnmatch.fnmatchcase(argument, pattern) for argument in target.argv for pattern in policy.denied_patterns):
+    if any(
+        fnmatch.fnmatchcase(argument, pattern)
+        for argument in target.argv
+        for pattern in policy.denied_patterns
+    ):
         return _decision(request, DenyCode.TOOL_COMMAND_DENIED, capability=capability, grant=grant)
     if policy.mode == "explicit" and executable not in policy.allowed_executables:
         return _decision(request, DenyCode.TOOL_COMMAND_DENIED, capability=capability, grant=grant)
@@ -333,7 +364,11 @@ def _evaluate_network(  # noqa: PLR0911
         return _decision(request, DenyCode.TOOL_NETWORK_DENIED, capability=capability, grant=grant)
     host = _normalise_host(target.host)
     allowed_hosts = {_normalise_host(value) for value in policy.hosts}
-    if host not in allowed_hosts or target.scheme.lower() not in policy.schemes or target.port not in policy.ports:
+    if (
+        host not in allowed_hosts
+        or target.scheme.lower() not in policy.schemes
+        or target.port not in policy.ports
+    ):
         return _decision(request, DenyCode.TOOL_NETWORK_DENIED, capability=capability, grant=grant)
     addresses = target.resolved_addresses
     if addresses is None:
@@ -344,7 +379,9 @@ def _evaluate_network(  # noqa: PLR0911
             grant=grant,
             host_verification_required=True,
         )
-    if not policy.allow_private_addresses and any(_is_private_address(value) for value in addresses):
+    if not policy.allow_private_addresses and any(
+        _is_private_address(value) for value in addresses
+    ):
         return _decision(request, DenyCode.TOOL_NETWORK_DENIED, capability=capability, grant=grant)
     if target.redirect_target is not None:
         redirect = target.redirect_target
@@ -353,7 +390,9 @@ def _evaluate_network(  # noqa: PLR0911
             or redirect.scheme.lower() not in policy.schemes
             or redirect.port not in policy.ports
         ):
-            return _decision(request, DenyCode.TOOL_NETWORK_DENIED, capability=capability, grant=grant)
+            return _decision(
+                request, DenyCode.TOOL_NETWORK_DENIED, capability=capability, grant=grant
+            )
         return _decision(
             request,
             DenyCode.HOST_VERIFICATION_REQUIRED,

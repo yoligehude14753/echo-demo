@@ -91,7 +91,9 @@ class TokenCountResult:
 
 
 class EchoModelPort(Protocol):
-    def stream(self, request: AgentModelRequest, signal: asyncio.Event | None = None) -> AsyncIterator[AgentModelEvent]: ...
+    def stream(
+        self, request: AgentModelRequest, signal: asyncio.Event | None = None
+    ) -> AsyncIterator[AgentModelEvent]: ...
 
     async def count_tokens(self, request: AgentModelRequest) -> TokenCountResult: ...
 
@@ -113,14 +115,18 @@ def _identity(request: AgentModelRequest, snapshot: ModelRuntimeSnapshot) -> Req
     ):
         _non_empty(value, field_name)
     if request.purpose != snapshot.purpose or request.model != snapshot.model:
-        raise ProtocolAdapterError("MODEL_REQUEST_IDENTITY_MISMATCH", "request model identity does not match snapshot")
+        raise ProtocolAdapterError(
+            "MODEL_REQUEST_IDENTITY_MISMATCH", "request model identity does not match snapshot"
+        )
     identity = snapshot.identity(
         request_id=request.request_id,
         task_id=request.task_id,
         operation_key=request.operation_key,
     )
     if request.config_revision != snapshot.revision or request.route_id != snapshot.route_id:
-        raise ProtocolAdapterError("MODEL_REQUEST_IDENTITY_MISMATCH", "request revision or route does not match snapshot")
+        raise ProtocolAdapterError(
+            "MODEL_REQUEST_IDENTITY_MISMATCH", "request revision or route does not match snapshot"
+        )
     return validate_request_identity(identity, snapshot)
 
 
@@ -205,7 +211,7 @@ class AgentModelGateway:
     ) -> AsyncIterator[AgentModelEvent]:
         return self._stream(request, signal)
 
-    async def _stream(
+    async def _stream(  # noqa: PLR0912
         self,
         request: AgentModelRequest,
         signal: asyncio.Event | None,

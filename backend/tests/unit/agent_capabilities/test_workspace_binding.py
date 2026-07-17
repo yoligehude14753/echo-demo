@@ -24,7 +24,9 @@ def _unbound(tmp_path: Path) -> GrantSnapshot:
     result = compile_grant(
         PermissionFacts(
             revision=7,
-            capabilities=(CapabilityFact("path.read", {"platform": "posix", "root": str(tmp_path)}),),
+            capabilities=(
+                CapabilityFact("path.read", {"platform": "posix", "root": str(tmp_path)}),
+            ),
         ),
         task_id="task-binding",
         now=NOW,
@@ -33,7 +35,13 @@ def _unbound(tmp_path: Path) -> GrantSnapshot:
     return result.grant
 
 
-def _evidence(grant: GrantSnapshot, root: Path, *, identity: str | None = None, workspace_id: str | None = None):
+def _evidence(
+    grant: GrantSnapshot,
+    root: Path,
+    *,
+    identity: str | None = None,
+    workspace_id: str | None = None,
+):
     observed = identity or PathVerifier.identity_for(root)
     return VerifiedWorkspaceBinding(
         workspace_id=workspace_id or grant.workspace_identity.workspace_id,
@@ -53,7 +61,9 @@ def _evidence(grant: GrantSnapshot, root: Path, *, identity: str | None = None, 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("case", ("missing", "extra", "placeholder", "reparse", "workspace"))
-def test_workspace_binder_rejects_incomplete_or_ambiguous_evidence(tmp_path: Path, case: str) -> None:
+def test_workspace_binder_rejects_incomplete_or_ambiguous_evidence(
+    tmp_path: Path, case: str
+) -> None:
     grant = _unbound(tmp_path)
     evidence = _evidence(grant, tmp_path)
     if case == "missing":
@@ -73,9 +83,7 @@ def test_workspace_binder_rejects_incomplete_or_ambiguous_evidence(tmp_path: Pat
             }
         )
     elif case == "placeholder":
-        evidence = evidence.model_copy(
-            update={"workspace_identity": "host-verification-required"}
-        )
+        evidence = evidence.model_copy(update={"workspace_identity": "host-verification-required"})
     elif case == "reparse":
         root = evidence.roots[0].model_copy(update={"reparse_identity": "different"})
         evidence = evidence.model_copy(update={"roots": (root,)})

@@ -56,7 +56,9 @@ class CaptureSelectionStore:
         selected_device_ids: list[str],
         expected_revision: int,
     ) -> CaptureSelection:
-        normalized = tuple(dict.fromkeys(value.strip() for value in selected_device_ids if value.strip()))
+        normalized = tuple(
+            dict.fromkeys(value.strip() for value in selected_device_ids if value.strip())
+        )
         if mode == "single" and len(normalized) != 1:
             raise ValueError("single mode requires exactly one selected device")
         if mode == "multi" and not normalized:

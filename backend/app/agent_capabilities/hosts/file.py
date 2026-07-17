@@ -5,9 +5,9 @@ from __future__ import annotations
 import glob as glob_module
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from ..types import CapabilityName, DenyCode, PermissionRight
 from .common import HostContext, HostResult, denied, failed, receipt_for, succeeded, target_digest
@@ -32,7 +32,9 @@ class FileReadHost:
 
     @staticmethod
     def _root(context: HostContext, root_id: str) -> PathVerifier | None:
-        root = next((item for item in context.grant.workspace_roots if item.root_id == root_id), None)
+        root = next(
+            (item for item in context.grant.workspace_roots if item.root_id == root_id), None
+        )
         return PathVerifier(root) if root is not None else None
 
     def _verify(
@@ -87,7 +89,7 @@ class FileReadHost:
             )
         return verified, None
 
-    def read_bytes(self, context: HostContext, path: str, *, root_id: str) -> HostResult[bytes]:
+    def read_bytes(self, context: HostContext, path: str, *, root_id: str) -> HostResult[bytes]:  # noqa: PLR0911
         verified, failure = self._verify(
             context,
             operation="file.read",
@@ -96,7 +98,7 @@ class FileReadHost:
             root_id=root_id,
         )
         if failure is not None:
-            return failure  # type: ignore[return-value]
+            return failure  # type: ignore
         assert verified is not None
         if not verified.exists or verified.is_directory:
             return denied(
@@ -104,7 +106,7 @@ class FileReadHost:
                 operation="file.read",
                 capability=CapabilityName.PATH_READ.value,
                 code=DenyCode.TOOL_PATH_AMBIGUOUS,
-            )  # type: ignore[return-value]
+            )
         try:
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
             fd = os.open(verified.path, flags)
@@ -117,7 +119,7 @@ class FileReadHost:
                         operation="file.read",
                         capability=CapabilityName.PATH_READ.value,
                         code=DenyCode.TOOL_PATH_IDENTITY_CHANGED,
-                    )  # type: ignore[return-value]
+                    )
                 data = os.read(fd, self.max_bytes + 1)
             finally:
                 os.close(fd)
@@ -127,7 +129,7 @@ class FileReadHost:
                     operation="file.read",
                     capability=CapabilityName.PATH_READ.value,
                     code=DenyCode.TOOL_BUDGET_EXCEEDED,
-                )  # type: ignore[return-value]
+                )
         except OSError:
             decision = context.authorize(
                 context.path_request(
@@ -145,7 +147,7 @@ class FileReadHost:
                 decision=decision,
                 error_code="HOST_IO_FAILED",
                 metadata={"target_digest": target_digest(verified.path)},
-            )  # type: ignore[return-value]
+            )
         decision = context.authorize(
             context.path_request(
                 capability=CapabilityName.PATH_READ,
@@ -160,10 +162,8 @@ class FileReadHost:
             return HostResult(
                 None,
                 decision,
-                receipt_for(
-                    context, operation="file.read", decision=decision, result="denied"
-                ),
-            )  # type: ignore[return-value]
+                receipt_for(context, operation="file.read", decision=decision, result="denied"),
+            )
         return succeeded(
             context,
             operation="file.read",
@@ -172,10 +172,12 @@ class FileReadHost:
             metadata={"target_digest": target_digest(verified.path), "bytes": len(data)},
         )
 
-    def read_text(self, context: HostContext, path: str, *, root_id: str, encoding: str = "utf-8") -> HostResult[str]:
+    def read_text(
+        self, context: HostContext, path: str, *, root_id: str, encoding: str = "utf-8"
+    ) -> HostResult[str]:
         result = self.read_bytes(context, path, root_id=root_id)
         if not result.ok or result.value is None:
-            return result  # type: ignore[return-value]
+            return result  # type: ignore
         try:
             return HostResult(result.value.decode(encoding), result.decision, result.receipt)
         except UnicodeDecodeError:
@@ -185,14 +187,31 @@ class FileReadHost:
                 decision=result.decision,
                 error_code="HOST_TEXT_DECODE_FAILED",
                 metadata={"target_digest": target_digest(path)},
-            )  # type: ignore[return-value]
+            )
 
-    def glob(self, context: HostContext, pattern: str, *, root_id: str) -> HostResult[tuple[str, ...]]:
+    def glob(
+        self, context: HostContext, pattern: str, *, root_id: str
+    ) -> HostResult[tuple[str, ...]]:
         verifier = self._root(context, root_id)
         if verifier is None:
-            return denied(context, operation="file.glob", capability=CapabilityName.PATH_READ.value, code=DenyCode.TOOL_PATH_OUTSIDE_WORKSPACE)  # type: ignore[return-value]
-        if not pattern or "\x00" in pattern or os.path.isabs(pattern) or any(part == ".." for part in Path(pattern).parts):
-            return denied(context, operation="file.glob", capability=CapabilityName.PATH_READ.value, code=DenyCode.TOOL_PATH_AMBIGUOUS)  # type: ignore[return-value]
+            return denied(
+                context,
+                operation="file.glob",
+                capability=CapabilityName.PATH_READ.value,
+                code=DenyCode.TOOL_PATH_OUTSIDE_WORKSPACE,
+            )
+        if (
+            not pattern
+            or "\x00" in pattern
+            or os.path.isabs(pattern)
+            or any(part == ".." for part in Path(pattern).parts)
+        ):
+            return denied(
+                context,
+                operation="file.glob",
+                capability=CapabilityName.PATH_READ.value,
+                code=DenyCode.TOOL_PATH_AMBIGUOUS,
+            )
         try:
             root = verifier.verify(verifier.root_path)
             decision = context.authorize(
@@ -206,17 +225,33 @@ class FileReadHost:
                 )
             )
             if not decision.allowed:
-                return HostResult(None, decision, receipt_for(context, operation="file.glob", decision=decision, result="denied"))  # type: ignore[return-value]
+                return HostResult(
+                    None,
+                    decision,
+                    receipt_for(context, operation="file.glob", decision=decision, result="denied"),
+                )
             matches: list[str] = []
-            for candidate in glob_module.iglob(os.path.join(verifier.root_path, pattern), recursive=True):
+            for candidate in glob_module.iglob(
+                os.path.join(verifier.root_path, pattern), recursive=True
+            ):
                 verified = verifier.verify(candidate)
                 if verified.is_directory:
                     continue
                 matches.append(verified.path)
                 if len(matches) > self.max_matches:
-                    return denied(context, operation="file.glob", capability=CapabilityName.PATH_READ.value, code=DenyCode.TOOL_BUDGET_EXCEEDED)  # type: ignore[return-value]
+                    return denied(
+                        context,
+                        operation="file.glob",
+                        capability=CapabilityName.PATH_READ.value,
+                        code=DenyCode.TOOL_BUDGET_EXCEEDED,
+                    )
         except PathHostError as exc:
-            return denied(context, operation="file.glob", capability=CapabilityName.PATH_READ.value, code=exc.code)  # type: ignore[return-value]
+            return denied(
+                context,
+                operation="file.glob",
+                capability=CapabilityName.PATH_READ.value,
+                code=exc.code,
+            )
         return succeeded(
             context,
             operation="file.glob",
@@ -225,7 +260,7 @@ class FileReadHost:
             metadata={"match_count": len(matches), "pattern_digest": target_digest(pattern)},
         )
 
-    def grep(
+    def grep(  # noqa: PLR0911
         self,
         context: HostContext,
         pattern: str,
@@ -236,30 +271,59 @@ class FileReadHost:
         try:
             compiled = re.compile(pattern)
         except re.error:
-            return denied(context, operation="file.grep", capability=CapabilityName.PATH_READ.value, code=DenyCode.TOOL_PATH_AMBIGUOUS)  # type: ignore[return-value]
+            return denied(
+                context,
+                operation="file.grep",
+                capability=CapabilityName.PATH_READ.value,
+                code=DenyCode.TOOL_PATH_AMBIGUOUS,
+            )
         verified_paths: list[VerifiedPath] = []
         for path in paths:
-            verified, failure = self._verify(context, operation="file.grep", capability=CapabilityName.PATH_READ, path=path, root_id=root_id)
+            verified, failure = self._verify(
+                context,
+                operation="file.grep",
+                capability=CapabilityName.PATH_READ,
+                path=path,
+                root_id=root_id,
+            )
             if failure is not None:
-                return failure  # type: ignore[return-value]
+                return failure  # type: ignore
             assert verified is not None
             if verified.is_directory:
-                return denied(context, operation="file.grep", capability=CapabilityName.PATH_READ.value, code=DenyCode.TOOL_PATH_AMBIGUOUS)  # type: ignore[return-value]
+                return denied(
+                    context,
+                    operation="file.grep",
+                    capability=CapabilityName.PATH_READ.value,
+                    code=DenyCode.TOOL_PATH_AMBIGUOUS,
+                )
             verified_paths.append(verified)
         if not verified_paths:
-            return denied(context, operation="file.grep", capability=CapabilityName.PATH_READ.value, code=DenyCode.TOOL_PATH_AMBIGUOUS)  # type: ignore[return-value]
+            return denied(
+                context,
+                operation="file.grep",
+                capability=CapabilityName.PATH_READ.value,
+                code=DenyCode.TOOL_PATH_AMBIGUOUS,
+            )
         decision = context.authorize(
             context.path_request(
                 capability=CapabilityName.PATH_READ,
-                path=verified_paths[0].path if verified_paths else self._root(context, root_id).root_path,  # type: ignore[union-attr]
+                path=verified_paths[0].path
+                if verified_paths
+                else self._root(context, root_id).root_path,  # type: ignore[union-attr]
                 root_id=root_id,
                 right=PermissionRight.READ,
                 host_verified=True,
-                observed_identity=verified_paths[0].root_identity if verified_paths else self._root(context, root_id).identity,  # type: ignore[union-attr]
+                observed_identity=verified_paths[0].root_identity
+                if verified_paths
+                else self._root(context, root_id).identity,  # type: ignore[union-attr]
             )
         )
         if not decision.allowed:
-            return HostResult(None, decision, receipt_for(context, operation="file.grep", decision=decision, result="denied"))  # type: ignore[return-value]
+            return HostResult(
+                None,
+                decision,
+                receipt_for(context, operation="file.grep", decision=decision, result="denied"),
+            )
         matches: list[GrepMatch] = []
         try:
             for verified in verified_paths:
@@ -268,9 +332,16 @@ class FileReadHost:
                         if compiled.search(line):
                             matches.append(GrepMatch(verified.path, line_number, line.rstrip("\n")))
                             if len(matches) > self.max_matches:
-                                return denied(context, operation="file.grep", capability=CapabilityName.PATH_READ.value, code=DenyCode.TOOL_BUDGET_EXCEEDED)  # type: ignore[return-value]
+                                return denied(
+                                    context,
+                                    operation="file.grep",
+                                    capability=CapabilityName.PATH_READ.value,
+                                    code=DenyCode.TOOL_BUDGET_EXCEEDED,
+                                )
         except (OSError, UnicodeError):
-            return failed(context, operation="file.grep", decision=decision, error_code="HOST_IO_FAILED")  # type: ignore[return-value]
+            return failed(
+                context, operation="file.grep", decision=decision, error_code="HOST_IO_FAILED"
+            )
         return succeeded(
             context,
             operation="file.grep",

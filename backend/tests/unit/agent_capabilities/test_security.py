@@ -102,7 +102,9 @@ def test_unknown_duplicate_and_mismatched_tool_use_ids_share_fail_closed_code() 
     )
 
     assert all(result.code == MODEL_TOOL_CORRELATION_MISMATCH for result in results)
-    assert all(not result.ok and not result.tool_invoked and not result.retryable for result in results)
+    assert all(
+        not result.ok and not result.tool_invoked and not result.retryable for result in results
+    )
 
 
 @pytest.mark.unit

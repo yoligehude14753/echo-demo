@@ -74,7 +74,9 @@ def make_b13_resume_identity(
         raise PersistenceError("PERSISTENCE_INVALID_INPUT", "grant snapshot is required")
     grant = dict(grant_snapshot)
     if grant.get("taskId", grant.get("task_id")) != task_id:
-        raise PersistenceError("CHECKPOINT_TASK_MISMATCH", "grant snapshot is not bound to the task")
+        raise PersistenceError(
+            "CHECKPOINT_TASK_MISMATCH", "grant snapshot is not bound to the task"
+        )
     existing_operation = grant.get("operationKey", grant.get("operation_key"))
     if existing_operation not in (None, operation_key):
         raise PersistenceError(
@@ -276,7 +278,9 @@ async def create_b13_runtime_composition(
     """
 
     if not str(settings.db_path):
-        raise B13CompositionError("PERSISTENCE_DB_UNBOUND", "B13 persistence database path is required")
+        raise B13CompositionError(
+            "PERSISTENCE_DB_UNBOUND", "B13 persistence database path is required"
+        )
     if transport is None and not os.environ.get(B13_RUNTIME_FD_ENV):
         raise B13CompositionError(
             "EMBEDDED_RUNTIME_UNAVAILABLE",
@@ -294,7 +298,9 @@ async def create_b13_runtime_composition(
         artifact_skill_projection=ArtifactSkillProjection(settings),
     )
 
-    def session_factory(identity_data: Mapping[str, Any], _kernel_identity: Mapping[str, Any]) -> B13SessionCheckpointPort:
+    def session_factory(
+        identity_data: Mapping[str, Any], _kernel_identity: Mapping[str, Any]
+    ) -> B13SessionCheckpointPort:
         return B13SessionCheckpointPort(
             repositories.session_checkpoints,
             make_b13_resume_identity(

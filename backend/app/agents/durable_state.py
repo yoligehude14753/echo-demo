@@ -15,9 +15,7 @@ from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
-TERMINAL_STATES = frozenset(
-    {"succeeded", "failed", "cancelled", "cancel_failed", "timeout"}
-)
+TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "cancel_failed", "timeout"})
 
 _VOLATILE_ENVELOPE_FIELDS = frozenset({"occurredAt", "receivedAt", "ts"})
 _REQUIRED_ENVELOPE_FIELDS = (
@@ -42,9 +40,7 @@ def _canonical_envelope(raw: Mapping[str, Any]) -> dict[str, Any]:
     if missing:
         raise ValueError(f"runtime event missing required fields: {', '.join(missing)}")
     return {
-        key: raw[key]
-        for key in _REQUIRED_ENVELOPE_FIELDS
-        if key not in _VOLATILE_ENVELOPE_FIELDS
+        key: raw[key] for key in _REQUIRED_ENVELOPE_FIELDS if key not in _VOLATILE_ENVELOPE_FIELDS
     }
 
 

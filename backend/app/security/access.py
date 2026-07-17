@@ -49,9 +49,7 @@ _HOST_CAPABILITY_PATTERNS = (
     ("POST", re.compile(r"^/agents/grants/claude_code$")),
     ("DELETE", re.compile(r"^/agents/grants/[^/]+$")),
 )
-_OWNER_CAPABILITY_PATTERNS = (
-    ("artifact:generate", "POST", re.compile(r"^/artifacts/generate$")),
-)
+_OWNER_CAPABILITY_PATTERNS = (("artifact:generate", "POST", re.compile(r"^/artifacts/generate$")),)
 
 
 class AccessPolicyError(RuntimeError):

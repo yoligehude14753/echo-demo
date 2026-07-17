@@ -36,13 +36,10 @@ def test_b10_vertical_requires_real_b04k_handler_export() -> None:
     """Block acceptance until handler → framed port → service is real."""
 
     framed_server_source = (
-        REPO_ROOT
-        / "desktop/electron/agent-runtime/bridge/embedded-runtime-server.ts"
+        REPO_ROOT / "desktop/electron/agent-runtime/bridge/embedded-runtime-server.ts"
     ).read_text()
     production_sources = _production_sources()
-    production_texts = [
-        path.read_text(errors="replace") for path in production_sources
-    ]
+    production_texts = [path.read_text(errors="replace") for path in production_sources]
     production_text = "\n".join(production_texts)
 
     missing: list[str] = []

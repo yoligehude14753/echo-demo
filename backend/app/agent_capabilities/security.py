@@ -168,7 +168,11 @@ def classify_path(  # noqa: PLR0912
         reasons.append("PATH_LINK_KIND_AMBIGUOUS")
 
     if reasons:
-        verdict = Verdict.DENY if "PATH_PARENT_TRAVERSAL" in reasons or "PATH_NUL_BYTE" in reasons else Verdict.AMBIGUOUS
+        verdict = (
+            Verdict.DENY
+            if "PATH_PARENT_TRAVERSAL" in reasons or "PATH_NUL_BYTE" in reasons
+            else Verdict.AMBIGUOUS
+        )
     else:
         verdict = Verdict.ALLOW
     return PathClassification(
@@ -184,7 +188,9 @@ def classify_path(  # noqa: PLR0912
     )
 
 
-def classify_path_fixture(fixture: PathFixture | Mapping[str, Any] | str, **kwargs: Any) -> PathClassification:
+def classify_path_fixture(
+    fixture: PathFixture | Mapping[str, Any] | str, **kwargs: Any
+) -> PathClassification:
     """Classify a fixture without touching the filesystem."""
 
     if isinstance(fixture, PathFixture):
@@ -329,7 +335,9 @@ def classify_network_target(  # noqa: PLR0912, PLR0915
     obligations = [B09_HOST_NETWORK_VERIFICATION]
     if parts is None:
         reasons.append("URL_MALFORMED_OR_HOST_MISSING")
-        return NetworkClassification(Verdict.DENY, tuple(reasons), host_obligations=tuple(obligations))
+        return NetworkClassification(
+            Verdict.DENY, tuple(reasons), host_obligations=tuple(obligations)
+        )
     scheme = parts.scheme.lower()
     hostname = parts.hostname or ""
     canonical, is_idn = _canonical_hostname(hostname)
@@ -375,19 +383,23 @@ def classify_network_target(  # noqa: PLR0912, PLR0915
         obligations.append(B09_REDIRECT_ORIGIN_REVERIFICATION)
         if not allow_redirects:
             reasons.append("URL_REDIRECTS_NOT_ALLOWED")
-    verdict = Verdict.DENY if any(
-        reason in reasons
-        for reason in (
-            "URL_MALFORMED_OR_HOST_MISSING",
-            "URL_SCHEME_NOT_ALLOWED",
-            "URL_USERINFO_NOT_ALLOWED",
-            "URL_LOOPBACK_ADDRESS",
-            "URL_PRIVATE_ADDRESS",
-            "URL_LINK_LOCAL_ADDRESS",
-            "URL_LOCALHOST_NAME",
-            "URL_REDIRECTS_NOT_ALLOWED",
+    verdict = (
+        Verdict.DENY
+        if any(
+            reason in reasons
+            for reason in (
+                "URL_MALFORMED_OR_HOST_MISSING",
+                "URL_SCHEME_NOT_ALLOWED",
+                "URL_USERINFO_NOT_ALLOWED",
+                "URL_LOOPBACK_ADDRESS",
+                "URL_PRIVATE_ADDRESS",
+                "URL_LINK_LOCAL_ADDRESS",
+                "URL_LOCALHOST_NAME",
+                "URL_REDIRECTS_NOT_ALLOWED",
+            )
         )
-    ) else (Verdict.AMBIGUOUS if reasons else Verdict.ALLOW)
+        else (Verdict.AMBIGUOUS if reasons else Verdict.ALLOW)
+    )
     return NetworkClassification(
         verdict=verdict,
         reasons=tuple(dict.fromkeys(reasons)),

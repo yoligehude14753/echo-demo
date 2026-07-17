@@ -13,15 +13,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from app.model_runtime import (
     canonical_config_hash,
     compile_model_runtime_config,
     compile_snapshot,
 )
-from app.model_runtime.protocols import ModelEventEnvelope, ModelRequestEnvelope, ProtocolAdapterError
+from app.model_runtime.protocols import (
+    ModelEventEnvelope,
+    ModelRequestEnvelope,
+    ProtocolAdapterError,
+)
 from app.model_runtime.types import RequestIdentity
-
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 FIXTURE = FIXTURE_DIR / "b05m_settings_contract.json"
@@ -157,11 +159,7 @@ def test_missing_unknown_and_mismatched_envelopes_fail_closed() -> None:
             raw.update(case["replace"])
 
         if "add" in case:
-            constructor = (
-                ModelEventEnvelope
-                if case["kind"] == "event"
-                else ModelRequestEnvelope
-            )
+            constructor = ModelEventEnvelope if case["kind"] == "event" else ModelRequestEnvelope
             kwargs = {
                 "identity": identity,
                 "schema_version": 1,

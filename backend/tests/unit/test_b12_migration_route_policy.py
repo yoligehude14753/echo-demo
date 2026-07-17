@@ -6,9 +6,7 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
-import aiosqlite
 import pytest
-
 from app.adapters.repo.migrator import run_migrations
 from app.agents.agentos import AgentOSBackend
 from app.agents.base import AgentIntent
@@ -44,9 +42,10 @@ def test_failed_upgrade_rolls_back_the_current_migration_and_resumes_cleanly(
     assert failed.current_version == 1
     assert failed.errors
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute(
-            "SELECT 1 FROM sqlite_schema WHERE name = 'partial_items'"
-        ).fetchone() is None
+        assert (
+            conn.execute("SELECT 1 FROM sqlite_schema WHERE name = 'partial_items'").fetchone()
+            is None
+        )
 
     _write_migration(
         migrations,
@@ -64,6 +63,7 @@ def test_failed_upgrade_rolls_back_the_current_migration_and_resumes_cleanly(
     assert resumed.errors == []
     assert resumed.applied == [2, 3]
     assert resumed.current_version == 3
+
 
 @pytest.mark.unit
 def test_external_runner_requires_explicit_endpoint_before_any_submit() -> None:

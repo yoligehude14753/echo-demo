@@ -127,10 +127,17 @@ def _allowed(invocation: CapabilityInvocation, _cancel: CancellationToken) -> Ho
         ),
         (
             "host",
-            _invocation(_grant(), binding_identity=WorkspaceIdentity(workspace_id="other", identity="root-1")),
+            _invocation(
+                _grant(),
+                binding_identity=WorkspaceIdentity(workspace_id="other", identity="root-1"),
+            ),
             DenyCode.GRANT_BINDING_MISMATCH,
         ),
-        ("host", _invocation(_grant(), binding_policy_revision=12), DenyCode.GRANT_REVISION_MISMATCH),
+        (
+            "host",
+            _invocation(_grant(), binding_policy_revision=12),
+            DenyCode.GRANT_REVISION_MISMATCH,
+        ),
     ),
 )
 def test_registry_rejects_unknown_or_mismatched_invocations(name, invocation, code) -> None:
@@ -169,7 +176,9 @@ def test_shared_receipt_is_redacted_and_cancellation_is_idempotent() -> None:
         return HostOutcome(
             None,
             decision,
-            make_receipt(current, operation="test.host", decision=decision, result="denied", occurred_at=NOW),
+            make_receipt(
+                current, operation="test.host", decision=decision, result="denied", occurred_at=NOW
+            ),
         )
 
     registry.register("host", handler)

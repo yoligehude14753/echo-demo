@@ -51,7 +51,9 @@ def _safe_url(value: str) -> str:
         port = f":{parts.port}" if parts.port is not None else ""
     except ValueError:
         port = ""
-    return urlunsplit((parts.scheme, f"{hostname}{port}", parts.path, "redacted" if parts.query else "", ""))
+    return urlunsplit(
+        (parts.scheme, f"{hostname}{port}", parts.path, "redacted" if parts.query else "", "")
+    )
 
 
 def _redact_url(match: re.Match[str]) -> str:
@@ -78,7 +80,10 @@ def redact_audit_value(value: Any, *, key: str | None = None) -> Any:
     if key is not None and _SENSITIVE_KEY_RE.search(key):
         return redact_secret(value)
     if isinstance(value, Mapping):
-        return {str(item_key): redact_audit_value(item, key=str(item_key)) for item_key, item in value.items()}
+        return {
+            str(item_key): redact_audit_value(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
     if isinstance(value, list):
         return [redact_audit_value(item) for item in value]
     if isinstance(value, tuple):
@@ -91,7 +96,7 @@ def redact_audit_value(value: Any, *, key: str | None = None) -> Any:
 def redact_audit_event(event: Mapping[str, Any]) -> dict[str, Any]:
     """Project a mapping into an audit-safe mapping; raw input is never mutated."""
 
-    return redact_audit_value(event)  # type: ignore[return-value]
+    return redact_audit_value(event)
 
 
 redact_audit = redact_audit_event
