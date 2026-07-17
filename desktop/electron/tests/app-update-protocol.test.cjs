@@ -7,7 +7,9 @@ const test = require("node:test");
 
 const {
   compareSemver,
+  isCompatibleUpgrade,
   normalizeDigest,
+  releaseVersionForChannel,
   selectRelease,
   updateAssetName,
 } = require("../app-update-protocol.cjs");
@@ -51,7 +53,7 @@ test("preview channel queries release arrays and selects the exact mac ZIP", () 
       release("0.3.5-preview.1", { assetName: "EchoDesk-unsafe.dmg" }),
     ],
     {
-      currentVersion: "0.3.3",
+      currentVersion: "0.3.4-preview.0",
       channel: "preview",
       platform: "darwin",
     },
@@ -63,7 +65,7 @@ test("preview channel queries release arrays and selects the exact mac ZIP", () 
   );
 });
 
-test("stable excludes prereleases while preview accepts stable and prerelease", () => {
+test("stable and preview channels only accept their canonical release shapes", () => {
   const releases = [
     release("0.3.4-preview.2"),
     release("0.3.4", { prerelease: false }),
@@ -78,12 +80,65 @@ test("stable excludes prereleases while preview accepts stable and prerelease", 
   );
   assert.equal(
     selectRelease(releases, {
-      currentVersion: "0.3.3",
+      currentVersion: "0.3.4-preview.0",
       channel: "preview",
       platform: "darwin",
     }).version,
-    "0.3.4",
+    "0.3.4-preview.2",
   );
+});
+
+test("preview ignores adhoc and malformed tags even when marked prerelease", () => {
+  const malformed = release("0.3.5-preview.1");
+  malformed.tag_name = "vadhoc-test";
+  assert.equal(releaseVersionForChannel(malformed, "preview"), null);
+  assert.equal(
+    selectRelease([malformed, release("0.3.3-preview.4")], {
+      currentVersion: "0.3.3-preview.3",
+      channel: "preview",
+      platform: "darwin",
+    }).version,
+    "0.3.3-preview.4",
+  );
+});
+
+test("preview falls back when a newer release lacks its platform asset", () => {
+  const selected = selectRelease(
+    [
+      release("0.3.3-preview.5", { assetName: "EchoDesk-unsupported.dmg" }),
+      release("0.3.3-preview.4"),
+    ],
+    {
+      currentVersion: "0.3.3-preview.3",
+      channel: "preview",
+      platform: "darwin",
+    },
+  );
+  assert.equal(selected.version, "0.3.3-preview.4");
+});
+
+test("preview stays on the current core train and rejects missing digests", () => {
+  assert.equal(
+    isCompatibleUpgrade(
+      "0.3.4-preview.1",
+      "0.3.3-preview.3",
+      "preview",
+    ),
+    false,
+  );
+  const selected = selectRelease(
+    [
+      release("0.3.4-preview.1"),
+      release("0.3.3-preview.5", { digest: null }),
+      release("0.3.3-preview.4"),
+    ],
+    {
+      currentVersion: "0.3.3-preview.3",
+      channel: "preview",
+      platform: "darwin",
+    },
+  );
+  assert.equal(selected.version, "0.3.3-preview.4");
 });
 
 test("asset digest is mandatory and must be GitHub sha256", () => {

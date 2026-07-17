@@ -95,23 +95,48 @@ function normalizeDigest(raw) {
   return match[1].toLowerCase();
 }
 
+function releaseVersionForChannel(release, channel) {
+  if (!release || release.draft === true) return null;
+  if (channel === "preview") {
+    const tag = String(release.tag_name || "").trim();
+    if (
+      release.prerelease !== true ||
+      !/^v\d+\.\d+\.\d+-preview\.\d+$/.test(tag)
+    ) {
+      return null;
+    }
+    return parseSemver(tag).raw;
+  }
+  if (channel !== "stable" || release.prerelease === true) return null;
+  try {
+    return parseSemver(release.tag_name || release.name).raw;
+  } catch {
+    return null;
+  }
+}
+
+function isCompatibleUpgrade(version, currentVersion, channel) {
+  if (channel !== "preview") {
+    return compareSemver(version, currentVersion) > 0;
+  }
+  const next = String(version).match(/^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/);
+  const current = String(currentVersion).match(
+    /^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/,
+  );
+  if (!next || !current) return false;
+  return (
+    next[1] === current[1] &&
+    next[2] === current[2] &&
+    next[3] === current[3] &&
+    BigInt(next[4]) > BigInt(current[4])
+  );
+}
+
 function selectRelease(releases, { currentVersion, channel, platform }) {
   const candidates = [];
   for (const release of Array.isArray(releases) ? releases : []) {
-    if (
-      !release ||
-      release.draft === true ||
-      (channel === "stable" && release.prerelease === true)
-    ) {
-      continue;
-    }
-    let version;
-    try {
-      version = parseSemver(release.tag_name || release.name).raw;
-      if (compareSemver(version, currentVersion) <= 0) continue;
-    } catch {
-      continue;
-    }
+    const version = releaseVersionForChannel(release, channel);
+    if (!version || !isCompatibleUpgrade(version, currentVersion, channel)) continue;
     const expectedName = updateAssetName(platform, version);
     if (!expectedName) continue;
     const matches = (Array.isArray(release.assets) ? release.assets : []).filter(
@@ -452,8 +477,10 @@ module.exports = {
   compareSemver,
   createAppUpdateManager,
   downloadVerifiedAsset,
+  isCompatibleUpgrade,
   normalizeDigest,
   parseSemver,
+  releaseVersionForChannel,
   selectRelease,
   updateAssetName,
 };

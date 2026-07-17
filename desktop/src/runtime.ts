@@ -408,6 +408,62 @@ function normalizeVersion(raw: string | null | undefined): string {
   return String(raw ?? "").trim().replace(/^v/i, "");
 }
 
+type AppUpdateChannel = "preview" | "stable";
+
+interface GithubAppRelease {
+  tag_name?: string;
+  name?: string;
+  html_url?: string;
+  draft?: boolean;
+  prerelease?: boolean;
+  assets?: Array<{
+    name?: string;
+    size?: number;
+    digest?: string;
+    browser_download_url?: string;
+  }>;
+}
+
+function releaseVersionForChannel(
+  release: GithubAppRelease,
+  channel: AppUpdateChannel,
+): string | null {
+  if (!release || release.draft === true) return null;
+  if (channel === "preview") {
+    const tag = String(release.tag_name ?? "").trim();
+    return release.prerelease === true &&
+      /^v\d+\.\d+\.\d+-preview\.\d+$/.test(tag)
+      ? normalizeVersion(tag)
+      : null;
+  }
+  if (release.prerelease === true) return null;
+  const value = String(release.tag_name || release.name || "").trim();
+  return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z.-]+)?$/.test(
+    value,
+  )
+    ? normalizeVersion(value)
+    : null;
+}
+
+function isCompatibleAppUpgrade(
+  version: string,
+  currentVersion: string,
+  channel: AppUpdateChannel,
+): boolean {
+  if (channel !== "preview") return compareVersions(version, currentVersion) > 0;
+  const next = version.match(/^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/);
+  const current = currentVersion.match(
+    /^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/,
+  );
+  if (!next || !current) return false;
+  return (
+    next[1] === current[1] &&
+    next[2] === current[2] &&
+    next[3] === current[3] &&
+    compareNumericIdentifiers(next[4], current[4]) > 0
+  );
+}
+
 interface ParsedVersion {
   core: string[];
   prerelease: string[] | null;
@@ -516,6 +572,44 @@ function preferredUpdateAsset(
   }
   const matches = assets.filter((asset) => asset.name === exactName);
   return matches.length === 1 ? matches[0] : null;
+}
+
+export function selectCompatibleAppUpdate(
+  releases: GithubAppRelease[],
+  currentVersion: string,
+  channel: AppUpdateChannel,
+): {
+  release: GithubAppRelease;
+  version: string;
+  asset: { name: string; url: string; size: number; digest: string };
+} | null {
+  return (
+    releases
+      .flatMap((release) => {
+        const version = releaseVersionForChannel(release, channel);
+        if (!version || !isCompatibleAppUpgrade(version, currentVersion, channel)) {
+          return [];
+        }
+        const assets = (release.assets ?? [])
+          .filter(
+            (asset) =>
+              typeof asset.name === "string" &&
+              typeof asset.browser_download_url === "string" &&
+              Number.isSafeInteger(asset.size) &&
+              (asset.size ?? 0) > 0 &&
+              /^sha256:[0-9a-f]{64}$/i.test(asset.digest ?? ""),
+          )
+          .map((asset) => ({
+            name: asset.name as string,
+            size: asset.size as number,
+            digest: asset.digest as string,
+            url: asset.browser_download_url as string,
+          }));
+        const asset = preferredUpdateAsset(assets, version);
+        return asset ? [{ release, version, asset }] : [];
+      })
+      .sort((left, right) => compareVersions(right.version, left.version))[0] ?? null
+  );
 }
 
 function envBackendBase(): string | null {
@@ -654,54 +748,13 @@ export async function checkAppUpdate(): Promise<AppUpdateStatus> {
       headers: { Accept: "application/vnd.github+json" },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const releases = (await res.json()) as Array<{
-      tag_name?: string;
-      name?: string;
-      html_url?: string;
-      draft?: boolean;
-      prerelease?: boolean;
-      assets?: Array<{
-        name?: string;
-        size?: number;
-        digest?: string;
-        browser_download_url?: string;
-      }>;
-    }>;
+    const releases = (await res.json()) as GithubAppRelease[];
     if (!Array.isArray(releases)) throw new Error("invalid release list");
-    const channel = "preview";
-    const candidates = releases
-      .filter(
-        (release) =>
-          release &&
-          release.draft !== true &&
-          (channel === "preview" || release.prerelease !== true),
-      )
-      .flatMap((release) => {
-        try {
-          const version = normalizeVersion(release.tag_name || release.name);
-          if (compareVersions(version, __APP_UPDATE_VERSION__) <= 0) return [];
-          const assets = (release.assets ?? [])
-            .filter(
-              (asset) =>
-                typeof asset.name === "string" &&
-                typeof asset.browser_download_url === "string" &&
-                Number.isSafeInteger(asset.size) &&
-                (asset.size ?? 0) > 0 &&
-                /^sha256:[0-9a-f]{64}$/i.test(asset.digest ?? ""),
-            )
-            .map((asset) => ({
-              name: asset.name as string,
-              size: asset.size as number,
-              digest: asset.digest as string,
-              url: asset.browser_download_url as string,
-            }));
-          return [{ release, version, asset: preferredUpdateAsset(assets, version) }];
-        } catch {
-          return [];
-        }
-      })
-      .sort((left, right) => compareVersions(right.version, left.version));
-    const candidate = candidates[0] ?? null;
+    const candidate = selectCompatibleAppUpdate(
+      releases,
+      __APP_UPDATE_VERSION__,
+      "preview",
+    );
     const latestVersion = candidate?.version ?? __APP_UPDATE_VERSION__;
     const asset = candidate?.asset ?? null;
     const hasNewerVersion =
