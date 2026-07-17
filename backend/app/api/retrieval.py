@@ -528,7 +528,7 @@ async def _sse(
     *,
     conversation_id: str = "default",
     message_id: str | None = None,
-    memory_model_display_name: str = "qwen3 8b",
+    memory_model_display_name: str = "Qwen3 8B",
 ) -> AsyncIterator[bytes]:
     """Forward real provider deltas and terminate with one done or error event.
 

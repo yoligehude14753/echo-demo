@@ -43,7 +43,7 @@ import {
   type CaptureMode,
 } from "@/capture/captureControl";
 import { CaptureControlConflictError } from "@/capture/captureControlConflict";
-import { PRODUCT_MODEL_NAME } from "@/lib/modelDisplay";
+import { SMALL_MODEL_NAME } from "@/lib/modelDisplay";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
 const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
@@ -1234,7 +1234,7 @@ export async function memoryRecall(
     label: sources.length > 0 ? `找到 ${sources.length} 条相关历史信息` : "未找到相关历史信息",
     conversation_id: conversationId,
     message_id: messageId,
-    model_display_name: PRODUCT_MODEL_NAME,
+    model_display_name: SMALL_MODEL_NAME,
     latency_ms: result.latency_ms,
     sources,
   };

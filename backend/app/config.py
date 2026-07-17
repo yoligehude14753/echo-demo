@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     llm_fast_base_url: str = "https://yunwu.ai/v1"
     # 展示名与真实 provider model 故意分离：UI/诊断如需展示快速模型，
     # 只读这个字段；LLM adapter 绝不得用它发起调用。
-    llm_fast_display_name: str = "qwen3 8b"
+    llm_fast_display_name: str = "Qwen3 8B"
     # intent route / RAG arbitration 的 fast 通道只允许短时尝试；
     # 超时立即改用 Yunwu MAIN，不再累加 15s + 30s 失败等待。
     llm_fast_classification_timeout_s: float = Field(default=2.0, ge=1.0, le=3.0)
