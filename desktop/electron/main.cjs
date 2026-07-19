@@ -2512,7 +2512,7 @@ function spawnBackendAndWatch() {
         // drained below; Windows packaged GUI apps do not have a stable console,
         // so bytes go to files instead of process.stdout/process.stderr there.
         stdio: backendStdio,
-        windowsHide: true,
+        windowsHide: !(bundledBackend && process.platform === "win32"),
       },
     );
   } catch (e) {
