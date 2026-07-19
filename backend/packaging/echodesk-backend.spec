@@ -58,7 +58,18 @@ for node_package in ("docxtemplater", "pizzip", "pptxgenjs"):
             f"missing packaged PPT runtime dependency: {package_manifest}; "
             "run npm ci in app/adapters/skill/assets/ppt_ib_deck before PyInstaller"
         )
-datas.append((str(PPT_RUNTIME_DIR), "app/adapters/skill/assets/ppt_ib_deck"))
+for runtime_file in PPT_RUNTIME_DIR.rglob("*"):
+    if runtime_file.is_dir() or runtime_file.is_symlink():
+        continue
+    relative = runtime_file.relative_to(PPT_RUNTIME_DIR)
+    if relative.parts[:2] == ("node_modules", ".bin"):
+        continue
+    datas.append(
+        (
+            str(runtime_file),
+            str(Path("app/adapters/skill/assets/ppt_ib_deck") / relative.parent),
+        )
+    )
 
 hiddenimports = sorted(set(hiddenimports))
 
