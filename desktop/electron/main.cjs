@@ -2442,8 +2442,13 @@ function spawnBackendAndWatch() {
           ...process.env,
           // The packaged app already contains a platform-correct Node runtime.
           // The backend reuses it for deterministic PPT rendering instead of
-          // requiring users to install node/npm separately.
-          ...electronNodeRuntimeEnvironment(process.execPath),
+          // requiring users to install node/npm separately. On Windows packaged
+          // GUI builds this environment can make the frozen Python backend load
+          // Electron's Node DLLs before uvicorn binds, so keep the backend in
+          // plain HTTP mode there.
+          ...(enablePackagedRuntimeBridge
+            ? electronNodeRuntimeEnvironment(process.execPath)
+            : {}),
           // The supervisor-selected endpoint is authoritative for both the
           // uvicorn socket and backend Settings/health/bootstrap diagnostics.
           PORT: String(BACKEND_PORT),
