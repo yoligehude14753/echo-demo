@@ -2426,8 +2426,13 @@ function spawnBackendAndWatch() {
   log(`[backend] spawn mode=${bundledBackend ? "bundled" : "source"} port=${BACKEND_PORT}`);
 
   try {
-    fusedWorkerNonce = randomBytes(32).toString("hex");
-    const backendStdio = ["ignore", "pipe", "pipe", "pipe"];
+    const enablePackagedRuntimeBridge = !(bundledBackend && process.platform === "win32");
+    fusedWorkerNonce = enablePackagedRuntimeBridge
+      ? randomBytes(32).toString("hex")
+      : null;
+    const backendStdio = enablePackagedRuntimeBridge
+      ? ["ignore", "pipe", "pipe", "pipe"]
+      : ["ignore", "pipe", "pipe"];
     backendProc = spawn(
       executable,
       args,
@@ -2454,10 +2459,17 @@ function spawnBackendAndWatch() {
           http_proxy: "",
           https_proxy: "",
           all_proxy: "",
-          // The local production backend must consume this exact inherited
-          // duplex and nonce; EmbeddedRuntimeBackend has no external fallback.
-          ECHODESK_RUNTIME_FD: "3",
-          ECHODESK_RUNTIME_NONCE: fusedWorkerNonce,
+          // The local production backend consumes this inherited duplex where
+          // the platform exposes it as a safe bidirectional fd. On Windows
+          // packaged GUI builds, Node's extra pipe handle blocks the frozen
+          // Python backend before uvicorn binds 8769, so the runtime bridge is
+          // intentionally degraded there while HTTP/STT/LLM stay available.
+          ...(enablePackagedRuntimeBridge
+            ? {
+                ECHODESK_RUNTIME_FD: "3",
+                ECHODESK_RUNTIME_NONCE: fusedWorkerNonce,
+              }
+            : {}),
         },
         // Keep fd 3 for the packaged runtime bridge. Backend stdout/stderr are
         // drained below; Windows packaged GUI apps do not have a stable console,
