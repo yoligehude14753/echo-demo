@@ -2424,6 +2424,9 @@ function spawnBackendAndWatch() {
         "info",
       ];
   log(`[backend] spawn mode=${bundledBackend ? "bundled" : "source"} port=${BACKEND_PORT}`);
+  log(
+    `[backend] spawn executable=${JSON.stringify(executable)} cwd=${JSON.stringify(cwd)} args=${JSON.stringify(args)}`,
+  );
 
   try {
     const enablePackagedRuntimeBridge = !(bundledBackend && process.platform === "win32");
