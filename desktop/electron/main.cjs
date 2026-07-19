@@ -207,6 +207,30 @@ process.on("unhandledRejection", (reason) => {
 
 function log(msg) {
   console.log(msg);
+  try {
+    const logDir = path.join(app.getPath("userData"), "logs");
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(logDir, "main.log"),
+      `${new Date().toISOString()} ${msg}\n`,
+      "utf8",
+    );
+  } catch {
+    // Best-effort diagnostic log only.
+  }
+}
+
+function appendBackendSupervisorLog(streamName, bytes) {
+  try {
+    const logDir = path.join(app.getPath("userData"), "logs");
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(logDir, `backend-${streamName}.log`),
+      bytes,
+    );
+  } catch (error) {
+    log(`[backend] ${streamName} log write failed [${safeFailureCode(error)}]`);
+  }
 }
 
 function isTrustedRenderer(webContents) {
@@ -2403,10 +2427,7 @@ function spawnBackendAndWatch() {
 
   try {
     fusedWorkerNonce = randomBytes(32).toString("hex");
-    const backendStdio =
-      bundledBackend && process.platform === "win32"
-        ? ["ignore", "ignore", "ignore", "pipe"]
-        : ["ignore", "pipe", "pipe", "pipe"];
+    const backendStdio = ["ignore", "pipe", "pipe", "pipe"];
     backendProc = spawn(
       executable,
       args,
@@ -2438,9 +2459,9 @@ function spawnBackendAndWatch() {
           ECHODESK_RUNTIME_FD: "3",
           ECHODESK_RUNTIME_NONCE: fusedWorkerNonce,
         },
-        // Windows packaged GUI apps do not have a stable console stdout/stderr.
-        // The backend writes diagnostics to its own log file; keep fd 3 for the
-        // packaged runtime bridge, but do not pipe stdio through Electron there.
+        // Keep fd 3 for the packaged runtime bridge. Backend stdout/stderr are
+        // drained below; Windows packaged GUI apps do not have a stable console,
+        // so bytes go to files instead of process.stdout/process.stderr there.
         stdio: backendStdio,
       },
     );
@@ -2455,12 +2476,20 @@ function spawnBackendAndWatch() {
   backendProc.on("error", (err) => {
     log(`[backend] spawn error [${safeFailureCode(err)}]`);
   });
-  backendProc.stdout?.on("data", (b) =>
-    process.stdout.write(`[backend] ${b.toString()}`),
-  );
-  backendProc.stderr?.on("data", (b) =>
-    process.stderr.write(`[backend] ${b.toString()}`),
-  );
+  backendProc.stdout?.on("data", (b) => {
+    if (bundledBackend && process.platform === "win32") {
+      appendBackendSupervisorLog("stdout", b);
+      return;
+    }
+    process.stdout.write(`[backend] ${b.toString()}`);
+  });
+  backendProc.stderr?.on("data", (b) => {
+    if (bundledBackend && process.platform === "win32") {
+      appendBackendSupervisorLog("stderr", b);
+      return;
+    }
+    process.stderr.write(`[backend] ${b.toString()}`);
+  });
   backendProc.on("exit", (code, signal) => {
     const wasOurs = backendProc !== null; // killBackendProc 会先置 null
     log(`[backend] child exited code=${code} signal=${signal} ours=${wasOurs}`);
