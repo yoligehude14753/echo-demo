@@ -179,6 +179,20 @@ function normalizeSttStatus(value: unknown): SttStatus {
     : "unknown";
 }
 
+function emptyCaptureChunkResponse(sttStatus: SttStatus): CaptureChunkResponse {
+  return {
+    ambient_stored: false,
+    ambient_text: null,
+    audio_ref: null,
+    speaker_id: null,
+    speaker_label: null,
+    meeting_id: null,
+    meeting_segments: [],
+    stt_status: sttStatus,
+    capture_mode: "free",
+  };
+}
+
 export function normalizeCaptureChunkResponse(
   value: unknown,
 ): CaptureChunkResponse {
@@ -243,6 +257,10 @@ export async function uploadCaptureChunk(
     options.timeoutMs ?? CAPTURE_UPLOAD_TIMEOUT_MS,
     options.signal,
   );
+  if (r.status === 429) {
+    await r.body?.cancel().catch(() => undefined);
+    return emptyCaptureChunkResponse("circuit_open");
+  }
   const parsed = await asJson<unknown>(r);
   return normalizeCaptureChunkResponse(parsed);
 }

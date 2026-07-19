@@ -8,6 +8,7 @@
  */
 import {
   CAPTURE_CHUNK_SAMPLES,
+  CAPTURE_CHUNK_SECONDS,
   CAPTURE_SAMPLE_RATE,
   downsample,
   floatTo16BitPCM,
@@ -669,7 +670,7 @@ class AudioCapture {
       this.nativeActive = true;
       await plugin.start({
         sampleRate: CAPTURE_SAMPLE_RATE,
-        chunkMs: 6000,
+        chunkMs: CAPTURE_CHUNK_SECONDS * 1000,
       });
       if (!isActiveAttempt()) {
         this.teardownNative();

@@ -1,7 +1,10 @@
 /** PCM / WAV 工具（Capture 层，与 UI / 会议无关） */
 
 export const CAPTURE_SAMPLE_RATE = 16_000;
-export const CAPTURE_CHUNK_SECONDS = 6;
+// 24/7 free capture must not become a 10-request/minute ASR firehose.
+// A 30s slice keeps the microphone continuously open while preserving
+// provider headroom for formal meetings and multiple devices.
+export const CAPTURE_CHUNK_SECONDS = 30;
 export const CAPTURE_CHUNK_SAMPLES = CAPTURE_SAMPLE_RATE * CAPTURE_CHUNK_SECONDS;
 
 export function floatTo16BitPCM(input: Float32Array): Int16Array {
