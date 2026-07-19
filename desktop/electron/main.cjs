@@ -2435,7 +2435,7 @@ function spawnBackendAndWatch() {
       : null;
     const backendStdio = enablePackagedRuntimeBridge
       ? ["ignore", "pipe", "pipe", "pipe"]
-      : ["ignore", "pipe", "pipe"];
+      : ["ignore", "ignore", "ignore"];
     backendProc = spawn(
       executable,
       args,
