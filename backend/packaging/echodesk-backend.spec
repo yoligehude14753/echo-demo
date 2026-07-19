@@ -34,7 +34,7 @@ UNUSED_ACCELERATOR_MODULES = [
 # PyInstaller cannot discover these imports through normal static analysis.
 # Collect their complete runtime explicitly, including package metadata and
 # native extensions used by lxml/Pillow/fontTools dependencies.
-for artifact_package in ("docx", "openpyxl", "fpdf", "pdfplumber"):
+for artifact_package in ("pydantic_settings", "docx", "openpyxl", "fpdf", "pdfplumber"):
     package_datas, package_binaries, package_hiddenimports = collect_all(
         artifact_package,
         include_py_files=False,

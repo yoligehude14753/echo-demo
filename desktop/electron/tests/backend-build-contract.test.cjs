@@ -100,6 +100,15 @@ test("package entry points cannot bypass the bundled backend verifier", () => {
   );
 });
 
+test("frozen backend spec explicitly collects pydantic settings runtime", () => {
+  const spec = require("node:fs").readFileSync(
+    path.resolve(__dirname, "../../../backend/packaging/echodesk-backend.spec"),
+    "utf8",
+  );
+  assert.match(spec, /collect_all\(\s*artifact_package/);
+  assert.match(spec, /"pydantic_settings"/);
+});
+
 test("frozen backend manifest preserves CPU diarization and rejects unused runtimes", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "echodesk-frozen-contract-"));
   const manifest = path.join(root, "Analysis-00.toc");
