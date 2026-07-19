@@ -153,7 +153,7 @@ const HEALTH_FAIL_THRESHOLD = 3;
 // 第 N 次重启等待 RESTART_BACKOFFS_MS[N-1]，超出数组长度后判定 degraded
 const RESTART_BACKOFFS_MS = [1000, 3000, 10000];
 // uvicorn 冷启动可能要 5-15s（import torch / 加载模型），给 30s 余量
-const STARTUP_TIMEOUT_MS = 30_000;
+const STARTUP_TIMEOUT_MS = 120_000;
 // SIGTERM 后给 uvicorn 3s 跑 lifespan shutdown，超时强制 SIGKILL
 const SIGKILL_GRACE_MS = 3000;
 
@@ -1990,6 +1990,32 @@ function refusePackagedSourceFallback() {
   return true;
 }
 
+function sanitizedWindowsPackagedBackendEnv(baseEnv) {
+  const blockedPrefixes = [
+    "ELECTRON_",
+    "NODE_",
+    "NPM_",
+    "PYTHON",
+  ];
+  const blockedExact = new Set([
+    "INIT_CWD",
+    "npm_config_node_gyp",
+    "npm_execpath",
+    "npm_lifecycle_event",
+    "npm_lifecycle_script",
+    "npm_node_execpath",
+    "VIRTUAL_ENV",
+  ].map((key) => key.toUpperCase()));
+  const clean = {};
+  for (const [key, value] of Object.entries(baseEnv || {})) {
+    const upper = key.toUpperCase();
+    if (blockedExact.has(upper)) continue;
+    if (blockedPrefixes.some((prefix) => upper.startsWith(prefix))) continue;
+    clean[key] = value;
+  }
+  return clean;
+}
+
 // ---------- Python 解析（P1.6） ----------
 
 // 源码开发只允许显式绝对路径或当前 checkout 的专属 venv；不扫描 HOME、系统
@@ -2436,13 +2462,16 @@ function spawnBackendAndWatch() {
     const backendStdio = enablePackagedRuntimeBridge
       ? ["ignore", "pipe", "pipe", "pipe"]
       : ["ignore", "ignore", "ignore"];
+    const inheritedBackendEnv = (bundledBackend && process.platform === "win32")
+      ? sanitizedWindowsPackagedBackendEnv(process.env)
+      : process.env;
     backendProc = spawn(
       executable,
       args,
       {
         cwd,
         env: {
-          ...process.env,
+          ...inheritedBackendEnv,
           // The packaged app already contains a platform-correct Node runtime.
           // The backend reuses it for deterministic PPT rendering instead of
           // requiring users to install node/npm separately. On Windows packaged
@@ -2483,6 +2512,7 @@ function spawnBackendAndWatch() {
         // drained below; Windows packaged GUI apps do not have a stable console,
         // so bytes go to files instead of process.stdout/process.stderr there.
         stdio: backendStdio,
+        windowsHide: true,
       },
     );
   } catch (e) {
