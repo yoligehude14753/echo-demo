@@ -14,7 +14,9 @@ test("packaged main has the executable fused-worker lifecycle wiring", () => {
   assert.match(mainSource, /startPackagedFusedWorkerBridge/);
   assert.match(mainSource, /ECHODESK_RUNTIME_FD:\s*"3"/);
   assert.match(mainSource, /ECHODESK_RUNTIME_NONCE/);
-  assert.match(mainSource, /stdio:\s*\["ignore", "pipe", "pipe", "pipe"\]/);
+  assert.match(mainSource, /process\.platform\s*===\s*"win32"/);
+  assert.match(mainSource, /\["ignore", "ignore", "ignore", "pipe"\]/);
+  assert.match(mainSource, /\["ignore", "pipe", "pipe", "pipe"\]/);
   assert.match(mainSource, /startFusedWorkerBridge\(\)/);
   assert.match(mainSource, /stopFusedWorkerBridge\(\)/);
   assert.match(bridgeSource, /new Worker\(/);

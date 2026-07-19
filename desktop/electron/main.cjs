@@ -2403,6 +2403,10 @@ function spawnBackendAndWatch() {
 
   try {
     fusedWorkerNonce = randomBytes(32).toString("hex");
+    const backendStdio =
+      bundledBackend && process.platform === "win32"
+        ? ["ignore", "ignore", "ignore", "pipe"]
+        : ["ignore", "pipe", "pipe", "pipe"];
     backendProc = spawn(
       executable,
       args,
@@ -2434,7 +2438,10 @@ function spawnBackendAndWatch() {
           ECHODESK_RUNTIME_FD: "3",
           ECHODESK_RUNTIME_NONCE: fusedWorkerNonce,
         },
-        stdio: ["ignore", "pipe", "pipe", "pipe"],
+        // Windows packaged GUI apps do not have a stable console stdout/stderr.
+        // The backend writes diagnostics to its own log file; keep fd 3 for the
+        // packaged runtime bridge, but do not pipe stdio through Electron there.
+        stdio: backendStdio,
       },
     );
   } catch (e) {
