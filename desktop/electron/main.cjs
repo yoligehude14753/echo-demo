@@ -2016,6 +2016,35 @@ function sanitizedWindowsPackagedBackendEnv(baseEnv) {
   return clean;
 }
 
+function quotePowerShellSingleQuoted(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function windowsPackagedBackendSpawnSpec(executable, args, cwd) {
+  const command = [
+    `Set-Location -LiteralPath ${quotePowerShellSingleQuoted(cwd)}`,
+    [
+      "&",
+      quotePowerShellSingleQuoted(executable),
+      ...args.map(quotePowerShellSingleQuoted),
+      "2>&1",
+      "|",
+      "ForEach-Object",
+      "{ $_.ToString() }",
+    ].join(" "),
+  ].join("; ");
+  return {
+    executable: "powershell.exe",
+    args: [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `& { ${command} }`,
+    ],
+  };
+}
+
 // ---------- Python 解析（P1.6） ----------
 
 // 源码开发只允许显式绝对路径或当前 checkout 的专属 venv；不扫描 HOME、系统
@@ -2465,9 +2494,17 @@ function spawnBackendAndWatch() {
     const inheritedBackendEnv = (bundledBackend && process.platform === "win32")
       ? sanitizedWindowsPackagedBackendEnv(process.env)
       : process.env;
+    const spawnSpec = (bundledBackend && process.platform === "win32")
+      ? windowsPackagedBackendSpawnSpec(executable, args, cwd)
+      : { executable, args };
+    if (spawnSpec.executable !== executable) {
+      log(
+        `[backend] windows packaged supervisor executable=${JSON.stringify(spawnSpec.executable)} args=${JSON.stringify(spawnSpec.args)}`,
+      );
+    }
     backendProc = spawn(
-      executable,
-      args,
+      spawnSpec.executable,
+      spawnSpec.args,
       {
         cwd,
         env: {
