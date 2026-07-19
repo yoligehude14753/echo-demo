@@ -91,7 +91,13 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    # Windows packaged desktop launches this executable as a long-running
+    # sidecar from a GUI process.  A windowed/no-console PyInstaller backend
+    # can start without binding uvicorn when launched outside an interactive
+    # foreground console, while the same frozen app runs correctly with the
+    # console bootloader.  Electron hides the console window with
+    # windowsHide=true, so users still see only the EchoDesk UI.
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
