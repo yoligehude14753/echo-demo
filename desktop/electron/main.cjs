@@ -2016,6 +2016,10 @@ function sanitizedWindowsPackagedBackendEnv(baseEnv) {
   return clean;
 }
 
+function quoteWindowsCommandArg(arg) {
+  return `"${String(arg).replace(/"/g, '""')}"`;
+}
+
 // ---------- Python 解析（P1.6） ----------
 
 // 源码开发只允许显式绝对路径或当前 checkout 的专属 venv；不扫描 HOME、系统
@@ -2449,9 +2453,16 @@ function spawnBackendAndWatch() {
         "--log-level",
         "info",
       ];
+  const launchBundledViaCmd = Boolean(bundledBackend && process.platform === "win32");
+  const spawnExecutable = launchBundledViaCmd
+    ? (process.env.ComSpec || "cmd.exe")
+    : executable;
+  const spawnArgs = launchBundledViaCmd
+    ? ["/d", "/s", "/c", [executable, ...args].map(quoteWindowsCommandArg).join(" ")]
+    : args;
   log(`[backend] spawn mode=${bundledBackend ? "bundled" : "source"} port=${BACKEND_PORT}`);
   log(
-    `[backend] spawn executable=${JSON.stringify(executable)} cwd=${JSON.stringify(cwd)} args=${JSON.stringify(args)}`,
+    `[backend] spawn executable=${JSON.stringify(spawnExecutable)} cwd=${JSON.stringify(cwd)} args=${JSON.stringify(spawnArgs)} target=${JSON.stringify(executable)}`,
   );
 
   try {
@@ -2466,8 +2477,8 @@ function spawnBackendAndWatch() {
       ? sanitizedWindowsPackagedBackendEnv(process.env)
       : process.env;
     backendProc = spawn(
-      executable,
-      args,
+      spawnExecutable,
+      spawnArgs,
       {
         cwd,
         env: {
