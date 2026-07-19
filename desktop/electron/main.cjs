@@ -2455,7 +2455,7 @@ function spawnBackendAndWatch() {
   );
 
   try {
-    const enablePackagedRuntimeBridge = !(bundledBackend && process.platform === "win32");
+    const enablePackagedRuntimeBridge = true;
     fusedWorkerNonce = enablePackagedRuntimeBridge
       ? randomBytes(32).toString("hex")
       : null;
@@ -2474,10 +2474,9 @@ function spawnBackendAndWatch() {
           ...inheritedBackendEnv,
           // The packaged app already contains a platform-correct Node runtime.
           // The backend reuses it for deterministic PPT rendering instead of
-          // requiring users to install node/npm separately. On Windows packaged
-          // GUI builds this environment can make the frozen Python backend load
-          // Electron's Node DLLs before uvicorn binds, so keep the backend in
-          // plain HTTP mode there.
+          // requiring users to install node/npm separately. Windows packaged
+          // builds must keep the bridge too; otherwise STT/LLM stay healthy but
+          // document/PPT agent generation loses its bundled runtime.
           ...(enablePackagedRuntimeBridge
             ? electronNodeRuntimeEnvironment(process.execPath)
             : {}),
@@ -2496,11 +2495,8 @@ function spawnBackendAndWatch() {
           http_proxy: "",
           https_proxy: "",
           all_proxy: "",
-          // The local production backend consumes this inherited duplex where
-          // the platform exposes it as a safe bidirectional fd. On Windows
-          // packaged GUI builds, Node's extra pipe handle blocks the frozen
-          // Python backend before uvicorn binds 8769, so the runtime bridge is
-          // intentionally degraded there while HTTP/STT/LLM stay available.
+          // The local production backend consumes this inherited duplex for the
+          // packaged fused runtime used by document/PPT agent generation.
           ...(enablePackagedRuntimeBridge
             ? {
                 ECHODESK_RUNTIME_FD: "3",
