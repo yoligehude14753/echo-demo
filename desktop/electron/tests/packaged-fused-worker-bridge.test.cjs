@@ -17,7 +17,7 @@ test("packaged main has the executable fused-worker lifecycle wiring", () => {
   assert.match(mainSource, /process\.platform\s*===\s*"win32"/);
   assert.match(mainSource, /\["ignore", "pipe", "pipe", "pipe"\]/);
   assert.match(mainSource, /enablePackagedRuntimeBridge/);
-  assert.match(mainSource, /\["ignore", "ignore", "ignore"\]/);
+  assert.match(mainSource, /\["ignore", "pipe", "pipe"\]/);
   assert.match(mainSource, /sanitizedWindowsPackagedBackendEnv/);
   assert.match(mainSource, /appendBackendSupervisorLog/);
   assert.match(mainSource, /backend-\$\{streamName\}\.log/);
