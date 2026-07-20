@@ -555,6 +555,26 @@ async def test_txt_short_output_is_repaired_once(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_markdown_short_brief_retries_until_quality_gate_passes(tmp_path: Path) -> None:
+    repaired = "# EchoDesk 验收\n\n" + "完整正文。" * 320
+    llm = SequenceFakeLLM(["# Short note\n\nToo short.", "仍然太短", repaired])
+    skill = SkillExecutor(_settings(tmp_path))
+
+    artifact = await skill.generate(
+        llm=llm,
+        artifact_type="markdown",
+        brief="Generate a short validation note",
+    )
+
+    assert len(llm.calls) == 3
+    assert "至少 1500 个字符" in llm.calls[1][1].content
+    assert "忽略该篇幅限制" in llm.calls[1][1].content
+    assert artifact.metadata["retry_count"] == "2"
+    assert Path(artifact.file_path).read_text(encoding="utf-8") == repaired
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_pdf_generation_minimal_ascii(tmp_path: Path) -> None:
     """PDF stub：用 fpdf2 内置 helvetica 不依赖中文字体，验证执行链路。
 

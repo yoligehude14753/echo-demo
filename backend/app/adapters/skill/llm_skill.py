@@ -360,6 +360,7 @@ class SkillExecutor:
         self._build_root = Path(settings.skill_executor_build_dir).expanduser()
         self._timeout_s = float(settings.skill_executor_timeout_s)
         self._max_tokens = settings.skill_executor_max_tokens
+        self._fix_max_retries = settings.skill_fix_max_retries
         self._node_bin = settings.resolved_skill_node_bin
         self._node_is_electron = settings.resolved_skill_node_is_electron
         self._node_modules_root = (
@@ -478,13 +479,20 @@ class SkillExecutor:
         ext = _CANONICAL_EXT[kind]
         result = await self._exec_for_kind(kind, code, build_dir, ext)
         retry_count = 0
-        if (not result.success or result.output_path is None) and kind in {"markdown", "txt"}:
-            retry_count = 1
+        while (
+            (not result.success or result.output_path is None)
+            and kind in {"markdown", "txt"}
+            and retry_count < self._fix_max_retries
+        ):
+            retry_count += 1
+            minimum_length = 1_500 if kind == "markdown" else 600
             repair_instructions = (
                 f"{extra_instructions or ''}\n\n"
                 f"上一次 {kind} 输出未通过产物校验：{result.stderr[:200]}。"
-                "请完整重写整篇文档，不要解释失败原因；严格遵守 system 中的格式和"
-                "最低长度要求，确保正文信息充分。"
+                "请完整重写整篇文档，不要解释失败原因。"
+                f"本次正文必须至少 {minimum_length} 个字符，并满足 system 中的结构要求。"
+                "如果原始 brief 包含‘短’、‘简短’、‘short’或类似篇幅要求，"
+                "本修复指令优先：保留主题但忽略该篇幅限制，输出完整正文。"
             ).strip()
             llm_out = await self._call_llm(llm, sys_prompt, brief, repair_instructions)
             generation_latency_ms += llm_out.latency_ms
