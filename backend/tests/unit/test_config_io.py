@@ -64,6 +64,16 @@ def test_default_origins_include_local_renderer_5174(
     }.issubset(set(settings.allowed_origins_list))
 
 
+@pytest.mark.unit
+def test_unknown_speaker_auto_meeting_fallback_is_enabled_by_default(
+    isolated_user_dir: Path,
+) -> None:
+    """Packaged clients without diarization must still create automatic meetings."""
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.automeet_unknown_speaker_min_active_seconds == 12.0
+
+
 @pytest.fixture
 def isolated_user_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """每个测试用独立 ECHO_USER_DIR，互不污染、不影响真实 ~/.echodesk/。"""

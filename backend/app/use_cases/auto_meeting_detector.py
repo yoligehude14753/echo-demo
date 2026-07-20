@@ -3,8 +3,8 @@
 触发规则（保守为先，避免误开会）：
 - 滑动窗口（默认 30s）内 distinct speakers ≥ 2
 - 窗口内总语音 duration ≥ ``min_active_seconds``（默认 6s）
-- 如果声纹暂时识别不出 speaker_id，仅在显式配置
-  ``unknown_speaker_min_active_seconds`` 时才允许 fallback 自动开始记录
+- 如果声纹暂时识别不出 speaker_id，可在窗口内累积足够的严格音质
+  门控语音后通过 ``unknown_speaker_min_active_seconds`` fallback 自动开始记录
 - 当前没在 meeting 中（手动 @开始 优先；用户手动开会时 detector 自动让步）
 - 触发后进入 ``auto_meeting`` 状态，meeting_id = ``auto-<unix_ts>``
 

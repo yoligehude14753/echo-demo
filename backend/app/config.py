@@ -516,9 +516,12 @@ class Settings(BaseSettings):
     automeet_window_s: float = 30.0
     automeet_min_distinct_speakers: int = 2
     automeet_min_active_seconds: float = 6.0
-    # speaker_id 不可用时默认禁止仅凭 ASR 文本自动开会；显式配置正数才启用
-    # fallback，避免噪声幻觉/声纹失败形成重复 auto-meeting。
-    automeet_unknown_speaker_min_active_seconds: float | None = Field(default=None, gt=0)
+    # speaker_id 不可用时（未配置声纹或新设备尚未建立声纹），仍必须能从
+    # 通过严格音质门控的连续真实语音进入自动会议。12s 需要窗口内多次有效
+    # 语音观测，低于该阈值仍只归档 ambient；部署方仍可通过环境变量设为
+    # null 关闭 fallback。这避免“转写正常但 speaker_id 全为 null”时永不创建
+    # meeting，进而永不触发自动纪要。
+    automeet_unknown_speaker_min_active_seconds: float | None = Field(default=12.0, gt=0)
     # 自动开始与会议续命使用比“允许转写入库”更严格的音频证据。这样低语仍可
     # 保留为 ambient，但不能仅凭一段 ASR 文本把会议无限续命。
     automeet_min_valid_speech_ratio: float = Field(default=0.25, ge=0.0, le=1.0)
