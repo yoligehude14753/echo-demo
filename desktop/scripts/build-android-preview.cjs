@@ -18,8 +18,8 @@ const {
   run,
 } = require("./android-build-common.cjs");
 
-const PREVIEW_VERSION = "0.3.3-preview.4";
-const PREVIEW_VERSION_CODE = "30304";
+const PREVIEW_VERSION = "0.3.4";
+const PREVIEW_VERSION_CODE = "30401";
 const RELEASE_APK = join(
   ANDROID_DIR,
   "app",
@@ -31,7 +31,7 @@ const RELEASE_APK = join(
 );
 const OUTPUT_APK = join(
   RELEASE_DIR,
-  `EchoDesk-${PREVIEW_VERSION}-android-universal-PREVIEW.apk`,
+  `EchoDesk-${PREVIEW_VERSION}-android-universal.apk`,
 );
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");

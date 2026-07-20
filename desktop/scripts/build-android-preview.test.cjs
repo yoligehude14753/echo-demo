@@ -16,11 +16,11 @@ const backendConfig = JSON.parse(
 );
 
 test("Android Preview builder pins artifact and in-APK preview version", () => {
-  assert.match(builder, /PREVIEW_VERSION = "0\.3\.3-preview\.4"/);
-  assert.match(builder, /PREVIEW_VERSION_CODE = "30304"/);
+  assert.match(builder, /PREVIEW_VERSION = "0\.3\.4"/);
+  assert.match(builder, /PREVIEW_VERSION_CODE = "30401"/);
   assert.match(
     builder,
-    /EchoDesk-\$\{PREVIEW_VERSION\}-android-universal-PREVIEW\.apk/,
+    /EchoDesk-\$\{PREVIEW_VERSION\}-android-universal\.apk/,
   );
   assert.match(builder, /-PechoPreviewVersionName=\$\{PREVIEW_VERSION\}/);
   assert.match(gradle, /versionName previewSigningRequested/);

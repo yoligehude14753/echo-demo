@@ -33,11 +33,11 @@ def previewSigningRequested = project.findProperty("echoPreviewSigning")?.toStri
 def previewVersionName = project.findProperty("echoPreviewVersionName")?.toString()
 def previewVersionCode = project.findProperty("echoPreviewVersionCode")?.toString()
 if (previewSigningRequested) {
-    if (!(previewVersionName ==~ /\d+\.\d+\.\d+-preview\.\d+/) ||
+    if (!(previewVersionName ==~ /\d+\.\d+\.\d+(?:-preview\.\d+)?/) ||
         !(previewVersionCode ==~ /\d+/)) {
         throw new GradleException(
             "Android Preview builds require numeric echoPreviewVersionCode and " +
-            "echoPreviewVersionName=<semver>-preview.<n>"
+            "echoPreviewVersionName=<semver> or <semver>-preview.<n>"
         )
     }
     def previewSigningVariables = [
