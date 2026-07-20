@@ -65,7 +65,7 @@ function validateRelease(release, expectedSha, tagSha) {
     !release.body.includes(TARGET_VERSION) ||
     typeof release?.html_url !== "string"
   ) {
-    throw new Error("release must be the public 0.3.4 stable release with versioned notes");
+    throw new Error(`release must be the public ${TARGET_VERSION} stable release with versioned notes`);
   }
   const expectedNames = Object.values(canonicalAssets()).sort();
   const actualNames = (release.assets || []).map((asset) => asset?.name).sort();

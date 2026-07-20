@@ -44,26 +44,26 @@ function releaseFixture(extraAssets = []) {
   };
 }
 
-test("0.3.4 promotion remains a strict updater-compatible metadata step", () => {
+test("0.3.5 promotion remains a strict updater-compatible metadata step", () => {
   const result = assertVersionContract();
-  assert.equal(result.previousVersion, "0.3.3-preview.4");
+  assert.equal(result.previousVersion, "0.3.4");
   assert.equal(result.targetVersion, TARGET_VERSION);
   assert.equal(result.androidVersionCode, TARGET_VERSION_CODE);
   assert.deepEqual(result.assets, {
-    darwin: "EchoDesk-0.3.4-arm64-mac.zip",
-    win32: "EchoDesk.Setup.0.3.4.exe",
-    android: "EchoDesk-0.3.4-android.apk",
+    darwin: "EchoDesk-0.3.5-arm64-mac.zip",
+    win32: "EchoDesk.Setup.0.3.5.exe",
+    android: "EchoDesk-0.3.5-android.apk",
   });
   assert.equal(result.releaseChannel, "stable");
-  assert.equal(result.releaseNotes, "EchoDesk 0.3.4");
-  assert.equal(result.preview4ToStable, "in-app");
+  assert.equal(result.releaseNotes, "EchoDesk 0.3.5");
+  assert.equal(result.stableToStable, "in-app");
 });
 
 test("release readback requires exact tag SHA and exactly three canonical update assets", () => {
   const evidence = validateRelease(releaseFixture(), SOURCE_SHA, SOURCE_SHA);
   assert.equal(evidence.sourceSha, SOURCE_SHA);
   assert.equal(evidence.prerelease, false);
-  assert.match(evidence.releaseNotes, /0\.3\.4/);
+  assert.match(evidence.releaseNotes, /0\.3\.5/);
   assert.deepEqual(Object.keys(evidence.assets).sort(), Object.values(canonicalAssets()).sort());
   assert.throws(
     () => validateRelease(releaseFixture(), SOURCE_SHA, "d".repeat(40)),

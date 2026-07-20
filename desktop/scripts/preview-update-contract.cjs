@@ -12,9 +12,9 @@ const {
 
 const DESKTOP_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, "..");
-const PREVIOUS_VERSION = "0.3.3-preview.4";
-const TARGET_VERSION = "0.3.4";
-const TARGET_VERSION_CODE = 30400;
+const PREVIOUS_VERSION = "0.3.4";
+const TARGET_VERSION = "0.3.5";
+const TARGET_VERSION_CODE = 30500;
 const OWNER = "yoligehude14753";
 const REPO = "echo-demo";
 
@@ -82,12 +82,12 @@ function assertVersionContract(root = REPO_ROOT) {
   const target = releases?.at(-1);
   if (
     previous?.version !== PREVIOUS_VERSION ||
-    previous?.status !== "historical-preview" ||
+    previous?.status !== "historical-release" ||
     target?.version !== TARGET_VERSION ||
     target?.versionCode !== TARGET_VERSION_CODE ||
     target?.status !== "current-release"
   ) {
-    throw new Error("Android version ledger is not a strict Preview4 -> 0.3.4 release step");
+    throw new Error("Android version ledger is not a strict 0.3.4 -> 0.3.5 release step");
   }
   if (
     !releaseBuilder.includes('const { version } = require(join(ROOT, "package.json"))') ||
@@ -96,7 +96,7 @@ function assertVersionContract(root = REPO_ROOT) {
     throw new Error("Android formal release builder is not bound to the package version");
   }
   if (compareSemver(TARGET_VERSION, PREVIOUS_VERSION) <= 0) {
-    throw new Error("target version must be newer than the installed Preview4 version");
+    throw new Error("target version must be newer than the installed 0.3.4 version");
   }
 
   const assets = canonicalAssets();
@@ -107,7 +107,7 @@ function assertVersionContract(root = REPO_ROOT) {
       platform,
     });
     if (!selected || selected.version !== TARGET_VERSION || selected.asset.name !== assets[platform]) {
-      throw new Error(`Preview4 updater cannot select the canonical ${platform} 0.3.4 asset`);
+      throw new Error(`0.3.4 updater cannot select the canonical ${platform} 0.3.5 asset`);
     }
   }
   return {
@@ -120,7 +120,7 @@ function assertVersionContract(root = REPO_ROOT) {
     assets,
     releaseChannel: "stable",
     releaseNotes: `EchoDesk ${TARGET_VERSION}`,
-    preview4ToStable: "in-app",
+    stableToStable: "in-app",
   };
 }
 

@@ -108,6 +108,26 @@ test("Preview4 discovers formal 0.3.4 on every supported updater path", () => {
   }
 });
 
+test("formal 0.3.4 discovers formal 0.3.5 on every supported updater path", () => {
+  for (const platform of ["darwin", "win32", "android"]) {
+    const selected = selectRelease(
+      [
+        release("0.3.5", {
+          prerelease: false,
+          assetName: updateAssetName(platform, "0.3.5"),
+        }),
+      ],
+      {
+        currentVersion: "0.3.4",
+        channel: "stable",
+        platform,
+      },
+    );
+    assert.equal(selected?.version, "0.3.5");
+    assert.equal(selected?.asset.name, updateAssetName(platform, "0.3.5"));
+  }
+});
+
 test("preview ignores adhoc and malformed tags even when marked prerelease", () => {
   const malformed = release("0.3.5-preview.1");
   malformed.tag_name = "vadhoc-test";
