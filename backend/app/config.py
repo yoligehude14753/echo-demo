@@ -187,13 +187,14 @@ class Settings(BaseSettings):
         return self.heyi_gateway_token or "EMPTY"
 
     # ── STT ───────────────────────────────────────────────────────
-    # 当前**唯一** = firered（@ eight :8090，判别式无幻觉、中文强）；
+    # 当前**唯一** = firered（受控公网入口，判别式无幻觉、中文强）；
     # echo 实战路径 Deepgram → FireRed → faster-whisper → SenseVoice → 回 FireRed。
     # SenseVoice GPU 在 PR `echodesk-remove-sensevoice` 删除（理由：多 backend
     # 选项老让人误判"换 backend 能修 X"）。详见 docs/ARCH-AUDIT.md §2。
     # 保留 stt_backend 字段供未来扩展（如本地化离线 STT）。
     stt_backend: str = "firered"
-    stt_firered_url: str = "http://100.76.3.59:8090"
+    # 这是无需凭证的公开服务入口；环境变量和用户配置仍可覆盖它，供私有部署使用。
+    stt_firered_url: str = "https://stt.yoliyoli.uk"
     stt_firered_api_key: str = Field(
         default="",
         repr=False,
@@ -208,9 +209,9 @@ class Settings(BaseSettings):
     stt_llm_correct: bool = False
 
     # ── ASR scheduler / capability routing ───────────────────────
-    # Rollout is explicitly off by default so existing FireRed call sites
-    # remain compatible until the ASR-owned integration candidate is enabled.
-    asr_scheduler_enabled: bool = False
+    # Capture 主链已经经由 scheduler 提交 ASR 工作；产品默认必须启用它，
+    # 否则新安装会在 provider 可用时仍拒绝上传。环境变量和用户配置可显式关闭。
+    asr_scheduler_enabled: bool = True
     asr_eligible_providers: tuple[str, ...] = ("firered",)
     asr_provider_weights: dict[str, float] = Field(
         default_factory=lambda: {"firered": 1.0},

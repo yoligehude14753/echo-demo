@@ -90,8 +90,9 @@ async def test_public_readiness_is_safe_and_unknown_is_not_ready() -> None:
     try:
         response = await get_asr_readiness(settings=settings, scheduler=scheduler)
         assert response.schema_version == 1
-        assert response.status == "unavailable"
+        assert response.status == "unknown"
         assert response.accepting is False
+        assert response.reason_code == "asr_probe_stale"
         assert set(response.model_dump()) == {
             "schema_version",
             "status",

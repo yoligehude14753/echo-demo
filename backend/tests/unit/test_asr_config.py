@@ -8,10 +8,11 @@ from pydantic import ValidationError
 
 
 @pytest.mark.unit
-def test_asr_scheduler_defaults_are_safe_and_keep_firered_compatibility() -> None:
+def test_product_defaults_enable_the_public_firered_scheduler_path() -> None:
     settings = Settings()
     assert settings.stt_backend == "firered"
-    assert settings.asr_scheduler_enabled is False
+    assert settings.stt_firered_url == "https://stt.yoliyoli.uk"
+    assert settings.asr_scheduler_enabled is True
     assert settings.asr_stepfun_enabled is False
     assert settings.asr_stepfun_transport == "sse_one_shot"
     assert settings.asr_local_enabled is False

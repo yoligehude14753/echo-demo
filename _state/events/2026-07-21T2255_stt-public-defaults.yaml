@@ -1,0 +1,35 @@
+event_id: "E-20260721T2255-001"
+event_type: "add"
+timestamp: "2026-07-21T22:55:16+08:00"
+author: "agent/codex-stt-source-fix"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-039"
+      claim: "EchoDesk product defaults use the public FireRed STT endpoint with the ASR scheduler enabled and firered eligible for new backend installations."
+      category: "code"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.95
+      observed_at: "2026-07-21T22:55:16+08:00"
+      observed_by: "agent/codex-stt-source-fix"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "backend/app/config.py:195-220"
+        - "scripts/install-backend.sh:244-252"
+        - "backend/tests/unit/test_asr_config.py:11-21"
+        - "backend/tests/unit/test_config_io.py:58-78"
+      evidence: "Focused configuration and override tests passed after the source defaults and bootstrap template were aligned."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "stt"
+        - "firered"
+        - "asr"
+        - "installation-defaults"
+git_commit: null

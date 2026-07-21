@@ -1,8 +1,8 @@
 version: '1.0'
-project: echodesk-fix-capture-asr-context-e9100
-generated_at: '2026-07-16T20:54:40.522379+00:00'
+project: echo
+generated_at: '2026-07-21T14:56:50.078328+00:00'
 generated_by: replay.py
-fact_count: 37
+fact_count: 38
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1217,3 +1217,30 @@ facts:
   - asr
   - production
   - contract
+- id: F-ECHO-039
+  claim: EchoDesk product defaults use the public FireRed STT endpoint with the ASR scheduler enabled and firered eligible
+    for new backend installations.
+  category: code
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.95
+  observed_at: '2026-07-21T22:55:16+08:00'
+  observed_by: agent/codex-stt-source-fix
+  valid_until: null
+  ttl_hours: null
+  source:
+  - backend/app/config.py:195-220
+  - scripts/install-backend.sh:244-252
+  - backend/tests/unit/test_asr_config.py:11-21
+  - backend/tests/unit/test_config_io.py:58-78
+  evidence: Focused configuration and override tests passed after the source defaults and bootstrap template were aligned.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - stt
+  - firered
+  - asr
+  - installation-defaults
