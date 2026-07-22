@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-22T15:10:32.896253+00:00'
+generated_at: '2026-07-22T15:58:28.876491+00:00'
 generated_by: replay.py
-fact_count: 48
+fact_count: 49
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1565,3 +1565,34 @@ facts:
   - androidTest
   - recent
   - agent-artifact
+- id: F-ECHO-057
+  claim: The source Electron supervisor applies EchoDesk branding and an isolated user-data directory; real Electron 43.1.0
+    then reports safeStorage available without plaintext fallback.
+  category: conclusion
+  volatility: low
+  evidence_strength: runtime
+  status: confirmed
+  confidence: 0.99
+  observed_at: '2026-07-22T23:58:00+08:00'
+  observed_by: agent/codex-luna-secure-storage-fix-20260722
+  valid_until: null
+  ttl_hours: null
+  source:
+  - desktop/scripts/start-electron-dev.cjs
+  - desktop/electron/scripts/brand-dev-electron.cjs
+  - desktop/electron/tests/source-runtime-public-session.test.cjs
+  - runtime:Electron 43.1.0 real safe-storage smoke => safeStorage=true with task-owned --user-data-dir
+  - test:Node 24 focused Electron vault/session/source-runtime tests => 33 passed
+  evidence: The clean source runtime initially retained Electron bundle metadata after npm ci --ignore-scripts; running the
+    existing branding setup changed only ignored runtime dependency metadata to EchoDesk (dev), and the real Electron smoke
+    then returned safeStorage=true. The vault continues to require safeStorage and retains HTTPS origin binding; no bearer,
+    plaintext fallback, model call, package, install, or publish was used.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - desktop
+  - source-runtime
+  - secure-storage
+  - macos
