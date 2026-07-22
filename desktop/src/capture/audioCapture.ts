@@ -20,6 +20,13 @@ import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { backendBase } from "@/runtime";
 import { ensureServerSession } from "@/session";
 import { captureDeviceId } from "@/capture/captureDeviceIdentity";
+import {
+  captureCorrelationSessionSalt,
+} from "@/capture/captureCorrelation";
+import {
+  normalizeNativeCaptureUpload,
+  type NativeCaptureUploadResult,
+} from "@/capture/captureNativeBridge";
 
 export type CaptureChunkHandler = (wav: Blob) => void | Promise<void>;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
@@ -47,11 +54,18 @@ interface EchoAudioUploadSessionRequiredEvent {
   status: number;
 }
 
+interface EchoAudioUploadSucceededEvent {
+  segmentCorrelation?: unknown;
+  ambientStored?: unknown;
+  ambientText?: unknown;
+}
+
 interface EchoAudioPlugin {
   configureSession(options: {
     baseUrl: string;
     sessionToken: string;
     deviceId: string;
+    correlationSalt: string;
   }): Promise<unknown>;
   setCaptureMode(options: {
     formal: boolean;
@@ -80,6 +94,10 @@ interface EchoAudioPlugin {
   addListener(
     eventName: "uploadSessionRequired",
     listenerFunc: (event: EchoAudioUploadSessionRequiredEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "captureUploadSucceeded",
+    listenerFunc: (event: EchoAudioUploadSucceededEvent) => void,
   ): Promise<PluginListenerHandle>;
 }
 
@@ -228,7 +246,9 @@ class AudioCapture {
   private nativeCleanup: Promise<void> = Promise.resolve();
   private nativeSilentChunks = 0;
   private nativeSessionHandle: PluginListenerHandle | null = null;
+  private nativeUploadHandle: PluginListenerHandle | null = null;
   private nativeSessionRecovery: Promise<void> | null = null;
+  private nativeUploadHandlers = new Set<(result: NativeCaptureUploadResult) => void>();
   private buf: Float32Array[] = [];
   private accSamples = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -254,6 +274,11 @@ class AudioCapture {
     this.statusHandlers.add(handler);
     handler(this.state, this.errorMessage ?? undefined);
     return () => this.statusHandlers.delete(handler);
+  }
+
+  onNativeUpload(handler: (result: NativeCaptureUploadResult) => void): () => void {
+    this.nativeUploadHandlers.add(handler);
+    return () => this.nativeUploadHandlers.delete(handler);
   }
 
   start(): void {
@@ -314,6 +339,16 @@ class AudioCapture {
         },
       );
     }
+    if (!this.nativeUploadHandle) {
+      this.nativeUploadHandle = await plugin.addListener(
+        "captureUploadSucceeded",
+        (event) => {
+          const result = normalizeNativeCaptureUpload(event);
+          if (!result) return;
+          for (const handler of this.nativeUploadHandlers) handler(result);
+        },
+      );
+    }
     await this.configureNativeUploadSession(false);
   }
 
@@ -327,6 +362,7 @@ class AudioCapture {
       baseUrl,
       sessionToken,
       deviceId: captureDeviceId(),
+      correlationSalt: captureCorrelationSessionSalt(),
     });
     window.dispatchEvent(new Event("echodesk:capture-control-refresh"));
   }

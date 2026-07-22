@@ -26,9 +26,22 @@ function hashSegment(value: string): string {
   }`;
 }
 
-export function captureSegmentCorrelation(segmentId: unknown): string | null {
+export function captureSegmentCorrelationForSalt(
+  segmentId: unknown,
+  salt: string,
+): string | null {
   if (typeof segmentId !== "string" || segmentId.trim() === "") return null;
-  return `seg-${hashSegment(`${SESSION_SALT}\u0000${segmentId}`)}`;
+  if (salt.trim() === "") return null;
+  return `seg-${hashSegment(`${salt}\u0000${segmentId}`)}`;
+}
+
+export function captureSegmentCorrelation(segmentId: unknown): string | null {
+  return captureSegmentCorrelationForSalt(segmentId, SESSION_SALT);
+}
+
+/** Ephemeral renderer-only salt shared with the native bridge in memory. */
+export function captureCorrelationSessionSalt(): string {
+  return SESSION_SALT;
 }
 
 export interface AmbientSegment {

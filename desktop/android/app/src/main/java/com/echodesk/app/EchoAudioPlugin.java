@@ -71,6 +71,7 @@ public class EchoAudioPlugin extends Plugin {
     String baseUrl = call.getString("baseUrl", "");
     String sessionToken = call.getString("sessionToken", "");
     String deviceId = call.getString("deviceId", "");
+    String correlationSalt = call.getString("correlationSalt", "");
     if (
         baseUrl == null
             || baseUrl.isBlank()
@@ -78,13 +79,15 @@ public class EchoAudioPlugin extends Plugin {
             || sessionToken.isBlank()
             || deviceId == null
             || deviceId.isBlank()
+            || correlationSalt == null
+            || correlationSalt.isBlank()
     ) {
-      call.reject("baseUrl, sessionToken and authoritative deviceId are required");
+      call.reject("baseUrl, sessionToken, authoritative deviceId and correlationSalt are required");
       return;
     }
     SessionHandoff.publish(getContext(), baseUrl, sessionToken, deviceId);
     EchoCaptureRuntime runtime = EchoCaptureRuntime.get(getContext());
-    runtime.configureSession(baseUrl, sessionToken, deviceId);
+    runtime.configureSession(baseUrl, sessionToken, deviceId, correlationSalt);
     JSObject result = runtimeStatus(runtime);
     call.resolve(result);
   }
@@ -379,6 +382,19 @@ public class EchoAudioPlugin extends Plugin {
     JSObject payload = new JSObject();
     payload.put("status", status);
     target.notifyListeners("uploadSessionRequired", payload);
+  }
+
+  static void notifyUploadSucceeded(EchoCaptureRuntime.UploadResponse response) {
+    EchoAudioPlugin target = eventTarget;
+    if (target == null || response == null || response.segmentCorrelation == null) return;
+    JSObject payload = new JSObject();
+    payload.put("segmentCorrelation", response.segmentCorrelation);
+    payload.put("ambientStored", response.ambientStored);
+    payload.put("sttStatus", response.sttStatus);
+    if (response.ambientText != null) {
+      payload.put("ambientText", response.ambientText);
+    }
+    target.notifyListeners("captureUploadSucceeded", payload);
   }
 
   @PluginMethod

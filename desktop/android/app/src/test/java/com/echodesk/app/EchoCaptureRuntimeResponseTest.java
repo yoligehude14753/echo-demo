@@ -51,4 +51,15 @@ public class EchoCaptureRuntimeResponseTest {
         read.getBytes(StandardCharsets.UTF_8).length
     );
   }
+
+  @Test
+  public void nativeCorrelationMatchesRendererSessionHashVector() {
+    String correlation = EchoCaptureRuntime.correlationForSegmentId(
+        "device-secret:42:segment-uuid",
+        "bridge-test-salt"
+    );
+
+    assertEquals("seg-edc0a08e58c5716f", correlation);
+    assertFalse(correlation.contains("device-secret"));
+  }
 }

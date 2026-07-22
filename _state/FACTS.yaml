@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-22T16:55:41.207920+00:00'
+generated_at: '2026-07-22T17:29:11.071129+00:00'
 generated_by: replay.py
-fact_count: 50
+fact_count: 51
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1633,4 +1633,43 @@ facts:
   - capture
   - correlation
   - observability
+  - privacy
+- id: F-ECHO-059
+  claim: Android native capture success now reaches renderer state through an opaque correlation bridge that matches recent/transcript
+    correlation without carrying raw identity or diagnostic hashes.
+  category: conclusion
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-23T01:22:34+08:00'
+  observed_by: agent/codex-luna-android-native-webview-bridge-20260723
+  valid_until: null
+  ttl_hours: null
+  source:
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoCaptureRuntime.java
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoAudioPlugin.java
+  - desktop/src/capture/audioCapture.ts
+  - desktop/src/capture/captureNativeBridge.ts
+  - desktop/src/capture/captureChunkRouter.ts
+  - desktop/src/capture/captureCorrelation.ts
+  - test:node --experimental-strip-types --test src/capture/captureCorrelation.test.ts => 4 passed
+  - test:npm run typecheck => passed
+  - test:changed-file eslint => passed
+  - test:JAVA_HOME=... ANDROID_HOME=... ./gradlew :app:testDebugUnitTest --tests com.echodesk.app.EchoCaptureRuntimeResponseTest
+    --no-daemon => BUILD SUCCESSFUL
+  evidence: The native plugin registers captureUploadSucceeded before session configure/drain, native computes the same session-salted
+    opaque correlation vector, and the event allowlist contains only correlation, ambientStored, sttStatus, and optional transcript
+    text. Renderer normalization drops raw identifiers and hashes before store insertion; the focused tests assert equal native/recent
+    correlation and no sensitive fields in the normalized state. Existing queue and session persistence were not changed.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - android
+  - webview
+  - native-bridge
+  - capture
+  - correlation
   - privacy

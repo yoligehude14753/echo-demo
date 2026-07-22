@@ -84,6 +84,7 @@ final class EchoCaptureRuntime {
   private volatile String baseUrl;
   private volatile String bearerToken;
   private volatile String deviceId;
+  private volatile String correlationSalt;
   private volatile boolean formalMode;
   private volatile String meetingId;
   private volatile boolean authBlocked;
@@ -94,12 +95,38 @@ final class EchoCaptureRuntime {
     final boolean ambientStored;
     final String sttStatus;
     final String textSha256;
+    final String ambientText;
+    final String segmentCorrelation;
 
     UploadResponse(int status, boolean ambientStored, String sttStatus, String textSha256) {
+      this(status, ambientStored, sttStatus, textSha256, null, null);
+    }
+
+    UploadResponse(
+        int status,
+        boolean ambientStored,
+        String sttStatus,
+        String textSha256,
+        String ambientText,
+        String segmentCorrelation
+    ) {
       this.status = status;
       this.ambientStored = ambientStored;
       this.sttStatus = sttStatus;
       this.textSha256 = textSha256;
+      this.ambientText = ambientText;
+      this.segmentCorrelation = segmentCorrelation;
+    }
+
+    UploadResponse withSegmentCorrelation(String correlation) {
+      return new UploadResponse(
+          status,
+          ambientStored,
+          sttStatus,
+          textSha256,
+          ambientText,
+          correlation
+      );
     }
   }
 
@@ -111,16 +138,19 @@ final class EchoCaptureRuntime {
     );
     this.baseUrl = normalizeBaseUrl(preferences.getString(KEY_BASE_URL, ""));
     this.deviceId = normalizeSessionField(preferences.getString(KEY_DEVICE_ID, ""));
+    this.correlationSalt = "";
   }
 
   synchronized void configureSession(
       String baseUrl,
       String bearerToken,
-      String deviceId
+      String deviceId,
+      String correlationSalt
   ) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
     this.bearerToken = bearerToken == null ? "" : bearerToken.trim();
     this.deviceId = deviceId == null ? "" : deviceId.trim();
+    this.correlationSalt = correlationSalt == null ? "" : correlationSalt.trim();
     this.authBlocked = false;
     preferences
         .edit()
@@ -130,8 +160,19 @@ final class EchoCaptureRuntime {
     requestDrain();
   }
 
+  // Retain the package-local test seam for legacy native transport tests; the
+  // product Capacitor path always supplies the renderer correlation salt.
+  synchronized void configureSession(
+      String baseUrl,
+      String bearerToken,
+      String deviceId
+  ) {
+    configureSession(baseUrl, bearerToken, deviceId, "");
+  }
+
   synchronized void clearSession() {
     this.bearerToken = "";
+    this.correlationSalt = "";
     this.authBlocked = true;
   }
 
@@ -370,9 +411,11 @@ final class EchoCaptureRuntime {
     } finally {
       connection.disconnect();
     }
-    UploadResponse response = parseUploadResponse(status, responseBody);
+    UploadResponse response = parseUploadResponse(status, responseBody)
+        .withSegmentCorrelation(correlationForSegmentId(record.id(), correlationSalt));
     if (status >= 200 && status < 300) {
       logSuccessfulUpload(record, response);
+      EchoAudioPlugin.notifyUploadSucceeded(response);
     }
     return status;
   }
@@ -399,15 +442,17 @@ final class EchoCaptureRuntime {
     boolean ambientStored = false;
     String sttStatus = "unknown";
     String textSha256 = "";
+    String ambientText = null;
     if (status >= 200 && status < 300 && body != null && !body.isBlank()) {
       ambientStored = readJsonBoolean(JSON_AMBIENT_STORED, body);
       sttStatus = normalizeSttStatus(readJsonString(JSON_STT_STATUS, body));
       String text = readJsonString(JSON_AMBIENT_TEXT, body);
       if (text != null) {
+        ambientText = text;
         textSha256 = sha256(text);
       }
     }
-    return new UploadResponse(status, ambientStored, sttStatus, textSha256);
+    return new UploadResponse(status, ambientStored, sttStatus, textSha256, ambientText, null);
   }
 
   private static boolean readJsonBoolean(Pattern pattern, String body) {
@@ -459,21 +504,41 @@ final class EchoCaptureRuntime {
       NativeCaptureQueue.Record record,
       UploadResponse response
   ) {
-    String segmentId = record.id().replace("\\", "\\\\").replace("\"", "\\\"");
     Log.i(
         TAG,
-        "native_capture_result {\"segmentId\":\""
-            + segmentId
-            + "\",\"status\":"
+        "native_capture_result {\"status\":"
             + response.status
             + ",\"ambient_stored\":"
             + response.ambientStored
             + ",\"stt_status\":\""
             + response.sttStatus
-            + "\",\"text_sha256\":\""
-            + response.textSha256
             + "\"}"
     );
+  }
+
+  /** Same session-salted UTF-16 hash as desktop/src/capture/captureCorrelation.ts. */
+  static String correlationForSegmentId(String segmentId, String salt) {
+    if (segmentId == null || segmentId.trim().isEmpty()) return null;
+    if (salt == null || salt.trim().isEmpty()) return null;
+    String value = salt + "\u0000" + segmentId;
+    int first = 0x811c9dc5;
+    int second = 0x9e3779b9;
+    for (int index = 0; index < value.length(); index += 1) {
+      int code = value.charAt(index);
+      first ^= code;
+      first *= 0x01000193;
+      second ^= code + index;
+      second *= 0x85ebca6b;
+    }
+    return "seg-" + hex32(first) + hex32(second);
+  }
+
+  private static String hex32(int value) {
+    String hex = Integer.toUnsignedString(value, 16);
+    StringBuilder padded = new StringBuilder(8);
+    for (int index = hex.length(); index < 8; index += 1) padded.append('0');
+    padded.append(hex);
+    return padded.toString();
   }
 
   private static String normalizeSttStatus(String value) {

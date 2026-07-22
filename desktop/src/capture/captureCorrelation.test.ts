@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 // @ts-expect-error Node strip-types requires the explicit source extension.
 import { captureSegmentCorrelation, normalizeAmbientSegments } from "./captureCorrelation.ts";
+// @ts-expect-error Node strip-types requires the explicit source extension.
+import { normalizeNativeCaptureUpload } from "./captureNativeBridge.ts";
 
 test("chunk and recent results produce the same opaque correlation", () => {
   const chunkResponse = {
@@ -40,6 +42,37 @@ test("same segment compares equal while different segments stay distinct", () =>
   assert.equal(captureSegmentCorrelation(null), null);
 });
 
+test("native success payload maps to the same renderer correlation as recent", () => {
+  const rawSegmentId = "device-secret:42:segment-uuid";
+  const expectedCorrelation = captureSegmentCorrelation(rawSegmentId);
+  const [recent] = normalizeAmbientSegments([
+    {
+      text: "同一段转写",
+      captured_at: "2026-07-23T00:00:00.000Z",
+      speaker_id: null,
+      speaker_label: null,
+      duration_ms: 1200,
+      segment_id: rawSegmentId,
+    },
+  ]);
+  const native = normalizeNativeCaptureUpload({
+    segmentCorrelation: expectedCorrelation,
+    ambientStored: true,
+    ambientText: "同一段转写",
+    segmentId: rawSegmentId,
+    deviceId: "device-secret",
+    textSha256: "must-not-cross-bridge",
+  });
+
+  assert.equal(native?.segment_correlation, recent.segment_correlation);
+  assert.equal(native?.ambient_text, recent.text);
+  assert.equal("segmentId" in (native ?? {}), false);
+  assert.equal("deviceId" in (native ?? {}), false);
+  assert.equal("textSha256" in (native ?? {}), false);
+  assert.equal(JSON.stringify(native).includes("device-secret"), false);
+  assert.equal(JSON.stringify(native).includes("must-not-cross-bridge"), false);
+});
+
 test("Android WebView exposes only stable correlation and product hooks", () => {
   const transcript = readFileSync(
     new URL("../components/TranscriptStream.tsx", import.meta.url),
@@ -58,4 +91,8 @@ test("Android WebView exposes only stable correlation and product hooks", () => 
   assert.match(selection, /data-capture-selection="surface"/);
   assert.match(selection, /data-capture-selection-option=/);
   assert.match(artifacts, /testId="agent-artifact-link"/);
+  assert.match(
+    readFileSync(new URL("./audioCapture.ts", import.meta.url), "utf8"),
+    /captureUploadSucceeded/,
+  );
 });

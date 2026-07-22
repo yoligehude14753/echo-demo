@@ -272,18 +272,6 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
       "echodesk:capture-control-refresh",
       onNativeControlRefresh,
     );
-    void audioCapture.attachNativeRuntime()
-      .then(() => fetchControl())
-      .catch((error: unknown) => {
-        if (cancelled || !isCurrent(originGeneration)) return;
-        const detail = error instanceof Error ? error.message : String(error);
-        setErrorMessage(`收音身份未就绪：${detail}`);
-      });
-    const controlTimer = window.setInterval(
-      () => void fetchControl(),
-      CONTROL_POLL_MS,
-    );
-
     const offRouter = attachCaptureChunkRouter({
       onChunkPosted: () => setAmbientChunks((n) => n + 1),
       onAmbientUploaded: () => setAmbientStored((n) => n + 1),
@@ -303,6 +291,17 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
         }
       },
     });
+    void audioCapture.attachNativeRuntime()
+      .then(() => fetchControl())
+      .catch((error: unknown) => {
+        if (cancelled || !isCurrent(originGeneration)) return;
+        const detail = error instanceof Error ? error.message : String(error);
+        setErrorMessage(`收音身份未就绪：${detail}`);
+      });
+    const controlTimer = window.setInterval(
+      () => void fetchControl(),
+      CONTROL_POLL_MS,
+    );
 
     // 5s 轮询 stats；freshness/admission 各自归约，不能代偿 transport ack。
     let cancelled = false;

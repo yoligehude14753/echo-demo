@@ -323,6 +323,19 @@ export function attachCaptureChunkRouter(
     emitTransport({ queueDepth: pending.length });
     drain();
   });
+  const offNativeUpload = audioCapture.onNativeUpload((result) => {
+    if (result.ambient_stored && result.ambient_text) {
+      useStore.getState().addAmbientSegment({
+        text: result.ambient_text,
+        captured_at: new Date().toISOString(),
+        speaker_id: null,
+        speaker_label: null,
+        duration_ms: 0,
+        segment_correlation: result.segment_correlation,
+      });
+    }
+    if (result.ambient_stored) handlers?.onAmbientUploaded?.();
+  });
 
   handlers?.onTransportStateChange?.({ ...transport });
 
@@ -334,5 +347,6 @@ export function attachCaptureChunkRouter(
     activeAbort = null;
     window.removeEventListener(BACKEND_ORIGIN_EVENT, handleBackendOriginChange);
     offChunk();
+    offNativeUpload();
   };
 }
