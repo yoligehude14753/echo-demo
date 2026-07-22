@@ -3,7 +3,12 @@ package com.echodesk.app;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.WebView;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.ByteArrayOutputStream;
@@ -16,31 +21,51 @@ import org.junit.runner.RunWith;
 /**
  * Task-owned native uploader acceptance fixture.
  *
- * This test is instrumentation-only: it calls the package-private runtime
- * directly, injects no HTTP substitute, and receives the real URL/token only
- * through instrumentation arguments.
+ * This test starts the real renderer bootstrap path, consumes the debug-only
+ * app-private handoff, then calls the package-private runtime directly. The
+ * default assertion stops after native session acquisition; an explicit
+ * task-owned runUpload=true additionally exercises the real uploader. No HTTP
+ * substitute or bearer instrumentation argument is accepted.
  */
 @RunWith(AndroidJUnit4.class)
 public class EchoCaptureRuntimeAcceptanceTest {
   private static final String ASSET = "controlled-zh-16k-mono.wav";
+  private static final long HANDOFF_TIMEOUT_MS = 45_000L;
   private static final long DRAIN_TIMEOUT_MS = 60_000L;
 
   @Test
   public void controlledPcmReachesTheRealNativeUploader() throws Exception {
-    Bundle args = InstrumentationRegistry.getArguments();
-    String baseUrl = requiredArg(args, "echodesk.baseUrl");
-    String bearerToken = requiredArg(args, "echodesk.bearerToken");
-    String deviceId = requiredArg(args, "echodesk.deviceId");
+    android.app.Instrumentation instrumentation =
+        InstrumentationRegistry.getInstrumentation();
+    android.content.Context targetContext = instrumentation.getTargetContext();
+    SessionHandoff.clear(targetContext);
+    launchProductBootstrap(instrumentation, targetContext);
+    SessionHandoff.Credentials credentials = waitForSessionHandoff(
+        targetContext,
+        HANDOFF_TIMEOUT_MS
+    );
     byte[] pcm = readPcm16MonoWav();
 
-    EchoCaptureRuntime runtime = EchoCaptureRuntime.get(
-        InstrumentationRegistry.getInstrumentation().getTargetContext()
-    );
+    EchoCaptureRuntime runtime = EchoCaptureRuntime.get(targetContext);
     assertEquals("acceptance must start with an empty task-owned queue", 0, runtime.queuedCount());
     runtime.setPaused(false);
     runtime.markFreeModeEnabled(true);
     runtime.setFormalMode(false, "");
-    runtime.configureSession(baseUrl, bearerToken, deviceId);
+    runtime.configureSession(
+        credentials.baseUrl,
+        credentials.bearerToken,
+        credentials.deviceId
+    );
+    assertTrue(
+        "product handoff must provide a complete native upload session",
+        runtime.hasUploadSession()
+    );
+    if (!Boolean.parseBoolean(
+        InstrumentationRegistry.getArguments().getString("echodesk.runUpload", "false")
+    )) {
+      runtime.clearSession();
+      return;
+    }
 
     assertTrue(runtime.acceptPcm(pcm, 16_000, "androidTest", 0.0, 0));
     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DRAIN_TIMEOUT_MS);
@@ -51,10 +76,60 @@ public class EchoCaptureRuntimeAcceptanceTest {
     runtime.clearSession();
   }
 
-  private static String requiredArg(Bundle args, String key) {
-    String value = args.getString(key, "").trim();
-    if (value.isEmpty()) throw new AssertionError("missing instrumentation argument: " + key);
-    return value;
+  private static void launchProductBootstrap(
+      android.app.Instrumentation instrumentation,
+      android.content.Context targetContext
+  ) throws Exception {
+    Intent intent = new Intent(targetContext, MainActivity.class)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+    Activity activity = instrumentation.startActivitySync(intent);
+    WebView webView = null;
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+    while (System.nanoTime() < deadline) {
+      WebView[] candidate = new WebView[1];
+      instrumentation.runOnMainSync(() -> {
+        WebView found = findWebView(activity.getWindow().getDecorView());
+        if (found != null && found.getUrl() != null) candidate[0] = found;
+      });
+      webView = candidate[0];
+      if (webView != null) break;
+      Thread.sleep(250L);
+    }
+    if (webView == null) {
+      throw new AssertionError("MainActivity WebView did not load");
+    }
+    final WebView loadedWebView = webView;
+    instrumentation.runOnMainSync(() -> loadedWebView.evaluateJavascript(
+        "(function(){localStorage.setItem('echodesk.onboarding.completed','1');return 'ok';})()",
+        null
+    ));
+    instrumentation.runOnMainSync(loadedWebView::reload);
+  }
+
+  private static SessionHandoff.Credentials waitForSessionHandoff(
+      android.content.Context targetContext,
+      long timeoutMs
+  ) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+    while (System.nanoTime() < deadline) {
+      SessionHandoff.Credentials credentials = SessionHandoff.consume(targetContext);
+      if (credentials != null) return credentials;
+      Thread.sleep(250L);
+    }
+    throw new AssertionError(
+        "product bootstrap did not publish a short-lived app-private native session handoff"
+    );
+  }
+
+  private static WebView findWebView(View root) {
+    if (root instanceof WebView) return (WebView) root;
+    if (!(root instanceof ViewGroup)) return null;
+    ViewGroup group = (ViewGroup) root;
+    for (int index = 0; index < group.getChildCount(); index++) {
+      WebView found = findWebView(group.getChildAt(index));
+      if (found != null) return found;
+    }
+    return null;
   }
 
   private static byte[] readPcm16MonoWav() throws Exception {

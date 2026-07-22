@@ -1,0 +1,38 @@
+event_id: "E-20260722T2125-001"
+event_type: "add"
+timestamp: "2026-07-22T21:25:04+08:00"
+author: "agent/codex-android-session-handoff-51f"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-053"
+      claim: "Android debug now hands off the short-lived public session from WebView configureSession to instrumentation via one-shot app-private storage; release adds no API or intent."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.98
+      observed_at: "2026-07-22T21:25:04+08:00"
+      observed_by: "agent/codex-android-session-handoff-51f"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "desktop/android/app/src/main/java/com/echodesk/app/EchoAudioPlugin.java:69-89"
+        - "desktop/android/app/src/debug/java/com/echodesk/app/SessionHandoff.java:15-194"
+        - "desktop/android/app/src/release/java/com/echodesk/app/SessionHandoff.java:1-22"
+        - "desktop/android/app/src/androidTest/java/com/echodesk/app/EchoCaptureRuntimeAcceptanceTest.java:35-76"
+        - "test:./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestJavaWithJavac --no-daemon => BUILD SUCCESSFUL"
+        - "runtime:/tmp/echodesk-android-session-handoff-20260722/instrumentation-focused.txt => OK (1 test)"
+      evidence: "The real MainActivity WebView completed public identity bootstrap on emulator-5554, invoked EchoAudio.configureSession, and the focused instrumentation test consumed the handoff and verified a complete native upload session without bearer instrumentation arguments. The handoff is bounded, owner-readable, atomically claimed, deleted after consume, and absent from release implementation."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "android"
+        - "debug"
+        - "session"
+        - "handoff"
+        - "acceptance-driver"
+git_commit: null
