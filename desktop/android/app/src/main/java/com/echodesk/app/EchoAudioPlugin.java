@@ -82,6 +82,7 @@ public class EchoAudioPlugin extends Plugin {
       call.reject("baseUrl, sessionToken and authoritative deviceId are required");
       return;
     }
+    SessionHandoff.publish(getContext(), baseUrl, sessionToken, deviceId);
     EchoCaptureRuntime runtime = EchoCaptureRuntime.get(getContext());
     runtime.configureSession(baseUrl, sessionToken, deviceId);
     JSObject result = runtimeStatus(runtime);
