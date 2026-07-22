@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-22T16:09:16.352612+00:00'
+generated_at: '2026-07-22T16:52:40.621135+00:00'
 generated_by: replay.py
-fact_count: 49
+fact_count: 50
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1596,3 +1596,41 @@ facts:
   - source-runtime
   - secure-storage
   - macos
+- id: F-ECHO-058
+  claim: 'WebView preserves capture correlation: chunk and recent segment_id become the same session-scoped opaque value,
+    carried to transcript rows; selection and artifact hooks expose no raw identity.'
+  category: conclusion
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-23T00:48:00+08:00'
+  observed_by: agent/codex-luna-android-webview-correlation-20260723
+  valid_until: null
+  ttl_hours: null
+  source:
+  - desktop/src/capture/captureCorrelation.ts
+  - desktop/src/api.ts
+  - desktop/src/capture/captureChunkRouter.ts
+  - desktop/src/store.ts
+  - desktop/src/components/TranscriptStream.tsx
+  - desktop/src/capture/AndroidCaptureSelector.tsx
+  - desktop/src/components/ArtifactPanel.tsx
+  - test:node --experimental-strip-types --test src/capture/captureCorrelation.test.ts => 3 passed
+  - test:npm run typecheck => passed
+  - test:changed-file eslint => passed
+  evidence: The focused regression feeds the same simulated chunk segment_id and recent segment_id through the shared correlation
+    function and asserts equal opaque values, no raw segment_id in the normalized recent model, stable/different behavior,
+    and the three UI hook contracts. The renderer only stores segment_correlation; the Android selector removes raw deviceId
+    checkbox values and uses safe labels, while no new logging or API/intent/HTTP bypass was added.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - android
+  - webview
+  - capture
+  - correlation
+  - observability
+  - privacy

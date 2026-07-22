@@ -49,6 +49,7 @@ interface DisplaySegment {
   memorySources?: MemorySourceCard[];
   memoryLabel?: string;
   memoryModel?: string;
+  segmentCorrelation?: string | null;
 }
 
 function MemoryAssociationCard({ segment }: { segment: DisplaySegment }): JSX.Element {
@@ -114,11 +115,17 @@ function MemoryAssociationCard({ segment }: { segment: DisplaySegment }): JSX.El
   );
 }
 
-function ambientToDisplay(s: AmbientSegment): DisplaySegment {
+function ambientToDisplay(s: {
+  text: string;
+  captured_at: string;
+  speaker_label: string | null;
+  segment_correlation?: string | null;
+}): DisplaySegment {
   return {
     text: s.text,
     captured_at: s.captured_at,
     speaker_label: s.speaker_label,
+    segmentCorrelation: s.segment_correlation,
   };
 }
 
@@ -569,6 +576,7 @@ export default function TranscriptStream(): JSX.Element {
                 isSelf ? "flex-row-reverse" : "flex-row"
               }`}
               data-testid="transcript-row"
+              data-segment-correlation={s.segmentCorrelation ?? undefined}
             >
               {sameSpeakerAsPrev ? avatarSpacer : avatar}
               <div

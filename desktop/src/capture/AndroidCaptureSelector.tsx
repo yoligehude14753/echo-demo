@@ -169,6 +169,7 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
         </Button>,
       ]}
       data-testid="android-capture-selector"
+      data-capture-selection="surface"
     >
       {devices.length > 1 ? (
         <div className="space-y-4">
@@ -183,21 +184,34 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
             <Radio value="single">单端收音</Radio>
             <Radio value="multi">多端收音</Radio>
           </Radio.Group>
-          <Checkbox.Group
+          <div
             className="flex flex-col gap-2"
-            value={selected}
-            onChange={(values) => setSelected(values.map(String))}
+            role="group"
+            aria-label="收音设备选择"
+            data-capture-selection="options"
           >
-            {devices.map((device) => (
+            {devices.map((device, index) => (
               <Checkbox
                 key={device.deviceId}
-                value={device.deviceId}
+                checked={selected.includes(device.deviceId)}
+                onChange={(event) => {
+                  setSelected((current) =>
+                    event.target.checked
+                      ? [...new Set([...current, device.deviceId])]
+                      : current.filter((id) => id !== device.deviceId),
+                  );
+                }}
                 disabled={mode === "single" && device.deviceId !== localDeviceId}
+                data-capture-selection-option={
+                  selected.includes(device.deviceId) ? "selected" : "available"
+                }
               >
-                {device.displayName || device.deviceId}
+                {device.displayName && device.displayName !== device.deviceId
+                  ? device.displayName
+                  : `设备 ${index + 1}`}
               </Checkbox>
             ))}
-          </Checkbox.Group>
+          </div>
         </div>
       ) : (
         <div>将使用这台 Android 设备持续自由收音。确认后会记住选择，App 恢复时自动继续。</div>

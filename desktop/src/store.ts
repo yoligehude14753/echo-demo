@@ -33,6 +33,8 @@ export interface LocalAmbientSegment {
   speaker_id: string | null;
   speaker_label: string | null;
   duration_ms: number;
+  /** Session-scoped opaque correlation; old persisted records may omit it. */
+  segment_correlation?: string | null;
 }
 
 /**

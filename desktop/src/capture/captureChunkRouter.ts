@@ -205,6 +205,7 @@ export function attachCaptureChunkRouter(
             speaker_id: result.speaker_id ?? null,
             speaker_label: result.speaker_label ?? null,
             duration_ms: 0,
+            segment_correlation: result.segment_correlation,
           });
         }
         handlers?.onAmbientUploaded?.();

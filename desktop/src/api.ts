@@ -44,6 +44,12 @@ import {
 } from "@/capture/captureControl";
 import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 import { PRODUCT_MODEL_NAME } from "@/lib/modelDisplay";
+import {
+  captureSegmentCorrelation,
+  normalizeAmbientSegments,
+  type AmbientSegment,
+} from "@/capture/captureCorrelation";
+export type { AmbientSegment } from "@/capture/captureCorrelation";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 6_000;
 const PUBLIC_PROBE_TIMEOUT_MS = 12_000;
@@ -131,6 +137,8 @@ export type SttStatus =
   | "unknown";
 
 export interface CaptureChunkResponse {
+  /** Opaque WebView-only correlation; raw segment_id never enters client state. */
+  segment_correlation: string | null;
   ambient_stored: boolean;
   ambient_text: string | null;
   audio_ref: string | null;
@@ -181,6 +189,7 @@ function normalizeSttStatus(value: unknown): SttStatus {
 
 function emptyCaptureChunkResponse(sttStatus: SttStatus): CaptureChunkResponse {
   return {
+    segment_correlation: null,
     ambient_stored: false,
     ambient_text: null,
     audio_ref: null,
@@ -198,6 +207,7 @@ export function normalizeCaptureChunkResponse(
 ): CaptureChunkResponse {
   const body = captureRecord(value);
   return {
+    segment_correlation: captureSegmentCorrelation(body.segment_id),
     ambient_stored: body.ambient_stored === true,
     ambient_text: nullableString(body.ambient_text),
     audio_ref: nullableString(body.audio_ref),
@@ -634,21 +644,13 @@ export async function clearMeetingOutputs(
 
 // ── 待机时持续显示 ambient 转写片段 ──────────────────────────
 
-export interface AmbientSegment {
-  text: string;
-  captured_at: string;
-  speaker_id: string | null;
-  speaker_label: string | null;
-  duration_ms: number;
-}
-
 export async function listRecentAmbient(
   limit = 50,
   options: ApiReadOptions = {},
 ): Promise<AmbientSegment[]> {
   const u = await apiUrl(`/capture/recent?limit=${limit}`);
   const r = await fetch(u, { cache: "no-store", signal: options.signal });
-  return asJson<AmbientSegment[]>(r);
+  return normalizeAmbientSegments(await asJson<unknown>(r));
 }
 
 export type ArtifactKind =

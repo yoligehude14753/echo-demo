@@ -604,6 +604,7 @@ function AgentArtifactLink({
     <AuthenticatedDownloadLink
       url={authenticatedUrl}
       downloadName={item.name}
+      testId="agent-artifact-link"
       className="flex items-center gap-1.5 text-[11px] text-accent hover:underline"
     >
       <Download className="w-3 h-3" />
