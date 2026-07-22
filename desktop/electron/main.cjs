@@ -96,6 +96,7 @@ const {
   expectedBackendContract,
   probeBackendContract,
 } = require("./backend-contract.cjs");
+const { resolveDesktopProductVersion } = require("./product-version.cjs");
 const { createModelRuntimeIpcSurface } = require("./model-runtime-contract.cjs");
 const {
   startPackagedFusedWorkerBridge,
@@ -112,6 +113,12 @@ const {
 registerAppScheme(protocol);
 
 app.commandLine.appendSwitch("enable-media-stream");
+
+// app.getVersion() is Electron's runtime version in the dev CLI path.  The
+// backend contract must use EchoDesk's package version in both dev and asar.
+const DESKTOP_PRODUCT_VERSION = resolveDesktopProductVersion(
+  path.join(__dirname, "..", "package.json"),
+);
 
 const IS_DEV = !!process.env.ELECTRON_DEV;
 const VITE_URL = process.env.VITE_DEV_URL || "http://localhost:5173";
@@ -2135,7 +2142,7 @@ function expectedLocalBackendContract() {
   const bundledBackend = bundledBackendExecutable();
   const sourceCwd = bundledBackend ? null : resolveBackendCwd();
   expectedLocalBackendContractPromise = expectedBackendContract({
-    productVersion: app.getVersion(),
+    productVersion: DESKTOP_PRODUCT_VERSION,
     bundledBackendPath: bundledBackend,
     sourceAppPath: sourceCwd ? path.join(sourceCwd, "app") : null,
   });

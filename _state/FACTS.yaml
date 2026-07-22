@@ -1,8 +1,8 @@
 version: '1.0'
-project: echo
-generated_at: '2026-07-22T08:37:01.764061+00:00'
+project: /Users/yoligehude/.codex/worktrees/1f9c/echo
+generated_at: '2026-07-22T12:37:20.977463+00:00'
 generated_by: replay.py
-fact_count: 42
+fact_count: 43
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1363,3 +1363,41 @@ facts:
   - capture
   - observability
   - correlation
+- id: F-ECHO-048
+  claim: '2a fix covers A-D: stable contract version, fail-closed Vite targets, 503 on ambient persistence failure, androidTest
+    fixture; A-C pass, Android compile blocked by missing Java.'
+  category: conclusion
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.98
+  observed_at: '2026-07-22T20:35:34+08:00'
+  observed_by: agent/codex-unified-fix-2a
+  valid_until: null
+  ttl_hours: null
+  source:
+  - commit:2a8036d7645bc0ddaded6af4bd8d297088193944
+  - desktop/electron/main.cjs:99-125,2142-2145
+  - desktop/electron/product-version.cjs
+  - desktop/vite.config.ts:8-82
+  - desktop/vite-backend-target.cjs
+  - backend/app/use_cases/ambient_capture.py:56,912-916
+  - backend/app/api/capture.py:248-262
+  - desktop/android/app/src/androidTest/java/com/echodesk/app/EchoCaptureRuntimeAcceptanceTest.java
+  - test:backend focused pytest => 37 passed
+  - test:Node product-version/vite-backend-target => 4 passed
+  - runtime:./gradlew :app:compileDebugAndroidTestJavaWithJavac --no-daemon => no Java Runtime
+  evidence: A-C focused tests are green. The Android acceptance fixture is androidTest-only and has no release API/intent/service
+    change; compilation could not start because macOS reported 'Unable to locate a Java Runtime'. No package was built, installed,
+    or published.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - unified-fix
+  - macos
+  - windows
+  - backend
+  - android
+  - acceptance-fixture

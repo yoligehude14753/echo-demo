@@ -53,6 +53,10 @@ _STABLE_GATE_REASONS = frozenset(
 )
 
 
+class AmbientPersistenceError(RuntimeError):
+    """Authoritative ambient DB append failed after a non-empty transcript."""
+
+
 def _complete_admission_frames(audio_bytes: bytes) -> int:
     """Return complete 20ms/16kHz/int16 frames in the normalized PCM buffer."""
     if _ADMISSION_FRAME_SAMPLES <= 0:
@@ -908,7 +912,9 @@ class AmbientCapturePipeline:
                     repository_stored = True
                 except Exception as e:
                     repository_stored = False
+                    self._stats.segment_store_failed += 1
                     logger.warning("ambient repo persist failed: %s", e)
+                    raise AmbientPersistenceError("ambient persistence unavailable") from e
             rag_stored = False
             # A configured repository is authoritative.  If its append
             # failed, there is no durable row/generation from which RAG can

@@ -1,0 +1,43 @@
+event_id: "E-20260722T2035-001"
+event_type: "add"
+timestamp: "2026-07-22T20:35:34+08:00"
+author: "agent/codex-unified-fix-2a"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-048"
+      claim: "2a fix covers A-D: stable contract version, fail-closed Vite targets, 503 on ambient persistence failure, androidTest fixture; A-C pass, Android compile blocked by missing Java."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.98
+      observed_at: "2026-07-22T20:35:34+08:00"
+      observed_by: "agent/codex-unified-fix-2a"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "commit:2a8036d7645bc0ddaded6af4bd8d297088193944"
+        - "desktop/electron/main.cjs:99-125,2142-2145"
+        - "desktop/electron/product-version.cjs"
+        - "desktop/vite.config.ts:8-82"
+        - "desktop/vite-backend-target.cjs"
+        - "backend/app/use_cases/ambient_capture.py:56,912-916"
+        - "backend/app/api/capture.py:248-262"
+        - "desktop/android/app/src/androidTest/java/com/echodesk/app/EchoCaptureRuntimeAcceptanceTest.java"
+        - "test:backend focused pytest => 37 passed"
+        - "test:Node product-version/vite-backend-target => 4 passed"
+        - "runtime:./gradlew :app:compileDebugAndroidTestJavaWithJavac --no-daemon => no Java Runtime"
+      evidence: "A-C focused tests are green. The Android acceptance fixture is androidTest-only and has no release API/intent/service change; compilation could not start because macOS reported 'Unable to locate a Java Runtime'. No package was built, installed, or published."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "unified-fix"
+        - "macos"
+        - "windows"
+        - "backend"
+        - "android"
+        - "acceptance-fixture"

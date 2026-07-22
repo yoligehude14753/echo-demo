@@ -11,12 +11,14 @@ from pathlib import Path
 
 import pytest
 from app.adapters.audio import pcm_to_wav
+from app.api import capture as capture_api
 from app.api.capture import reset_ambient_pipeline
 from app.api.deps import get_repository
 from app.config import Settings, get_settings
 from app.main import create_app
 from app.ports.repository import AmbientSegmentRecord
 from app.schemas.capture import CaptureChunkResult
+from app.use_cases.ambient_capture import AmbientPersistenceError
 from fastapi.testclient import TestClient
 
 _EXPECTED_FIELDS = {
@@ -161,6 +163,32 @@ def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:
     assert "stt_status" in body
     assert body["stt_status"] in ("ok", "empty", "failed", "circuit_open", "gated")
     assert body["segment_id"] == "status-silent"
+
+
+def test_capture_chunk_returns_503_when_authoritative_persistence_fails(
+    client: TestClient,
+) -> None:
+    class _PersistenceFailureProbe:
+        async def ingest_chunk(self, *_args: object, **_kwargs: object) -> CaptureChunkResult:
+            raise AmbientPersistenceError("ambient persistence unavailable")
+
+    client.app.dependency_overrides[capture_api.get_ambient_pipeline] = _PersistenceFailureProbe
+    enable_local_capture(client)
+    try:
+        response = client.post(
+            "/capture/chunk",
+            files={"audio": ("c.wav", b"audio", "audio/wav")},
+            data={
+                "sample_rate": "16000",
+                "deviceId": "legacy-local",
+                "segmentId": "persist-failure",
+            },
+        )
+    finally:
+        client.app.dependency_overrides.pop(capture_api.get_ambient_pipeline, None)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "ambient persistence unavailable"
 
 
 def test_capture_result_missing_stt_status_is_unknown() -> None:

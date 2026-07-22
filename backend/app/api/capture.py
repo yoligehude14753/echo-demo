@@ -53,7 +53,7 @@ from app.security.governor import PrincipalGovernor
 from app.security.public_projection import project_client_dict
 from app.telemetry.runtime import TelemetryRuntime
 from app.upload import UploadTooLarge, read_limited_upload
-from app.use_cases.ambient_capture import AmbientCapturePipeline
+from app.use_cases.ambient_capture import AmbientCapturePipeline, AmbientPersistenceError
 from app.use_cases.meeting_pipeline import MeetingPipeline
 from app.use_cases.meeting_state import MeetingState
 from app.use_cases.speaker_registry import SpeakerRegistry
@@ -245,14 +245,17 @@ async def capture_chunk(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="empty audio")
     mid = meeting_id.strip() if meeting_id else None
-    result = await pipeline.ingest_chunk(
-        audio_bytes,
-        sample_rate=sample_rate,
-        meeting_id=mid or None,
-        capture_mode=capture_mode,
-        asr_context=_capture_asr_context(request, settings),
-        client_segment_id=segment_id.strip(),
-    )
+    try:
+        result = await pipeline.ingest_chunk(
+            audio_bytes,
+            sample_rate=sample_rate,
+            meeting_id=mid or None,
+            capture_mode=capture_mode,
+            asr_context=_capture_asr_context(request, settings),
+            client_segment_id=segment_id.strip(),
+        )
+    except AmbientPersistenceError as exc:
+        raise HTTPException(status_code=503, detail="ambient persistence unavailable") from exc
     payload = project_client_dict(result.model_dump(mode="json"), principal)
     payload["device_id"] = principal.device_id
     return CaptureChunkResult.model_validate(payload)

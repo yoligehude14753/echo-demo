@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from app.config import Settings
 from app.schemas.meeting import TranscriptSegment
-from app.use_cases.ambient_capture import AmbientCapturePipeline
+from app.use_cases.ambient_capture import AmbientCapturePipeline, AmbientPersistenceError
 
 
 @pytest.fixture
@@ -137,9 +137,9 @@ async def test_ambient_stored_does_not_report_rag_only_success_when_repository_f
     repository.append_ambient_segment = AsyncMock(side_effect=RuntimeError("db down"))
     ambient_pipeline._repo = repository  # type: ignore[assignment]
 
-    result = await ambient_pipeline.ingest_chunk(b"\x01" * 1000)
+    with pytest.raises(AmbientPersistenceError, match="ambient persistence unavailable"):
+        await ambient_pipeline.ingest_chunk(b"\x01" * 1000)
 
-    assert result.ambient_stored is False
     assert ambient_pipeline.get_stats().stored == 0
     assert ambient_pipeline.get_stats().segment_store_failed == 1
     ambient_pipeline._rag.ingest_ambient_segment.assert_not_awaited()  # type: ignore[attr-defined]
