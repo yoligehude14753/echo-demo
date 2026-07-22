@@ -323,6 +323,11 @@ function hasElectronBackendRouting(): boolean {
   );
 }
 
+function hasExplicitViteProxyTarget(): boolean {
+  const target = runtimeEnv().VITE_API_TARGET;
+  return typeof target === "string" && target.trim().length > 0;
+}
+
 export function runtimeMode(): EchoRuntimeMode {
   const bridgeMode = window.echo?.backendRouting?.runtimeMode;
   if (isEchoRuntimeMode(bridgeMode)) return bridgeMode;
@@ -362,7 +367,7 @@ export function canUseRelativeBackendProxy(): boolean {
   const mode = runtimeMode();
   return (
     (mode === "development" || mode === "diagnostic") &&
-    backendRole() === "local_dev_diagnostic"
+    (backendRole() === "local_dev_diagnostic" || hasExplicitViteProxyTarget())
   );
 }
 
@@ -842,6 +847,7 @@ export function configuredBackendBase(): string | null {
     return normalizedElectronBackendBase();
   }
   if (runtimeMode() === "release") return DEFAULT_ANDROID_BACKEND_BASE;
+  if (canUseRelativeBackendProxy()) return null;
   const configured = envBackendBase();
   if (backendRole() === "public_service") {
     if (configured && !configured.startsWith("https://")) {
