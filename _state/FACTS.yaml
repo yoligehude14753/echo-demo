@@ -1,8 +1,8 @@
 version: '1.0'
-project: /Users/yoligehude/.codex/worktrees/1f9c/echo
-generated_at: '2026-07-22T12:37:20.977463+00:00'
+project: echo
+generated_at: '2026-07-22T13:20:03.611278+00:00'
 generated_by: replay.py
-fact_count: 43
+fact_count: 44
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1401,3 +1401,33 @@ facts:
   - backend
   - android
   - acceptance-fixture
+- id: F-ECHO-052
+  claim: Public dev renderer 的显式 VITE_API_TARGET 被误作公网直连，bootstrap 绕过 Vite proxy 并在 session enroll/renew 前失败。
+  category: conclusion
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.99
+  observed_at: '2026-07-22T21:19:06+08:00'
+  observed_by: agent/codex-public-session-fix
+  valid_until: null
+  ttl_hours: null
+  source:
+  - desktop/src/runtime.ts
+  - desktop/tests/e2e/public-session-capture-contract.spec.ts
+  - test:VITE_ECHODESK_RUNTIME_MODE=development VITE_ECHODESK_PRINCIPAL_MODE=public VITE_API_TARGET=https://echodesk.yoliyoli.uk
+    npx playwright test tests/e2e/public-session-capture-contract.spec.ts --project=chromium => 1 passed
+  - runtime:C:\Users\anyut\Desktop\echodesk-e2e-source-51f55d3e-20260722\evidence\public-e2e-2\bug-record.json
+  evidence: The failing Sunny renderer attempted GET https://echodesk.yoliyoli.uk/bootstrap from http://127.0.0.1:5176 and
+    raised ApiTransportError before observing session/enroll or session/renew. The focused regression test now observes bootstrap
+    -> session/enroll -> capture/control and capture/devices, with one enrollment and no renewal, while principal mode remains
+    public.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - desktop
+  - public-session
+  - vite-proxy
+  - root-cause
