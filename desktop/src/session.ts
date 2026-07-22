@@ -5,6 +5,7 @@ import {
   backendWsUrl,
   compareVersions,
   shouldHideSharedPublicHistory,
+  usesElectronViteProxy,
   type ElectronBackendBuildContract,
 } from "@/runtime";
 import {
@@ -1036,7 +1037,13 @@ function publishIdentityStatusForOrigin(
 
 async function configuredBackendOrigin(): Promise<string> {
   const base = await backendBase();
-  const endpoint = base || (await apiUrl("/bootstrap"));
+  // Vite proxy is only a transport origin. Identity/session scope remains
+  // bound to Electron's authoritative HTTPS backend origin.
+  const endpoint =
+    base ||
+    (usesElectronViteProxy()
+      ? window.echo?.backendHost || (await apiUrl("/bootstrap"))
+      : await apiUrl("/bootstrap"));
   return new URL(endpoint, window.location.href).origin;
 }
 
@@ -1046,7 +1053,10 @@ async function backendUrlForOrigin(
 ): Promise<string> {
   const url = await apiUrl(endpoint);
   const actualOrigin = new URL(url, window.location.href).origin;
-  if (actualOrigin !== expectedOrigin) {
+  if (
+    actualOrigin !== expectedOrigin &&
+    !(usesElectronViteProxy() && actualOrigin === window.location.origin)
+  ) {
     throw new Error("后端地址已切换，请重新发起请求");
   }
   return url;
@@ -1564,7 +1574,10 @@ export async function authenticatedFetch(
     return fetch(input, withoutBackendAuthorization(input, init));
   }
   const actualOrigin = new URL(requestUrl(input), window.location.href).origin;
-  if (actualOrigin !== requestOrigin) {
+  if (
+    actualOrigin !== requestOrigin &&
+    !(usesElectronViteProxy() && actualOrigin === window.location.origin)
+  ) {
     throw new Error("后端地址已切换，已拒绝访问旧服务地址");
   }
   const token = await ensureServerSession();
@@ -1620,9 +1633,13 @@ async function backendRequestOrigin(
   const configuredBase = await backendBase();
   const expectedOrigin = configuredBase
     ? new URL(configuredBase).origin
-    : window.location.origin;
+    : usesElectronViteProxy()
+      ? new URL(String(window.echo?.backendHost || "")).origin
+      : window.location.origin;
   try {
-    return new URL(requestUrl(input), window.location.href).origin === expectedOrigin
+    const actualOrigin = new URL(requestUrl(input), window.location.href).origin;
+    return actualOrigin === expectedOrigin ||
+      (usesElectronViteProxy() && actualOrigin === window.location.origin)
       ? expectedOrigin
       : null;
   } catch {
@@ -2007,7 +2024,10 @@ export async function authenticatedWsConnection(): Promise<AuthenticatedWsConnec
   selectBackendOrigin(origin);
   const url = new URL(await backendWsUrl());
   const wsHttpOrigin = `${url.protocol === "wss:" ? "https:" : "http:"}//${url.host}`;
-  if (wsHttpOrigin !== origin) {
+  if (
+    wsHttpOrigin !== origin &&
+    !(usesElectronViteProxy() && wsHttpOrigin === window.location.origin)
+  ) {
     throw new Error("后端地址已切换，已停止建立旧身份 WebSocket");
   }
   const token = await ensureServerSession();

@@ -17,10 +17,16 @@ const keyPath = join(root, "localhost.key");
 const certPath = join(root, "localhost.crt");
 let server = null;
 let closing = false;
+const lifecycleParentPid = Number.parseInt(
+  process.env.ECHODESK_LIFECYCLE_PARENT_PID || "",
+  10,
+);
+let parentMonitor = null;
 
 async function close(exitCode = 0) {
   if (closing) return;
   closing = true;
+  if (parentMonitor) clearInterval(parentMonitor);
   try {
     await server?.close();
   } finally {
@@ -68,6 +74,16 @@ async function main() {
   });
   await server.listen();
   console.log(`[e2e-vite] https://localhost:${port}`);
+  if (Number.isSafeInteger(lifecycleParentPid) && lifecycleParentPid > 1) {
+    parentMonitor = setInterval(() => {
+      try {
+        process.kill(lifecycleParentPid, 0);
+      } catch (error) {
+        if (error?.code === "ESRCH") void close(0);
+      }
+    }, 1_000);
+    parentMonitor.unref();
+  }
 }
 
 process.once("SIGINT", () => void close(0));

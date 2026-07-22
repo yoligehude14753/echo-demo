@@ -1,0 +1,40 @@
+event_id: "E-20260722T2250-001"
+event_type: "add"
+timestamp: "2026-07-22T22:50:00+08:00"
+author: "agent/codex-luna-source-runtime-fix-20260722"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-055"
+      claim: "Source public Electron uses EchoDesk safeStorage, HTTPS Vite relative proxy transport with canonical backend-origin session scope, and supervised Vite/Electron shutdown without plaintext fallback."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.98
+      observed_at: "2026-07-22T22:50:00+08:00"
+      observed_by: "agent/codex-luna-source-runtime-fix-20260722"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "desktop/electron/main.cjs"
+        - "desktop/src/runtime.ts"
+        - "desktop/src/session.ts"
+        - "desktop/scripts/start-electron-dev.cjs"
+        - "desktop/scripts/start-e2e-vite.cjs"
+        - "desktop/electron/tests/source-runtime-public-session.test.cjs"
+        - "test:node --test desktop/electron/tests/source-runtime-public-session.test.cjs desktop/electron/tests/public-identity-session.test.cjs desktop/electron/tests/credential-vault.test.cjs desktop/electron/tests/vite-backend-target.test.cjs => 33 passed"
+      evidence: "The focused source contract verifies EchoDesk application identity, HTTPS backend target selection, canonical backend-origin session scope across relative proxy transport, process-tree cleanup hooks, and absence of plaintext safeStorage fallback. Existing vault/session tests continue to prove fail-closed unavailable storage, origin binding, durable enrollment, and rotation recovery."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "desktop"
+        - "source-runtime"
+        - "public-session"
+        - "secure-storage"
+        - "vite-proxy"
+        - "lifecycle"
+git_commit: null

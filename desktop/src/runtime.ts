@@ -328,6 +328,15 @@ function hasExplicitViteProxyTarget(): boolean {
   return typeof target === "string" && target.trim().length > 0;
 }
 
+export function usesElectronViteProxy(): boolean {
+  return (
+    hasElectronBackendRouting() &&
+    !isPackagedElectronRenderer() &&
+    hasExplicitViteProxyTarget() &&
+    (runtimeMode() === "development" || runtimeMode() === "diagnostic")
+  );
+}
+
 export function runtimeMode(): EchoRuntimeMode {
   const bridgeMode = window.echo?.backendRouting?.runtimeMode;
   if (isEchoRuntimeMode(bridgeMode)) return bridgeMode;
@@ -843,6 +852,7 @@ export async function installAppUpdate(status?: AppUpdateStatus): Promise<void> 
 
 export function configuredBackendBase(): string | null {
   if (isNativeMobile()) return mobilePcBackendBase();
+  if (usesElectronViteProxy()) return null;
   if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
     return normalizedElectronBackendBase();
   }
@@ -887,6 +897,10 @@ export function backendBaseSnapshot(): string | null {
     return cachedBase;
   }
 
+  if (usesElectronViteProxy()) {
+    cachedBase = "";
+    return cachedBase;
+  }
   if (isPackagedElectronRenderer() || hasElectronBackendRouting()) {
     const bridgeHost = normalizedElectronBackendBase();
     if (!bridgeHost) return null;

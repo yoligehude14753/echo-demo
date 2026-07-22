@@ -108,6 +108,11 @@ const {
   captureStatusLabel,
 } = require("./background-residency.cjs");
 
+// Source Electron 默认以 Electron 作为应用身份。显式设置产品名，让 macOS
+// Keychain/safeStorage 与打包态使用同一个受支持的 EchoDesk 应用命名空间。
+// 这里不启用明文回退；safeStorage 不可用时仍必须 fail closed。
+app.setName("EchoDesk");
+
 // Electron 要求 privileged scheme 在 app ready 前完成声明。打包态只从该
 // secure/standard origin 加载静态资源，不再使用具有 opaque Origin 的 file://。
 registerAppScheme(protocol);
