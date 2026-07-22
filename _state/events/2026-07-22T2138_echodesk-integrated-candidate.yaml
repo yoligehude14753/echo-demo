@@ -1,0 +1,36 @@
+event_id: "E-20260722T2138-001"
+event_type: "add"
+timestamp: "2026-07-22T21:38:42+08:00"
+author: "agent/codex-luna-integration-20260722"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-054"
+      claim: "The isolated integration candidate at cb8df40 descends from 2a8036d through 51f55d3 and contains the desktop public-session fix f6bc9b7 followed by Android secure SessionHandoff 13fe393."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "code"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-22T21:38:42+08:00"
+      observed_by: "agent/codex-luna-integration-20260722"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "commit:2a8036d7645bc0ddaded6af4bd8d297088193944"
+        - "commit:51f55d3e1d3c2d6f5836b07341a16452b39c8077"
+        - "commit:f6bc9b75087c3f4ca64058726f488c162d11825b"
+        - "commit:13fe39397a6c42863c2f0fe52db33f6d2e3aaba2"
+        - "commit:cb8df40"
+        - "branch:codex/echodesk-integrated-candidate-20260722"
+      evidence: "The integration worktree was created from 51f55d3, whose ancestor check to 2a8036d passed. The two source refs were fetched at their exact requested heads and cherry-picked in order; the only conflict was the duplicate FactStore id F-ECHO-052, resolved mechanically as Android F-ECHO-053. No product tests, packaging, or deployment were run."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "integration"
+        - "immutable-candidate"
+        - "desktop"
+        - "android"
