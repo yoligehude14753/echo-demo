@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class EchoCaptureRuntime {
   private static final String TAG = "EchoCaptureRuntime";
   private static final String PREFS = "echodesk_native_capture";
+  static final String CLIENT_VERSION_HEADER = "X-EchoDesk-Client-Version";
   private static final String KEY_FREE_MODE = "free_mode_enabled";
   private static final String KEY_PAUSED = "free_mode_paused";
   private static final String KEY_BASE_URL = "base_url";
@@ -309,7 +310,7 @@ final class EchoCaptureRuntime {
     connection.setRequestProperty("Idempotency-Key", "capture:" + record.id());
     connection.setRequestProperty("X-Capture-Device-Id", record.metadata.getProperty("deviceId", ""));
     connection.setRequestProperty("X-Echo-Platform", "android");
-    connection.setRequestProperty("X-Echo-App-Version", appVersion());
+    connection.setRequestProperty(CLIENT_VERSION_HEADER, appVersion());
     connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
     try (OutputStream output = connection.getOutputStream()) {
       writeField(output, boundary, "sample_rate", record.metadata.getProperty("sampleRate", "16000"));

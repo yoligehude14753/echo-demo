@@ -1,11 +1,17 @@
 package com.echodesk.app;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
 public class EchoCaptureRuntimeSessionTest {
+  @Test
+  public void nativeUploadUsesBackendClientVersionHeader() {
+    assertEquals("X-EchoDesk-Client-Version", EchoCaptureRuntime.CLIENT_VERSION_HEADER);
+  }
+
   @Test
   public void missingSessionFieldsStayFailClosedWithoutThrowing() {
     assertFalse(EchoCaptureRuntime.hasUploadSession(null, null, null));

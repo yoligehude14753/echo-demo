@@ -1,0 +1,35 @@
+event_id: "E-20260722T1400-003"
+event_type: "add"
+timestamp: "2026-07-22T14:00:00+08:00"
+author: "agent/codex-android-header-contract"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-042"
+      claim: "Android native capture must send X-EchoDesk-Client-Version; the old X-Echo-App-Version caused public native queue uploads to return HTTP 426 for APK 0.3.5."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-22T13:48:02+08:00"
+      observed_by: "agent/codex-android-header-contract"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "commit:9724830c463838be036442d7decb78e073f267fd"
+        - "desktop/android/app/src/main/java/com/echodesk/app/EchoCaptureRuntime.java:311"
+        - "backend/app/security/client_version.py:10-12"
+        - "runtime:/tmp/echodesk-android-validation-9724830c-20260722-130842/logcat-native-queue-drain.txt"
+        - "runtime:/tmp/echodesk-android-validation-9724830c-20260722-130842/public-bootstrap.json"
+      evidence: "Fresh-installed com.echodesk.app on task-owned emulator emulator-5554 drained a controlled 16kHz mono WAV through EchoCaptureRuntime and repeatedly logged HTTP 426 while the queue remained at one record. The backend source names X-EchoDesk-Client-Version as PUBLIC_CLIENT_VERSION_HEADER, while the candidate Android source used X-Echo-App-Version. The public bootstrap reported minimum_client_version=0.3.3-preview.2 and the APK reported versionName=0.3.5."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "android"
+        - "capture"
+        - "client-version"
+        - "root-cause"
