@@ -6,14 +6,16 @@ import android.content.pm.PackageInfo;
 import android.util.Log;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
@@ -21,6 +23,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Process-scoped native free-capture runtime.
@@ -34,6 +38,16 @@ final class EchoCaptureRuntime {
   private static final String TAG = "EchoCaptureRuntime";
   private static final String PREFS = "echodesk_native_capture";
   static final String CLIENT_VERSION_HEADER = "X-EchoDesk-Client-Version";
+  static final int MAX_UPLOAD_RESPONSE_BYTES = 64 * 1024;
+  private static final Pattern JSON_AMBIENT_STORED = Pattern.compile(
+      "\\\"ambient_stored\\\"\\s*:\\s*(true|false)"
+  );
+  private static final Pattern JSON_STT_STATUS = Pattern.compile(
+      "\\\"stt_status\\\"\\s*:\\s*(\\\"(?:\\\\.|[^\\\"\\\\])*\\\"|null)"
+  );
+  private static final Pattern JSON_AMBIENT_TEXT = Pattern.compile(
+      "\\\"ambient_text\\\"\\s*:\\s*(\\\"(?:\\\\.|[^\\\"\\\\])*\\\"|null)"
+  );
   private static final String KEY_FREE_MODE = "free_mode_enabled";
   private static final String KEY_PAUSED = "free_mode_paused";
   private static final String KEY_BASE_URL = "base_url";
@@ -74,6 +88,20 @@ final class EchoCaptureRuntime {
   private volatile String meetingId;
   private volatile boolean authBlocked;
   private volatile int recoveryAttempts;
+
+  static final class UploadResponse {
+    final int status;
+    final boolean ambientStored;
+    final String sttStatus;
+    final String textSha256;
+
+    UploadResponse(int status, boolean ambientStored, String sttStatus, String textSha256) {
+      this.status = status;
+      this.ambientStored = ambientStored;
+      this.sttStatus = sttStatus;
+      this.textSha256 = textSha256;
+    }
+  }
 
   private EchoCaptureRuntime(Context context) {
     this.context = context;
@@ -332,26 +360,148 @@ final class EchoCaptureRuntime {
       output.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
     }
     int status = connection.getResponseCode();
-    try (
-        BufferedReader ignored =
-            new BufferedReader(
-                new InputStreamReader(
-                    status >= 400
-                        ? connection.getErrorStream()
-                        : connection.getInputStream(),
-                    StandardCharsets.UTF_8
-                )
-            )
-    ) {
-      while (ignored.readLine() != null) {
-        // Drain for connection reuse without logging response payload.
-      }
+    String responseBody = "";
+    try (InputStream input = status >= 400
+        ? connection.getErrorStream()
+        : connection.getInputStream()) {
+      responseBody = readBoundedResponse(input);
     } catch (Exception ignored) {
-      // A status code is sufficient for queue ownership.
+      // Status remains authoritative for queue ownership; body telemetry is best effort.
     } finally {
       connection.disconnect();
     }
+    UploadResponse response = parseUploadResponse(status, responseBody);
+    if (status >= 200 && status < 300) {
+      logSuccessfulUpload(record, response);
+    }
     return status;
+  }
+
+  static String readBoundedResponse(InputStream input) throws Exception {
+    if (input == null) return "";
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    byte[] buffer = new byte[8 * 1024];
+    int total = 0;
+    int count;
+    while ((count = input.read(buffer)) >= 0) {
+      if (count == 0) continue;
+      int remaining = MAX_UPLOAD_RESPONSE_BYTES - total;
+      if (remaining <= 0) break;
+      int accepted = Math.min(count, remaining);
+      output.write(buffer, 0, accepted);
+      total += accepted;
+      if (accepted < count) break;
+    }
+    return output.toString(StandardCharsets.UTF_8.name());
+  }
+
+  static UploadResponse parseUploadResponse(int status, String body) {
+    boolean ambientStored = false;
+    String sttStatus = "unknown";
+    String textSha256 = "";
+    if (status >= 200 && status < 300 && body != null && !body.isBlank()) {
+      ambientStored = readJsonBoolean(JSON_AMBIENT_STORED, body);
+      sttStatus = normalizeSttStatus(readJsonString(JSON_STT_STATUS, body));
+      String text = readJsonString(JSON_AMBIENT_TEXT, body);
+      if (text != null) {
+        textSha256 = sha256(text);
+      }
+    }
+    return new UploadResponse(status, ambientStored, sttStatus, textSha256);
+  }
+
+  private static boolean readJsonBoolean(Pattern pattern, String body) {
+    Matcher match = pattern.matcher(body);
+    return match.find() && "true".equals(match.group(1));
+  }
+
+  private static String readJsonString(Pattern pattern, String body) {
+    Matcher match = pattern.matcher(body);
+    if (!match.find() || "null".equals(match.group(1))) return null;
+    return unescapeJsonString(match.group(1));
+  }
+
+  private static String unescapeJsonString(String quoted) {
+    String value = quoted.substring(1, quoted.length() - 1);
+    StringBuilder result = new StringBuilder(value.length());
+    for (int index = 0; index < value.length(); index++) {
+      char current = value.charAt(index);
+      if (current != '\\' || index + 1 >= value.length()) {
+        result.append(current);
+        continue;
+      }
+      char escaped = value.charAt(++index);
+      switch (escaped) {
+        case '"': result.append('"'); break;
+        case '\\': result.append('\\'); break;
+        case '/': result.append('/'); break;
+        case 'b': result.append('\b'); break;
+        case 'f': result.append('\f'); break;
+        case 'n': result.append('\n'); break;
+        case 'r': result.append('\r'); break;
+        case 't': result.append('\t'); break;
+        case 'u':
+          if (index + 4 >= value.length()) return "";
+          try {
+            result.append((char) Integer.parseInt(value.substring(index + 1, index + 5), 16));
+            index += 4;
+          } catch (NumberFormatException error) {
+            return "";
+          }
+          break;
+        default: return "";
+      }
+    }
+    return result.toString();
+  }
+
+  private static void logSuccessfulUpload(
+      NativeCaptureQueue.Record record,
+      UploadResponse response
+  ) {
+    String segmentId = record.id().replace("\\", "\\\\").replace("\"", "\\\"");
+    Log.i(
+        TAG,
+        "native_capture_result {\"segmentId\":\""
+            + segmentId
+            + "\",\"status\":"
+            + response.status
+            + ",\"ambient_stored\":"
+            + response.ambientStored
+            + ",\"stt_status\":\""
+            + response.sttStatus
+            + "\",\"text_sha256\":\""
+            + response.textSha256
+            + "\"}"
+    );
+  }
+
+  private static String normalizeSttStatus(String value) {
+    if (
+        "ok".equals(value)
+            || "empty".equals(value)
+            || "failed".equals(value)
+            || "circuit_open".equals(value)
+            || "gated".equals(value)
+            || "unknown".equals(value)
+    ) {
+      return value;
+    }
+    return "unknown";
+  }
+
+  private static String sha256(String value) {
+    try {
+      byte[] digest = MessageDigest.getInstance("SHA-256")
+          .digest(value.getBytes(StandardCharsets.UTF_8));
+      StringBuilder hex = new StringBuilder(digest.length * 2);
+      for (byte item : digest) {
+        hex.append(String.format("%02x", item & 0xff));
+      }
+      return hex.toString();
+    } catch (NoSuchAlgorithmException impossible) {
+      return "unavailable";
+    }
   }
 
   private static void writeField(

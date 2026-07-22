@@ -157,3 +157,12 @@ async def test_real_migrations_dir_applies_on_fresh_db(tmp_path: Path) -> None:
     ):
         assert await _has_table(db, tbl), f"missing table {tbl}"
     assert await _has_table(db, "schema_version")
+
+    async with aiosqlite.connect(db) as conn:
+        cursor = await conn.execute("PRAGMA table_info(ambient_segments)")
+        columns = {
+            row[1]
+            for row in await cursor.fetchall()
+        }
+        await cursor.close()
+    assert "client_segment_id" in columns

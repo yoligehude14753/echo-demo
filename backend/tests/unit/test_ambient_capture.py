@@ -57,6 +57,27 @@ async def test_ambient_chunk_always_persisted_and_ingested(
 
 
 @pytest.mark.asyncio
+async def test_ambient_chunk_preserves_client_segment_correlation(
+    ambient_pipeline: AmbientCapturePipeline,
+) -> None:
+    repository = AsyncMock()
+    repository.append_ambient_segment = AsyncMock(return_value=17)
+    ambient_pipeline._repo = repository  # type: ignore[assignment]
+
+    result = await ambient_pipeline.ingest_chunk(
+        b"\x00" * 1000,
+        sample_rate=16_000,
+        client_segment_id="device:native:segment-17",
+    )
+
+    assert result.segment_id == "device:native:segment-17"
+    repository.append_ambient_segment.assert_awaited_once()
+    assert repository.append_ambient_segment.await_args.kwargs["client_segment_id"] == (
+        "device:native:segment-17"
+    )
+
+
+@pytest.mark.asyncio
 async def test_ambient_with_meeting_overlay(
     ambient_pipeline: AmbientCapturePipeline,
 ) -> None:

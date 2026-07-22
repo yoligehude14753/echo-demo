@@ -1,0 +1,37 @@
+event_id: "E-20260722T1636-001"
+event_type: "add"
+timestamp: "2026-07-22T16:36:12+08:00"
+author: "agent/codex-capture-correlation"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-043"
+      claim: "Capture correlation preserves client_segment_id in ambient records and chunk/recent responses; Android native 2xx responses emit bounded redacted status, STT, and text-hash logs."
+      category: "code"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-22T16:36:12+08:00"
+      observed_by: "agent/codex-capture-correlation"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "backend/app/adapters/repo/migrations/045_capture_client_correlation.sql"
+        - "backend/app/adapters/repo/sqlite.py:736-817"
+        - "backend/app/api/capture.py:248-290"
+        - "desktop/android/app/src/main/java/com/echodesk/app/EchoCaptureRuntime.java:334-500"
+        - "test:backend focused pytest => 36 passed"
+        - "test:Android EchoCaptureRuntimeResponseTest and EchoCaptureRuntimeSessionTest passed"
+      evidence: "The additive nullable schema field preserves old rows; backend stores and projects the client segment id, while native response parsing is capped at 64 KiB and logs only segmentId, HTTP status, ambient_stored, allowlisted stt_status, and SHA-256 of ambient_text. Focused backend migration/repository/pipeline/API tests passed 36/36 and Android native response/session tests passed."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "android"
+        - "capture"
+        - "observability"
+        - "correlation"
+git_commit: null

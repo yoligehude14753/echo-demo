@@ -22,6 +22,8 @@ CaptureStreamMode = Literal["free", "formal", "auto"]
 class CaptureChunkResult(BaseModel):
     """POST /capture/chunk 响应。"""
 
+    # 客户端生成的关联标识；仅用于跨 native upload 与 recent 的可观测性。
+    segment_id: str | None = None
     ambient_stored: bool = False
     ambient_text: str | None = None
     # Internal/local responses retain the durable file reference. Public

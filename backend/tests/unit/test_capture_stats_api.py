@@ -6,13 +6,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from app.adapters.audio import pcm_to_wav
 from app.api.capture import reset_ambient_pipeline
+from app.api.deps import get_repository
 from app.config import Settings, get_settings
 from app.main import create_app
+from app.ports.repository import AmbientSegmentRecord
 from app.schemas.capture import CaptureChunkResult
 from fastapi.testclient import TestClient
 
@@ -157,11 +160,34 @@ def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:
     body = r.json()
     assert "stt_status" in body
     assert body["stt_status"] in ("ok", "empty", "failed", "circuit_open", "gated")
+    assert body["segment_id"] == "status-silent"
 
 
 def test_capture_result_missing_stt_status_is_unknown() -> None:
     """schema 防御性默认不能把缺字段的旧响应伪装成 ready。"""
     assert CaptureChunkResult().stt_status == "unknown"
+
+
+def test_recent_projects_client_segment_id(client: TestClient) -> None:
+    class _RepositoryProbe:
+        async def list_ambient_segments(self, **_kwargs: object) -> list[AmbientSegmentRecord]:
+            return [
+                AmbientSegmentRecord(
+                    audio_ref="/private/probe.wav",
+                    text="关联文本",
+                    captured_at=datetime.now(UTC),
+                    client_segment_id="device:native:recent-17",
+                )
+            ]
+
+    client.app.dependency_overrides[get_repository] = lambda: _RepositoryProbe()
+    try:
+        response = client.get("/capture/recent")
+    finally:
+        client.app.dependency_overrides.pop(get_repository, None)
+
+    assert response.status_code == 200
+    assert response.json()[0]["segment_id"] == "device:native:recent-17"
 
 
 def test_post_chunk_accepts_frontend_silent_wav_without_persisting(

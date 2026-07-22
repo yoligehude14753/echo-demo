@@ -742,6 +742,7 @@ class SQLiteRepository(RepositoryPort):
         speaker_id: str | None = None,
         speaker_label: str | None = None,
         duration_ms: int = 0,
+        client_segment_id: str | None = None,
     ) -> int:
         tenant_id, device_id, owner_id = _scope()
         async with self._lock:
@@ -749,8 +750,8 @@ class SQLiteRepository(RepositoryPort):
             cur = await conn.execute(
                 "INSERT INTO ambient_segments "
                 "(audio_ref, text, speaker_id, speaker_label, duration_ms, captured_at, "
-                "tenant_id, device_id, owner_id, rag_projection_state) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'index_pending')",
+                "tenant_id, device_id, owner_id, client_segment_id, rag_projection_state) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'index_pending')",
                 (
                     audio_ref,
                     text,
@@ -761,6 +762,7 @@ class SQLiteRepository(RepositoryPort):
                     tenant_id,
                     device_id,
                     owner_id,
+                    client_segment_id,
                 ),
             )
             row_id = cur.lastrowid
@@ -789,7 +791,7 @@ class SQLiteRepository(RepositoryPort):
         async with self._lock:
             conn = self._require_conn()
             cur = await conn.execute(
-                "SELECT id, audio_ref, text, speaker_id, speaker_label, duration_ms, captured_at, device_id, "
+                "SELECT id, audio_ref, text, speaker_id, speaker_label, duration_ms, captured_at, device_id, client_segment_id, "
                 "rag_projection_state, rag_projection_error, rag_projected_at, "
                 "rag_projection_attempts, rag_projection_next_retry_at "
                 f"FROM ambient_segments {where} ORDER BY captured_at DESC LIMIT ?",
@@ -807,11 +809,12 @@ class SQLiteRepository(RepositoryPort):
                 duration_ms=r[5],
                 captured_at=_from_iso(r[6]) or datetime.fromtimestamp(0),
                 device_id=r[7],
-                rag_projection_state=r[8],
-                rag_projection_error=r[9],
-                rag_projected_at=_from_iso(r[10]),
-                rag_projection_attempts=int(r[11]),
-                rag_projection_next_retry_at=_from_iso(r[12]),
+                client_segment_id=r[8],
+                rag_projection_state=r[9],
+                rag_projection_error=r[10],
+                rag_projected_at=_from_iso(r[11]),
+                rag_projection_attempts=int(r[12]),
+                rag_projection_next_retry_at=_from_iso(r[13]),
             )
             for r in rows
         ]

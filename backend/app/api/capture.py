@@ -251,6 +251,7 @@ async def capture_chunk(
         meeting_id=mid or None,
         capture_mode=capture_mode,
         asr_context=_capture_asr_context(request, settings),
+        client_segment_id=segment_id.strip(),
     )
     payload = project_client_dict(result.model_dump(mode="json"), principal)
     payload["device_id"] = principal.device_id
@@ -286,6 +287,7 @@ async def list_recent_ambient(
             "speaker_label": r.speaker_label,
             "duration_ms": r.duration_ms,
             "device_id": getattr(r, "device_id", None),
+            "segment_id": getattr(r, "client_segment_id", None),
         }
         for r in recs_sorted
     ]

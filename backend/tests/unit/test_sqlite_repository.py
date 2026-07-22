@@ -191,6 +191,7 @@ async def test_ambient_segment_persist_and_query(repo: SQLiteRepository) -> None
         speaker_id="spk_A",
         speaker_label="说话人1",
         duration_ms=8_000,
+        client_segment_id="device:native:segment-1",
     )
     assert aid > 0
     rows = await repo.list_ambient_segments(limit=10)
@@ -199,6 +200,7 @@ async def test_ambient_segment_persist_and_query(repo: SQLiteRepository) -> None
     assert r.audio_ref == "/x/1.wav"
     assert r.speaker_id == "spk_A"
     assert r.duration_ms == 8_000
+    assert r.client_segment_id == "device:native:segment-1"
 
     # 时间窗口过滤
     later = t0 + timedelta(minutes=5)

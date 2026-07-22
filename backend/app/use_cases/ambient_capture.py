@@ -685,6 +685,7 @@ class AmbientCapturePipeline:
         meeting_id: str | None = None,
         capture_mode: str = "free",
         asr_context: ASRRequestContext | None = None,
+        client_segment_id: str | None = None,
     ) -> CaptureChunkResult:
         if self._state is not None and not self._settings.public_demo_mode:
             await self._state.hydrate()
@@ -899,6 +900,7 @@ class AmbientCapturePipeline:
                         speaker_id=speaker_id,
                         speaker_label=speaker_label,
                         duration_ms=duration_ms,
+                        client_segment_id=client_segment_id,
                     )
                     if not isinstance(stored_id, int) or stored_id <= 0:
                         raise RuntimeError("ambient repository returned an invalid segment id")
@@ -1018,6 +1020,7 @@ class AmbientCapturePipeline:
                 logger.debug("meeting overlay skipped: %s", e)
 
         return CaptureChunkResult(
+            segment_id=client_segment_id,
             ambient_stored=ambient_stored,
             ambient_text=ambient_text,
             audio_ref=audio_ref,

@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-22T06:01:08.632992+00:00'
+generated_at: '2026-07-22T08:37:01.764061+00:00'
 generated_by: replay.py
-fact_count: 41
+fact_count: 42
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1331,3 +1331,35 @@ facts:
   - capture
   - client-version
   - root-cause
+- id: F-ECHO-043
+  claim: Capture correlation preserves client_segment_id in ambient records and chunk/recent responses; Android native 2xx
+    responses emit bounded redacted status, STT, and text-hash logs.
+  category: code
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-22T16:36:12+08:00'
+  observed_by: agent/codex-capture-correlation
+  valid_until: null
+  ttl_hours: null
+  source:
+  - backend/app/adapters/repo/migrations/045_capture_client_correlation.sql
+  - backend/app/adapters/repo/sqlite.py:736-817
+  - backend/app/api/capture.py:248-290
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoCaptureRuntime.java:334-500
+  - test:backend focused pytest => 36 passed
+  - test:Android EchoCaptureRuntimeResponseTest and EchoCaptureRuntimeSessionTest passed
+  evidence: The additive nullable schema field preserves old rows; backend stores and projects the client segment id, while
+    native response parsing is capped at 64 KiB and logs only segmentId, HTTP status, ambient_stored, allowlisted stt_status,
+    and SHA-256 of ambient_text. Focused backend migration/repository/pipeline/API tests passed 36/36 and Android native response/session
+    tests passed.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - android
+  - capture
+  - observability
+  - correlation
