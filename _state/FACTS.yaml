@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-21T14:56:50.078328+00:00'
+generated_at: '2026-07-22T02:41:33.883595+00:00'
 generated_by: replay.py
-fact_count: 38
+fact_count: 40
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1244,3 +1244,59 @@ facts:
   - firered
   - asr
   - installation-defaults
+- id: F-ECHO-040
+  claim: GET /capture/devices returned HTTP 500 when Hub was disabled or unconfigured because the route called HubRuntime.list_devices(),
+    whose _require_client raised HubRuntimeError without route translation.
+  category: conclusion
+  volatility: low
+  evidence_strength: runtime
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-22T10:40:27+08:00'
+  observed_by: agent/codex-echodesk-capture-devices-500
+  valid_until: null
+  ttl_hours: null
+  source:
+  - commit:49d7f66684a14e3a9d34dd89dc01f22acca86dfa
+  - backend/app/api/capture.py:71-72
+  - backend/app/hub/runtime.py:309-332
+  - runtime:controlled TestClient GET /capture/devices => HTTP 500
+  evidence: A controlled request with hub_enabled=false and an empty hub_base_url reproduced HTTP 500. The direct traceback
+    ended at HubRuntime._require_client with HubRuntimeError(connection_failed); no microphone, STT provider, capture control,
+    or capture chunk path was invoked.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - capture
+  - devices
+  - hub
+  - root-cause
+- id: F-ECHO-041
+  claim: 'Capture devices handling is isolated from STT and capture control/chunk semantics: disabled Hub returns an empty
+    list, configured Hub failures return HTTP 503, and device mapping is unchanged.'
+  category: conclusion
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-22T10:40:27+08:00'
+  observed_by: agent/codex-echodesk-capture-devices-500
+  valid_until: null
+  ttl_hours: null
+  source:
+  - backend/app/api/capture.py:70-84
+  - backend/tests/unit/test_capture_devices_api.py:25-43
+  - runtime:focused pytest => 11 passed
+  evidence: Focused route, Hub runtime, Hub API, and capture selection tests passed. The new route tests cover both disabled-Hub
+    HTTP 200 with devices=[] and configured-Hub failure HTTP 503; no STT, UI, install, Android, or real microphone code was
+    changed or exercised.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - capture
+  - devices
+  - scope

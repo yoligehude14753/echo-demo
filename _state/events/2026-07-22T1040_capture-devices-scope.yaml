@@ -1,0 +1,33 @@
+event_id: "E-20260722T1040-002"
+event_type: "add"
+timestamp: "2026-07-22T10:40:27+08:00"
+author: "agent/codex-echodesk-capture-devices-500"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-041"
+      claim: "Capture devices handling is isolated from STT and capture control/chunk semantics: disabled Hub returns an empty list, configured Hub failures return HTTP 503, and device mapping is unchanged."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-22T10:40:27+08:00"
+      observed_by: "agent/codex-echodesk-capture-devices-500"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "backend/app/api/capture.py:70-84"
+        - "backend/tests/unit/test_capture_devices_api.py:25-43"
+        - "runtime:focused pytest => 11 passed"
+      evidence: "Focused route, Hub runtime, Hub API, and capture selection tests passed. The new route tests cover both disabled-Hub HTTP 200 with devices=[] and configured-Hub failure HTTP 503; no STT, UI, install, Android, or real microphone code was changed or exercised."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "capture"
+        - "devices"
+        - "scope"
+git_commit: null

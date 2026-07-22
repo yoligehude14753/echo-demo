@@ -36,6 +36,7 @@ from app.api.meetings import get_meeting_pipeline
 from app.api.memory import get_memory_dependency
 from app.api.retrieval import get_rag
 from app.config import Settings, get_settings
+from app.hub.runtime import HubRuntimeError
 from app.memory import MemoryService
 from app.ports.asr import ASRRequestContext, ASRSchedulerPort, ASRTelemetryPort
 from app.ports.diarizer import DiarizerPort
@@ -69,7 +70,12 @@ def get_capture_selection_store(
 @router.get("/devices")
 async def get_capture_devices(request: Request) -> dict[str, object]:
     runtime = getattr(request.app.state, "hub_runtime", None)
-    raw_devices = await runtime.list_devices() if runtime is not None else []
+    raw_devices: list[dict[str, object]] = []
+    if runtime is not None and runtime.settings.hub_enabled and runtime.configured:
+        try:
+            raw_devices = await runtime.list_devices()
+        except HubRuntimeError as exc:
+            raise HTTPException(status_code=503, detail="设备列表暂不可用") from exc
     return {
         "devices": [
             {

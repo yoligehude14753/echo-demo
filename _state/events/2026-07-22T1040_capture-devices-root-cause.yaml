@@ -1,0 +1,35 @@
+event_id: "E-20260722T1040-001"
+event_type: "add"
+timestamp: "2026-07-22T10:40:27+08:00"
+author: "agent/codex-echodesk-capture-devices-500"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-040"
+      claim: "GET /capture/devices returned HTTP 500 when Hub was disabled or unconfigured because the route called HubRuntime.list_devices(), whose _require_client raised HubRuntimeError without route translation."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "runtime"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-22T10:40:27+08:00"
+      observed_by: "agent/codex-echodesk-capture-devices-500"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "commit:49d7f66684a14e3a9d34dd89dc01f22acca86dfa"
+        - "backend/app/api/capture.py:71-72"
+        - "backend/app/hub/runtime.py:309-332"
+        - "runtime:controlled TestClient GET /capture/devices => HTTP 500"
+      evidence: "A controlled request with hub_enabled=false and an empty hub_base_url reproduced HTTP 500. The direct traceback ended at HubRuntime._require_client with HubRuntimeError(connection_failed); no microphone, STT provider, capture control, or capture chunk path was invoked."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "capture"
+        - "devices"
+        - "hub"
+        - "root-cause"
+git_commit: null
