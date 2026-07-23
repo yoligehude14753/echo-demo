@@ -15,6 +15,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
+from app.adapters.intent.llm_router import LLMIntentRouter
 from app.agents.artifact_transfer import (
     ArtifactContentLengthError,
     ArtifactSizeLimitError,
@@ -36,7 +37,9 @@ from app.agents.service import (
     get_agent_task_service,
 )
 from app.api.deps import get_event_bus, require_admin_access
+from app.api.deps import get_llm_singleton as get_llm
 from app.config import Settings, get_settings
+from app.ports.llm import LLMPort
 from app.security.context import current_principal
 from app.security.headers import PRIVATE_NO_STORE_HEADERS
 from app.security.public_projection import project_client_dict, server_private_roots
@@ -211,10 +214,26 @@ def _encode_agentos_artifact_path(relpath: str) -> str:
 async def create_task(
     body: AgentTaskCreateRequest,
     settings: Settings = Depends(get_settings),
+    llm: LLMPort = Depends(get_llm),
     service: AgentTaskService = Depends(_service),
 ) -> AgentTaskDTO:
     if not body.text.strip():
         raise HTTPException(400, "text empty")
+    # This is the authoritative API-side check. The embedded Claude Code
+    # bridge receives a task only after the same strict V4 Flash plan selects
+    # claude_code_runtime; there is intentionally no local runner fallback.
+    decision = await LLMIntentRouter(settings, llm).route(
+        body.text,
+        available_context=[str(value) for value in body.context.values() if isinstance(value, str)],
+    )
+    plan = decision.params.get("intent_plan")
+    if (
+        decision.kind != "agent_task"
+        or decision.params.get("ready_to_execute") is not True
+        or not isinstance(plan, dict)
+        or plan.get("execution_target") != "claude_code_runtime"
+    ):
+        raise HTTPException(status_code=409, detail="task requires an authorized intent plan")
     intent = AgentIntent(
         text=body.text,
         device_id=body.device_id,

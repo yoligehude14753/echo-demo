@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
+from app.adapters.intent.llm_router import LLMIntentRouter
 from app.adapters.llm import LLMError
 from app.adapters.skill import SkillError, SkillExecutor
 from app.api.deps import (
@@ -85,6 +86,29 @@ def reset_skill_singleton() -> None:
 def _artifact_dto(value: GeneratedArtifact | dict[str, Any]) -> GeneratedArtifactDTO:
     payload = value.model_dump(mode="json") if isinstance(value, GeneratedArtifact) else value
     return GeneratedArtifactDTO.model_validate(project_client_dict(payload, current_principal()))
+
+
+async def _require_authorized_artifact_plan(
+    *, settings: Settings, llm: LLMPort, body: ArtifactRequest, artifact_kind: str
+) -> None:
+    """Do not let an alternate UI path bypass the V4 Flash intent-plan gate."""
+
+    decision = await LLMIntentRouter(settings, llm).route(
+        body.brief,
+        available_context=body.context_refs,
+    )
+    plan = decision.params.get("intent_plan")
+    planned_kind = normalize_kind(str(decision.params.get("artifact_type") or ""))
+    if (
+        decision.params.get("ready_to_execute") is not True
+        or not isinstance(plan, dict)
+        or plan.get("execution_target") != "builtin_skill"
+        or planned_kind != artifact_kind
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="artifact generation requires an authorized intent plan",
+        )
 
 
 def bind_artifact_workflow_handler(
@@ -335,6 +359,12 @@ async def generate(
         )
     if body.meeting_id and await repository.get_meeting(body.meeting_id) is None:
         raise HTTPException(status_code=404, detail="meeting not found")
+    await _require_authorized_artifact_plan(
+        settings=artifact_repo.settings,
+        llm=llm,
+        body=body,
+        artifact_kind=artifact_kind,
+    )
     bind_artifact_workflow_handler(
         dispatcher,
         settings=artifact_repo.settings,

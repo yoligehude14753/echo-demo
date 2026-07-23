@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_INTENT_TEXT_CHARS = 32_000
 MAX_RESOURCE_ID_CHARS = 256
@@ -88,6 +88,23 @@ INTENT_TO_ARTIFACT_TYPE: dict[IntentKind, str] = {
     "generate_txt": "txt",
 }
 
+# 所有可由聊天入口触发的内置动作。keyword_route 只能把它们作为给
+# 主模型的候选，绝不能作为执行授权。
+BUILTIN_SKILL_INTENTS: frozenset[str] = frozenset(
+    [
+        "search_web",
+        "search_rag",
+        *INTENT_TO_ARTIFACT_TYPE.keys(),
+        "summarize_meeting",
+    ]
+)
+ExecutionTarget = Literal[
+    "builtin_skill",
+    "claude_code_runtime",
+    "conversational_response",
+    "clarification",
+]
+
 
 class IntentResult(BaseModel):
     kind: IntentKind
@@ -101,20 +118,33 @@ class IntentResult(BaseModel):
     rationale: str = ""
 
 
-class PPTIntentPlan(BaseModel):
-    """主模型为 PPT 请求生成的严格、可验证计划。"""
+class BuiltinIntentPlan(BaseModel):
+    """所有用户聊天入口共享的、主模型产出的严格执行计划。"""
 
     model_config = ConfigDict(extra="forbid")
 
     goal: str = Field(min_length=1, max_length=1_000)
-    audience: str = Field(min_length=1, max_length=300)
-    deliverable: Literal["pptx"]
+    execution_target: ExecutionTarget
+    builtin_intent: str | None = Field(default=None, max_length=64)
     available_context: list[str] = Field(max_length=MAX_INTENT_CONTEXT_ITEMS)
+    steps: list[str] = Field(min_length=1, max_length=16)
+    critical_constraints: list[str] = Field(max_length=16)
     missing_constraints: list[str] = Field(max_length=12)
     assumptions: list[str] = Field(max_length=12)
-    outline: list[str] = Field(min_length=1, max_length=24)
-    required_clarification: str | None = Field(default=None, max_length=1_000)
+    clarification_questions: list[str] = Field(max_length=4)
     confidence: float = Field(ge=0.0, le=1.0)
+    execution_authorized: bool
+
+    @model_validator(mode="after")
+    def _validate_target(self) -> BuiltinIntentPlan:
+        if self.execution_target == "builtin_skill":
+            if self.builtin_intent not in BUILTIN_SKILL_INTENTS:
+                raise ValueError("builtin_skill requires a supported builtin_intent")
+        elif self.builtin_intent is not None:
+            raise ValueError("only builtin_skill may select builtin_intent")
+        if self.execution_target == "clarification" and self.execution_authorized:
+            raise ValueError("clarification cannot be execution_authorized")
+        return self
 
 
 class IntentRequest(BaseModel):
@@ -144,7 +174,7 @@ def parse_at_prefix(text: str) -> str | None:
     return rest
 
 
-# 极简正则路由：在 LLM 不可达 / 高置信度场景下兜底
+# 关键词只生成给主模型的候选提示，绝不是路由或执行兜底。
 # 注意：键统一为小写，匹配时也 .lower()，所以"PDF"等大写写法用 "pdf"。
 _KEYWORD_HINTS: dict[str, IntentKind] = {
     # search
@@ -456,7 +486,7 @@ def _chat_no_rag_explicit(text: str) -> bool:
 
 
 def keyword_route(text: str) -> tuple[IntentKind, float] | None:
-    """关键字快速路由：命中明确 token 返回高置信度，避免每次调 LLM。
+    """Return a non-authoritative candidate hint for the main-model planner.
 
     优先级（从高到低）：
       1. ``@chat`` 显式逃生 → ``chat_no_rag``（用户明确不要 RAG）
@@ -465,6 +495,7 @@ def keyword_route(text: str) -> tuple[IntentKind, float] | None:
       4. 现有 _KEYWORD_HINTS 关键字（生成产物 / web 搜索 / 纪要 / 等）
       5. 问句信号（含问号 / 含 "什么 / 介绍" 等）→ ``search_rag``（默认走 RAG）
     """
+    # 任何调用方都不得用返回值直接派发；它只能进入 planning prompt。
     # 1. chat_no_rag 显式 escape
     if _chat_no_rag_explicit(text):
         return "chat_no_rag", 0.95

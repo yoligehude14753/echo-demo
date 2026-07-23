@@ -1,4 +1,4 @@
-"""HTTP /intent/route 单测（注入 mock LLM）。"""
+"""HTTP focused coverage for the strict intent-plan contract."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 
 class _StubLLM:
-    def __init__(self, content: str = "") -> None:
+    def __init__(self, content: str) -> None:
         self.content = content
 
     async def chat(self, _messages: list[ChatMessage], **_kw: Any) -> LLMResponse:
@@ -25,109 +25,45 @@ class _StubLLM:
         raise NotImplementedError
 
 
+def _plan(target: str, builtin: str | None = None) -> str:
+    return json.dumps(
+        {
+            "goal": "完成请求",
+            "execution_target": target,
+            "builtin_intent": builtin,
+            "available_context": [],
+            "steps": ["执行"],
+            "critical_constraints": [],
+            "missing_constraints": [],
+            "assumptions": [],
+            "clarification_questions": [],
+            "confidence": 0.9,
+            "execution_authorized": True,
+        },
+        ensure_ascii=False,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_router() -> None:
     reset_intent_router()
 
 
-@pytest.fixture
-def client_kw_hit() -> TestClient:
+def test_explicit_at_enters_main_plan_gate() -> None:
     app = create_app()
-    plan = json.dumps(
-        {
-            "goal": "英伟达投资展望",
-            "audience": "投资评审人",
-            "deliverable": "pptx",
-            "available_context": [],
-            "missing_constraints": [],
-            "assumptions": [],
-            "outline": ["投资结论", "财务表现", "风险与催化剂"],
-            "required_clarification": None,
-            "confidence": 0.91,
-        },
-        ensure_ascii=False,
-    )
-    app.dependency_overrides[get_llm] = lambda: _StubLLM(content=plan)
-    return TestClient(app)
+    app.dependency_overrides[get_llm] = lambda: _StubLLM(_plan("builtin_skill", "generate_html"))
+    with TestClient(app) as client:
+        response = client.post("/intent/route", json={"text": "@生成 HTML 周报"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "generate_html"
+    assert body["params"]["ready_to_execute"] is True
 
 
-@pytest.fixture
-def client_llm_json() -> TestClient:
+def test_http_invalid_plan_does_not_authorize_dispatch() -> None:
     app = create_app()
-    app.dependency_overrides[get_llm] = lambda: _StubLLM(
-        content='{"kind":"search_rag","confidence":0.7,"rationale":"找之前的"}'
-    )
-    return TestClient(app)
-
-
-@pytest.fixture
-def client_llm_agent_task() -> TestClient:
-    app = create_app()
-    app.dependency_overrides[get_llm] = lambda: _StubLLM(
-        content='{"kind":"agent_task","confidence":0.86,"rationale":"长任务"}'
-    )
-    return TestClient(app)
-
-
-@pytest.mark.unit
-def test_intent_route_keyword_pptx(client_kw_hit: TestClient) -> None:
-    r = client_kw_hit.post(
-        "/intent/route",
-        json={"text": "@生成 PPT 英伟达 2025 投资展望", "current_meeting_id": "m1"},
-    )
-    assert r.status_code == 200, r.text
-    data = r.json()
-    assert data["kind"] == "generate_pptx"
-    assert data["params"]["artifact_type"] == "pptx"
-    assert "英伟达" in data["params"]["brief"]
-    assert data["confidence"] >= 0.8
-
-
-@pytest.mark.unit
-def test_intent_route_no_at_returns_chat(client_kw_hit: TestClient) -> None:
-    r = client_kw_hit.post("/intent/route", json={"text": "今天天气真好"})
-    assert r.status_code == 200
-    assert r.json()["kind"] == "chat"
-
-
-@pytest.mark.unit
-def test_intent_route_llm_search_rag(client_llm_json: TestClient) -> None:
-    r = client_llm_json.post(
-        "/intent/route",
-        json={"text": "@翻一下我们上周对那个方案的讨论"},  # 命中“上周”=>无关键词、走 LLM
-    )
-    assert r.status_code == 200
-    body = r.json()
-    # 走 LLM 返回的 JSON
-    assert body["kind"] in {"search_rag", "search_web", "chat"}
-
-
-@pytest.mark.unit
-def test_intent_route_llm_agent_task(client_llm_agent_task: TestClient) -> None:
-    r = client_llm_agent_task.post(
-        "/intent/route",
-        json={"text": "帮我连续操作我的电脑整理竞品信息"},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["kind"] == "agent_task"
-    assert body["params"]["text"] == "帮我连续操作我的电脑整理竞品信息"
-    assert "竞品信息" in body["params"]["title"]
-
-
-@pytest.mark.unit
-def test_intent_route_empty_400(client_kw_hit: TestClient) -> None:
-    r = client_kw_hit.post("/intent/route", json={"text": "   "})
-    assert r.status_code == 400
-
-
-@pytest.mark.unit
-def test_intent_route_html(client_kw_hit: TestClient) -> None:
-    r = client_kw_hit.post(
-        "/intent/route",
-        json={"text": "@生成 HTML 投资周报 含 SVG 柱图"},
-    )
-    assert r.status_code == 200
-    data = r.json()
-    assert data["kind"] == "generate_html"
-    assert data["params"]["artifact_type"] == "html"
+    app.dependency_overrides[get_llm] = lambda: _StubLLM("invalid")
+    with TestClient(app) as client:
+        response = client.post("/intent/route", json={"text": "@生成 PDF 合同"})
+    assert response.status_code == 200
+    assert response.json()["params"]["ready_to_execute"] is False

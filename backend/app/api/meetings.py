@@ -32,6 +32,7 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from app.adapters.event_bus.inmemory import InMemoryEventBus
+from app.adapters.intent.llm_router import LLMIntentRouter
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from app.adapters.stt import make_stt
 from app.api.deps import (
@@ -57,6 +58,7 @@ from app.artifacts.recovery import (
 from app.artifacts.repository import ArtifactRepository
 from app.config import Settings, get_settings
 from app.ports.diarizer import DiarizerPort
+from app.ports.llm import LLMPort
 from app.ports.rag import RagPort
 from app.ports.repository import RepositoryPort
 from app.schemas.artifact import GeneratedArtifact, GeneratedArtifactDTO
@@ -1865,6 +1867,8 @@ async def finalize(
     pipeline: Annotated[MeetingPipeline, Depends(get_meeting_pipeline)],
     repository: Annotated[RepositoryPort, Depends(get_repository)],
     dispatcher: Annotated[WorkflowDispatcher, Depends(get_workflow_dispatcher)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    llm: Annotated[LLMPort, Depends(get_llm_singleton)],
     title: str = Form(...),
 ) -> MeetingMinutes:
     """生成或重试生成会议纪要（幂等）。
@@ -1879,6 +1883,19 @@ async def finalize(
     rec = await repository.get_meeting(meeting_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"meeting {meeting_id} not found")
+    decision = await LLMIntentRouter(settings, llm).route(
+        "@总结当前会议",
+        current_meeting_id=meeting_id,
+        available_context=[f"当前会议：{title}"],
+    )
+    plan = decision.params.get("intent_plan")
+    if (
+        decision.kind != "summarize_meeting"
+        or decision.params.get("ready_to_execute") is not True
+        or not isinstance(plan, dict)
+        or plan.get("execution_target") != "builtin_skill"
+    ):
+        raise HTTPException(status_code=409, detail="meeting summary requires an authorized intent plan")
     try:
         minutes = await dispatch_meeting_finalize(
             dispatcher,

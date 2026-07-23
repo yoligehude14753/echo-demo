@@ -36,7 +36,7 @@ import type { IntentKind, IntentResult } from "@/types";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 import { meetingDisplayTitle } from "@/lib/meetingDisplay";
-import { requiresPptIntentPlan, resolvePptPlanGate } from "@/lib/pptIntentPlan";
+import { resolveIntentPlanGate } from "@/lib/intentPlanGate";
 import { isTvLikeViewport } from "@/runtime";
 
 interface PendingDoc {
@@ -60,41 +60,6 @@ const kindLabel: Record<IntentKind, string> = {
   chat_no_rag: "对话",
   chat: "对话",
 };
-
-function routeExplicitGenerateCommand(value: string): IntentResult | null {
-  if (requiresPptIntentPlan(value)) {
-    // PPT 必须经过后端主模型 intent plan gate；本地关键字不得授权模板生成。
-    return null;
-  }
-  const match = value.match(
-    /@\s*生成\s*(pptx?|幻灯片|html|网页|页面|word|docx|文档|excel|xlsx|表格|markdown|md|pdf|txt|文本)/i,
-  );
-  const rawType = match?.[1]?.toLowerCase();
-  if (!rawType) return null;
-
-  const artifactType =
-    rawType === "html" || rawType === "网页" || rawType === "页面"
-        ? "html"
-        : rawType === "word" || rawType === "docx" || rawType === "文档"
-          ? "word"
-          : rawType === "excel" || rawType === "xlsx" || rawType === "表格"
-            ? "xlsx"
-            : rawType === "markdown" || rawType === "md"
-              ? "markdown"
-              : rawType === "pdf"
-                ? "pdf"
-                : "txt";
-
-  return {
-    kind: `generate_${artifactType}` as IntentKind,
-    confidence: null,
-    params: {
-      artifact_type: artifactType,
-      brief: value,
-    },
-    rationale: "explicit @生成 command",
-  };
-}
 
 // 与后端 parsers.SUPPORTED_EXTS 保持一致的子集（最常用的；其他扩展名走 markitdown 也支持）
 const ACCEPT_EXT =
@@ -373,9 +338,9 @@ export default function CommandBar(): JSX.Element {
         ...pendingDocs.map((doc) => `可用资料：${doc.filename}`),
         activePrefillMeta?.todo_id ? `当前待办：${activePrefillMeta.todo_id}` : null,
       ].filter((item): item is string => Boolean(item));
-      const r =
-        routeExplicitGenerateCommand(value) ??
-        (await routeIntent(value, currentMeetingId, availableContext));
+      // @ 命令和普通输入统一由后端 V4 Flash 结构化计划；前端不再选择
+      // artifact 模板或构造任何 direct-dispatch IntentResult。
+      const r = await routeIntent(value, currentMeetingId, availableContext);
       if (!isCurrent(originGeneration)) return;
       await dispatch(r, value, activePrefillMeta, originGeneration, messageId);
       if (!isCurrent(originGeneration)) return;
@@ -418,6 +383,19 @@ export default function CommandBar(): JSX.Element {
     const conversationId = interactionMeetingId
       ? `meeting:${interactionMeetingId}`
       : "global";
+    const intentGate = resolveIntentPlanGate(r);
+    if (!intentGate.allowDispatch) {
+      applyEvent({
+        type: "chat.done",
+        seq: 0,
+        ts: new Date().toISOString(),
+        meeting_id: interactionMeetingId,
+        payload: { question: originalText, answer: intentGate.message },
+      });
+      if (intentGate.failed) message.error("需求规划失败，请稍后重试");
+      else message.info("请补充信息后再执行");
+      return;
+    }
     const emitMemoryFrame = (frame: import("@/types").MemoryFramePayload): void => {
       if (!isCurrent(originGeneration)) return;
       applyEvent({
@@ -438,22 +416,6 @@ export default function CommandBar(): JSX.Element {
       case "generate_txt": {
         const kind = (r.params.artifact_type as string | undefined) ?? "html";
         const brief = (r.params.brief as string | undefined) ?? originalText;
-        const pptGate = resolvePptPlanGate(r);
-        if (pptGate && !pptGate.allowArtifact) {
-          applyEvent({
-            type: "chat.done",
-            seq: 0,
-            ts: new Date(Date.now() + 1).toISOString(),
-            meeting_id: interactionMeetingId,
-            payload: { question: originalText, answer: pptGate.message },
-          });
-          if (pptGate.failed) {
-            message.error("PPT 需求规划失败，请稍后重试");
-          } else {
-            message.info("请补充信息后再生成 PPT");
-          }
-          return;
-        }
         if (!brief) {
           message.warning("请先描述想生成的内容");
           return;
@@ -471,7 +433,7 @@ export default function CommandBar(): JSX.Element {
         message.info(`正在整理资料并${kindLabel[r.kind]}`);
         // 异步触发，结果通过 WS artifact.ready event 反馈到 store
         // 不 await，避免 busy/textarea 在 60-180s LLM 链路上一直锁住
-        const intentPlan = pptGate?.serializedPlan ?? null;
+        const intentPlan = intentGate.serializedPlan;
         void generateArtifact({
           artifact_type: kind as
             | "html"
