@@ -466,6 +466,11 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
               </div>
             )}
           </div>
+          {!meetingOverlayId && (
+            <div className="text-[11px] text-slate-500">
+              仅上传满足有效语音阈值的短片段；静音和不足有效语音不会上传。
+            </div>
+          )}
           <DoorBreakdown
             stats={stats}
             chunksDroppedCircuit={chunksDroppedCircuit}

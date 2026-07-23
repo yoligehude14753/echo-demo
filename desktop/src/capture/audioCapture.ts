@@ -7,13 +7,12 @@
  * - App 启动时 start()，退出时 stop()
  */
 import {
-  CAPTURE_CHUNK_SAMPLES,
-  CAPTURE_CHUNK_SECONDS,
   CAPTURE_SAMPLE_RATE,
   downsample,
   floatTo16BitPCM,
   pcm16ToWav,
 } from "@/capture/pcm";
+import { VoiceActiveChunker } from "@/capture/voiceActiveChunker";
 import type { CaptureState } from "@/domain/session";
 import { isNativeMobile } from "@/runtime";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
@@ -32,6 +31,8 @@ export type CaptureChunkHandler = (wav: Blob) => void | Promise<void>;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
 
 const RETRY_MS = 5_000;
+// Android 原生录音仍由原生端自己的上传队列控制；本次只收窄 desktop WebAudio。
+const NATIVE_CAPTURE_CHUNK_MS = 30_000;
 const NATIVE_RUNTIME_RETRY_LIMIT = 3;
 const TV_SILENT_INPUT_GRACE_MS = 30_000;
 const TV_SILENT_PEAK_THRESHOLD = 0.000002;
@@ -249,8 +250,12 @@ class AudioCapture {
   private nativeUploadHandle: PluginListenerHandle | null = null;
   private nativeSessionRecovery: Promise<void> | null = null;
   private nativeUploadHandlers = new Set<(result: NativeCaptureUploadResult) => void>();
-  private buf: Float32Array[] = [];
-  private accSamples = 0;
+  private voiceChunker = new VoiceActiveChunker({
+    emit: (pcm) => {
+      const wav = pcm16ToWav(floatTo16BitPCM(pcm), CAPTURE_SAMPLE_RATE);
+      this.emitChunk(wav);
+    },
+  });
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private generation = 0;
@@ -413,8 +418,7 @@ class AudioCapture {
     this.stream = null;
     this.audioCtx?.close().catch(() => undefined);
     this.audioCtx = null;
-    this.buf = [];
-    this.accSamples = 0;
+    this.voiceChunker.reset();
     this.silentInputSinceMs = null;
   }
 
@@ -538,29 +542,8 @@ class AudioCapture {
     return false;
   }
 
-  private flush(force = false): void {
-    if (!force && this.accSamples < CAPTURE_CHUNK_SAMPLES) return;
-    if (this.buf.length === 0) return;
-
-    const total = this.buf.reduce((s, b) => s + b.length, 0);
-    const merged = new Float32Array(total);
-    let off = 0;
-    for (const b of this.buf) {
-      merged.set(b, off);
-      off += b.length;
-    }
-    this.buf = [];
-    this.accSamples = 0;
-
-    const ctx = this.audioCtx;
-    if (!ctx) return;
-    const down = downsample(merged, ctx.sampleRate, CAPTURE_SAMPLE_RATE);
-    const pcm = floatTo16BitPCM(down);
-    this.emitChunk(pcm16ToWav(pcm, CAPTURE_SAMPLE_RATE));
-  }
-
   /**
-   * Test seam：让 E2E 跳过 ~6s 真实音频积累，直接合成一次 chunk emit。
+   * Test seam：跳过真实音频积累，直接合成一次 chunk emit。
    * Headless Chromium 拿不到真实麦克风、AudioContext 也不跑，无法验证
    * Phase 4「采集 vs 入库」两个计数器；E2E 通过 `window.__echoAudioCapture`
    * 调用本方法触发 ChunkRouter。production 永不调用。
@@ -646,11 +629,11 @@ class AudioCapture {
       proc.onaudioprocess = (ev) => {
         const ch = ev.inputBuffer.getChannelData(0);
         if (!this.observeInputHealth(ch)) return;
-        this.buf.push(new Float32Array(ch));
-        this.accSamples += Math.round((ch.length * CAPTURE_SAMPLE_RATE) / ctx.sampleRate);
-        if (this.accSamples >= CAPTURE_CHUNK_SAMPLES) {
-          this.flush();
-        }
+        // 每个高频 WebAudio callback 都立即进入 20 ms VAD；只在有效语音
+        // 成段时产生 wav，避免长静音参与 RMS 平均并稀释短句。
+        this.voiceChunker.push(
+          downsample(new Float32Array(ch), ctx.sampleRate, CAPTURE_SAMPLE_RATE),
+        );
       };
       src.connect(proc);
       proc.connect(ctx.destination);
@@ -706,7 +689,7 @@ class AudioCapture {
       this.nativeActive = true;
       await plugin.start({
         sampleRate: CAPTURE_SAMPLE_RATE,
-        chunkMs: CAPTURE_CHUNK_SECONDS * 1000,
+        chunkMs: NATIVE_CAPTURE_CHUNK_MS,
       });
       if (!isActiveAttempt()) {
         this.teardownNative();
