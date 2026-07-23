@@ -1,0 +1,44 @@
+event_id: "E-20260724T0112-001"
+event_type: "add"
+timestamp: "2026-07-24T01:12:00+08:00"
+author: "agent/codex-luna-intent-planner-20260724"
+session_id: "intent_planner"
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-063"
+      claim: "Chat actions require a V4 Flash intent plan; keywords and @ only hint. Authorized Claude Code plans enter AgentTaskService context and need an authority-issued open binding."
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.98
+      observed_at: "2026-07-24T01:12:00+08:00"
+      observed_by: "agent/codex-luna-intent-planner-20260724"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "backend/app/adapters/intent/llm_router.py"
+        - "backend/app/adapters/intent/prompts.py"
+        - "backend/app/api/agents.py"
+        - "desktop/src/components/CommandBar.tsx"
+        - "desktop/electron/packaged-fused-worker-bridge.cjs"
+        - "backend/tests/unit/test_intent_router.py"
+        - "backend/tests/unit/test_agent_intent_plan.py"
+        - "desktop/src/lib/intentPlanGate.test.ts"
+        - "test: PYTHONPATH=backend pytest backend/tests/unit/test_intent_router.py backend/tests/unit/test_agent_intent_plan.py -q => 18 passed"
+        - "test: cd desktop && npm run typecheck => passed"
+        - "test: cd desktop && node --experimental-strip-types --test src/lib/intentPlanGate.test.ts => 2 passed"
+        - "test: node --test desktop/electron/tests/packaged-fused-worker-bridge.test.cjs => 6 passed"
+      evidence: "Focused tests prove every built-in command goes through the V4 Flash plan call, invalid or unauthorized plans fail closed, legacy conversation output is normalized rather than bypassed, and only a server-replanned claude_code_runtime plan is placed in the AgentIntent context. The packaged bridge converts that authoritative raw task context into a turn only when an authority-issued open binding is present; it refuses to fabricate model, credential, or capability grants. No live runtime execution, packaging, or deployment was performed in this change."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "intent"
+        - "planner"
+        - "builtin-skill"
+        - "claude-code"
+        - "context"
+git_commit: null

@@ -18,7 +18,12 @@ const readyPlan = {
 };
 
 test("a backend-approved plan is the only dispatch authorization", () => {
-  assert.equal(resolveIntentPlanGate(result({ intent_plan: readyPlan, ready_to_execute: true })).allowDispatch, true);
+  const decision = resolveIntentPlanGate(result({
+    intent_plan: { ...readyPlan, available_context: ["可用资料：研究笔记.md"] },
+    ready_to_execute: true,
+  }));
+  assert.equal(decision.allowDispatch, true);
+  assert.deepEqual(decision.contextRefs, ["可用资料：研究笔记.md"]);
 });
 
 test("missing constraints and invalid plans fail closed", () => {

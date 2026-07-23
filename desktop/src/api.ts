@@ -677,6 +677,8 @@ export async function generateArtifact(req: {
   meeting_id?: string;
   todo_id?: string;
   retry_of_run_id?: string;
+  /** 已由服务端计划器确认的会话/资料引用，供生成端再次授权时复用。 */
+  context_refs?: string[];
 }, options: ApiReadOptions = {}): Promise<GeneratedArtifact> {
   const u = await apiUrl("/artifacts/generate");
   const r = await fetchWithAbortTimeout(
@@ -758,6 +760,7 @@ export async function createAgentTask(req: {
   conversation_id?: string;
   message_id?: string;
   context?: Record<string, unknown>;
+  available_context?: string[];
   output_contract?: Record<string, unknown>;
 }): Promise<AgentTaskCard> {
   const u = await apiUrl("/agents/tasks");

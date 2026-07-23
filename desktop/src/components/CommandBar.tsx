@@ -342,7 +342,7 @@ export default function CommandBar(): JSX.Element {
       // artifact 模板或构造任何 direct-dispatch IntentResult。
       const r = await routeIntent(value, currentMeetingId, availableContext);
       if (!isCurrent(originGeneration)) return;
-      await dispatch(r, value, activePrefillMeta, originGeneration, messageId);
+      await dispatch(r, value, activePrefillMeta, originGeneration, messageId, availableContext);
       if (!isCurrent(originGeneration)) return;
       setText("");
       setPrefillMeta(null);
@@ -377,6 +377,7 @@ export default function CommandBar(): JSX.Element {
     meta: CommandBarPrefillMeta | null,
     originGeneration: number,
     messageId: string,
+    availableContext: string[],
   ): Promise<void> {
     if (!isCurrent(originGeneration)) return;
     const interactionMeetingId = meta?.meeting_id ?? currentMeetingId ?? undefined;
@@ -455,6 +456,7 @@ export default function CommandBar(): JSX.Element {
           meeting_id: meta?.meeting_id ?? currentMeetingId ?? undefined,
           todo_id: meta?.todo_id,
           retry_of_run_id: meta?.retry_of_run_id,
+          context_refs: intentGate.contextRefs,
         })
           .then((art) => {
             if (!isCurrent(originGeneration)) return;
@@ -529,8 +531,11 @@ export default function CommandBar(): JSX.Element {
           text: taskText,
           title: (r.params.title as string | undefined) ?? taskText.slice(0, 42),
           task_kind: "agent_task",
+          conversation_id: conversationId,
+          message_id: messageId,
+          available_context: availableContext,
           context: {
-            current_meeting_id: currentMeetingId,
+            meeting_id: interactionMeetingId,
           },
         });
         if (!isCurrent(originGeneration)) return;

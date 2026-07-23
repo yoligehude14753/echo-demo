@@ -17,6 +17,7 @@ from app.ports.llm import LLMPort
 from app.schemas.intent import (
     BUILTIN_SKILL_INTENTS,
     INTENT_TO_ARTIFACT_TYPE,
+    MAX_INTENT_CONTEXT_ITEMS,
     BuiltinIntentPlan,
     IntentKind,
     IntentResult,
@@ -48,12 +49,18 @@ class LLMIntentRouter:
     ) -> IntentResult:
         started = time.perf_counter()
         stripped = text.strip()
+        planning_context = list(available_context or [])[:MAX_INTENT_CONTEXT_ITEMS]
+        if current_meeting_id:
+            # Keep the plan grounded in the selected meeting without exposing
+            # an opaque internal identifier to the model provider.
+            planning_context = planning_context[: MAX_INTENT_CONTEXT_ITEMS - 1]
+            planning_context.append("当前会议：已选定，可用于会议总结")
         # 所有用户输入（包括显式 @ 命令）均由主模型生成严格计划。关键词只给
         # 计划器提供候选提示；它绝不构成执行开关或前端模板选择依据。
         result = await self._plan_builtin_intent(
             stripped,
             current_meeting_id=current_meeting_id,
-            available_context=list(available_context or []),
+            available_context=planning_context,
         )
         return self._finish_route(result, started=started, source="main_intent_plan")
 

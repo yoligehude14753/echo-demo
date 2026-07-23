@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MAX_INTENT_TEXT_CHARS = 32_000
 MAX_RESOURCE_ID_CHARS = 256
@@ -101,7 +101,7 @@ BUILTIN_SKILL_INTENTS: frozenset[str] = frozenset(
 ExecutionTarget = Literal[
     "builtin_skill",
     "claude_code_runtime",
-    "conversational_response",
+    "conversation",
     "clarification",
 ]
 
@@ -134,6 +134,19 @@ class BuiltinIntentPlan(BaseModel):
     clarification_questions: list[str] = Field(max_length=4)
     confidence: float = Field(ge=0.0, le=1.0)
     execution_authorized: bool
+
+    @field_validator("execution_target", mode="before")
+    @classmethod
+    def _normalize_legacy_conversation_target(cls, value: object) -> object:
+        """Accept one former wire value while emitting the canonical target.
+
+        A deployed main-model prompt can briefly retain the previous label after
+        the source prompt changes. Normalizing it here keeps the plan gate
+        fail-closed for every other value without rejecting a conversation
+        request during a rolling update.
+        """
+
+        return "conversation" if value == "conversational_response" else value
 
     @model_validator(mode="after")
     def _validate_target(self) -> BuiltinIntentPlan:
