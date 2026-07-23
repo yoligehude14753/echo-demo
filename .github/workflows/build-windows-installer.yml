@@ -88,9 +88,16 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: |
-          npm ci
-          npm audit --audit-level=high --registry=https://registry.npmjs.org
+        run: npm ci
+
+      # Unsigned preview packages are intentionally non-release artifacts. Keep
+      # their audit result visible, but do not prevent the x64 package build.
+      # Any publish_release=true invocation remains blocking here (and is also
+      # rejected above because this workflow must never publish unsigned assets).
+      - name: Audit desktop dependencies
+        working-directory: desktop
+        continue-on-error: ${{ inputs.publish_release == false }}
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
 
       - name: Run Electron main-process contracts
         working-directory: desktop
@@ -242,3 +249,15 @@ jobs:
             <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
             <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort)
           printf 'ECHODESK_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"
+
+      - name: Upload unsigned Windows preview package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: echodesk-windows-unsigned-preview-${{ github.sha }}
+          path: |
+            desktop/release/EchoDesk.Setup.*.exe
+            desktop/release/EchoDesk-*-win-x64.zip
+            desktop/release/latest.yml
+            desktop/release/SHA256SUMS-Windows.txt
+          if-no-files-found: error
+          retention-days: 14
