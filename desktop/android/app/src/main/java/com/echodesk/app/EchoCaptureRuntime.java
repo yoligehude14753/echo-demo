@@ -246,27 +246,58 @@ final class EchoCaptureRuntime {
       double rms,
       int peak
   ) {
+    return acceptPcm(pcm, sampleRate, source);
+  }
+
+  boolean acceptPcm(byte[] pcm, int sampleRate, String source) {
     if (isPaused()) return true;
     if (!canQueueNativeCapture(baseUrl, bearerToken, deviceId, authBlocked)) {
       EchoCaptureService.updateUploadState(context, "auth_required", queue.count());
       return false;
     }
-    boolean currentFormal = formalMode;
-    NativeAudioGate.Result gated = gate.process(pcm, sampleRate, currentFormal);
-    if (!gated.accepted) {
+    List<NativeAudioGate.Result> segments = gate.process(
+        pcm,
+        sampleRate,
+        formalMode,
+        meetingId
+    );
+    return enqueueGatedSegments(segments, source);
+  }
+
+  boolean finishPcm(String source) {
+    if (isPaused()) {
+      gate.reset();
+      return true;
+    }
+    if (!canQueueNativeCapture(baseUrl, bearerToken, deviceId, authBlocked)) {
+      gate.reset();
+      EchoCaptureService.updateUploadState(context, "auth_required", queue.count());
+      return false;
+    }
+    return enqueueGatedSegments(gate.finish(), source);
+  }
+
+  private boolean enqueueGatedSegments(
+      List<NativeAudioGate.Result> segments,
+      String source
+  ) {
+    if (segments.isEmpty()) {
       Log.d(
           TAG,
-          "free chunk gated speechFrames="
-              + gated.speechFrames
-              + "/"
-              + gated.observedFrames
-              + " rms="
-              + Math.round(gated.rms)
-              + " peak="
-              + gated.peak
+          "native capture gated: no completed 20ms VAD segment"
       );
       return hasUploadSession();
     }
+    for (NativeAudioGate.Result segment : segments) {
+      if (!enqueueGatedSegment(segment, source)) return false;
+    }
+    return true;
+  }
+
+  private boolean enqueueGatedSegment(
+      NativeAudioGate.Result gated,
+      String source
+  ) {
     String currentDeviceId = deviceId;
     if (currentDeviceId == null || currentDeviceId.isBlank()) {
       // Until the authenticated session is known, keep the legacy JS path.
@@ -281,20 +312,42 @@ final class EchoCaptureRuntime {
     Properties metadata = new Properties();
     metadata.setProperty("segmentId", segmentId);
     metadata.setProperty("deviceId", currentDeviceId);
-    metadata.setProperty("sampleRate", String.valueOf(sampleRate));
-    metadata.setProperty("formalMode", String.valueOf(currentFormal));
-    metadata.setProperty("meetingId", currentFormal ? safe(meetingId) : "");
+    metadata.setProperty("sampleRate", String.valueOf(gated.sampleRate));
+    metadata.setProperty("formalMode", String.valueOf(gated.formalMode));
+    metadata.setProperty("meetingId", gated.formalMode ? safe(gated.meetingId) : "");
     metadata.setProperty("source", safe(source));
-    metadata.setProperty("rms", String.valueOf(rms));
-    metadata.setProperty("peak", String.valueOf(peak));
+    metadata.setProperty("rms", String.valueOf(gated.rms));
+    metadata.setProperty("peak", String.valueOf(gated.peak));
+    // 队列元数据不含密钥，可逐上传回答“此设备发送的是短 VAD 段还是长整窗”。
+    metadata.setProperty("captureCadenceMs", String.valueOf(NativeAudioGate.DEFAULT_FRAME_MS));
+    metadata.setProperty("segmentDurationMs", String.valueOf(gated.durationMs));
+    metadata.setProperty("observedFrames", String.valueOf(gated.observedFrames));
+    metadata.setProperty("speechFrames", String.valueOf(gated.speechFrames));
+    metadata.setProperty("speechFrameRatio", String.valueOf(gated.speechFrameRatio));
     try {
-      byte[] wav = EchoAudioPlugin.wavBytesForNativeQueue(gated.pcm, sampleRate);
+      byte[] wav = EchoAudioPlugin.wavBytesForNativeQueue(gated.pcm, gated.sampleRate);
       queue.enqueue(wav, metadata);
       EchoCaptureService.updateQueueState(
           context,
           queue.count(),
-          currentFormal,
+          gated.formalMode,
           isPaused()
+      );
+      Log.i(
+          TAG,
+          "native_capture_segment {\"mode\":\""
+              + (gated.formalMode ? "formal" : "free")
+              + "\",\"duration_ms\":"
+              + gated.durationMs
+              + ",\"vad_frame_ms\":"
+              + NativeAudioGate.DEFAULT_FRAME_MS
+              + ",\"observed_frames\":"
+              + gated.observedFrames
+              + ",\"speech_frames\":"
+              + gated.speechFrames
+              + ",\"speech_frame_ratio\":"
+              + gated.speechFrameRatio
+              + "}"
       );
       requestDrain();
       return true;

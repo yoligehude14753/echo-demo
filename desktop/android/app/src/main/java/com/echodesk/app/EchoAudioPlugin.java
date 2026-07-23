@@ -28,6 +28,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 
 @CapacitorPlugin(
     name = "EchoAudio",
@@ -42,7 +43,12 @@ import java.nio.ByteOrder;
 public class EchoAudioPlugin extends Plugin {
   private static final String TAG = "EchoDeskAudio";
   private static final int DEFAULT_SAMPLE_RATE = 16000;
-  private static final int DEFAULT_CHUNK_MS = 6000;
+  // 原生传输与桌面 VoiceActiveChunker 对齐：每 20 ms 检查 PCM，任何传输片段
+  // 都不得延后到 640 ms 以后。
+  private static final int DEFAULT_CHUNK_MS = NativeAudioGate.DEFAULT_MAX_SEGMENT_MS;
+  private static final int MIN_CHUNK_MS = NativeAudioGate.DEFAULT_FRAME_MS;
+  private static final int MAX_CHUNK_MS = NativeAudioGate.DEFAULT_MAX_SEGMENT_MS;
+  private static final int READ_WINDOW_MS = 80;
   private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
   private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
   private static final int PROBE_MS = 500;
@@ -161,7 +167,18 @@ public class EchoAudioPlugin extends Plugin {
     int sampleRate = call.getInt("sampleRate", DEFAULT_SAMPLE_RATE);
     int chunkMs = call.getInt("chunkMs", DEFAULT_CHUNK_MS);
     if (sampleRate <= 0) sampleRate = DEFAULT_SAMPLE_RATE;
-    if (chunkMs < 1000) chunkMs = DEFAULT_CHUNK_MS;
+    if (chunkMs <= 0) chunkMs = DEFAULT_CHUNK_MS;
+    if (chunkMs < MIN_CHUNK_MS || chunkMs > MAX_CHUNK_MS) {
+      Log.w(
+          TAG,
+          "Clamping native capture segment target from "
+              + chunkMs
+              + "ms to <= "
+              + MAX_CHUNK_MS
+              + "ms"
+      );
+      chunkMs = Math.max(MIN_CHUNK_MS, Math.min(MAX_CHUNK_MS, chunkMs));
+    }
 
     EchoAudioPlugin existing = activeInstance;
     if (existing != null && existing.running) {
@@ -480,7 +497,11 @@ public class EchoAudioPlugin extends Plugin {
       Log.w(TAG, "Invalid min buffer for " + sourceToName(source) + ": " + minBuffer);
       return null;
     }
-    int bufferSize = Math.max(minBuffer * 4, sampleRate);
+    int lowLatencyReadBytes = Math.max(
+        sampleRate * 2 * NativeAudioGate.DEFAULT_FRAME_MS / 1000,
+        sampleRate * 2 * READ_WINDOW_MS / 1000
+    );
+    int bufferSize = Math.max(minBuffer * 2, lowLatencyReadBytes * 2);
     try {
       AudioFormat format = new AudioFormat.Builder()
           .setEncoding(AUDIO_FORMAT)
@@ -523,10 +544,16 @@ public class EchoAudioPlugin extends Plugin {
   }
 
   private void recordLoop(int sampleRate, int chunkMs) {
-    int bytesPerSample = 2;
-    int chunkBytes = Math.max(sampleRate * bytesPerSample, sampleRate * bytesPerSample * chunkMs / 1000);
-    byte[] readBuffer = new byte[Math.max(4096, sampleRate / 4 * bytesPerSample)];
-    ByteArrayOutputStream chunk = new ByteArrayOutputStream(chunkBytes + 4096);
+    int frameBytes = Math.max(
+        2,
+        sampleRate * 2 * NativeAudioGate.DEFAULT_FRAME_MS / 1000
+    );
+    int readWindowMs = Math.max(
+        NativeAudioGate.DEFAULT_FRAME_MS,
+        Math.min(READ_WINDOW_MS, chunkMs)
+    );
+    int readBytes = Math.max(frameBytes, sampleRate * 2 * readWindowMs / 1000);
+    byte[] readBuffer = new byte[readBytes];
 
     while (running) {
       AudioRecord rec;
@@ -537,20 +564,16 @@ public class EchoAudioPlugin extends Plugin {
 
       int n = rec.read(readBuffer, 0, readBuffer.length);
       if (n > 0) {
-        chunk.write(readBuffer, 0, n);
-        if (chunk.size() >= chunkBytes) {
-          emitChunk(chunk.toByteArray(), sampleRate);
-          chunk.reset();
-        }
+        int pcmBytes = n - (n % 2);
+        if (pcmBytes > 0) emitChunk(Arrays.copyOf(readBuffer, pcmBytes), sampleRate);
       } else if (n == AudioRecord.ERROR_INVALID_OPERATION || n == AudioRecord.ERROR_DEAD_OBJECT) {
         emitError("AudioRecord read failed: " + n);
         break;
       }
     }
 
-    if (chunk.size() > sampleRate * bytesPerSample / 2) {
-      emitChunk(chunk.toByteArray(), sampleRate);
-    }
+    boolean flushed = EchoCaptureRuntime.get(getContext()).finishPcm(activeSource);
+    if (!flushed) Log.w(TAG, "Native capture tail could not be queued after recorder stop");
     Log.i(TAG, "AudioRecord loop ended source=" + activeSource + " sampleRate=" + sampleRate);
   }
 
@@ -559,9 +582,11 @@ public class EchoAudioPlugin extends Plugin {
       AudioStats stats = audioStats(pcm);
       Log.i(
           TAG,
-          "AudioRecord chunk source=" + activeSource
+          "AudioRecord input source=" + activeSource
               + " sampleRate=" + sampleRate
               + " bytes=" + pcm.length
+              + " durationMs=" + (pcm.length / 2 * 1000 / Math.max(1, sampleRate))
+              + " vadFrameMs=" + NativeAudioGate.DEFAULT_FRAME_MS
               + " rms=" + Math.round(stats.rms)
               + " peak=" + stats.peak
       );

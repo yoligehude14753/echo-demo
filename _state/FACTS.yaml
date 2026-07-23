@@ -1,8 +1,8 @@
 version: '1.0'
-project: echo
-generated_at: '2026-07-23T08:03:05.468995+00:00'
+project: /Users/yoligehude/.codex/worktrees/realtime-audio-cadence/echo
+generated_at: '2026-07-23T17:08:54.113645+00:00'
 generated_by: replay.py
-fact_count: 53
+fact_count: 54
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1741,3 +1741,39 @@ facts:
   - session
   - android
   - authorization
+- id: F-ECHO-062
+  claim: Desktop and Android capture PCM with 20ms VAD and cap each free or formal upload segment at 640ms; Android reads
+    AudioRecord in 80ms blocks and records non-secret per-segment metrics.
+  category: code
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.98
+  observed_at: '2026-07-24T01:08:00+08:00'
+  observed_by: agent/codex-luna-audio-pipeline-20260724
+  valid_until: null
+  ttl_hours: null
+  source:
+  - desktop/src/capture/audioCapture.ts
+  - desktop/android/app/src/main/java/com/echodesk/app/NativeAudioGate.java
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoAudioPlugin.java
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoCaptureRuntime.java
+  - desktop/android/app/src/test/java/com/echodesk/app/NativeAudioGateTest.java
+  - test:JAVA_HOME=openjdk@21 ANDROID_HOME=... ./gradlew :app:testDebugUnitTest --tests com.echodesk.app.NativeAudioGateTest
+    => passed
+  - test:npm run typecheck => passed
+  - test:node --test --experimental-strip-types src/capture/voiceActiveChunker.test.ts => 3 passed
+  evidence: NativeAudioGate incrementally consumes 20 ms frames, emits voiced free segments after post-roll or at the 640
+    ms cap, preserves formal audio in independently bounded 640 ms segments, and records only non-secret segment metrics in
+    the app-private queue. Focused tests prove silence drop, post-roll emission, six seconds of continuous voice splits without
+    loss or overlap, and formal-tail flushing. No emulator or physical microphone validation was performed.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - capture
+  - android
+  - desktop
+  - vad
+  - low-latency
