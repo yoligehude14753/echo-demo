@@ -2,7 +2,6 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
 
 const APP_SCHEME = "echodesk";
 const APP_HOST = "app";
@@ -173,7 +172,6 @@ function responseHeaders(filePath, size, backendBase = null) {
 
 function createAppProtocolHandler({
   distRoot,
-  fileFetcher = null,
   backendBase = null,
 }) {
   const root = path.resolve(distRoot);
@@ -202,17 +200,12 @@ function createAppProtocolHandler({
       if (request.method === "HEAD") {
         return new Response(null, { status: 200, headers });
       }
-      if (fileFetcher) {
-        // Electron's documented file-protocol path uses net.fetch(file://...).
-        // Keep its streaming body: constructing a navigation response from a
-        // fully buffered Node Buffer can leave Chromium reloads in ERR_ABORTED.
-        const fileResponse = await fileFetcher(pathToFileURL(filePath).toString());
-        if (!fileResponse.ok || fileResponse.body === null) throw new Error("asset read failed");
-        return new Response(fileResponse.body, {
-          status: 200,
-          headers,
-        });
-      }
+      // The product protocol already owns the URL-to-file mapping above.  Do
+      // not route the verified local path back through Electron's file://
+      // network stack: a rejected file fetch was indistinguishable from a
+      // missing renderer entry and surfaced as the production "Not Found"
+      // page.  Reading this verified regular file keeps the renderer on the
+      // echodesk:// origin and never exposes file:// to the renderer.
       const body = await fs.promises.readFile(filePath);
       return new Response(body, {
         status: 200,
@@ -233,15 +226,11 @@ function createAppProtocolHandler({
 function installAppProtocol(
   protocol,
   distRoot,
-  fileFetcher,
   { backendBase = null } = {},
 ) {
-  if (typeof fileFetcher !== "function") {
-    throw new TypeError("Electron net.fetch is required for the app protocol");
-  }
   protocol.handle(
     APP_SCHEME,
-    createAppProtocolHandler({ distRoot, fileFetcher, backendBase }),
+    createAppProtocolHandler({ distRoot, backendBase }),
   );
 }
 

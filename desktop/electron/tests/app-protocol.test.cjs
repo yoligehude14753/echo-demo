@@ -8,6 +8,7 @@ const {
   rmSync,
   symlinkSync,
   writeFileSync,
+  existsSync,
 } = require("node:fs");
 const { realpath } = require("node:fs/promises");
 const os = require("node:os");
@@ -159,6 +160,35 @@ test("protocol handler is read-only and serves controlled static responses", asy
   });
 });
 
+test(
+  "built renderer index and an emitted asset resolve while missing and traversal URLs stay rejected",
+  { skip: process.env.ECHODESK_VERIFY_BUILT_PROTOCOL !== "1" },
+  async () => {
+    const dist = path.resolve(__dirname, "../../dist");
+    assert.ok(existsSync(path.join(dist, "index.html")), "run npm run build before this check");
+    const indexHtml = readFileSync(path.join(dist, "index.html"), "utf8");
+    const assetPath = indexHtml.match(/(?:src|href)="\.\/(assets\/[^"?]+(?:\.js|\.css))"/)?.[1];
+    assert.ok(assetPath, "built index must reference a hashed renderer asset");
+
+    const handler = createAppProtocolHandler({ distRoot: dist });
+    const index = await handler(new Request(APP_ENTRY_URL));
+    assert.equal(index.status, 200);
+
+    const asset = await handler(new Request(`${APP_ORIGIN}/${assetPath}`));
+    assert.equal(asset.status, 200);
+    assert.ok(Number(asset.headers.get("content-length")) > 0);
+
+    assert.equal(
+      (await handler(new Request(`${APP_ORIGIN}/missing.txt`))).status,
+      404,
+    );
+    assert.equal(
+      (await handler(new Request(`${APP_ORIGIN}/%2F..%2Fpackage.json`))).status,
+      404,
+    );
+  },
+);
+
 test("production CSP grants only the bound backend and the fixed legacy bootstrap hash", () => {
   const csp = productionContentSecurityPolicy("http://127.0.0.1:8769");
   assert.match(csp, /connect-src 'self' http:\/\/127\.0\.0\.1:8769 ws:\/\/127\.0\.0\.1:8769/);
@@ -185,9 +215,8 @@ test("production CSP grants only the bound backend and the fixed legacy bootstra
   assert.match(vite, /CSP_INLINE_SCRIPT_HASHES/);
 });
 
-test("protocol installer binds only the product scheme and requires Electron net.fetch", () => {
+test("protocol installer binds only the product scheme and reads only verified build files", () => {
   let installed = null;
-  const fileFetcher = async () => new Response("test");
   installAppProtocol(
     {
       handle(scheme, handler) {
@@ -195,14 +224,9 @@ test("protocol installer binds only the product scheme and requires Electron net
       },
     },
     "/tmp/echodesk-dist",
-    fileFetcher,
   );
   assert.equal(installed.scheme, APP_SCHEME);
   assert.equal(typeof installed.handler, "function");
-  assert.throws(
-    () => installAppProtocol({ handle() {} }, "/tmp/echodesk-dist"),
-    /net\.fetch is required/,
-  );
 });
 
 test("main process registers before ready and never falls back to file loading", () => {
@@ -210,10 +234,10 @@ test("main process registers before ready and never falls back to file loading",
   assert.ok(main.indexOf("registerAppScheme(protocol)") < main.indexOf("app.whenReady()"));
   assert.match(main, /installAppProtocol\(\s*protocol,/);
   assert.match(main, /\{ backendBase: BACKEND_HOST \}/);
-  assert.match(main, /\(url\) => net\.fetch\(url\)/);
   assert.match(main, /await mainWindow\.loadURL\(APP_ENTRY_URL\)/);
   assert.match(main, /error\?\.code === "ERR_ABORTED"/);
   assert.match(main, /isTrustedAppRendererUrl\(currentUrl\)/);
   assert.doesNotMatch(main, /mainWindow\.loadFile\(/);
   assert.doesNotMatch(main, /url\.startsWith\("file:\/\/"\)/);
+  assert.doesNotMatch(main, /net\.fetch\(url\)/);
 });

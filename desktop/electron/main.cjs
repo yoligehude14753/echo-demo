@@ -10,7 +10,6 @@ const {
   systemPreferences,
   session,
   protocol,
-  net,
   nativeImage,
 } = require("electron");
 const { spawn, spawnSync } = require("node:child_process");
@@ -3370,7 +3369,6 @@ if (singleInstanceLock) app.whenReady()
       installAppProtocol(
         protocol,
         path.join(__dirname, "..", "dist"),
-        (url) => net.fetch(url),
         { backendBase: BACKEND_HOST },
       );
     }
