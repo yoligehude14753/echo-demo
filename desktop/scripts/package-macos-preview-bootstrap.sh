@@ -93,8 +93,11 @@ readonly PACKAGE_ROOT="${TEMP_DIR}/${STEM}"
 readonly PAYLOAD_DIR="${PACKAGE_ROOT}/Payload"
 readonly PAYLOAD_BUNDLE="${PAYLOAD_DIR}/EchoDesk Preview.app"
 readonly INTERNAL_MANIFEST="${PACKAGE_ROOT}/manifest.json"
+readonly INTERNAL_MANIFEST_SUMS="${PACKAGE_ROOT}/manifest.sha256"
+readonly INTERNAL_PAYLOAD_SUMS="${PACKAGE_ROOT}/payload.sha256"
 readonly FINAL_ZIP="${OUTPUT_DIR}/${STEM}.zip"
 readonly FINAL_MANIFEST="${OUTPUT_DIR}/${STEM}.manifest.json"
+readonly FINAL_BOOTSTRAP="${OUTPUT_DIR}/${STEM}.offline-bootstrap.command"
 readonly FINAL_SUMS="${OUTPUT_DIR}/${STEM}.SHA256SUMS"
 readonly TEMP_ZIP="${TEMP_DIR}/${STEM}.zip"
 
@@ -106,7 +109,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-[[ ! -e "${FINAL_ZIP}" && ! -e "${FINAL_MANIFEST}" && ! -e "${FINAL_SUMS}" ]] ||
+[[ ! -e "${FINAL_ZIP}" && ! -e "${FINAL_MANIFEST}" && ! -e "${FINAL_BOOTSTRAP}" && ! -e "${FINAL_SUMS}" ]] ||
   fail "unique output collision: ${STEM}"
 
 /bin/mkdir -p -- "${PAYLOAD_DIR}"
@@ -178,6 +181,8 @@ const manifest = {
   version: process.env.ECHODESK_PACKAGE_VERSION,
   bundle_path: "Payload/EchoDesk Preview.app",
   payload_tree_sha256: treeDigest,
+  payload_checksums: "payload.sha256",
+  manifest_checksum: "manifest.sha256",
   installer: {
     path: "Install EchoDesk Preview.command",
     sha256: sha256(fs.readFileSync(installerPath)),
@@ -189,19 +194,44 @@ fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
   encoding: "utf8",
   mode: 0o644,
 });
+
+const checksumLines = entries
+  .filter((entry) => entry.type === "file")
+  .map((entry) => {
+    const relative = path.posix.join("Payload", "EchoDesk Preview.app", entry.path);
+    return `${entry.sha256}  ${relative}`;
+  });
+fs.writeFileSync(
+  path.join(path.dirname(manifestPath), "payload.sha256"),
+  `${checksumLines.join("\n")}\n`,
+  { encoding: "utf8", mode: 0o644 },
+);
 NODE
+
+(
+  cd -- "${PACKAGE_ROOT}"
+  /usr/bin/shasum -a 256 manifest.json >"${INTERNAL_MANIFEST_SUMS##*/}"
+  /usr/bin/shasum -a 256 --check --strict "${INTERNAL_MANIFEST_SUMS##*/}"
+  /usr/bin/shasum -a 256 --check --strict "${INTERNAL_PAYLOAD_SUMS##*/}"
+)
 
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "${PACKAGE_ROOT}" "${TEMP_ZIP}"
 /bin/cp -- "${INTERNAL_MANIFEST}" "${FINAL_MANIFEST}"
+/bin/cp -- "${INSTALLER_TEMPLATE}" "${FINAL_BOOTSTRAP}"
+/bin/chmod 0755 "${FINAL_BOOTSTRAP}"
 /bin/mv -- "${TEMP_ZIP}" "${FINAL_ZIP}"
 
 (
   cd -- "${OUTPUT_DIR}"
-  /usr/bin/shasum -a 256 "$(basename -- "${FINAL_ZIP}")" "$(basename -- "${FINAL_MANIFEST}")"
+  /usr/bin/shasum -a 256 \
+    "$(basename -- "${FINAL_ZIP}")" \
+    "$(basename -- "${FINAL_MANIFEST}")" \
+    "$(basename -- "${FINAL_BOOTSTRAP}")"
 ) >"${FINAL_SUMS}"
 
 printf '%s\n' \
   "ZIP=${FINAL_ZIP}" \
   "MANIFEST=${FINAL_MANIFEST}" \
+  "BOOTSTRAP=${FINAL_BOOTSTRAP}" \
   "SHA256SUMS=${FINAL_SUMS}" \
   "INSTALLER=Install EchoDesk Preview.command (inside ZIP)"

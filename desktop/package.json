@@ -32,6 +32,7 @@
     "backend:build:linux": "node scripts/build-backend-linux.cjs",
     "backend:build:win": "node scripts/build-backend-win.cjs",
     "app:build:mac:test": "node scripts/package-macos-adhoc-preview.cjs",
+    "app:package:mac:source": "node scripts/package-macos-source-assets.cjs",
     "app:dist": "npm run app:dist:mac",
     "app:dist:mac": "node scripts/desktop-release-signing.cjs mac",
     "app:dist:mac:adhoc": "npm run app:dist:mac:adhoc-test",

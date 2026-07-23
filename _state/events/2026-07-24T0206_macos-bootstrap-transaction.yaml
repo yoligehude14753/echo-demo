@@ -1,0 +1,39 @@
+event_id: "E-20260724T0206-001"
+event_type: "add"
+timestamp: "2026-07-24T02:06:23+08:00"
+author: "agent/codex-luna-macos-bootstrap-04094c16"
+session_id: "macos_bootstrap_release"
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-066"
+      claim: "macOS bootstrap verifies manifest/payload SHA-256, requires INSTALL confirmation, atomically replaces and strictly verifies the app, runs a loopback fused smoke, and rolls back on failure."
+      category: "code"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-24T02:06:23+08:00"
+      observed_by: "agent/codex-luna-macos-bootstrap-04094c16"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "desktop/scripts/templates/Install EchoDesk Preview.command"
+        - "desktop/scripts/package-macos-preview-bootstrap.sh"
+        - "desktop/scripts/package-macos-preview-bootstrap.test.cjs"
+        - "desktop/scripts/package-macos-source-assets.cjs"
+        - "desktop/scripts/package-macos-source-assets.test.cjs"
+        - "test: node --test desktop/scripts/package-macos-preview-bootstrap.test.cjs desktop/scripts/package-macos-source-assets.test.cjs => 4 passed"
+        - "test: bash -n bootstrap scripts; node --check source asset script; git diff --check => passed"
+      evidence: "The bootstrap reads only an extracted local package, validates manifest.sha256 and payload.sha256 before confirmation, clears quarantine only on the staged target bundle, performs deep ad-hoc signing and strict verification before and after atomic replacement, checks local bootstrap/health plus packaged fused-worker bridge output, and retains the prior target until the workflow readback succeeds. The source asset helper is source-SHA-bound and performs ZIP/DMG offline readback, but no final release assets were produced in this step."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "macos"
+        - "bootstrap"
+        - "offline"
+        - "rollback"
+        - "source-bound"
+git_commit: null

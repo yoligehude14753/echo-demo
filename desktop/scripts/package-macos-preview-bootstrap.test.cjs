@@ -17,16 +17,22 @@ test("installer policy is local, transactional, and contains no downloader", () 
   const source = fs.readFileSync(installer, "utf8");
 
   assert.match(source, /xattr -r -d com\.apple\.quarantine "\$\{STAGED_BUNDLE\}"/);
+  assert.match(source, /shasum -a 256 --check --strict.*MANIFEST_SUMS/);
+  assert.match(source, /plutil -extract release_sha raw/);
+  assert.match(source, /Type INSTALL to continue/);
   assert.match(source, /codesign --force --deep --sign - "\$\{STAGED_BUNDLE\}"/);
   assert.match(
     source,
     /codesign --verify --deep --strict --verbose=2 "\$\{TARGET_BUNDLE\}"/,
   );
   assert.match(source, /previous_moved=1/);
+  assert.match(source, /minimal fused workflow/);
+  assert.match(source, /packaged fused worker bridge connected/);
   assert.match(source, /mv -- "\$\{BACKUP_BUNDLE\}" "\$\{TARGET_BUNDLE\}"/);
+  assert.match(source, /rm -rf -- "\$\{BACKUP_BUNDLE\}"/);
   assert.doesNotMatch(
     source,
-    /(^|[;&|]\s*)(curl|wget|spctl|defaults)\s|master-disable/m,
+    /(^|[;&|]\s*)(curl|wget)\s*[^\n]*\|\s*(sh|bash)|spctl|defaults|master-disable/m,
   );
 });
 
@@ -86,6 +92,7 @@ test("packager emits a unique bound archive without tracked product bytes", () =
 
     assert.ok(fs.existsSync(values.ZIP));
     assert.ok(fs.existsSync(values.MANIFEST));
+    assert.ok(fs.existsSync(values.BOOTSTRAP));
     assert.ok(fs.existsSync(values.SHA256SUMS));
     assert.match(path.basename(values.ZIP), /0123456789ab-\d{8}T\d{6}Z-[A-Za-z0-9]+\.zip$/);
 
@@ -93,6 +100,8 @@ test("packager emits a unique bound archive without tracked product bytes", () =
     assert.equal(manifest.release_sha, "0123456789abcdef0123456789abcdef01234567");
     assert.equal(manifest.version, "0.3.3-preview.3");
     assert.equal(manifest.bundle_path, "Payload/EchoDesk Preview.app");
+    assert.equal(manifest.payload_checksums, "payload.sha256");
+    assert.equal(manifest.manifest_checksum, "manifest.sha256");
     assert.match(manifest.payload_tree_sha256, /^[0-9a-f]{64}$/);
 
     execFileSync("/usr/bin/shasum", [
@@ -110,7 +119,11 @@ test("packager emits a unique bound archive without tracked product bytes", () =
       path.basename(values.ZIP, ".zip"),
     );
     assert.ok(fs.existsSync(path.join(packageRoot, "Payload", "EchoDesk Preview.app")));
+    assert.ok(fs.existsSync(path.join(packageRoot, "manifest.sha256")));
+    assert.ok(fs.existsSync(path.join(packageRoot, "payload.sha256")));
     assert.ok(fs.existsSync(path.join(packageRoot, "Install EchoDesk Preview.command")));
+    execFileSync("/usr/bin/shasum", ["-a", "256", "--check", "--strict", "manifest.sha256"], { cwd: packageRoot });
+    execFileSync("/usr/bin/shasum", ["-a", "256", "--check", "--strict", "payload.sha256"], { cwd: packageRoot });
     assert.deepEqual(
       JSON.parse(fs.readFileSync(path.join(packageRoot, "manifest.json"), "utf8")),
       manifest,
