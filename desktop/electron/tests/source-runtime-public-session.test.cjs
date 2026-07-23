@@ -74,11 +74,17 @@ test("source Electron supervisor prepares the branded secure-storage runtime", (
 });
 
 test("source Electron accepts only an explicit absolute isolated user-data path", () => {
+  const userDataDir = path.join(
+    path.parse(desktopRoot).root,
+    "tmp",
+    "echodesk-source-runtime",
+    "user-data",
+  );
   const args = electronLaunchArgs({
-    ECHODESK_ELECTRON_USER_DATA_DIR: "/tmp/echodesk-source-runtime/user-data",
+    ECHODESK_ELECTRON_USER_DATA_DIR: userDataDir,
   });
   assert.match(args[0], /electron[\\/]main\.cjs$/);
-  assert.equal(args[1], "--user-data-dir=/tmp/echodesk-source-runtime/user-data");
+  assert.equal(args[1], `--user-data-dir=${userDataDir}`);
   assert.throws(
     () => electronLaunchArgs({ ECHODESK_ELECTRON_USER_DATA_DIR: "relative/path" }),
     /must be absolute/,
