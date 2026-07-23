@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-23T08:03:05.468995+00:00'
+generated_at: '2026-07-23T17:43:26.260706+00:00'
 generated_by: replay.py
-fact_count: 53
+fact_count: 56
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1741,3 +1741,112 @@ facts:
   - session
   - android
   - authorization
+- id: F-ECHO-062
+  claim: Desktop and Android capture PCM with 20ms VAD and cap each free or formal upload segment at 640ms; Android reads
+    AudioRecord in 80ms blocks and records non-secret per-segment metrics.
+  category: code
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.98
+  observed_at: '2026-07-24T01:08:00+08:00'
+  observed_by: agent/codex-luna-audio-pipeline-20260724
+  valid_until: null
+  ttl_hours: null
+  source:
+  - desktop/src/capture/audioCapture.ts
+  - desktop/android/app/src/main/java/com/echodesk/app/NativeAudioGate.java
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoAudioPlugin.java
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoCaptureRuntime.java
+  - desktop/android/app/src/test/java/com/echodesk/app/NativeAudioGateTest.java
+  - test:JAVA_HOME=openjdk@21 ANDROID_HOME=... ./gradlew :app:testDebugUnitTest --tests com.echodesk.app.NativeAudioGateTest
+    => passed
+  - test:npm run typecheck => passed
+  - test:node --test --experimental-strip-types src/capture/voiceActiveChunker.test.ts => 3 passed
+  evidence: NativeAudioGate incrementally consumes 20 ms frames, emits voiced free segments after post-roll or at the 640
+    ms cap, preserves formal audio in independently bounded 640 ms segments, and records only non-secret segment metrics in
+    the app-private queue. Focused tests prove silence drop, post-roll emission, six seconds of continuous voice splits without
+    loss or overlap, and formal-tail flushing. No emulator or physical microphone validation was performed.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - capture
+  - android
+  - desktop
+  - vad
+  - low-latency
+- id: F-ECHO-063
+  claim: Chat actions require a V4 Flash intent plan; keywords and @ only hint. Authorized Claude Code plans enter AgentTaskService
+    context and need an authority-issued open binding.
+  category: conclusion
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.98
+  observed_at: '2026-07-24T01:12:00+08:00'
+  observed_by: agent/codex-luna-intent-planner-20260724
+  valid_until: null
+  ttl_hours: null
+  source:
+  - backend/app/adapters/intent/llm_router.py
+  - backend/app/adapters/intent/prompts.py
+  - backend/app/api/agents.py
+  - desktop/src/components/CommandBar.tsx
+  - desktop/electron/packaged-fused-worker-bridge.cjs
+  - backend/tests/unit/test_intent_router.py
+  - backend/tests/unit/test_agent_intent_plan.py
+  - desktop/src/lib/intentPlanGate.test.ts
+  - 'test: PYTHONPATH=backend pytest backend/tests/unit/test_intent_router.py backend/tests/unit/test_agent_intent_plan.py
+    -q => 18 passed'
+  - 'test: cd desktop && npm run typecheck => passed'
+  - 'test: cd desktop && node --experimental-strip-types --test src/lib/intentPlanGate.test.ts => 2 passed'
+  - 'test: node --test desktop/electron/tests/packaged-fused-worker-bridge.test.cjs => 6 passed'
+  evidence: Focused tests prove every built-in command goes through the V4 Flash plan call, invalid or unauthorized plans
+    fail closed, legacy conversation output is normalized rather than bypassed, and only a server-replanned claude_code_runtime
+    plan is placed in the AgentIntent context. The packaged bridge converts that authoritative raw task context into a turn
+    only when an authority-issued open binding is present; it refuses to fabricate model, credential, or capability grants.
+    No live runtime execution, packaging, or deployment was performed in this change.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - intent
+  - planner
+  - builtin-skill
+  - claude-code
+  - context
+- id: F-ECHO-064
+  claim: Android public identity credentials are process-memory only; restart requires bootstrap, while non-sensitive capture
+    preferences, queue audio/metadata, and cadence metrics remain durable.
+  category: code
+  volatility: low
+  evidence_strength: code
+  status: confirmed
+  confidence: 0.99
+  observed_at: '2026-07-24T01:50:00+08:00'
+  observed_by: agent/codex-luna-unified-source-candidate-20260724
+  valid_until: null
+  ttl_hours: null
+  source:
+  - desktop/android/app/src/main/java/com/echodesk/app/AndroidMemoryIdentityStore.java
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoIdentityPlugin.java
+  - desktop/android/app/src/main/java/com/echodesk/app/EchoCaptureRuntime.java
+  - desktop/android/app/src/debug/java/com/echodesk/app/SessionHandoff.java
+  - desktop/android/app/src/test/java/com/echodesk/app/AndroidMemoryIdentityStoreTest.java
+  evidence: The Android identity plugin reports android-memory/memory-only with durable=false and stores identity state only
+    in a process-scoped map. EchoCaptureRuntime no longer reads or writes session base URL/device identity in SharedPreferences;
+    only free-mode and pause preferences remain, and the app-private queue retains audio plus non-secret metadata. The debug-only
+    handoff uses a synchronized process-memory slot and has no file/cache I/O. Focused JVM tests cover process reset bootstrap,
+    atomic rotation, lost-identity handling, and origin separation.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - android
+  - identity
+  - memory-only
+  - credential

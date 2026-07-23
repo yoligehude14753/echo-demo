@@ -12,7 +12,10 @@ import {
   floatTo16BitPCM,
   pcm16ToWav,
 } from "@/capture/pcm";
-import { VoiceActiveChunker } from "@/capture/voiceActiveChunker";
+import {
+  VOICE_ACTIVITY_MAX_CHUNK_MS,
+  VoiceActiveChunker,
+} from "@/capture/voiceActiveChunker";
 import type { CaptureState } from "@/domain/session";
 import { isNativeMobile } from "@/runtime";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
@@ -31,8 +34,10 @@ export type CaptureChunkHandler = (wav: Blob) => void | Promise<void>;
 export type CaptureStatusHandler = (state: CaptureState, errorMessage?: string) => void;
 
 const RETRY_MS = 5_000;
-// Android 原生录音仍由原生端自己的上传队列控制；本次只收窄 desktop WebAudio。
-const NATIVE_CAPTURE_CHUNK_MS = 30_000;
+// Android 原生端会把每个 PCM read 送进 20 ms VAD；此值是任何单个上传片段的
+// 硬上限，而不是旧版按整窗积累的等待时间。
+const NATIVE_CAPTURE_CHUNK_MS = VOICE_ACTIVITY_MAX_CHUNK_MS;
+const WEB_AUDIO_PROCESSOR_BUFFER_SAMPLES = 1_024;
 const NATIVE_RUNTIME_RETRY_LIMIT = 3;
 const TV_SILENT_INPUT_GRACE_MS = 30_000;
 const TV_SILENT_PEAK_THRESHOLD = 0.000002;
@@ -623,7 +628,9 @@ class AudioCapture {
         : new AudioContext({ sampleRate: CAPTURE_SAMPLE_RATE });
       this.audioCtx = ctx;
       const src = ctx.createMediaStreamSource(stream);
-      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      // 16 kHz 下每次最多约 64 ms；随后逐帧进入 20 ms VAD。不能再让一整个
+      // 多秒窗口成为首次语音上传的前置条件。
+      const proc = ctx.createScriptProcessor(WEB_AUDIO_PROCESSOR_BUFFER_SAMPLES, 1, 1);
       this.proc = proc;
 
       proc.onaudioprocess = (ev) => {

@@ -5,13 +5,17 @@ export interface IntentPlanGateDecision {
   message: string;
   failed: boolean;
   serializedPlan: string | null;
+  contextRefs: string[];
 }
 
 const TARGETS = new Set([
   "builtin_skill",
   "claude_code_runtime",
-  "conversational_response",
+  "conversation",
   "clarification",
+  // A rolling update can briefly pair a new renderer with an old backend
+  // response. The backend canonicalizes this value on the next plan.
+  "conversational_response",
 ]);
 
 /**
@@ -33,6 +37,11 @@ export function resolveIntentPlanGate(result: IntentResult): IntentPlanGateDecis
   const questions = plan?.clarification_questions;
   const confidence = plan?.confidence;
   const authorized = plan?.execution_authorized;
+  const contextRefs = Array.isArray(plan?.available_context)
+    ? plan.available_context.filter(
+        (item): item is string => typeof item === "string" && item.length > 0,
+      )
+    : [];
   const ready = result.params.ready_to_execute === true;
   const valid = Boolean(
     plan
@@ -49,7 +58,13 @@ export function resolveIntentPlanGate(result: IntentResult): IntentPlanGateDecis
       && target !== "clarification",
   );
   if (ready && valid) {
-    return { allowDispatch: true, message: "", failed: false, serializedPlan: JSON.stringify(plan) };
+    return {
+      allowDispatch: true,
+      message: "",
+      failed: false,
+      serializedPlan: JSON.stringify(plan),
+      contextRefs,
+    };
   }
   return {
     allowDispatch: false,
@@ -58,5 +73,6 @@ export function resolveIntentPlanGate(result: IntentResult): IntentPlanGateDecis
       : "请补充必要信息后再执行。"),
     failed,
     serializedPlan: null,
+    contextRefs: [],
   };
 }

@@ -1,9 +1,9 @@
-"""Integration：意图路由真 LLM 端到端（当前 Settings 的 fast LLM）。
+"""Integration：意图路由真 V4 Flash 计划端到端。
 
-跳过条件：fast LLM endpoint 不可达 → 自动 skip。
+跳过条件：主模型 endpoint 不可达 → 自动 skip。
 覆盖：
-1. 关键字命中场景（零 LLM）：@生成 PPT / @财务模型 / @查
-2. LLM 兜底场景（无关键字）：模糊指令 → LLM 分类
+1. 关键字命中场景：@生成 PPT / @财务模型 / @查 仍必须生成计划
+2. 无关键字场景：模糊指令 → LLM 计划
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ from app.config import Settings
 pytestmark = pytest.mark.integration
 
 
-def _heyi_reachable() -> bool:
+def _main_model_reachable() -> bool:
     s = Settings()
-    parsed = urlparse(s.llm_fast_base_url)
+    parsed = urlparse(s.llm_main_base_url)
     host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     if not host:
@@ -34,8 +34,10 @@ def _heyi_reachable() -> bool:
 
 
 @pytest.mark.asyncio
-async def test_intent_keyword_hits_skip_llm() -> None:
-    """关键字命中应当不调 LLM 即返回（带 0.85 置信度）。"""
+@pytest.mark.live
+@pytest.mark.skipif(not _main_model_reachable(), reason="V4 Flash endpoint unreachable")
+async def test_intent_keyword_hints_still_require_a_v4_flash_plan() -> None:
+    """关键词只能提示候选；所有命令仍需主模型计划授权。"""
     s = Settings()
     llm = OpenAICompatibleLLM(s)
     try:
@@ -50,14 +52,15 @@ async def test_intent_keyword_hits_skip_llm() -> None:
         for text, expect in cases:
             r = await router.route(text, current_meeting_id="m-test")
             assert r.kind == expect, f"{text!r} → {r.kind}（应为 {expect}）"
-            assert r.confidence >= 0.8
+            assert isinstance(r.params.get("intent_plan"), dict)
+            assert r.params["intent_plan"]["execution_target"] == "builtin_skill"
     finally:
         await llm.aclose()
 
 
 @pytest.mark.asyncio
 @pytest.mark.live
-@pytest.mark.skipif(not _heyi_reachable(), reason="eight fast LLM unreachable")
+@pytest.mark.skipif(not _main_model_reachable(), reason="V4 Flash endpoint unreachable")
 async def test_intent_llm_fallback_classifies() -> None:
     """无关键字 + @前缀 → 走 LLM 分类，返回合法 kind。"""
     s = Settings()

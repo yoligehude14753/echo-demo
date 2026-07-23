@@ -1,0 +1,36 @@
+event_id: "E-20260724T0150-001"
+event_type: "add"
+timestamp: "2026-07-24T01:50:00+08:00"
+author: "agent/codex-luna-unified-source-candidate-20260724"
+session_id: "unified_source_candidate"
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-064"
+      claim: "Android public identity credentials are process-memory only; restart requires bootstrap, while non-sensitive capture preferences, queue audio/metadata, and cadence metrics remain durable."
+      category: "code"
+      volatility: "low"
+      evidence_strength: "code"
+      status: "confirmed"
+      confidence: 0.99
+      observed_at: "2026-07-24T01:50:00+08:00"
+      observed_by: "agent/codex-luna-unified-source-candidate-20260724"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "desktop/android/app/src/main/java/com/echodesk/app/AndroidMemoryIdentityStore.java"
+        - "desktop/android/app/src/main/java/com/echodesk/app/EchoIdentityPlugin.java"
+        - "desktop/android/app/src/main/java/com/echodesk/app/EchoCaptureRuntime.java"
+        - "desktop/android/app/src/debug/java/com/echodesk/app/SessionHandoff.java"
+        - "desktop/android/app/src/test/java/com/echodesk/app/AndroidMemoryIdentityStoreTest.java"
+      evidence: "The Android identity plugin reports android-memory/memory-only with durable=false and stores identity state only in a process-scoped map. EchoCaptureRuntime no longer reads or writes session base URL/device identity in SharedPreferences; only free-mode and pause preferences remain, and the app-private queue retains audio plus non-secret metadata. The debug-only handoff uses a synchronized process-memory slot and has no file/cache I/O. Focused JVM tests cover process reset bootstrap, atomic rotation, lost-identity handling, and origin separation."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "android"
+        - "identity"
+        - "memory-only"
+        - "credential"
+git_commit: null

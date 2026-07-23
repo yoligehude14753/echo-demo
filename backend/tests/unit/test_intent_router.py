@@ -30,8 +30,10 @@ class _MockLLM:
         self.content = content or ""
         self.error = error
         self.options: list[dict[str, object]] = []
+        self.messages: list[list[ChatMessage]] = []
 
-    async def chat(self, _messages: list[ChatMessage], **kwargs: object) -> LLMResponse:
+    async def chat(self, messages: list[ChatMessage], **kwargs: object) -> LLMResponse:
+        self.messages.append(messages)
         self.options.append(kwargs)
         if self.error:
             raise self.error
@@ -70,7 +72,9 @@ def _plan(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_explicit_at_keyword_only_hints_and_main_plan_authorizes_skill(tmp_path: Path) -> None:
+async def test_explicit_at_keyword_only_hints_and_main_plan_authorizes_skill(
+    tmp_path: Path,
+) -> None:
     llm = _MockLLM(_plan("builtin_skill", builtin="generate_pptx"))
     result = await LLMIntentRouter(_settings(tmp_path), llm).route("@生成 PPT 投资复盘")
 
@@ -100,6 +104,7 @@ async def test_explicit_at_keyword_only_hints_and_main_plan_authorizes_skill(tmp
         ("generate_pdf", "@生成 PDF 简历"),
         ("generate_txt", "@生成 TXT 清单"),
         ("summarize_meeting", "@总结当前会议"),
+        ("search_web", "@查 最新市场数据"),
         ("search_rag", "@查 当前会议要点"),
     ],
 )
@@ -139,23 +144,42 @@ async def test_missing_constraints_never_authorize_keyword_skill(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_non_builtin_execution_routes_to_real_claude_runtime_target(tmp_path: Path) -> None:
     llm = _MockLLM(_plan("claude_code_runtime"))
-    result = await LLMIntentRouter(_settings(tmp_path), llm).route("用浏览器整理竞品并写入工作区")
+    result = await LLMIntentRouter(_settings(tmp_path), llm).route(
+        "用浏览器整理竞品并写入工作区",
+        current_meeting_id="meeting-42",
+    )
 
     assert result.kind == "agent_task"
     assert result.params["ready_to_execute"] is True
     assert result.params["execution_target"] == "claude_code_runtime"
     assert result.params["text"] == "用浏览器整理竞品并写入工作区"
+    envelope = json.loads(llm.messages[0][1].content)
+    assert "当前会议：已选定，可用于会议总结" in envelope["available_context"]
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_pure_conversation_has_no_builtin_skill_dispatch(tmp_path: Path) -> None:
-    llm = _MockLLM(_plan("conversational_response"))
+    llm = _MockLLM(_plan("conversation"))
     result = await LLMIntentRouter(_settings(tmp_path), llm).route("你好，今天怎么样？")
 
     assert result.kind == "chat"
     assert result.params["ready_to_execute"] is True
-    assert result.params["execution_target"] == "conversational_response"
+    assert result.params["execution_target"] == "conversation"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_legacy_conversation_target_is_normalized_without_bypassing_the_plan(
+    tmp_path: Path,
+) -> None:
+    llm = _MockLLM(_plan("conversational_response"))
+
+    result = await LLMIntentRouter(_settings(tmp_path), llm).route("你好，今天怎么样？")
+
+    assert result.kind == "chat"
+    assert result.params["execution_target"] == "conversation"
+    assert len(llm.options) == 1
     assert "artifact_type" not in result.params
 
 

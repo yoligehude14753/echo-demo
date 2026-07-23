@@ -4,7 +4,7 @@ export const IDENTITY_CAPABILITY_EVENT = "echodesk:identity-capability";
 
 export type IdentityPersistence = "secure-device" | "memory-only";
 export type IdentityRuntime =
-  | "android-keystore"
+  | "android-memory"
   | "electron-keychain"
   | "browser-memory";
 export type IdentityCredentialErrorKind =
@@ -52,13 +52,13 @@ export class IdentityCredentialStoreError extends Error {
 }
 
 interface NativeCapabilityResult {
-  runtime: "android-keystore";
-  persistence: "secure-device";
+  runtime: "android-memory";
+  persistence: "memory-only";
   durable: boolean;
   originBound: boolean;
   atomicRotation: boolean;
-  keyNonExportable: boolean;
-  hardwareBacked: boolean;
+  keyNonExportable: null;
+  hardwareBacked: null;
 }
 
 interface NativeIdentityResult {
@@ -238,7 +238,7 @@ function normalizeNativeError(error: unknown): IdentityCredentialStoreError {
     );
   }
   return new IdentityCredentialStoreError(
-    "Android 安全身份存储不可用",
+    "Android 内存身份存储不可用",
     "secure-store-unavailable",
     { cause: error },
   );
@@ -322,23 +322,24 @@ export const identityCredentialStore = {
     try {
       const value = await EchoIdentity.capabilities();
       if (
-        value.runtime !== "android-keystore" ||
-        value.persistence !== "secure-device" ||
-        value.durable !== true ||
+        value.runtime !== "android-memory" ||
+        value.persistence !== "memory-only" ||
+        value.durable !== false ||
         value.originBound !== true ||
         value.atomicRotation !== true ||
-        value.keyNonExportable !== true
+        value.keyNonExportable !== null ||
+        value.hardwareBacked !== null
       ) {
         throw new Error("native identity capability contract mismatch");
       }
       const capability: IdentityCredentialCapability = {
         runtime: value.runtime,
         persistence: value.persistence,
-        durable: true,
+        durable: false,
         originBound: true,
         atomicRotation: true,
-        keyNonExportable: true,
-        hardwareBacked: value.hardwareBacked === true,
+        keyNonExportable: null,
+        hardwareBacked: null,
       };
       publishCapability(capability);
       return capability;

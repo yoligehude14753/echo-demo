@@ -6,47 +6,30 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONObject;
+
 @CapacitorPlugin(name = "EchoIdentity")
 public final class EchoIdentityPlugin extends Plugin {
-  private AndroidIdentityVault vault;
-
-  @Override
-  public void load() {
-    vault = new AndroidIdentityVault(getContext());
-  }
+  private final AndroidMemoryIdentityStore store = new AndroidMemoryIdentityStore();
 
   @PluginMethod
   public void capabilities(PluginCall call) {
-    try {
-      boolean nonExportable = vault.isKeyNonExportable();
-      if (!nonExportable) {
-        call.reject("secure identity key is exportable", "SECURE_STORE_ERROR");
-        return;
-      }
-      boolean hardwareBacked;
-      try {
-        hardwareBacked = vault.isKeyHardwareBacked();
-      } catch (AndroidIdentityVault.VaultException unavailableInfo) {
-        hardwareBacked = false;
-      }
-      JSObject result = new JSObject();
-      result.put("runtime", "android-keystore");
-      result.put("persistence", "secure-device");
-      result.put("durable", true);
-      result.put("originBound", true);
-      result.put("atomicRotation", true);
-      result.put("keyNonExportable", true);
-      result.put("hardwareBacked", hardwareBacked);
-      call.resolve(result);
-    } catch (Exception error) {
-      reject(call, error);
-    }
+    JSObject result = new JSObject();
+    result.put("runtime", "android-memory");
+    result.put("persistence", "memory-only");
+    result.put("durable", false);
+    result.put("originBound", true);
+    result.put("atomicRotation", true);
+    result.put("keyNonExportable", JSONObject.NULL);
+    result.put("hardwareBacked", JSONObject.NULL);
+    call.resolve(result);
   }
 
   @PluginMethod
   public void loadOrCreate(PluginCall call) {
     try {
-      AndroidIdentityVault.IdentityMaterial identity = vault.loadOrCreate(requiredOrigin(call));
+      AndroidMemoryIdentityStore.IdentityMaterial identity =
+          store.loadOrCreate(requiredOrigin(call));
       JSObject result = new JSObject();
       result.put("origin", identity.origin);
       result.put("enrollmentId", identity.enrollmentId);
@@ -64,8 +47,8 @@ public final class EchoIdentityPlugin extends Plugin {
   @PluginMethod
   public void loadForReconnect(PluginCall call) {
     try {
-      AndroidIdentityVault.IdentityMaterial identity =
-          vault.loadForReconnect(requiredOrigin(call));
+      AndroidMemoryIdentityStore.IdentityMaterial identity =
+          store.loadForReconnect(requiredOrigin(call));
       JSObject result = new JSObject();
       result.put("origin", identity.origin);
       result.put("enrollmentId", identity.enrollmentId);
@@ -83,7 +66,7 @@ public final class EchoIdentityPlugin extends Plugin {
   @PluginMethod
   public void confirmEnrollment(PluginCall call) {
     try {
-      vault.confirmEnrollment(requiredOrigin(call));
+      store.confirmEnrollment(requiredOrigin(call));
       call.resolve(ok());
     } catch (Exception error) {
       reject(call, error);
@@ -93,7 +76,8 @@ public final class EchoIdentityPlugin extends Plugin {
   @PluginMethod
   public void beginRotation(PluginCall call) {
     try {
-      AndroidIdentityVault.RotationMaterial rotation = vault.beginRotation(requiredOrigin(call));
+      AndroidMemoryIdentityStore.RotationMaterial rotation =
+          store.beginRotation(requiredOrigin(call));
       JSObject result = new JSObject();
       result.put("origin", rotation.origin);
       result.put("rotationId", rotation.rotationId);
@@ -108,7 +92,7 @@ public final class EchoIdentityPlugin extends Plugin {
   @PluginMethod
   public void commitRotation(PluginCall call) {
     try {
-      vault.commitRotation(requiredOrigin(call), requiredRotationId(call));
+      store.commitRotation(requiredOrigin(call), requiredRotationId(call));
       call.resolve(ok());
     } catch (Exception error) {
       reject(call, error);
@@ -118,7 +102,7 @@ public final class EchoIdentityPlugin extends Plugin {
   @PluginMethod
   public void abortRotation(PluginCall call) {
     try {
-      vault.abortRotation(requiredOrigin(call), requiredRotationId(call));
+      store.abortRotation(requiredOrigin(call), requiredRotationId(call));
       call.resolve(ok());
     } catch (Exception error) {
       reject(call, error);
@@ -128,7 +112,7 @@ public final class EchoIdentityPlugin extends Plugin {
   @PluginMethod
   public void markIdentityLost(PluginCall call) {
     try {
-      vault.markIdentityLost(requiredOrigin(call));
+      store.markIdentityLost(requiredOrigin(call));
       call.resolve(ok());
     } catch (Exception error) {
       reject(call, error);
@@ -138,7 +122,7 @@ public final class EchoIdentityPlugin extends Plugin {
   @PluginMethod
   public void restoreIdentity(PluginCall call) {
     try {
-      vault.restoreIdentity(requiredOrigin(call));
+      store.restoreIdentity(requiredOrigin(call));
       call.resolve(ok());
     } catch (Exception error) {
       reject(call, error);
@@ -148,7 +132,7 @@ public final class EchoIdentityPlugin extends Plugin {
   @PluginMethod
   public void clear(PluginCall call) {
     try {
-      vault.clear(requiredOrigin(call));
+      store.clear(requiredOrigin(call));
       call.resolve(ok());
     } catch (Exception error) {
       reject(call, error);
@@ -178,11 +162,11 @@ public final class EchoIdentityPlugin extends Plugin {
   }
 
   private static void reject(PluginCall call, Exception error) {
-    if (error instanceof AndroidIdentityVault.IdentityLostException) {
+    if (error instanceof AndroidMemoryIdentityStore.IdentityLostException) {
       call.reject("identity_lost", "IDENTITY_LOST");
       return;
     }
-    if (error instanceof AndroidIdentityVault.IdentityMissingException) {
+    if (error instanceof AndroidMemoryIdentityStore.IdentityMissingException) {
       call.reject("identity_missing", "IDENTITY_MISSING");
       return;
     }
@@ -190,11 +174,11 @@ public final class EchoIdentityPlugin extends Plugin {
       call.reject("invalid backend origin", "INVALID_ORIGIN");
       return;
     }
-    if (error instanceof AndroidIdentityVault.VaultException
-        && "secure_identity_rotation_mismatch".equals(error.getMessage())) {
-      call.reject("secure_identity_rotation_mismatch", "ROTATION_MISMATCH");
+    if (error instanceof AndroidMemoryIdentityStore.StoreException
+        && "memory_identity_rotation_mismatch".equals(error.getMessage())) {
+      call.reject("memory_identity_rotation_mismatch", "ROTATION_MISMATCH");
       return;
     }
-    call.reject("secure identity store unavailable", "SECURE_STORE_ERROR", error);
+    call.reject("memory identity store unavailable", "MEMORY_STORE_ERROR", error);
   }
 }

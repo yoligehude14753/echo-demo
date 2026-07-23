@@ -3,12 +3,9 @@ package com.echodesk.app;
 import java.net.IDN;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
 
-/** Backend origin canonicalization shared by the native identity vault and tests. */
+/** Backend origin canonicalization shared by the native identity store and tests. */
 final class IdentityOrigin {
   private IdentityOrigin() {}
 
@@ -46,19 +43,5 @@ final class IdentityOrigin {
       port = -1;
     }
     return scheme + "://" + host + (port >= 0 ? ":" + port : "");
-  }
-
-  static String storageKey(String normalizedOrigin) {
-    try {
-      MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      byte[] hash = digest.digest(normalizedOrigin.getBytes(StandardCharsets.UTF_8));
-      StringBuilder value = new StringBuilder("identity.");
-      for (byte part : hash) {
-        value.append(String.format(Locale.ROOT, "%02x", part & 0xff));
-      }
-      return value.toString();
-    } catch (NoSuchAlgorithmException impossible) {
-      throw new IllegalStateException("SHA-256 unavailable", impossible);
-    }
   }
 }

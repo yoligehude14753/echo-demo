@@ -40,6 +40,7 @@ from app.api.deps import get_event_bus, require_admin_access
 from app.api.deps import get_llm_singleton as get_llm
 from app.config import Settings, get_settings
 from app.ports.llm import LLMPort
+from app.schemas.intent import MAX_INTENT_CONTEXT_ITEMS
 from app.security.context import current_principal
 from app.security.headers import PRIVATE_NO_STORE_HEADERS
 from app.security.public_projection import project_client_dict, server_private_roots
@@ -55,6 +56,7 @@ class AgentTaskCreateRequest(BaseModel):
     conversation_id: str | None = None
     message_id: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
+    available_context: list[str] = Field(default_factory=list, max_length=MAX_INTENT_CONTEXT_ITEMS)
     output_contract: dict[str, Any] = Field(default_factory=dict)
     timeout_s: float | None = None
 
@@ -196,6 +198,31 @@ def _service(
     return get_agent_task_service(settings, event_bus)
 
 
+def _planner_context(body: AgentTaskCreateRequest) -> list[str]:
+    """Build the bounded, user-visible context frame consumed by the planner.
+
+    ``context`` is the task's durable metadata envelope. It can carry opaque
+    IDs such as ``meeting_id`` and must never become prompt evidence merely
+    because it is a string.
+    """
+
+    result: list[str] = []
+    for value in body.available_context:
+        normalized = value.strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+        if len(result) >= MAX_INTENT_CONTEXT_ITEMS:
+            break
+    return result
+
+
+def _planning_meeting_id(body: AgentTaskCreateRequest) -> str | None:
+    """Use meeting selection as a non-sensitive planning hint, never as evidence."""
+
+    value = body.context.get("meeting_id")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _encode_agentos_artifact_path(relpath: str) -> str:
     path = PurePosixPath(relpath)
     if path.is_absolute():
@@ -224,7 +251,8 @@ async def create_task(
     # claude_code_runtime; there is intentionally no local runner fallback.
     decision = await LLMIntentRouter(settings, llm).route(
         body.text,
-        available_context=[str(value) for value in body.context.values() if isinstance(value, str)],
+        current_meeting_id=_planning_meeting_id(body),
+        available_context=_planner_context(body),
     )
     plan = decision.params.get("intent_plan")
     if (
@@ -234,6 +262,11 @@ async def create_task(
         or plan.get("execution_target") != "claude_code_runtime"
     ):
         raise HTTPException(status_code=409, detail="task requires an authorized intent plan")
+    # The request is re-planned server-side; do not trust a plan supplied by
+    # the renderer. The embedded Claude runtime receives only this validated
+    # plan so its task retains the selected context, steps and constraints.
+    authoritative_context = dict(body.context)
+    authoritative_context["intent_plan"] = plan
     intent = AgentIntent(
         text=body.text,
         device_id=body.device_id,
@@ -241,7 +274,7 @@ async def create_task(
         message_id=body.message_id,
         title=body.title,
         task_kind=body.task_kind or "agent_task",
-        context=body.context,
+        context=authoritative_context,
         output_contract=body.output_contract,
         timeout_s=body.timeout_s or settings.agent_task_timeout_s,
     )
