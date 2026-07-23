@@ -37,10 +37,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 MAX_INTENT_TEXT_CHARS = 32_000
 MAX_RESOURCE_ID_CHARS = 256
+MAX_INTENT_CONTEXT_ITEMS = 24
 
 IntentKind = Literal[
     "search_web",
@@ -100,12 +101,32 @@ class IntentResult(BaseModel):
     rationale: str = ""
 
 
+class PPTIntentPlan(BaseModel):
+    """主模型为 PPT 请求生成的严格、可验证计划。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str = Field(min_length=1, max_length=1_000)
+    audience: str = Field(min_length=1, max_length=300)
+    deliverable: Literal["pptx"]
+    available_context: list[str] = Field(max_length=MAX_INTENT_CONTEXT_ITEMS)
+    missing_constraints: list[str] = Field(max_length=12)
+    assumptions: list[str] = Field(max_length=12)
+    outline: list[str] = Field(min_length=1, max_length=24)
+    required_clarification: str | None = Field(default=None, max_length=1_000)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class IntentRequest(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_INTENT_TEXT_CHARS)
     current_meeting_id: str | None = Field(
         default=None,
         max_length=MAX_RESOURCE_ID_CHARS,
     )  # 提供给 summarize_meeting 用
+    available_context: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_INTENT_CONTEXT_ITEMS,
+    )
 
 
 def parse_at_prefix(text: str) -> str | None:
@@ -390,6 +411,26 @@ def _requested_artifact_kind(text: str) -> IntentKind | None:  # noqa: PLR0911, 
     if "文档" in lower and not any(token in lower for token in ("调研", "研究", "报告", "方案")):
         return "generate_word"
     return "generate_markdown"
+
+
+def is_ppt_generation_request(text: str) -> bool:
+    """Detect a PPT creation request without treating every mention as generation.
+
+    This deterministic check only opens the main-model planning gate.  It never
+    selects a template or authorizes artifact generation.
+    """
+
+    lower = text.strip().lower()
+    ppt_positions = [lower.find(token) for token in ("ppt", "幻灯片", "幻灯")]
+    ppt_positions = [position for position in ppt_positions if position >= 0]
+    if not ppt_positions:
+        return False
+    command = lower.lstrip("@ ")
+    if command.startswith(("生成 ppt", "生成ppt", "做 ppt", "做ppt", "幻灯片", "幻灯")):
+        return True
+    first_ppt = min(ppt_positions)
+    prefix = lower[:first_ppt]
+    return any(action in prefix for action in _OUTPUT_ACTIONS)
 
 
 def _strong_rag_hit(text: str) -> bool:

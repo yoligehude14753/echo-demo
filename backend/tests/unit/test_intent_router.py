@@ -27,7 +27,7 @@ def _settings(tmp_path: Path) -> Settings:
     return Settings(
         storage_dir=tmp_path / "echo",
         rag_index_dir=tmp_path / "rag",
-        llm_main_model="MiniMax-M2.7",
+        llm_main_model="deepseek-v4-flash",
         llm_fast_model="qwen3-1.7b",
         yunwu_api_key="test",
         yunwu_base_url="http://localhost",
@@ -42,6 +42,7 @@ class _MockLLM:
         self._content = content
         self._exc = raise_exc
         self.calls: list[list[ChatMessage]] = []
+        self.call_options: list[dict[str, object]] = []
 
     async def chat(
         self,
@@ -53,6 +54,14 @@ class _MockLLM:
         timeout_s: float = 120.0,
     ) -> LLMResponse:
         self.calls.append(messages)
+        self.call_options.append(
+            {
+                "model": model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "timeout_s": timeout_s,
+            }
+        )
         if self._exc is not None:
             raise self._exc
         return LLMResponse(content=self._content or "", model=model or "mock")
@@ -67,6 +76,111 @@ class _MockLLM:
         timeout_s: float = 600.0,
     ) -> AsyncIterator[str]:  # pragma: no cover - 路由不用 stream
         raise NotImplementedError
+
+
+def _ppt_plan_json(
+    *,
+    available_context: list[str],
+    missing_constraints: list[str],
+    required_clarification: str | None,
+    confidence: float,
+) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "goal": "分析 WorkBuddy 并支持选型决策",
+            "audience": "管理层" if not missing_constraints else "待确认",
+            "deliverable": "pptx",
+            "available_context": available_context,
+            "missing_constraints": missing_constraints,
+            "assumptions": ["可先按内部选型汇报草案组织"],
+            "outline": ["目标与范围", "产品能力", "竞争对比", "建议与下一步"],
+            "required_clarification": required_clarification,
+            "confidence": confidence,
+        },
+        ensure_ascii=False,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_ambiguous_workbuddy_ppt_requests_clarification_before_artifact(
+    tmp_path: Path,
+) -> None:
+    llm = _MockLLM(
+        content=_ppt_plan_json(
+            available_context=[],
+            missing_constraints=["目标受众", "使用目的", "数据范围"],
+            required_clarification="这份 PPT 给谁看、用于什么决策，并以哪些资料为准？",
+            confidence=0.45,
+        )
+    )
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+
+    result = await router.route("帮我做一个workbuddy的分析的ppt")
+
+    assert result.kind == "generate_pptx"
+    assert result.params["ready_to_generate"] is False
+    assert result.params["plan_status"] == "clarification_required"
+    assert "给谁看" in str(result.params["required_clarification"])
+    assert "output_contract" not in result.params
+    assert llm.call_options[0]["model"] == "deepseek-v4-flash"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_context_rich_workbuddy_ppt_returns_structured_ready_plan(
+    tmp_path: Path,
+) -> None:
+    context = ["当前会话：管理层软件选型评审", "资料：WorkBuddy访谈纪要.md"]
+    llm = _MockLLM(
+        content=_ppt_plan_json(
+            available_context=context,
+            missing_constraints=[],
+            required_clarification=None,
+            confidence=0.92,
+        )
+    )
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+
+    result = await router.route(
+        "基于访谈纪要做一份给管理层选型用的 WorkBuddy 分析 PPT",
+        available_context=context,
+    )
+
+    assert result.kind == "generate_pptx"
+    assert result.params["ready_to_generate"] is True
+    assert result.params["plan_status"] == "ready"
+    assert result.params["required_clarification"] == ""
+    assert result.params["output_contract"] == {
+        "required": True,
+        "artifact_type": "pptx",
+        "download": True,
+    }
+    plan = result.params["intent_plan"]
+    assert isinstance(plan, dict)
+    assert plan["available_context"] == context
+    assert plan["outline"][0] == "目标与范围"
+    assert llm.call_options[0]["model"] == "deepseek-v4-flash"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_ppt_planning_llm_failure_fails_closed_without_artifact_contract(
+    tmp_path: Path,
+) -> None:
+    llm = _MockLLM(raise_exc=TimeoutError("model unavailable"))
+    router = LLMIntentRouter(_settings(tmp_path), llm)
+
+    result = await router.route("帮我做一个workbuddy的分析的ppt")
+
+    assert result.kind == "generate_pptx"
+    assert result.params["ready_to_generate"] is False
+    assert result.params["plan_status"] == "failed"
+    assert "稍后重试" in str(result.params["required_clarification"])
+    assert "output_contract" not in result.params
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.unit
@@ -215,23 +329,40 @@ async def test_route_llm_classified_keeps_real_confidence(tmp_path: Path) -> Non
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_route_keyword_hit_keeps_real_confidence(tmp_path: Path) -> None:
-    """对比：关键字命中路径仍然返回 0.85 float 置信度。"""
-    llm = _MockLLM(content="should not be called")
+    """PPT 关键字只打开主模型 plan gate，置信度来自有效计划。"""
+    llm = _MockLLM(
+        content=_ppt_plan_json(
+            available_context=[],
+            missing_constraints=[],
+            required_clarification=None,
+            confidence=0.91,
+        )
+    )
     router = LLMIntentRouter(_settings(tmp_path), llm)
     r = await router.route("@生成 PPT 测试", current_meeting_id=None)
     assert r.kind == "generate_pptx"
     assert r.confidence is not None
     assert r.confidence >= 0.8
+    assert r.params["ready_to_generate"] is True
+    assert llm.call_options[0]["model"] == "deepseek-v4-flash"
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_route_keyword_hit_skips_llm(tmp_path: Path) -> None:
-    llm = _MockLLM(content="should not be called")
+async def test_route_ppt_keyword_uses_main_plan_instead_of_skipping_llm(tmp_path: Path) -> None:
+    llm = _MockLLM(
+        content=_ppt_plan_json(
+            available_context=[],
+            missing_constraints=[],
+            required_clarification=None,
+            confidence=0.9,
+        )
+    )
     router = LLMIntentRouter(_settings(tmp_path), llm)
     r = await router.route("@生成 PPT 英伟达 2025 投资展望", current_meeting_id="m1")
     assert r.kind == "generate_pptx"
-    assert llm.calls == []
+    assert len(llm.calls) == 1
+    assert llm.call_options[0]["model"] == "deepseek-v4-flash"
     assert r.params.get("artifact_type") == "pptx"
     assert "英伟达" in str(r.params.get("brief", ""))
 

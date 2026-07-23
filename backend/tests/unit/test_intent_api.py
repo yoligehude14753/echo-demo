@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -32,7 +33,21 @@ def _reset_router() -> None:
 @pytest.fixture
 def client_kw_hit() -> TestClient:
     app = create_app()
-    app.dependency_overrides[get_llm] = lambda: _StubLLM(content="不会被调用")
+    plan = json.dumps(
+        {
+            "goal": "英伟达投资展望",
+            "audience": "投资评审人",
+            "deliverable": "pptx",
+            "available_context": [],
+            "missing_constraints": [],
+            "assumptions": [],
+            "outline": ["投资结论", "财务表现", "风险与催化剂"],
+            "required_clarification": None,
+            "confidence": 0.91,
+        },
+        ensure_ascii=False,
+    )
+    app.dependency_overrides[get_llm] = lambda: _StubLLM(content=plan)
     return TestClient(app)
 
 

@@ -11,5 +11,10 @@ async def route_intent(
     router: IntentRouterPort,
     text: str,
     current_meeting_id: str | None = None,
+    available_context: list[str] | None = None,
 ) -> IntentResult:
-    return await router.route(text, current_meeting_id=current_meeting_id)
+    return await router.route(
+        text,
+        current_meeting_id=current_meeting_id,
+        available_context=available_context,
+    )

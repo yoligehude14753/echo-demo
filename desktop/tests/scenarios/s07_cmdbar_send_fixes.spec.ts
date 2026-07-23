@@ -13,7 +13,7 @@
  *         并在派发完成后清空 pendingDocs
  *
  *  B. 普通文本走后端 intent route，再进入 RAG 回答闭环
- *  C. 显式 @生成 命令由本地确定性解析器直接派发，不依赖分类器置信度
+ *  C. 显式 @生成 PPT 也必须进入后端主模型 plan gate，不能本地直接派发模板
  *
  * 这三条 case 共同保护命令栏的发送与派发闭环。
  */
@@ -141,7 +141,7 @@ test("S07b · 无 @ 前缀输入 → intent route → RAG 回答", async ({
   await expect(page.getByTestId("transcript-scroller")).not.toContainText("置信度 100%");
 });
 
-test("S07c · 显式 @生成 PPT → 绕过分类器并派发 artifact", async ({
+test("S07c · 显式 @生成 PPT → 进入 intent plan gate 而非本地派发 artifact", async ({
   page,
 }) => {
   const mock = await installScenarioMock(page);
@@ -153,31 +153,12 @@ test("S07c · 显式 @生成 PPT → 绕过分类器并派发 artifact", async (
   await textarea.fill("@生成 PPT 测试");
   await textarea.press("Enter");
 
-  await expect
-    .poll(async () => {
-      const log = await mock.fetchLog();
-      return log.some(
-        (entry) => entry.method === "POST" && entry.url.includes("/artifacts/generate"),
-      );
-    }, { timeout: 5_000 })
-    .toBe(true);
-  const request = (await mock.fetchLog()).find(
-    (entry) => entry.method === "POST" && entry.url.includes("/artifacts/generate"),
-  );
-
-  expect(request?.bodyText).toBeDefined();
-  const body = JSON.parse(request?.bodyText ?? "{}") as {
-    artifact_type?: string;
-    brief?: string;
-  };
-  expect(body.artifact_type).toBe("pptx");
-  expect(body.brief).toContain("@生成 PPT 测试");
-  expect((await mock.fetchLog()).some((entry) => entry.url.includes("/intent/route"))).toBe(
-    false,
-  );
-  await expect(page.getByText("mock pptx 报告", { exact: true })).toBeVisible({
-    timeout: 5_000,
-  });
+  await expect(page.getByTestId("transcript-scroller")).toContainText("@生成 PPT 测试");
+  expect(
+    (await mock.fetchLog()).some(
+      (entry) => entry.method === "POST" && entry.url.includes("/artifacts/generate"),
+    ),
+  ).toBe(false);
 });
 
 test("S07d · 文本+附件都空时 Send 按钮 disabled（不允许空发送）", async ({

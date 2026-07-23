@@ -14,4 +14,5 @@ class IntentRouterPort(Protocol):
         text: str,
         *,
         current_meeting_id: str | None = None,
+        available_context: list[str] | None = None,
     ) -> IntentResult: ...

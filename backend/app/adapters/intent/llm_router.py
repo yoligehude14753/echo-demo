@@ -18,8 +18,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 
+from pydantic import ValidationError
+
+from app.adapters.intent.prompts import (
+    PPT_INTENT_PLAN_SYSTEM_PROMPT,
+    build_ppt_intent_plan_user_prompt,
+)
 from app.config import Settings
 from app.ports.llm import LLMPort
 from app.schemas.intent import (
@@ -27,6 +34,8 @@ from app.schemas.intent import (
     SUPPORTED_INTENTS,
     IntentKind,
     IntentResult,
+    PPTIntentPlan,
+    is_ppt_generation_request,
     keyword_route,
     parse_at_prefix,
 )
@@ -35,6 +44,8 @@ from app.schemas.llm import ChatMessage
 logger = logging.getLogger(__name__)
 
 _MAIN_ROUTE_FALLBACK_TIMEOUT_S = 8.0
+_PPT_PLAN_TIMEOUT_S = 12.0
+_PPT_PLAN_MIN_CONFIDENCE = 0.7
 
 _SYS_PROMPT = """你是 EchoDesk 桌面助手的意图路由器。
 
@@ -88,11 +99,20 @@ class LLMIntentRouter:
         text: str,
         *,
         current_meeting_id: str | None = None,
+        available_context: list[str] | None = None,
     ) -> IntentResult:
         started = time.perf_counter()
         stripped = text.strip()
         at_token = parse_at_prefix(stripped)
         has_at = at_token is not None or stripped.startswith("@")
+
+        # PPT 关键字只负责打开规划 gate；主模型计划通过之前绝不授权模板生成。
+        if is_ppt_generation_request(stripped):
+            result = await self._plan_ppt_intent(
+                stripped,
+                available_context=list(available_context or []),
+            )
+            return self._finish_route(result, started=started, source="main_intent_plan")
 
         # P4-fix-rag-chat：所有路径先跑 keyword_route。
         # · 强 RAG 词组 / 问句即使没有 @ 也会命中 → 不再硬归 chat
@@ -128,11 +148,11 @@ class LLMIntentRouter:
         stripped: str,
         current_meeting_id: str | None,
     ) -> IntentResult:
-        attempts = [
-            ("fast", self._fast_model, self._fast_timeout_s),
-        ]
-        if self._main_model != self._fast_model:
-            attempts.append(("main_fallback", self._main_model, _MAIN_ROUTE_FALLBACK_TIMEOUT_S))
+        attempts: list[tuple[str, str, float]] = []
+        if self._is_actual_qwen3_8b(self._fast_model):
+            attempts.append(("fast", self._fast_model, self._fast_timeout_s))
+        if self._main_model != self._fast_model or not attempts:
+            attempts.append(("main", self._main_model, _MAIN_ROUTE_FALLBACK_TIMEOUT_S))
 
         for channel, model, timeout_s in attempts:
             attempt_started = time.perf_counter()
@@ -174,6 +194,113 @@ class LLMIntentRouter:
             )
 
         return IntentResult(kind="chat", confidence=0.3, rationale="分类服务失败兜底")
+
+    async def _plan_ppt_intent(
+        self,
+        stripped: str,
+        *,
+        available_context: list[str],
+    ) -> IntentResult:
+        """Use only the configured main model and fail closed on any invalid plan."""
+
+        try:
+            response = await self._llm.chat(
+                [
+                    ChatMessage(role="system", content=PPT_INTENT_PLAN_SYSTEM_PROMPT),
+                    ChatMessage(
+                        role="user",
+                        content=build_ppt_intent_plan_user_prompt(stripped, available_context),
+                    ),
+                ],
+                model=self._main_model,
+                max_tokens=1_600,
+                temperature=0.0,
+                timeout_s=_PPT_PLAN_TIMEOUT_S,
+            )
+            plan = PPTIntentPlan.model_validate_json((response.content or "").strip())
+            if any(item not in available_context for item in plan.available_context):
+                raise ValueError("plan introduced unavailable context")
+        except (ValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "ppt intent plan invalid model=%s error_type=%s",
+                self._main_model,
+                type(exc).__name__,
+            )
+            return self._ppt_plan_failure(stripped)
+        except Exception as exc:
+            logger.warning(
+                "ppt intent plan failed model=%s error_type=%s",
+                self._main_model,
+                type(exc).__name__,
+            )
+            return self._ppt_plan_failure(stripped)
+
+        clarification = (plan.required_clarification or "").strip()
+        ready = (
+            not plan.missing_constraints
+            and not clarification
+            and plan.confidence >= _PPT_PLAN_MIN_CONFIDENCE
+        )
+        plan_payload = plan.model_dump(mode="json")
+        params: dict[str, object] = {
+            "artifact_type": "pptx",
+            "brief": stripped,
+            "intent_plan": plan_payload,
+            "ready_to_generate": ready,
+            "plan_status": "ready" if ready else "clarification_required",
+            "required_clarification": ""
+            if ready
+            else clarification or self._clarification_for(plan),
+            "assumption_draft": plan.assumptions,
+        }
+        if ready:
+            params.update(
+                {
+                    "delivery": "artifact",
+                    "output_contract": {
+                        "required": True,
+                        "artifact_type": "pptx",
+                        "download": True,
+                    },
+                }
+            )
+        else:
+            params["delivery"] = "clarification"
+        return IntentResult(
+            kind="generate_pptx",
+            confidence=plan.confidence,
+            params=params,
+            rationale="主模型 PPT intent plan",
+        )
+
+    @staticmethod
+    def _clarification_for(plan: PPTIntentPlan) -> str:
+        if plan.missing_constraints:
+            missing = "、".join(plan.missing_constraints[:4])
+            return f"开始制作前，请补充：{missing}。"
+        return "开始制作前，请确认这份 PPT 的目标、受众和资料范围。"
+
+    @staticmethod
+    def _ppt_plan_failure(text: str) -> IntentResult:
+        return IntentResult(
+            kind="generate_pptx",
+            confidence=0.0,
+            params={
+                "artifact_type": "pptx",
+                "brief": text,
+                "ready_to_generate": False,
+                "plan_status": "failed",
+                "delivery": "clarification",
+                "required_clarification": "暂时无法可靠规划这份 PPT，请稍后重试。",
+                "assumption_draft": [],
+            },
+            rationale="PPT intent plan 不可用",
+        )
+
+    @staticmethod
+    def _is_actual_qwen3_8b(model: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9]+", "-", model.strip().lower()).strip("-")
+        return "qwen3" in normalized and bool(re.search(r"(?:^|-)8b(?:-|$)", normalized))
 
     def _parse_llm_result(
         self,

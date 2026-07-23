@@ -36,6 +36,7 @@ import type { IntentKind, IntentResult } from "@/types";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { useTtsPlayer } from "@/hooks/useTtsPlayer";
 import { meetingDisplayTitle } from "@/lib/meetingDisplay";
+import { requiresPptIntentPlan, resolvePptPlanGate } from "@/lib/pptIntentPlan";
 import { isTvLikeViewport } from "@/runtime";
 
 interface PendingDoc {
@@ -61,6 +62,10 @@ const kindLabel: Record<IntentKind, string> = {
 };
 
 function routeExplicitGenerateCommand(value: string): IntentResult | null {
+  if (requiresPptIntentPlan(value)) {
+    // PPT 必须经过后端主模型 intent plan gate；本地关键字不得授权模板生成。
+    return null;
+  }
   const match = value.match(
     /@\s*生成\s*(pptx?|幻灯片|html|网页|页面|word|docx|文档|excel|xlsx|表格|markdown|md|pdf|txt|文本)/i,
   );
@@ -68,9 +73,7 @@ function routeExplicitGenerateCommand(value: string): IntentResult | null {
   if (!rawType) return null;
 
   const artifactType =
-    rawType === "ppt" || rawType === "pptx" || rawType === "幻灯片"
-      ? "pptx"
-      : rawType === "html" || rawType === "网页" || rawType === "页面"
+    rawType === "html" || rawType === "网页" || rawType === "页面"
         ? "html"
         : rawType === "word" || rawType === "docx" || rawType === "文档"
           ? "word"
@@ -363,7 +366,16 @@ export default function CommandBar(): JSX.Element {
     });
     setBusy(true);
     try {
-      const r = routeExplicitGenerateCommand(value) ?? (await routeIntent(value, currentMeetingId));
+      const availableContext = [
+        currentMeeting
+          ? `当前会话：${meetingDisplayTitle(currentMeeting, "未命名会话")}`
+          : null,
+        ...pendingDocs.map((doc) => `可用资料：${doc.filename}`),
+        activePrefillMeta?.todo_id ? `当前待办：${activePrefillMeta.todo_id}` : null,
+      ].filter((item): item is string => Boolean(item));
+      const r =
+        routeExplicitGenerateCommand(value) ??
+        (await routeIntent(value, currentMeetingId, availableContext));
       if (!isCurrent(originGeneration)) return;
       await dispatch(r, value, activePrefillMeta, originGeneration, messageId);
       if (!isCurrent(originGeneration)) return;
@@ -426,6 +438,22 @@ export default function CommandBar(): JSX.Element {
       case "generate_txt": {
         const kind = (r.params.artifact_type as string | undefined) ?? "html";
         const brief = (r.params.brief as string | undefined) ?? originalText;
+        const pptGate = resolvePptPlanGate(r);
+        if (pptGate && !pptGate.allowArtifact) {
+          applyEvent({
+            type: "chat.done",
+            seq: 0,
+            ts: new Date(Date.now() + 1).toISOString(),
+            meeting_id: interactionMeetingId,
+            payload: { question: originalText, answer: pptGate.message },
+          });
+          if (pptGate.failed) {
+            message.error("PPT 需求规划失败，请稍后重试");
+          } else {
+            message.info("请补充信息后再生成 PPT");
+          }
+          return;
+        }
         if (!brief) {
           message.warning("请先描述想生成的内容");
           return;
@@ -443,6 +471,7 @@ export default function CommandBar(): JSX.Element {
         message.info(`正在整理资料并${kindLabel[r.kind]}`);
         // 异步触发，结果通过 WS artifact.ready event 反馈到 store
         // 不 await，避免 busy/textarea 在 60-180s LLM 链路上一直锁住
+        const intentPlan = pptGate?.serializedPlan ?? null;
         void generateArtifact({
           artifact_type: kind as
             | "html"
@@ -458,6 +487,7 @@ export default function CommandBar(): JSX.Element {
             "本地知识库优先；联网搜索只用于补充最新信息、市场信息或知识库缺口。",
             "不要生成泛化模板；每一页/每一节都要尽量落到检索材料里的具体事实。",
             "如果证据不足，请在产物中明确标注“资料不足/待补充”，不要凭空编造。",
+            ...(intentPlan ? [`已验证的 intent plan：${intentPlan}`] : []),
             `用户原始需求：${originalText}`,
           ].join("\n"),
           meeting_id: meta?.meeting_id ?? currentMeetingId ?? undefined,

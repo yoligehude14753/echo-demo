@@ -47,4 +47,5 @@ async def route(
         router=intent_router,
         text=body.text,
         current_meeting_id=body.current_meeting_id,
+        available_context=body.available_context,
     )

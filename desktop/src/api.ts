@@ -1268,6 +1268,7 @@ export async function bootstrapBase(): Promise<void> {
 export async function routeIntent(
   text: string,
   currentMeetingId: string | null,
+  availableContext: string[] = [],
 ): Promise<IntentResult> {
   const u = await apiUrl("/intent/route");
   const r = await fetch(u, {
@@ -1276,6 +1277,7 @@ export async function routeIntent(
     body: JSON.stringify({
       text,
       current_meeting_id: currentMeetingId ?? undefined,
+      available_context: availableContext,
     }),
   });
   return asJson<IntentResult>(r);
