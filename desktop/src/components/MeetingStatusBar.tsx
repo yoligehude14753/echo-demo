@@ -18,6 +18,7 @@ import {
 } from "@/capture/captureControl";
 import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 import { captureDeviceId } from "@/capture/captureDeviceIdentity";
+import { currentSessionDeviceId } from "@/session";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { EchoEvent, MeetingStateSnapshot } from "@/types";
@@ -208,7 +209,10 @@ export default function MeetingStatusBar(): JSX.Element {
     async (startFormalAfterSelection: boolean): Promise<boolean> => {
       const snapshot = await getCaptureDevices();
       const localDeviceId = captureDeviceId();
-      const plan = planFreeCaptureSelection(snapshot.devices, localDeviceId);
+      const plan = planFreeCaptureSelection(snapshot.devices, {
+        sessionDeviceId: currentSessionDeviceId(),
+        localDeviceId,
+      });
       if (plan.kind === "choose") {
         const onlineDevices = plan.devices;
         const initialSelection = snapshot.control.selectedDeviceIds.filter((id) =>
@@ -230,8 +234,8 @@ export default function MeetingStatusBar(): JSX.Element {
         setCapturePickerOpen(true);
         return false;
       }
-      if (plan.kind === "local_unavailable") {
-        message.warning("未检测到本机可用收音设备，请检查设备连接后重试");
+      if (plan.kind === "identity_mismatch") {
+        message.error("本机会话身份不可用，未授权收音设备");
         return false;
       }
       const control = await updateCaptureControl({

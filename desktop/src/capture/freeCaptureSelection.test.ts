@@ -12,24 +12,48 @@ const local = {
 };
 
 test("free capture automatically claims the sole local online device", () => {
-  assert.deepEqual(planFreeCaptureSelection([local], local.deviceId), {
+  assert.deepEqual(planFreeCaptureSelection([local], {
+    sessionDeviceId: local.deviceId,
+    localDeviceId: local.deviceId,
+  }), {
     kind: "auto_single",
     deviceId: local.deviceId,
   });
 });
 
-test("free capture requires an explicit choice when multiple devices are online", () => {
-  const plan = planFreeCaptureSelection(
-    [local, { ...local, deviceId: "device-room", deviceName: "会议室 Mac" }],
-    local.deviceId,
-  );
-  assert.equal(plan.kind, "choose");
-  if (plan.kind === "choose") assert.equal(plan.devices.length, 2);
+test("an unpaired authenticated self is selected when the remote list is empty", () => {
+  assert.deepEqual(planFreeCaptureSelection([], {
+    sessionDeviceId: local.deviceId,
+    localDeviceId: local.deviceId,
+  }), {
+    kind: "auto_single",
+    deviceId: local.deviceId,
+  });
 });
 
-test("free capture never claims an unavailable local device", () => {
+test("paired remote candidates require an explicit choice instead of silent multi-capture", () => {
+  const plan = planFreeCaptureSelection(
+    [{ ...local, deviceId: "device-room", deviceName: "会议室 Mac" }],
+    {
+      sessionDeviceId: local.deviceId,
+      localDeviceId: local.deviceId,
+    },
+  );
+  assert.equal(plan.kind, "choose");
+  if (plan.kind === "choose") {
+    assert.deepEqual(plan.devices.map((device) => device.deviceId), [
+      local.deviceId,
+      "device-room",
+    ]);
+  }
+});
+
+test("a renderer device id that differs from the session principal never becomes an owner", () => {
   assert.deepEqual(
-    planFreeCaptureSelection([], local.deviceId),
-    { kind: "local_unavailable" },
+    planFreeCaptureSelection([], {
+      sessionDeviceId: "device-session",
+      localDeviceId: local.deviceId,
+    }),
+    { kind: "identity_mismatch" },
   );
 });

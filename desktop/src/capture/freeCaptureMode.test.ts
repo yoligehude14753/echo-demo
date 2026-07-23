@@ -49,15 +49,15 @@ test("pause, selection and offline states are explicit", () => {
   );
 });
 
-test("missing microphone permission is explicit and exposes the system-settings entry", () => {
-  assert.equal(
-    deriveCaptureRuntimeState({
-      ...base,
-      captureState: "error",
-      errorMessage: "NotAllowedError: Permission denied",
-    }),
-    "permission_required",
-  );
+test("missing microphone permission fails closed without claiming a formal recording", () => {
+  const runtimeState = deriveCaptureRuntimeState({
+    ...base,
+    captureState: "error",
+    errorMessage: "NotAllowedError: Permission denied",
+    formalMeetingId: "m-formal",
+  });
+  assert.equal(runtimeState, "permission_required");
+  assert.notEqual(runtimeState, "formal_recording");
   const status = readFileSync(
     new URL("../components/CaptureStatus.tsx", import.meta.url),
     "utf8",
