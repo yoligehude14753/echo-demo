@@ -211,11 +211,12 @@ function principalModeFor(runtimeMode, env) {
     fail("conflicting_principal_mode", "legacy local and public switches conflict");
   }
   if (runtimeMode === "release") {
-    // Installed Preview is local-first: the supervisor must start the bundled
-    // backend, which owns the fused worker runtime.  Remote service remains an
-    // explicit opt-in so a stale/demo environment cannot silently bypass it.
+    // A release build is a public client unless an operator explicitly selects
+    // the offline/local runtime.  Never make a public transport failure select
+    // a bundled backend: that would change the principal, capture, STT and
+    // worker authority without user intent.
     if (explicit) return { mode: explicit, source: "explicit-principal-mode" };
-    return { mode: "local", source: "release-default-local" };
+    return { mode: "public", source: "release-default-public" };
   }
   if (explicit) return { mode: explicit, source: "explicit-principal-mode" };
   if (legacyLocal) return { mode: "local", source: "legacy-force-local" };
@@ -255,34 +256,38 @@ function resolveBackendEndpoint(config, env = process.env, options = {}) {
   const publicBase = normalizePublicServiceBase(
     runtimeMode === "release" ? roles.publicBase : env.ECHO_PUBLIC_BACKEND_BASE || roles.publicBase,
   );
-  const localBase = localEndpointFor(roles, runtimeMode, env);
-  const parsedLocal = new URL(localBase);
-  const localHost = parsedLocal.hostname.replace(/^\[|\]$/g, "");
-  const port = Number(parsedLocal.port || 80);
-  const lanShareEnabled = runtimeMode !== "release" && config.lanShare?.enabled === true;
-  const configuredLanBindHost = requireString(
-    config.lanShare?.bindHost,
-    "lanShare.bindHost",
-  );
+  const isPublic = principal.mode === "public";
+  // Do not even derive a loopback endpoint for a public release.  Keeping it
+  // absent makes accidental fallback impossible for backend/STT/LLM/worker
+  // traffic, all of which are routed through backendBase.
+  const localBase = isPublic ? null : localEndpointFor(roles, runtimeMode, env);
+  const parsedLocal = localBase ? new URL(localBase) : null;
+  const localHost = parsedLocal
+    ? parsedLocal.hostname.replace(/^\[|\]$/g, "")
+    : null;
+  const port = parsedLocal ? Number(parsedLocal.port || 80) : null;
+  const lanShareEnabled = !isPublic && runtimeMode !== "release" && config.lanShare?.enabled === true;
+  const configuredLanBindHost = !isPublic
+    ? requireString(config.lanShare?.bindHost, "lanShare.bindHost")
+    : null;
   if (lanShareEnabled && isLoopbackHost(configuredLanBindHost)) {
     fail("invalid_lan_bind_host", "enabled LAN sharing requires a non-loopback bind host");
   }
-  const defaultBindHost = lanShareEnabled ? configuredLanBindHost : localHost;
-  const bindHost = requireString(
-    runtimeMode === "release"
-      ? localHost
-      : env.ECHO_BACKEND_BIND_HOST || defaultBindHost,
-    "effective bind host",
-  );
-  const bindScope = isLoopbackHost(bindHost) ? "local" : "lan";
-  const isPublic = principal.mode === "public";
+  const defaultBindHost = !isPublic
+    ? (lanShareEnabled ? configuredLanBindHost : localHost)
+    : null;
+  const bindHost = !isPublic
+    ? requireString(
+      runtimeMode === "release"
+        ? localHost
+        : env.ECHO_BACKEND_BIND_HOST || defaultBindHost,
+      "effective bind host",
+    )
+    : null;
+  const bindScope = bindHost ? (isLoopbackHost(bindHost) ? "local" : "lan") : null;
   const endpointSource = isPublic
     ? runtimeMode === "release"
-      ? principal.source === "explicit-principal-mode"
-        ? "explicit-principal-mode"
-        : roles.legacy
-          ? "release-legacy-public"
-          : "release-config"
+      ? principal.source
       : env.ECHO_PUBLIC_BACKEND_BASE
         ? "explicit-public-endpoint"
         : principal.source
@@ -305,7 +310,7 @@ function resolveBackendEndpoint(config, env = process.env, options = {}) {
     publicBase,
     publicServiceEndpoint: publicBase,
     pairedHubSyncGatewayEndpoint: null,
-    localDevDiagnosticEndpoint: runtimeMode === "release" && isPublic ? null : localBase,
+    localDevDiagnosticEndpoint: isPublic ? null : localBase,
     backendBase: isPublic ? publicBase : localBase,
     bindHost,
     bindScope,

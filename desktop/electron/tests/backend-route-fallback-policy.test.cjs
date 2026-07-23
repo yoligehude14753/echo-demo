@@ -45,6 +45,26 @@ test("public service is the only non-supervised backend route", () => {
   assert.doesNotMatch(lifecycle, /externalMode|externalBackend|startExternal|stopExternal/);
   assert.match(main, /if \(PUBLIC_DEMO_MODE\) \{/);
   assert.match(main, /connecting to public service/);
+  assert.match(main, /probePublicBackendContract\(BACKEND_HOST\)/);
+  assert.match(main, /ensurePublicSessionInMain\(\)/);
+  assert.doesNotMatch(
+    main
+      .split("function attachPublicBackend()", 2)[1]
+      .split("// ---------- 进程生命周期 ----------", 2)[0],
+    /spawnBackendAndWatch|bundledBackendExecutable|resolvePython/,
+  );
+});
+
+test("release public routing cannot retain a loopback endpoint or spawn permission", () => {
+  const endpoint = require("../backend-endpoint.cjs");
+  const config = require(path.resolve(__dirname, "../../backend.config.json"));
+  const runtime = endpoint.resolveBackendEndpoint(config, {});
+  assert.equal(runtime.mode, "public");
+  assert.equal(runtime.backendBase, config.roles.publicService.baseUrl);
+  assert.equal(runtime.spawnBackend, false);
+  assert.equal(runtime.localBase, null);
+  assert.equal(runtime.localDevDiagnosticEndpoint, null);
+  assert.equal(runtime.bindHost, null);
 });
 
 test("mobile route cannot fall back to a relative WebView proxy", () => {

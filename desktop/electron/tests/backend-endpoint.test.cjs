@@ -110,20 +110,23 @@ test("public mode and its custom host are authoritative for every URL", () => {
   );
 });
 
-test("packaged release defaults to the bundled local backend and ignores stale public env overrides", () => {
+test("packaged release defaults to the canonical public service without a local fallback", () => {
   const runtime = resolveBackendEndpoint(config, {
-    ECHO_PUBLIC_DEMO: "1",
     ECHO_BACKEND_PORT: "19001",
     ECHO_PUBLIC_BACKEND_BASE: "https://stale.example.test",
   });
 
   assert.equal(runtime.runtimeMode, "release");
-  assert.equal(runtime.mode, "local");
-  assert.equal(runtime.role, "local_dev_diagnostic");
-  assert.equal(runtime.source, "release-default-local");
-  assert.equal(runtime.backendBase, "http://127.0.0.1:8769");
-  assert.equal(runtime.spawnBackend, true);
-  assert.equal(runtime.localDevDiagnosticEndpoint, "http://127.0.0.1:8769");
+  assert.equal(runtime.mode, "public");
+  assert.equal(runtime.role, "public_service");
+  assert.equal(runtime.source, "release-default-public");
+  assert.equal(runtime.backendBase, config.roles.publicService.baseUrl);
+  assert.equal(runtime.spawnBackend, false);
+  assert.equal(runtime.localBase, null);
+  assert.equal(runtime.localDevDiagnosticEndpoint, null);
+  assert.equal(runtime.localHost, null);
+  assert.equal(runtime.port, null);
+  assert.equal(runtime.bindHost, null);
 });
 
 test("packaged release keeps remote service as an explicit opt-in", () => {
@@ -140,16 +143,16 @@ test("packaged release keeps remote service as an explicit opt-in", () => {
   assert.equal(runtime.localDevDiagnosticEndpoint, null);
 });
 
-test("legacy v1 packaged config defaults to its bundled local backend", () => {
+test("legacy v1 packaged config also defaults to its public service", () => {
   const runtime = resolveBackendEndpoint(legacyConfig, {});
 
   assert.equal(runtime.schemaVersion, 1);
   assert.equal(runtime.runtimeMode, "release");
-  assert.equal(runtime.role, "local_dev_diagnostic");
-  assert.equal(runtime.source, "release-default-local");
-  assert.equal(runtime.backendBase, "http://127.0.0.1:8769");
-  assert.equal(runtime.spawnBackend, true);
-  assert.equal(runtime.localDevDiagnosticEndpoint, "http://127.0.0.1:8769");
+  assert.equal(runtime.role, "public_service");
+  assert.equal(runtime.source, "release-default-public");
+  assert.equal(runtime.backendBase, "https://legacy.example.test");
+  assert.equal(runtime.spawnBackend, false);
+  assert.equal(runtime.localDevDiagnosticEndpoint, null);
 });
 
 test("legacy v1 local config is available only in explicit development", () => {

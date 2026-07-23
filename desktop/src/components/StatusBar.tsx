@@ -77,7 +77,7 @@ function isProbeResult(probeValue: ProbeResultDTO | undefined): probeValue is Pr
 
 function levelFromSupervisor(s: SupervisorStatus, healthzOk: boolean): Level {
   if (s.state === "ready" || s.state === "external") return healthzOk ? "ok" : "warn";
-  if (s.state === "starting" || s.state === "restarting") return "warn";
+  if (s.state === "starting" || s.state === "connecting" || s.state === "restarting") return "warn";
   if (
     s.state === "degraded" ||
     s.state === "python-not-found" ||
@@ -268,6 +268,7 @@ function BackendPopover({
     ready: "正常运行",
     external: "已连接",
     starting: "正在启动",
+    connecting: "正在连接公共服务",
     restarting: "正在重启",
     degraded: "部分可用",
     "python-not-found": "运行环境缺失",
@@ -330,7 +331,8 @@ function BackendPopover({
       )}
       {supervisor.reason && isFailState && (
         <div className="text-ink-500 text-[11px] mt-1">
-          后台服务未能正常启动，可尝试下方的重启操作。
+          {supervisor.reason}
+          {supervisor.backoff_ms ? " 正在自动重试。" : ""}
         </div>
       )}
       {isFailState && (
@@ -568,6 +570,7 @@ export default function StatusBar({
     ready: "ok",
     external: "外部",
     starting: "启动中",
+    connecting: "连接中",
     restarting: `重启 ${supervisor.attempt ?? 1}/3`,
     degraded: "降级",
     "python-not-found": "无 Python",

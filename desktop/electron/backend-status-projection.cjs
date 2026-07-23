@@ -2,6 +2,7 @@
 
 const RENDERER_BACKEND_STATES = new Set([
   "starting",
+  "connecting",
   "ready",
   "restarting",
   "degraded",
@@ -21,6 +22,10 @@ const SAFE_REASON_TEXT = Object.freeze({
   "backend-spawn-failed": "backend process failed to start",
   "backend-unavailable": "backend service is unavailable",
   "external-backend-unhealthy": "external backend is unhealthy",
+  "public-bootstrap-unreachable": "public service bootstrap is unreachable; retrying",
+  "public-bootstrap-timeout": "public service bootstrap timed out; retrying",
+  "public-bootstrap-rejected": "public service bootstrap contract was rejected; retrying",
+  "public-session-unavailable": "public service session is unavailable; retrying",
 });
 
 function stableReasonCode(payload) {
@@ -29,6 +34,7 @@ function stableReasonCode(payload) {
     return "backend-contract-mismatch";
   }
   if (reason === "external backend unhealthy") return "external-backend-unhealthy";
+  if (Object.hasOwn(SAFE_REASON_TEXT, reason)) return reason;
   if (/^spawn\b/i.test(reason)) return "backend-spawn-failed";
   if (/^child exited\b/i.test(reason)) return "backend-process-exited";
   if (/healthz|startup timeout/i.test(reason)) return "backend-health-failed";
@@ -55,7 +61,7 @@ function projectBackendStatusForRenderer(payload) {
   if (attempt !== undefined) projected.attempt = attempt;
   if (attempts !== undefined) projected.attempts = attempts;
   if (backoffMs !== undefined) projected.backoff_ms = backoffMs;
-  if (payload?.mode === "public-demo" || payload?.mode === "external") {
+  if (payload?.mode === "public-service" || payload?.mode === "public-demo" || payload?.mode === "external") {
     projected.mode = payload.mode;
   }
   if (payload?.help_url === "docs/INSTALL.md") {

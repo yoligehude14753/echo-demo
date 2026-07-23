@@ -93,6 +93,7 @@ const {
   BackendContractError,
   expectedBackendContract,
   probeBackendContract,
+  probePublicBackendContract,
 } = require("./backend-contract.cjs");
 const { resolveDesktopProductVersion } = require("./product-version.cjs");
 const { createModelRuntimeIpcSurface } = require("./model-runtime-contract.cjs");
@@ -146,8 +147,8 @@ const PUBLIC_DEMO_MODE = BACKEND_ENDPOINT.mode === "public";
 const BACKEND_HOST = BACKEND_ENDPOINT.backendBase;
 const BACKEND_BIND_HOST = BACKEND_ENDPOINT.bindHost;
 
-// Installed Preview defaults to the supervised bundled local backend/fused
-// worker. Remote public service is an explicit ECHO_PRINCIPAL_MODE=public opt-in.
+// Release defaults to the public service.  A bundled backend is available only
+// to an explicit local/offline runtime and can never be a public recovery path.
 const SPAWN_BACKEND = BACKEND_ENDPOINT.spawnBackend;
 
 // 注意：dev 模式下 macOS Dock / Cmd+Tab 显示的进程名依赖 brand-dev-electron.cjs 补丁后的
@@ -185,6 +186,8 @@ let quittingForReal = false;
 let expectedLocalBackendContractPromise = null;
 let backendHealthcheckPromise = null;
 let lastBackendContractFailure = null;
+let lastPublicBackendFailure = null;
+let publicBackendRetryAttempts = 0;
 let pythonResolved = null; // { python: string|null, searched: string[] }
 // renderer 启动慢于 backend：early status 缓存到 lastStatus，等 did-finish-load 后 replay
 let lastStatus = null;
@@ -2148,7 +2151,22 @@ function expectedLocalBackendContract() {
 }
 
 async function performBackendHealthcheck() {
-  if (PUBLIC_DEMO_MODE) return healthzOnce();
+  if (PUBLIC_DEMO_MODE) {
+    try {
+      await probePublicBackendContract(BACKEND_HOST);
+      await ensurePublicSessionInMain();
+      lastPublicBackendFailure = null;
+      return true;
+    } catch (error) {
+      const code = error instanceof BackendContractError ? error.code : String(error?.code || "");
+      if (code === "bootstrap-unreachable") lastPublicBackendFailure = "public-bootstrap-unreachable";
+      else if (code === "bootstrap-timeout") lastPublicBackendFailure = "public-bootstrap-timeout";
+      else if (code.startsWith("bootstrap-") || code.startsWith("public-")) lastPublicBackendFailure = "public-bootstrap-rejected";
+      else lastPublicBackendFailure = "public-session-unavailable";
+      log(`[backend] public route probe rejected [${lastPublicBackendFailure}]`);
+      return false;
+    }
+  }
   try {
     const expected = await expectedLocalBackendContract();
     await probeBackendContract(BACKEND_HOST, expected);
@@ -2165,6 +2183,17 @@ async function performBackendHealthcheck() {
     lastBackendContractFailure = failure;
     return false;
   }
+}
+
+function emitPublicBackendUnavailable() {
+  publicBackendRetryAttempts = Math.min(publicBackendRetryAttempts + 1, 100);
+  emitStatus({
+    state: "degraded",
+    mode: "public-service",
+    attempt: publicBackendRetryAttempts,
+    backoff_ms: HEALTH_INTERVAL_MS,
+    reason: lastPublicBackendFailure || "public-session-unavailable",
+  });
 }
 
 function healthcheckOnce() {
@@ -2282,15 +2311,11 @@ function startPublicBackendHealthWatcher() {
     if (shuttingDown) return;
     const ok = await healthcheckOnce();
     if (ok) {
+      publicBackendRetryAttempts = 0;
       emitStatus({ state: "ready", mode: "public-service" });
       return;
     }
-    emitStatus({
-      state: "degraded",
-      reason: "public backend unhealthy",
-      attempts: 0,
-      last_error: "healthz failed",
-    });
+    emitPublicBackendUnavailable();
   }, HEALTH_INTERVAL_MS);
 }
 
@@ -2299,14 +2324,10 @@ function attachPublicBackend() {
   void healthcheckOnce().then((ok) => {
     if (shuttingDown || !PUBLIC_DEMO_MODE) return;
     if (ok) {
+      publicBackendRetryAttempts = 0;
       emitStatus({ state: "ready", mode: "public-service" });
     } else {
-      emitStatus({
-        state: "degraded",
-        reason: "public backend unhealthy",
-        attempts: 0,
-        last_error: "healthz failed",
-      });
+      emitPublicBackendUnavailable();
     }
     startPublicBackendHealthWatcher();
   });

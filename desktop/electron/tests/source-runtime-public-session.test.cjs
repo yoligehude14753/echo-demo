@@ -41,6 +41,8 @@ test("source public Electron keeps ephemeral identity and proxy boundaries expli
   const session = fs.readFileSync(path.join(desktopRoot, "src/session.ts"), "utf8");
   assert.match(main, /app\.setName\("EchoDesk"\)/);
   assert.match(main, /createEphemeralPublicSessionManager/);
+  assert.match(main, /probePublicBackendContract\(BACKEND_HOST\)/);
+  assert.match(main, /ensurePublicSessionInMain\(\)/);
   assert.doesNotMatch(main, /safeStorage|createCredentialVault|credentialVault\(/);
   assert.doesNotMatch(main, /public-device-credential\.bin/);
   assert.doesNotMatch(publicSession, /createEphemeralPublicSessionManager\([\s\S]*?(?:node:fs|writeFile|mkdirSync|safeStorage|vault\.)/);

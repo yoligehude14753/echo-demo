@@ -223,9 +223,38 @@ function validateBackendContract(bootstrap, expected) {
   return actual;
 }
 
+// Public services deliberately do not expose the local build contract.  Their
+// bootstrap response is instead the stable transport/session admission
+// contract that every public capture, STT, LLM and worker request depends on.
+function validatePublicBackendContract(bootstrap) {
+  if (!bootstrap || typeof bootstrap !== "object") {
+    throw new BackendContractError("public-bootstrap-shape-mismatch");
+  }
+  if (
+    bootstrap.schema_version !== BOOTSTRAP_SCHEMA_VERSION ||
+    bootstrap.api_version !== BOOTSTRAP_API_VERSION
+  ) {
+    throw new BackendContractError("public-api-version-mismatch");
+  }
+  if (
+    bootstrap.session_required !== true ||
+    bootstrap.ws_path !== "/ws/echo" ||
+    bootstrap.session_path !== "/session" ||
+    typeof bootstrap.minimum_client_version !== "string" ||
+    !bootstrap.minimum_client_version.trim()
+  ) {
+    throw new BackendContractError("public-session-contract-mismatch");
+  }
+  return bootstrap;
+}
+
 async function probeBackendContract(baseUrl, expected, options) {
   const bootstrap = await readBootstrap(baseUrl, options);
   return validateBackendContract(bootstrap, expected);
+}
+
+async function probePublicBackendContract(baseUrl, options) {
+  return validatePublicBackendContract(await readBootstrap(baseUrl, options));
 }
 
 module.exports = {
@@ -236,7 +265,9 @@ module.exports = {
   REQUIRED_LOCAL_CAPABILITIES,
   expectedBackendContract,
   probeBackendContract,
+  probePublicBackendContract,
   readBootstrap,
   sourceTreeBuildId,
+  validatePublicBackendContract,
   validateBackendContract,
 };

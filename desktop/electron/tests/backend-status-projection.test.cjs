@@ -39,6 +39,27 @@ test("bundled backend failure is a first-class renderer status", () => {
   );
 });
 
+test("public bootstrap and session failures remain visible without endpoint details", () => {
+  assert.deepEqual(
+    projectBackendStatusForRenderer({
+      state: "degraded",
+      mode: "public-service",
+      attempt: 2,
+      backoff_ms: 2_000,
+      reason: "public-bootstrap-unreachable",
+      last_error: "ECONNREFUSED https://private.example.test/bootstrap",
+    }),
+    {
+      state: "degraded",
+      mode: "public-service",
+      attempt: 2,
+      backoff_ms: 2_000,
+      reason_code: "public-bootstrap-unreachable",
+      reason: "public service bootstrap is unreachable; retrying",
+    },
+  );
+});
+
 test("unknown status fields fail closed", () => {
   assert.deepEqual(
     projectBackendStatusForRenderer({

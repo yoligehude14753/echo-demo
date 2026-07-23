@@ -21,6 +21,7 @@ import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 
 export type SupervisorState =
   | "starting"
+  | "connecting"
   | "ready"
   | "restarting"
   | "degraded"
