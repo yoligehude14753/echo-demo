@@ -111,6 +111,12 @@ trap cleanup EXIT HUP INT TERM
 
 /bin/mkdir -p -- "${PAYLOAD_DIR}"
 /usr/bin/ditto -- "${APP_PATH}" "${PAYLOAD_BUNDLE}"
+
+# The bootstrap ZIP is a user-deliverable preview artifact.  Final ad-hoc
+# signing and strict verification must happen on its payload before it is
+# archived; do not rely on the installer to repair an already-archived App.
+"${NODE_BIN}" "${SCRIPT_DIR}/mac-bundle-sign.cjs" "${PAYLOAD_BUNDLE}"
+
 /bin/cp -- "${INSTALLER_TEMPLATE}" "${PACKAGE_ROOT}/Install EchoDesk Preview.command"
 /bin/chmod 0755 "${PACKAGE_ROOT}/Install EchoDesk Preview.command"
 

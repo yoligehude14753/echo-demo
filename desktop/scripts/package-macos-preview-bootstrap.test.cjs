@@ -39,8 +39,27 @@ test("packager emits a unique bound archive without tracked product bytes", () =
   const app = path.join(root, "Fixture.app");
   const output = path.join(root, "output");
   const contents = path.join(app, "Contents");
-  fs.mkdirSync(contents, { recursive: true });
-  fs.writeFileSync(path.join(contents, "fixture.txt"), "fixture-only\n");
+  const resources = path.join(contents, "Resources");
+  const executable = path.join(contents, "MacOS", "EchoDesk");
+  fs.mkdirSync(path.join(resources, "backend"), { recursive: true });
+  fs.mkdirSync(path.join(resources, "agent-runtime"), { recursive: true });
+  fs.mkdirSync(path.dirname(executable), { recursive: true });
+  fs.writeFileSync(
+    path.join(contents, "Info.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>EchoDesk</string>
+  <key>CFBundleIdentifier</key><string>com.echodesk.fixture</string>
+  <key>CFBundleName</key><string>EchoDesk</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>
+`,
+  );
+  fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(resources, "app.asar"), "fixture-only\n");
+  fs.writeFileSync(path.join(resources, "backend", "echodesk-backend"), "fixture-only\n");
+  fs.writeFileSync(path.join(resources, "agent-runtime", "worker.mjs"), "fixture-only\n");
 
   try {
     const stdout = execFileSync(
@@ -99,4 +118,14 @@ test("packager emits a unique bound archive without tracked product bytes", () =
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("bootstrap final-signs its copied payload before it creates the ZIP", () => {
+  const source = fs.readFileSync(packager, "utf8");
+  const signIndex = source.indexOf('mac-bundle-sign.cjs" "${PAYLOAD_BUNDLE}');
+  const archiveIndex = source.indexOf('/usr/bin/ditto -c -k --sequesterRsrc --keepParent');
+
+  assert.ok(signIndex >= 0, "bootstrap payload must use the final bundle signer");
+  assert.ok(archiveIndex >= 0, "bootstrap must create its ZIP with ditto");
+  assert.ok(signIndex < archiveIndex, "bootstrap must sign before it archives");
 });

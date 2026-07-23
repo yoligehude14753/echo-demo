@@ -676,7 +676,10 @@ test("PowerShell verifier and CI encode an honest signing contract", () => {
     pkg.scripts["app:dist:win"],
     "node scripts/desktop-release-signing.cjs windows",
   );
-  assert.match(pkg.scripts["app:dist:mac:adhoc-test"], /ECHODESK_ADHOC_SIGN=1/);
+  assert.equal(
+    pkg.scripts["app:dist:mac:adhoc-test"],
+    "node scripts/package-macos-adhoc-preview.cjs",
+  );
   assert.match(
     pkg.scripts["app:dist:win:unsigned-test"],
     /CSC_IDENTITY_AUTO_DISCOVERY=false/,

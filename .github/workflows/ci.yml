@@ -597,7 +597,7 @@ jobs:
           retention-days: 14
 
   desktop-packaged-smoke:
-    name: desktop / arm64 bundled-backend read-only DMG smoke
+    name: desktop / arm64 bundled-backend signed ad-hoc preview ZIP
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos' }}
     runs-on: macos-latest
     permissions:
@@ -627,10 +627,10 @@ jobs:
           pip install --require-hashes -r backend/packaging/requirements-build.lock
           npm ci --prefix backend/app/adapters/skill/assets/ppt_ib_deck
           python -c 'import platform, PyInstaller; assert platform.machine() == "arm64"; print(PyInstaller.__version__)'
-      - name: build arm64 backend first, then development ad-hoc DMG and zip (never publish)
+      - name: build arm64 backend, final-sign App, then archive development ZIP (never publish)
         working-directory: desktop
         run: ECHODESK_BACKEND_PYTHON="$(command -v python)" npm run app:dist:mac:adhoc-test
-      - name: verify bundled backend and release artifacts
+      - name: verify bundled backend and signed preview archive
         run: |
           version="$(node -p "require('./desktop/package.json').version")"
           backend="desktop/release/mac-arm64/EchoDesk.app/Contents/Resources/backend/echodesk-backend"
@@ -639,32 +639,24 @@ jobs:
           file backend/dist/echodesk-backend | grep -F "arm64"
           file "$backend" | grep -F "arm64"
           codesign --verify --deep --strict --verbose=2 desktop/release/mac-arm64/EchoDesk.app
-          test -f "desktop/release/EchoDesk-${version}-arm64.dmg"
-          test -f "desktop/release/EchoDesk-${version}-arm64-mac.zip"
-          node desktop/scripts/verify-release-update-metadata.cjs mac
-      - name: mounted read-only DMG + actual bundled backend smoke
-        working-directory: desktop
-        run: |
-          set -o pipefail
-          mkdir -p "$RUNNER_TEMP/echodesk-macos-smoke-evidence"
-          npm run smoke:mac:dmg 2>&1 \
-            | tee "$RUNNER_TEMP/echodesk-macos-smoke-evidence/dmg-smoke.log"
+          archive="desktop/release/adhoc/EchoDesk-${version}-arm64-adhoc-preview.zip"
+          test -s "$archive"
+          unzip -t "$archive"
+          unzip -l "$archive" | grep -F 'EchoDesk.app/Contents/'
       - name: generate macOS checksums and CycloneDX SBOM
         run: |
-          python scripts/generate-release-sbom.py desktop/release/EchoDesk-SBOM.cdx.json
-          cd desktop/release
-          version="$(node -p "require('../package.json').version")"
+          python scripts/generate-release-sbom.py desktop/release/adhoc/EchoDesk-SBOM.cdx.json
+          cd desktop/release/adhoc
+          version="$(node -p "require('../../package.json').version")"
           shasum -a 256 \
-            "EchoDesk-${version}-arm64.dmg" \
-            "EchoDesk-${version}-arm64-mac.zip" \
+            "EchoDesk-${version}-arm64-adhoc-preview.zip" \
             EchoDesk-SBOM.cdx.json > SHA256SUMS-macOS.txt
           shasum -a 256 -c SHA256SUMS-macOS.txt
           expected=(
-            "EchoDesk-${version}-arm64.dmg"
-            "EchoDesk-${version}-arm64-mac.zip"
+            "EchoDesk-${version}-arm64-adhoc-preview.zip"
           )
           candidates=()
-          for file in EchoDesk-*-arm64.dmg EchoDesk-*-arm64-mac.zip; do
+          for file in EchoDesk-*-arm64-adhoc-preview.zip; do
             test -f "${file}" && candidates+=("${file}")
           done
           diff -u \
@@ -675,10 +667,9 @@ jobs:
         with:
           name: echodesk-macos-arm64-adhoc-test
           path: |
-            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64.dmg
-            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64-mac.zip
-            desktop/release/SHA256SUMS-macOS.txt
-            desktop/release/EchoDesk-SBOM.cdx.json
+            desktop/release/adhoc/EchoDesk-${{ env.ECHODESK_VERSION }}-arm64-adhoc-preview.zip
+            desktop/release/adhoc/SHA256SUMS-macOS.txt
+            desktop/release/adhoc/EchoDesk-SBOM.cdx.json
           if-no-files-found: error
           retention-days: 14
       - name: collect macOS smoke failure diagnostics
@@ -686,7 +677,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          evidence="$RUNNER_TEMP/echodesk-macos-smoke-evidence"
+          evidence="$RUNNER_TEMP/echodesk-macos-preview-evidence"
           mkdir -p "$evidence"
           printf 'job=%s\nrun_id=%s\nsha=%s\n' \
             "$GITHUB_JOB" "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$evidence/job-context.txt"
@@ -697,8 +688,8 @@ jobs:
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: echodesk-macos-smoke-failure-${{ github.run_id }}
-          path: ${{ runner.temp }}/echodesk-macos-smoke-evidence
+          name: echodesk-macos-preview-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/echodesk-macos-preview-evidence
           if-no-files-found: error
           retention-days: 14
 
