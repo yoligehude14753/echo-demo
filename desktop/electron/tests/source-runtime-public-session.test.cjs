@@ -77,7 +77,7 @@ test("source Electron accepts only an explicit absolute isolated user-data path"
   const args = electronLaunchArgs({
     ECHODESK_ELECTRON_USER_DATA_DIR: "/tmp/echodesk-source-runtime/user-data",
   });
-  assert.match(args[0], /electron\/main\.cjs$/);
+  assert.match(args[0], /electron[\\/]main\.cjs$/);
   assert.equal(args[1], "--user-data-dir=/tmp/echodesk-source-runtime/user-data");
   assert.throws(
     () => electronLaunchArgs({ ECHODESK_ELECTRON_USER_DATA_DIR: "relative/path" }),

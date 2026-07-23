@@ -248,16 +248,23 @@ jobs:
           diff -u \
             <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
             <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort)
+          cat > UNSIGNED_PREVIEW_NOTES.txt <<EOF
+          STATUS: UNSIGNED PREVIEW / NOT A RELEASE
+          This artifact is only available for preview download and must not be published as a release asset.
+          Source SHA: ${GITHUB_SHA}
+          EOF
           printf 'ECHODESK_VERSION=%s\n' "${version}" >> "${GITHUB_ENV}"
 
       - name: Upload unsigned Windows preview package
+        if: ${{ inputs.publish_release == false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: echodesk-windows-unsigned-preview-${{ github.sha }}
           path: |
-            desktop/release/EchoDesk.Setup.*.exe
-            desktop/release/EchoDesk-*-win-x64.zip
+            desktop/release/EchoDesk.Setup.${{ env.ECHODESK_VERSION }}.exe
+            desktop/release/EchoDesk-${{ env.ECHODESK_VERSION }}-win-x64.zip
             desktop/release/latest.yml
             desktop/release/SHA256SUMS-Windows.txt
+            desktop/release/UNSIGNED_PREVIEW_NOTES.txt
           if-no-files-found: error
           retention-days: 14

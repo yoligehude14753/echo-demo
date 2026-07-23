@@ -696,7 +696,28 @@ test("PowerShell verifier and CI encode an honest signing contract", () => {
     unsignedUploads.length >= 1,
     "unsigned smoke evidence must be retained",
   );
+  const previewUploads = unsignedUploads.filter(
+    (step) =>
+      String(step.with?.name || "") ===
+      "echodesk-windows-unsigned-preview-${{ github.sha }}",
+  );
+  assert.equal(
+    previewUploads.length,
+    1,
+    "exactly one explicitly unsigned preview package may be downloadable",
+  );
+  const previewUpload = previewUploads[0];
+  assert.equal(
+    String(previewUpload.if || ""),
+    "${{ inputs.publish_release == false }}",
+    "unsigned preview package upload must be unreachable from publish_release=true",
+  );
+  assert.match(
+    String(previewUpload.with?.path || ""),
+    /UNSIGNED_PREVIEW_NOTES\.txt/,
+  );
   for (const upload of unsignedUploads) {
+    if (upload === previewUpload) continue;
     assert.doesNotMatch(
       String(upload.with?.path || ""),
       /desktop\/release|EchoDesk\.Setup|win-x64\.zip|latest\.yml|SBOM|SHA256SUMS/,

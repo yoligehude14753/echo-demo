@@ -551,9 +551,18 @@ test("required CI and live workflows encode honest release and network gates", (
   assert.doesNotMatch(live, /\{host\}:\{port\}|\{raw\}|\{address\}|\{exc\}/);
   assert.doesNotMatch(live, /pytest tests -m live/);
   assert.doesNotMatch(windows, /name: echodesk-windows-unsigned-test/);
-  assert.doesNotMatch(
+  assert.match(
     windows,
-    /path:\s*\|[\s\S]*desktop\/release\/EchoDesk\.Setup\.\$\{\{ env\.ECHODESK_VERSION \}\}\.exe/,
+    /name: echodesk-windows-unsigned-preview-\$\{\{ github\.sha \}\}/,
+  );
+  assert.match(windows, /STATUS: UNSIGNED PREVIEW \/ NOT A RELEASE/);
+  assert.match(
+    windows,
+    /if: \$\{\{ inputs\.publish_release == false \}\}[\s\S]*?UNSIGNED_PREVIEW_NOTES\.txt/,
+  );
+  assert.match(
+    windows,
+    /if: \$\{\{ inputs\.publish_release == false \}\}[\s\S]*desktop\/release\/EchoDesk\.Setup\.\$\{\{ env\.ECHODESK_VERSION \}\}\.exe/,
   );
   assert.doesNotMatch(windows, /name: echodesk-windows-release/);
   assert.match(windows, /Refuse unsigned public publishing/);
@@ -1507,18 +1516,18 @@ test("desktop SBOM fails when the frozen PPT runtime lock or a direct component 
   }
 });
 
-test("Electron identity IPC binds every issued session to the credential backend origin", () => {
+test("Electron identity IPC binds every issued session to the public backend origin", () => {
   const main = readFileSync(
     path.join(desktopRoot, "electron", "main.cjs"),
     "utf8",
   );
   assert.match(
     main,
-    /backend_origin:\s*credentialVault\(\)\.backendOrigin/g,
+    /backend_origin:\s*publicSessionOrigin\(\)/g,
   );
   assert.match(
     main,
-    /backendBoundJsonFetch\(\{[\s\S]*backendOrigin: vault\.backendOrigin,[\s\S]*pathname,/,
+    /backendBoundJsonFetch\(\{[\s\S]*backendOrigin: publicSessionOrigin\(\),[\s\S]*pathname,/,
   );
   assert.doesNotMatch(main, /fetch\(new URL\(pathname/);
 });
