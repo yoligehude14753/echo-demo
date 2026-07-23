@@ -3,7 +3,17 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 // @ts-expect-error Node strip-types requires the explicit source extension.
-import { deriveCaptureRuntimeState, resolveFreeCapturePreference } from "./freeCaptureMode.ts";
+import {
+  beginFreeCaptureSetup,
+  currentFreeCaptureSetupSnapshot,
+  deriveCaptureRuntimeState,
+  finishFreeCaptureSetup,
+  onFreeCaptureSetupRequest,
+  requestFreeCaptureSetup,
+  resetFreeCaptureSetupForTest,
+  resolveFreeCapturePreference,
+  retryFreeCaptureSetup,
+} from "./freeCaptureMode.ts";
 
 const base = {
   freeModeEnabled: true,
@@ -79,4 +89,62 @@ test("missing preference defaults on without erasing an explicit pause", () => {
     configured: true,
     enabled: false,
   });
+});
+
+test("a pending setup request is replayed when its listener mounts later", () => {
+  resetFreeCaptureSetupForTest();
+  const requested = requestFreeCaptureSetup("first_run");
+  const received: typeof requested[] = [];
+
+  const off = onFreeCaptureSetupRequest((snapshot) => received.push(snapshot));
+  assert.deepEqual(received, [requested]);
+  assert.equal(beginFreeCaptureSetup(requested.requestId!), true);
+  assert.equal(beginFreeCaptureSetup(requested.requestId!), false);
+  assert.equal(currentFreeCaptureSetupSnapshot().state, "running");
+  off();
+});
+
+test("a session recovery can redeliver setup once and then fails closed", () => {
+  resetFreeCaptureSetupForTest();
+  const received: string[] = [];
+  const off = onFreeCaptureSetupRequest((snapshot) => received.push(snapshot.state));
+  const requested = requestFreeCaptureSetup("first_run");
+  const requestId = requested.requestId!;
+
+  assert.equal(beginFreeCaptureSetup(requestId), true);
+  finishFreeCaptureSetup(requestId, "retryable_failed", "session pending");
+  assert.equal(currentFreeCaptureSetupSnapshot().state, "retryable_failed");
+  assert.equal(retryFreeCaptureSetup(requestId), true);
+  assert.equal(beginFreeCaptureSetup(requestId), true);
+  finishFreeCaptureSetup(requestId, "retryable_failed", "session pending");
+
+  assert.deepEqual(received, ["pending", "pending"]);
+  assert.deepEqual(currentFreeCaptureSetupSnapshot(), {
+    requestId,
+    reason: "first_run",
+    attempt: 1,
+    state: "failed",
+    errorMessage: "session pending",
+  });
+  assert.equal(retryFreeCaptureSetup(requestId), false);
+  off();
+});
+
+test("automatic setup preserves the established control and audio gates", () => {
+  const status = readFileSync(
+    new URL("../components/MeetingStatusBar.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(status, /await ensureServerSession\(\);\s+const result = await prepareCapture/);
+  assert.match(status, /const control = await updateCaptureControl/);
+  assert.match(status, /announceCaptureControl\(control\);/);
+  assert.match(status, /await audioCapture\.waitForFirstFrame\(\);/);
+
+  const android = readFileSync(
+    new URL("./AndroidCaptureSelector.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(android, /beginFreeCaptureSetup\(setup\.requestId\)/);
+  assert.match(android, /authorizeCaptureDevice\(localDeviceId, saved\.revision\)/);
+  assert.match(android, /finishFreeCaptureSetup\(/);
 });

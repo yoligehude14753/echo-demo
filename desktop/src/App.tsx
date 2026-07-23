@@ -78,13 +78,10 @@ export default function App(): JSX.Element {
     if (onboarding.shouldShow) return;
     if (initialFreeCaptureSetupRequested.current) return;
     if (isFreeCapturePreferenceConfigured()) return;
-    // Child selectors subscribe during the same commit. Defer one task so both
-    // Desktop and Android can receive the first-run setup request.
-    const timer = window.setTimeout(() => {
-      initialFreeCaptureSetupRequested.current = true;
-      requestFreeCaptureSetup("first_run");
-    }, 0);
-    return () => window.clearTimeout(timer);
+    // The request is retained until a selector claims it, so mount order cannot
+    // lose the first-run setup signal.
+    initialFreeCaptureSetupRequested.current = true;
+    requestFreeCaptureSetup("first_run");
   }, [onboarding.shouldShow]);
 
   useEffect(() => {

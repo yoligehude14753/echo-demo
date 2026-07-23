@@ -4,6 +4,8 @@ export const FREE_CAPTURE_RUNTIME_EVENT = "echodesk:capture-runtime-state";
 export const FREE_CAPTURE_COMMAND_EVENT = "echodesk:free-capture-command";
 export const FREE_CAPTURE_SETUP_REQUEST_EVENT =
   "echodesk:free-capture-setup-request";
+export const FREE_CAPTURE_SETUP_STATE_EVENT =
+  "echodesk:free-capture-setup-state";
 
 export type CaptureRuntimeState =
   | "off"
@@ -27,6 +29,25 @@ export interface CaptureRuntimeSnapshot {
 
 export type FreeCaptureCommand = "pause" | "resume";
 export type FreeCaptureSetupReason = "first_run" | "formal_meeting";
+
+export type FreeCaptureSetupState =
+  | "idle"
+  | "pending"
+  | "running"
+  | "awaiting_selection"
+  | "succeeded"
+  | "retryable_failed"
+  | "failed";
+
+export interface FreeCaptureSetupSnapshot {
+  requestId: number | null;
+  reason: FreeCaptureSetupReason | null;
+  attempt: number;
+  state: FreeCaptureSetupState;
+  errorMessage: string | null;
+}
+
+const MAX_FREE_CAPTURE_SETUP_ATTEMPTS = 2;
 
 export interface FreeCapturePreference {
   configured: boolean;
@@ -72,6 +93,17 @@ export function deriveCaptureRuntimeState(
 
 let formalMeetingId: string | null = null;
 let latestRuntimeSnapshot: CaptureRuntimeSnapshot | null = null;
+let nextFreeCaptureSetupRequestId = 1;
+let freeCaptureSetupSnapshot: FreeCaptureSetupSnapshot = {
+  requestId: null,
+  reason: null,
+  attempt: 0,
+  state: "idle",
+  errorMessage: null,
+};
+const freeCaptureSetupListeners = new Set<
+  (snapshot: FreeCaptureSetupSnapshot) => void
+>();
 
 function storage(): Storage | null {
   try {
@@ -133,26 +165,122 @@ export function currentCaptureRuntimeSnapshot(): CaptureRuntimeSnapshot | null {
   return latestRuntimeSnapshot;
 }
 
+export function currentFreeCaptureSetupSnapshot(): FreeCaptureSetupSnapshot {
+  return { ...freeCaptureSetupSnapshot };
+}
+
+function publishFreeCaptureSetup(): void {
+  if (typeof document !== "undefined") {
+    document.documentElement.dataset.freeCaptureSetupState =
+      freeCaptureSetupSnapshot.state;
+  }
+  const snapshot = currentFreeCaptureSetupSnapshot();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent<FreeCaptureSetupSnapshot>(FREE_CAPTURE_SETUP_STATE_EVENT, {
+        detail: snapshot,
+      }),
+    );
+    if (snapshot.state === "pending") {
+      window.dispatchEvent(
+        new CustomEvent<FreeCaptureSetupSnapshot>(FREE_CAPTURE_SETUP_REQUEST_EVENT, {
+          detail: snapshot,
+        }),
+      );
+    }
+  }
+  if (snapshot.state === "pending") {
+    for (const listener of freeCaptureSetupListeners) listener(snapshot);
+  }
+}
+
 export function requestFreeCaptureSetup(
   reason: FreeCaptureSetupReason = "first_run",
-): void {
-  window.dispatchEvent(
-    new CustomEvent<FreeCaptureSetupReason>(FREE_CAPTURE_SETUP_REQUEST_EVENT, {
-      detail: reason,
-    }),
-  );
+): FreeCaptureSetupSnapshot {
+  if (
+    freeCaptureSetupSnapshot.state === "pending" ||
+    freeCaptureSetupSnapshot.state === "running" ||
+    freeCaptureSetupSnapshot.state === "awaiting_selection"
+  ) {
+    return currentFreeCaptureSetupSnapshot();
+  }
+  freeCaptureSetupSnapshot = {
+    requestId: nextFreeCaptureSetupRequestId++,
+    reason,
+    attempt: 0,
+    state: "pending",
+    errorMessage: null,
+  };
+  publishFreeCaptureSetup();
+  return currentFreeCaptureSetupSnapshot();
 }
 
 export function onFreeCaptureSetupRequest(
-  listener: (reason: FreeCaptureSetupReason) => void,
+  listener: (snapshot: FreeCaptureSetupSnapshot) => void,
 ): () => void {
-  const handler = (event: Event) => {
-    const reason = (event as CustomEvent<FreeCaptureSetupReason>).detail;
-    listener(reason === "formal_meeting" ? reason : "first_run");
+  freeCaptureSetupListeners.add(listener);
+  if (freeCaptureSetupSnapshot.state === "pending") {
+    listener(currentFreeCaptureSetupSnapshot());
+  }
+  return () => freeCaptureSetupListeners.delete(listener);
+}
+
+export function beginFreeCaptureSetup(requestId: number): boolean {
+  if (
+    freeCaptureSetupSnapshot.requestId !== requestId ||
+    freeCaptureSetupSnapshot.state !== "pending"
+  ) {
+    return false;
+  }
+  freeCaptureSetupSnapshot = { ...freeCaptureSetupSnapshot, state: "running" };
+  publishFreeCaptureSetup();
+  return true;
+}
+
+export function finishFreeCaptureSetup(
+  requestId: number,
+  outcome: "succeeded" | "awaiting_selection" | "retryable_failed" | "failed",
+  errorMessage: string | null = null,
+): void {
+  if (freeCaptureSetupSnapshot.requestId !== requestId) return;
+  const retryable =
+    outcome === "retryable_failed" &&
+    freeCaptureSetupSnapshot.attempt + 1 < MAX_FREE_CAPTURE_SETUP_ATTEMPTS;
+  freeCaptureSetupSnapshot = {
+    ...freeCaptureSetupSnapshot,
+    state: retryable ? "retryable_failed" : outcome === "retryable_failed" ? "failed" : outcome,
+    errorMessage,
   };
-  window.addEventListener(FREE_CAPTURE_SETUP_REQUEST_EVENT, handler);
-  return () =>
-    window.removeEventListener(FREE_CAPTURE_SETUP_REQUEST_EVENT, handler);
+  publishFreeCaptureSetup();
+}
+
+export function retryFreeCaptureSetup(requestId: number): boolean {
+  if (
+    freeCaptureSetupSnapshot.requestId !== requestId ||
+    freeCaptureSetupSnapshot.state !== "retryable_failed"
+  ) {
+    return false;
+  }
+  freeCaptureSetupSnapshot = {
+    ...freeCaptureSetupSnapshot,
+    attempt: freeCaptureSetupSnapshot.attempt + 1,
+    state: "pending",
+    errorMessage: null,
+  };
+  publishFreeCaptureSetup();
+  return true;
+}
+
+export function resetFreeCaptureSetupForTest(): void {
+  nextFreeCaptureSetupRequestId = 1;
+  freeCaptureSetupSnapshot = {
+    requestId: null,
+    reason: null,
+    attempt: 0,
+    state: "idle",
+    errorMessage: null,
+  };
+  freeCaptureSetupListeners.clear();
 }
 
 export function installFreeCaptureCommandBridge(): () => void {

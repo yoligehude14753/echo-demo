@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components -- selection helpers are shared with capture contract tests */
 import { Button, Checkbox, Modal, Radio, message } from "antd";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { isNativeMobile } from "@/runtime";
 import { captureDeviceId } from "@/capture/captureDeviceIdentity";
 import {
@@ -18,10 +18,13 @@ import {
 } from "@/capture/mobileCaptureApi";
 import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 import {
+  beginFreeCaptureSetup,
+  finishFreeCaptureSetup,
   isFreeCaptureEnabled,
   isFreeCapturePreferenceConfigured,
   onFreeCaptureSetupRequest,
   setFreeCaptureEnabled,
+  type FreeCaptureSetupSnapshot,
 } from "@/capture/freeCaptureMode";
 
 const CAPTURE_AUTH_EVENT = "echodesk:android-capture-authorized";
@@ -64,6 +67,7 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
   const [control, setControl] = useState<CaptureControl | null>(null);
   const [mode, setMode] = useState<CaptureMode>("single");
   const [selected, setSelected] = useState<string[]>([]);
+  const setupRequestId = useRef<number | null>(null);
   const localDeviceId = captureDeviceId();
 
   const applyAuthoritativeSnapshot = useCallback((
@@ -86,7 +90,11 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
 
   useEffect(() => {
     if (!isNativeMobile()) return;
-    const request = () => {
+    const request = (setup?: FreeCaptureSetupSnapshot) => {
+      if (setup?.requestId !== null && setup?.requestId !== undefined) {
+        if (!beginFreeCaptureSetup(setup.requestId)) return;
+        setupRequestId.current = setup.requestId;
+      }
       setOpen(true);
       setLoading(true);
       void Promise.all([getCaptureDevices(), getCaptureControl()])
@@ -95,16 +103,25 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
         })
         .catch(() => {
           message.error("无法读取在线设备，请检查服务连接");
+          if (setupRequestId.current !== null) {
+            finishFreeCaptureSetup(
+              setupRequestId.current,
+              "retryable_failed",
+              "无法读取在线设备，请检查服务连接",
+            );
+            setupRequestId.current = null;
+          }
           pendingRequest?.resolve(false);
           pendingRequest = null;
           setOpen(false);
         })
         .finally(() => setLoading(false));
     };
-    window.addEventListener("echodesk:android-capture-request", request);
-    const offSetupRequest = onFreeCaptureSetupRequest(() => request());
+    const onAndroidRequest = () => request();
+    window.addEventListener("echodesk:android-capture-request", onAndroidRequest);
+    const offSetupRequest = onFreeCaptureSetupRequest(request);
     return () => {
-      window.removeEventListener("echodesk:android-capture-request", request);
+      window.removeEventListener("echodesk:android-capture-request", onAndroidRequest);
       offSetupRequest();
     };
   }, [applyAuthoritativeSnapshot]);
@@ -113,6 +130,14 @@ export default function AndroidCaptureSelector(): JSX.Element | null {
 
   const finish = (allowed: boolean) => {
     setAuthorized(allowed);
+    if (setupRequestId.current !== null) {
+      finishFreeCaptureSetup(
+        setupRequestId.current,
+        allowed ? "succeeded" : "failed",
+        allowed ? null : "用户未授权本设备自由收音",
+      );
+      setupRequestId.current = null;
+    }
     pendingRequest?.resolve(allowed);
     pendingRequest = null;
     setOpen(false);

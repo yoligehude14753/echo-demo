@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-23T05:54:44.506813+00:00'
+generated_at: '2026-07-23T08:03:05.468995+00:00'
 generated_by: replay.py
-fact_count: 52
+fact_count: 53
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1705,3 +1705,39 @@ facts:
   - pcm
   - vad
   - low-latency
+- id: F-ECHO-061
+  claim: Desktop and Android retain and settle free-capture setup requests; only one session-ready retry is permitted before
+    failure.
+  category: conclusion
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.98
+  observed_at: '2026-07-23T16:01:45+08:00'
+  observed_by: agent/codex-luna-free-capture-handshake-20260723
+  valid_until: null
+  ttl_hours: null
+  source:
+  - desktop/src/App.tsx
+  - desktop/src/capture/freeCaptureMode.ts
+  - desktop/src/capture/AndroidCaptureSelector.tsx
+  - desktop/src/components/MeetingStatusBar.tsx
+  - desktop/src/capture/freeCaptureMode.test.ts
+  - desktop/src/capture/freeCaptureSelection.test.ts
+  - test:node --test --experimental-strip-types src/capture/freeCaptureMode.test.ts src/capture/freeCaptureSelection.test.ts
+    => 12 passed
+  - test:npm run typecheck => passed
+  evidence: The focused tests assert late-listener replay, single claim, one retry after a retryable session failure, terminal
+    failure after the second transient failure, explicit multi-device choice, and identity mismatch rejection. Source contract
+    assertions retain session establishment before control update/announcement and first-frame audio gating, and retain Android
+    authorizeCaptureDevice before handshake success.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - capture
+  - handshake
+  - session
+  - android
+  - authorization

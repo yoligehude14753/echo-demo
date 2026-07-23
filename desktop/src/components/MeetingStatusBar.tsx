@@ -18,7 +18,13 @@ import {
 } from "@/capture/captureControl";
 import { CaptureControlConflictError } from "@/capture/captureControlConflict";
 import { captureDeviceId } from "@/capture/captureDeviceIdentity";
-import { currentSessionDeviceId } from "@/session";
+import {
+  SESSION_IDENTITY_EVENT,
+  currentSessionDeviceId,
+  currentSessionIdentityStatus,
+  ensureServerSession,
+  type SessionIdentityStatus,
+} from "@/session";
 import { shouldHideSharedPublicHistory } from "@/runtime";
 import { useStore } from "@/store";
 import type { EchoEvent, MeetingStateSnapshot } from "@/types";
@@ -29,9 +35,14 @@ import { audioCapture } from "@/capture/audioCapture";
 import { planFreeCaptureSelection } from "@/capture/freeCaptureSelection";
 import {
   currentCaptureRuntimeSnapshot,
+  beginFreeCaptureSetup,
+  currentFreeCaptureSetupSnapshot,
+  finishFreeCaptureSetup,
   onFreeCaptureSetupRequest,
+  retryFreeCaptureSetup,
   setFormalMeetingOverlay,
   setFreeCaptureEnabled,
+  type FreeCaptureSetupSnapshot,
 } from "@/capture/freeCaptureMode";
 
 /**
@@ -66,6 +77,8 @@ function elapsedMinutes(startedAt?: string | null): number {
   if (!Number.isFinite(ms) || ms < 0) return 0;
   return Math.floor(ms / 60000);
 }
+
+type CapturePreparation = "ready" | "selection_required" | "identity_failed";
 
 function newLocalMeetingId(): string {
   const suffix =
@@ -206,7 +219,7 @@ export default function MeetingStatusBar(): JSX.Element {
   }, [events, refresh]);
 
   const prepareCapture = useCallback(
-    async (startFormalAfterSelection: boolean): Promise<boolean> => {
+    async (startFormalAfterSelection: boolean): Promise<CapturePreparation> => {
       const snapshot = await getCaptureDevices();
       const localDeviceId = captureDeviceId();
       const plan = planFreeCaptureSelection(snapshot.devices, {
@@ -232,11 +245,11 @@ export default function MeetingStatusBar(): JSX.Element {
         );
         setCaptureSelectionStartsFormal(startFormalAfterSelection);
         setCapturePickerOpen(true);
-        return false;
+        return "selection_required";
       }
       if (plan.kind === "identity_mismatch") {
         message.error("本机会话身份不可用，未授权收音设备");
-        return false;
+        return "identity_failed";
       }
       const control = await updateCaptureControl({
         mode: "single",
@@ -245,22 +258,65 @@ export default function MeetingStatusBar(): JSX.Element {
       });
       announceCaptureControl(control);
       setFreeCaptureEnabled(true);
-      return true;
+      return "ready";
     },
     [],
   );
 
-  useEffect(
-    () =>
-      onFreeCaptureSetupRequest((reason) => {
-        if (isNativeMobile()) return;
-        void prepareCapture(reason === "formal_meeting").catch((error) => {
-          console.error("[capture-control] automatic setup failed", error);
-          message.error("无法准备自由收音，请检查服务连接");
-        });
-      }),
-    [prepareCapture],
-  );
+  const runAutomaticSetup = useCallback(async (request: FreeCaptureSetupSnapshot) => {
+    if (isNativeMobile() || request.requestId === null) return;
+    if (!beginFreeCaptureSetup(request.requestId)) return;
+    try {
+      // Device selection derives from the server-issued principal. Do not use a
+      // cached/null principal while public session enrollment is still pending.
+      await ensureServerSession();
+      const result = await prepareCapture(request.reason === "formal_meeting");
+      if (result === "ready") {
+        finishFreeCaptureSetup(request.requestId, "succeeded");
+        message.success("已准备本机自由收音");
+      } else if (result === "selection_required") {
+        finishFreeCaptureSetup(request.requestId, "awaiting_selection");
+      } else {
+        finishFreeCaptureSetup(
+          request.requestId,
+          "failed",
+          "本机会话身份不可用，未授权收音设备",
+        );
+      }
+    } catch (error) {
+      console.error("[capture-control] automatic setup failed", error);
+      const phase = currentSessionIdentityStatus().phase;
+      const terminal = phase === "identity-lost" || phase === "upgrade-required";
+      finishFreeCaptureSetup(
+        request.requestId,
+        terminal ? "failed" : "retryable_failed",
+        terminal ? "本机会话身份不可用，未授权收音设备" : "服务连接尚未就绪，等待身份恢复后重试",
+      );
+      message.error(
+        terminal
+          ? "本机会话身份不可用，未授权收音设备"
+          : "自由收音准备暂未完成，等待服务身份恢复",
+      );
+    }
+  }, [prepareCapture]);
+
+  useEffect(() => onFreeCaptureSetupRequest((request) => {
+    void runAutomaticSetup(request);
+  }), [runAutomaticSetup]);
+
+  useEffect(() => {
+    const onIdentity = (event: Event) => {
+      const detail = (event as CustomEvent<SessionIdentityStatus>).detail;
+      if (detail?.phase !== "ready") return;
+      const pending = currentFreeCaptureSetupSnapshot();
+      if (pending.requestId !== null && retryFreeCaptureSetup(pending.requestId)) {
+        // retryFreeCaptureSetup re-delivers to the mounted selector; no timer or
+        // polling loop is used, and the coordinator bounds attempts.
+      }
+    };
+    window.addEventListener(SESSION_IDENTITY_EVENT, onIdentity);
+    return () => window.removeEventListener(SESSION_IDENTITY_EVENT, onIdentity);
+  }, []);
 
   const onClick = useCallback(async (captureReady = false) => {
     if (busy) return;
@@ -280,7 +336,7 @@ export default function MeetingStatusBar(): JSX.Element {
             // An explicit pause is respected during normal operation. A formal
             // meeting is the user's explicit request to resume this device.
             setFreeCaptureEnabled(true);
-          } else if (!(await prepareCapture(true))) {
+          } else if ((await prepareCapture(true)) !== "ready") {
             return;
           }
         }
