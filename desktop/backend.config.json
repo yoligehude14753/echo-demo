@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "roles": {
     "publicService": {
-      "baseUrl": "https://echodesk.yoliyoli.uk"
+      "baseUrl": "https://echo.yoliyoli.uk"
     },
     "pairedHubSyncGateway": {
       "enabled": false,

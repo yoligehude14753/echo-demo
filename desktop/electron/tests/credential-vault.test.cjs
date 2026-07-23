@@ -11,7 +11,7 @@ const {
   normalizedHttpsOrigin,
 } = require("../credential-vault.cjs");
 
-const official = "https://echodesk.yoliyoli.uk";
+const official = "https://echo.yoliyoli.uk";
 const safeStorage = {
   isEncryptionAvailable: () => true,
   getSelectedStorageBackend: () => "gnome_libsecret",

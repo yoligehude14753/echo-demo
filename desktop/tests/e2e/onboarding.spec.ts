@@ -121,7 +121,7 @@ test("native Android 引导明确 remote-mobile、public endpoint 与 paired Hub
   await expect(page.getByTestId("onboarding-native-runtime-copy")).toContainText(
     "不会启动桌面 backend 或 bundled worker",
   );
-  await expect(contract).toContainText("https://echodesk.yoliyoli.uk");
+  await expect(contract).toContainText("https://echo.yoliyoli.uk");
   await expect(contract).toContainText("固定连接该公共服务");
   await expect(contract).toContainText("不能在设置中改写业务 endpoint");
   await expect(contract).toContainText("Hub 地址并使用配对码");
@@ -131,7 +131,7 @@ test("native Android 引导明确 remote-mobile、public endpoint 与 paired Hub
 
   await page.getByTestId("onboarding-next").click();
   await expect(
-    page.getByText("本 Preview 固定的公共服务 https://echodesk.yoliyoli.uk"),
+    page.getByText("本 Preview 固定的公共服务 https://echo.yoliyoli.uk"),
   ).toBeVisible();
   await expect(page.getByText("手机内没有本地 ASR 或桌面 bundled backend")).toBeVisible();
   await page.getByTestId("onboarding-next").click();

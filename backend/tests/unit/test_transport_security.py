@@ -208,7 +208,7 @@ async def test_trusted_host_rejects_before_reading_upload_body(
             "raw_path": b"/rag/ingest",
             "query_string": b"",
             "headers": [
-                (b"host", b"echodesk.yoliyoli.uk/healthz?mask="),
+                (b"host", b"echo.yoliyoli.uk/healthz?mask="),
                 (b"content-length", b"999999999"),
             ],
             "state": {},

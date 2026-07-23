@@ -799,7 +799,7 @@ class Settings(BaseSettings):
                 host
                 for host in (
                     canonical_host,
-                    "echodesk.yoliyoli.uk",
+                    "echo.yoliyoli.uk",
                     "localhost",
                     "127.0.0.1",
                     "::1",

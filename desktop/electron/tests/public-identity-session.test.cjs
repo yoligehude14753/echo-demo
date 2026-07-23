@@ -15,7 +15,7 @@ const {
   MAX_IDENTITY_RESPONSE_BYTES,
 } = require("../public-identity-session.cjs");
 
-const official = "https://echodesk.yoliyoli.uk";
+const official = "https://echo.yoliyoli.uk";
 const safeStorage = {
   isEncryptionAvailable: () => true,
   getSelectedStorageBackend: () => "gnome_libsecret",
@@ -128,11 +128,11 @@ test("backend-bound bootstrap fetch refuses a 307 without contacting its second 
 
 test("backend-bound identity requests reject non-origin URLs before fetch", async () => {
   for (const backendOrigin of [
-    "http://echodesk.yoliyoli.uk",
-    "https://user@echodesk.yoliyoli.uk",
-    "https://echodesk.yoliyoli.uk/private",
-    "https://echodesk.yoliyoli.uk/?query=1",
-    "https://echodesk.yoliyoli.uk/#fragment",
+    "http://echo.yoliyoli.uk",
+    "https://user@echo.yoliyoli.uk",
+    "https://echo.yoliyoli.uk/private",
+    "https://echo.yoliyoli.uk/?query=1",
+    "https://echo.yoliyoli.uk/#fragment",
   ]) {
     let fetched = 0;
     await assert.rejects(

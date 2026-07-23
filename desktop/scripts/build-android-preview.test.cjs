@@ -36,7 +36,7 @@ test("Android Preview builder is explicitly remote-mobile release public", () =>
 test("Android Preview release runtime and onboarding pin the public endpoint", () => {
   assert.equal(
     backendConfig.roles.publicService.baseUrl,
-    "https://echodesk.yoliyoli.uk",
+    "https://echo.yoliyoli.uk",
   );
   assert.match(
     runtime,

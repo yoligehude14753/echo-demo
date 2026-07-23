@@ -105,7 +105,7 @@ PY=/usr/bin/python3.11
 DEPLOY="$SRC/scripts/public-backend-deploy.sh"
 ENV_FILE="$ROOT/shared/runtime.env"
 NEW_DB="$ROOT/shared/data/echodesk.db"
-PUBLIC_URL=https://echodesk.yoliyoli.uk
+PUBLIC_URL=https://echo.yoliyoli.uk
 LEGACY_ENV=/home/ai/echodesk-demo-backend/.env
 LEGACY_ROOT=/home/ai/.echodesk-demo
 LEGACY_DB="$LEGACY_ROOT/echodesk.db"
@@ -205,7 +205,7 @@ ENV_FILE="$ROOT/shared/runtime.env"
 DB="$ROOT/shared/data/echodesk.db"
 RELEASE=v0.3.2-<git-sha>
 PY=/usr/bin/python3.11
-PUBLIC_URL=https://echodesk.yoliyoli.uk
+PUBLIC_URL=https://echo.yoliyoli.uk
 INGRESS_GATE="$ROOT/releases/$RELEASE/scripts/echodesk-ingress-gate.py"
 
 # 1. 新 release：目标目录必须不存在；clean checkout 默认强制

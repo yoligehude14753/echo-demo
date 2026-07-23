@@ -934,7 +934,7 @@ def test_session_success_failure_and_transport_responses_are_private_no_store(
     )
     malformed_host = public_client.post(
         "/session",
-        headers={"Host": "echodesk.yoliyoli.uk/invalid"},
+        headers={"Host": "echo.yoliyoli.uk/invalid"},
         json=_enrollment_payload("bad-host"),
     )
 
@@ -974,7 +974,7 @@ def test_unhandled_session_exception_is_private_no_store(
         )
         async with httpx.AsyncClient(
             transport=transport,
-            base_url="https://echodesk.yoliyoli.uk",
+            base_url="https://echo.yoliyoli.uk",
             headers={PUBLIC_CLIENT_VERSION_HEADER: MINIMUM_PUBLIC_CLIENT_VERSION},
         ) as client:
             return await client.post(
@@ -1096,14 +1096,14 @@ def test_malformed_host_cannot_poison_identity_or_lan_policy_path(
 ) -> None:
     poisoned = public_client.get(
         "/meetings",
-        headers={"Host": "echodesk.yoliyoli.uk/healthz?mask="},
+        headers={"Host": "echo.yoliyoli.uk/healthz?mask="},
     )
     assert poisoned.status_code == 400
     assert poisoned.text == "Invalid host header"
 
     canonical = public_client.get(
         "/meetings",
-        headers={"Host": "echodesk.yoliyoli.uk"},
+        headers={"Host": "echo.yoliyoli.uk"},
     )
     assert canonical.status_code == 401
     assert canonical.json()["detail"] == "session required"

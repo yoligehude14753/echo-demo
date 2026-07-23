@@ -329,7 +329,7 @@ const readme = `EchoDesk 智能电视一键安装包 ${version}
 
 使用前提
 - APK 是 EchoDesk 电视端客户端，不包含服务密钥。
-- 默认连接 https://echodesk.yoliyoli.uk 公共演示服务；模型、语音和检索能力由服务端统一提供。
+- 默认连接 https://echo.yoliyoli.uk 公共演示服务；模型、语音和检索能力由服务端统一提供。
 - 私有内网调试时，才需要让 Mac/Windows 本机服务监听 0.0.0.0:8769，并在 EchoDesk 设置里填电脑局域网地址。
 `;
 

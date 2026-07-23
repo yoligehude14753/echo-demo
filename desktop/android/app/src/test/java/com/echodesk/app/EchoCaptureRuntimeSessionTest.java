@@ -16,22 +16,22 @@ public class EchoCaptureRuntimeSessionTest {
   public void missingSessionFieldsStayFailClosedWithoutThrowing() {
     assertFalse(EchoCaptureRuntime.hasUploadSession(null, null, null));
     assertFalse(EchoCaptureRuntime.hasUploadSession("", "token", "device"));
-    assertFalse(EchoCaptureRuntime.hasUploadSession("https://echodesk.yoliyoli.uk", null, "device"));
-    assertFalse(EchoCaptureRuntime.hasUploadSession("https://echodesk.yoliyoli.uk", "token", null));
+    assertFalse(EchoCaptureRuntime.hasUploadSession("https://echo.yoliyoli.uk", null, "device"));
+    assertFalse(EchoCaptureRuntime.hasUploadSession("https://echo.yoliyoli.uk", "token", null));
   }
 
   @Test
   public void blankSessionFieldsStayFailClosedWithoutThrowing() {
     assertFalse(EchoCaptureRuntime.hasUploadSession("   ", "token", "device"));
-    assertFalse(EchoCaptureRuntime.hasUploadSession("https://echodesk.yoliyoli.uk", "   ", "device"));
-    assertFalse(EchoCaptureRuntime.hasUploadSession("https://echodesk.yoliyoli.uk", "token", "   "));
+    assertFalse(EchoCaptureRuntime.hasUploadSession("https://echo.yoliyoli.uk", "   ", "device"));
+    assertFalse(EchoCaptureRuntime.hasUploadSession("https://echo.yoliyoli.uk", "token", "   "));
   }
 
   @Test
   public void completeSessionAllowsNativeUpload() {
     assertTrue(
         EchoCaptureRuntime.hasUploadSession(
-            " https://echodesk.yoliyoli.uk/ ",
+            " https://echo.yoliyoli.uk/ ",
             " bearer-token ",
             " device-123 "
         )
@@ -42,17 +42,17 @@ public class EchoCaptureRuntimeSessionTest {
   public void nativeQueueRequiresLiveUnblockedBearerSession() {
     assertFalse(
         EchoCaptureRuntime.canQueueNativeCapture(
-            "https://echodesk.yoliyoli.uk", "", "device-123", false
+            "https://echo.yoliyoli.uk", "", "device-123", false
         )
     );
     assertFalse(
         EchoCaptureRuntime.canQueueNativeCapture(
-            "https://echodesk.yoliyoli.uk", "token", "device-123", true
+            "https://echo.yoliyoli.uk", "token", "device-123", true
         )
     );
     assertTrue(
         EchoCaptureRuntime.canQueueNativeCapture(
-            "https://echodesk.yoliyoli.uk", "token", "device-123", false
+            "https://echo.yoliyoli.uk", "token", "device-123", false
         )
     );
   }

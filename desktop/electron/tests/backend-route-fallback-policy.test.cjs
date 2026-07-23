@@ -11,6 +11,8 @@ const restart = readFileSync(
   path.resolve(__dirname, "../backend-manual-restart.cjs"),
   "utf8",
 );
+const CANONICAL_PUBLIC_ORIGIN = "https://echo.yoliyoli.uk";
+const deprecatedPublicOrigin = `https://echo${"desk.yoliyoli.uk"}`;
 
 function mainBackendSelectionBlock() {
   return main
@@ -60,11 +62,32 @@ test("release public routing cannot retain a loopback endpoint or spawn permissi
   const config = require(path.resolve(__dirname, "../../backend.config.json"));
   const runtime = endpoint.resolveBackendEndpoint(config, {});
   assert.equal(runtime.mode, "public");
-  assert.equal(runtime.backendBase, config.roles.publicService.baseUrl);
+  assert.equal(config.roles.publicService.baseUrl, CANONICAL_PUBLIC_ORIGIN);
+  assert.equal(runtime.backendBase, CANONICAL_PUBLIC_ORIGIN);
+  assert.equal(runtime.publicServiceEndpoint, CANONICAL_PUBLIC_ORIGIN);
   assert.equal(runtime.spawnBackend, false);
   assert.equal(runtime.localBase, null);
   assert.equal(runtime.localDevDiagnosticEndpoint, null);
   assert.equal(runtime.bindHost, null);
+});
+
+test("release desktop, renderer, LLM, and agent routing roots emit only the canonical public origin", () => {
+  const roots = [
+    path.resolve(__dirname, "../../backend.config.json"),
+    path.resolve(__dirname, "../main.cjs"),
+    path.resolve(__dirname, "../../src/runtime.ts"),
+    path.resolve(__dirname, "../../src/api.ts"),
+    path.resolve(__dirname, "../model-runtime-contract.cjs"),
+    path.resolve(__dirname, "../agent-runtime/index.ts"),
+  ];
+  const offenders = roots.filter((file) =>
+    readFileSync(file, "utf8").includes(deprecatedPublicOrigin),
+  );
+  assert.deepEqual(offenders, []);
+  assert.equal(
+    require(path.resolve(__dirname, "../../backend.config.json")).roles.publicService.baseUrl,
+    CANONICAL_PUBLIC_ORIGIN,
+  );
 });
 
 test("mobile route cannot fall back to a relative WebView proxy", () => {

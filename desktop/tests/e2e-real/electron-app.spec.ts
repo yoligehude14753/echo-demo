@@ -31,7 +31,7 @@ const CLIENT_VERSION = JSON.parse(
   readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
 ).version as string;
 const PUBLIC_BACKEND_BASE = (
-  process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echodesk.yoliyoli.uk"
+  process.env.ECHO_PUBLIC_BACKEND_BASE ?? "https://echo.yoliyoli.uk"
 ).replace(/\/+$/, "");
 const TEST_USER_DATA =
   process.env.ECHODESK_TEST_USER_DATA ??

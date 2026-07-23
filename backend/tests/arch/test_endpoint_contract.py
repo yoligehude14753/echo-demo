@@ -17,7 +17,7 @@ def test_desktop_and_backend_share_canonical_local_endpoint() -> None:
     assert config == {
         "schemaVersion": 2,
         "roles": {
-            "publicService": {"baseUrl": "https://echodesk.yoliyoli.uk"},
+            "publicService": {"baseUrl": "https://echo.yoliyoli.uk"},
             "pairedHubSyncGateway": {"enabled": False, "baseUrl": None},
             "localDevDiagnostic": {"host": "127.0.0.1", "port": 8769},
         },

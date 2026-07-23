@@ -30,8 +30,8 @@ test("local mode connects over loopback while LAN share binds explicitly", () =>
     port: 8769,
     localHost: "127.0.0.1",
     localBase: "http://127.0.0.1:8769",
-    publicBase: "https://echodesk.yoliyoli.uk",
-    publicServiceEndpoint: "https://echodesk.yoliyoli.uk",
+    publicBase: "https://echo.yoliyoli.uk",
+    publicServiceEndpoint: "https://echo.yoliyoli.uk",
     pairedHubSyncGatewayEndpoint: null,
     localDevDiagnosticEndpoint: "http://127.0.0.1:8769",
     backendBase: "http://127.0.0.1:8769",
@@ -138,7 +138,7 @@ test("packaged release keeps remote service as an explicit opt-in", () => {
   assert.equal(runtime.mode, "public");
   assert.equal(runtime.role, "public_service");
   assert.equal(runtime.source, "explicit-principal-mode");
-  assert.equal(runtime.backendBase, "https://echodesk.yoliyoli.uk");
+  assert.equal(runtime.backendBase, "https://echo.yoliyoli.uk");
   assert.equal(runtime.spawnBackend, false);
   assert.equal(runtime.localDevDiagnosticEndpoint, null);
 });
