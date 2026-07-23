@@ -18,6 +18,7 @@ import type {
   CaptureGateReason,
   CaptureViewModel,
 } from "@/capture/captureOperationalState";
+import { requestFreeCaptureSetup } from "@/capture/freeCaptureMode";
 
 interface Props {
   status: CaptureViewModel;
@@ -346,6 +347,28 @@ export default function CaptureStatus({ status }: Props): JSX.Element {
         tabIndex={-1}
       >
         本设备未选为收音端
+        <button
+          type="button"
+          className="ml-1 underline"
+          onClick={() => requestFreeCaptureSetup("first_run")}
+        >
+          选择收音设备
+        </button>
+      </Tag>
+    );
+  }
+
+  if (runtimeState === "permission_required") {
+    return (
+      <Tag color="red" data-testid="capture-status" tabIndex={-1}>
+        麦克风未授权
+        <button
+          type="button"
+          className="ml-1 underline"
+          onClick={() => void window.echo?.openMicSystemPrefs?.()}
+        >
+          打开系统麦克风设置
+        </button>
       </Tag>
     );
   }

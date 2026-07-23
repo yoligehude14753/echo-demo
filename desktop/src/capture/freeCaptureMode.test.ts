@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 // @ts-expect-error Node strip-types requires the explicit source extension.
@@ -46,6 +47,23 @@ test("pause, selection and offline states are explicit", () => {
     deriveCaptureRuntimeState({ ...base, uploadUnavailable: true }),
     "offline_buffering",
   );
+});
+
+test("missing microphone permission is explicit and exposes the system-settings entry", () => {
+  assert.equal(
+    deriveCaptureRuntimeState({
+      ...base,
+      captureState: "error",
+      errorMessage: "NotAllowedError: Permission denied",
+    }),
+    "permission_required",
+  );
+  const status = readFileSync(
+    new URL("../components/CaptureStatus.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(status, /打开系统麦克风设置/);
+  assert.match(status, /openMicSystemPrefs/);
 });
 
 test("missing preference defaults on without erasing an explicit pause", () => {

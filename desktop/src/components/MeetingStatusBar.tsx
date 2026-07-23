@@ -25,6 +25,7 @@ import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { requestAndroidCaptureStart } from "@/capture/AndroidCaptureSelector";
 import { isNativeMobile } from "@/runtime";
 import { audioCapture } from "@/capture/audioCapture";
+import { planFreeCaptureSelection } from "@/capture/freeCaptureSelection";
 import {
   currentCaptureRuntimeSnapshot,
   onFreeCaptureSetupRequest,
@@ -206,9 +207,10 @@ export default function MeetingStatusBar(): JSX.Element {
   const prepareCapture = useCallback(
     async (startFormalAfterSelection: boolean): Promise<boolean> => {
       const snapshot = await getCaptureDevices();
-      const onlineDevices = snapshot.devices.filter((device) => device.online);
       const localDeviceId = captureDeviceId();
-      if (onlineDevices.length > 1) {
+      const plan = planFreeCaptureSelection(snapshot.devices, localDeviceId);
+      if (plan.kind === "choose") {
+        const onlineDevices = plan.devices;
         const initialSelection = snapshot.control.selectedDeviceIds.filter((id) =>
           onlineDevices.some((device) => device.deviceId === id),
         );
@@ -228,9 +230,13 @@ export default function MeetingStatusBar(): JSX.Element {
         setCapturePickerOpen(true);
         return false;
       }
+      if (plan.kind === "local_unavailable") {
+        message.warning("未检测到本机可用收音设备，请检查设备连接后重试");
+        return false;
+      }
       const control = await updateCaptureControl({
         mode: "single",
-        selectedDeviceIds: [localDeviceId],
+        selectedDeviceIds: [plan.deviceId],
         expectedRevision: snapshot.control.revision,
       });
       announceCaptureControl(control);

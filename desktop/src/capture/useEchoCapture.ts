@@ -38,7 +38,6 @@ import type {
 import { useStore } from "@/store";
 import { useBackendOriginFence } from "@/hooks/useBackendOriginFence";
 import { captureDeviceId } from "@/capture/captureDeviceIdentity";
-import { isNativeMobile } from "@/runtime";
 import {
   currentFormalMeetingOverlay,
   deriveCaptureRuntimeState,
@@ -219,11 +218,7 @@ export function useEchoCapture({ enabled }: EchoCaptureOptions): CaptureViewMode
           : Math.max(controlBaseline, control.revision);
       const selected = isDeviceSelected(control);
       setDeviceSelected(selected);
-      if (
-        isNativeMobile() &&
-        control.selectedDeviceIds.length === 0 &&
-        !setupRequested
-      ) {
+      if (!selected && !setupRequested) {
         setupRequested = true;
         requestFreeCaptureSetup("first_run");
       }
