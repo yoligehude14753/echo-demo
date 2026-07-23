@@ -14,7 +14,18 @@
  *  POST /admin/speakers/reset
  */
 
-import { Drawer, Button, Modal, message, Spin, Tooltip, Input, Form, Tag } from "antd";
+import {
+  Drawer,
+  Button,
+  Modal,
+  message,
+  Spin,
+  Tooltip,
+  Input,
+  Form,
+  Tag,
+  type FormInstance,
+} from "antd";
 import {
   ArrowUpCircle,
   Database,
@@ -314,7 +325,7 @@ export default function SettingsPanel({
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const [adminUnavailable, setAdminUnavailable] = useState(false);
-  const [form] = Form.useForm<Record<string, string>>();
+  const [form]: [FormInstance<Record<string, string>>] = Form.useForm();
   const [backendBaseDraft, setBackendBaseDraft] = useState("");
   const backendBaseDraftRef = useRef("");
   const [pendingPrivateBackendBase, setPendingPrivateBackendBase] = useState<
