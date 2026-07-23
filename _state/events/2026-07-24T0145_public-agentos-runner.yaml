@@ -1,0 +1,37 @@
+event_id: "E-20260724T0145-001"
+event_type: "add"
+timestamp: "2026-07-24T01:45:00+08:00"
+author: "agent/codex-luna-public-agentos-20260724"
+session_id: "public_agentos_runner"
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-064"
+      claim: "公开 backend 的非内置 claude_code_runtime 任务经显式配置的 AgentOS runner 提交；请求保留服务端 intent_plan context，不发送 Electron/Settings 伪造的 runner model 或 base URL；runner 未配置时 fail closed，非终态通过 HTTP snapshot 恢复。"
+      category: "conclusion"
+      volatility: "low"
+      evidence_strength: "test"
+      status: "confirmed"
+      confidence: 0.98
+      observed_at: "2026-07-24T01:45:00+08:00"
+      observed_by: "agent/codex-luna-public-agentos-20260724"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "backend/app/agents/agentos.py:33-99"
+        - "backend/app/agents/service.py:2449-2458"
+        - "backend/tests/unit/test_public_agentos_runner.py"
+        - "test: pytest backend/tests/unit/test_public_agentos_runner.py backend/tests/unit/test_agent_bridge_recovery.py backend/tests/unit/test_b12_migration_route_policy.py => 17 passed"
+        - "test: pytest backend/tests/unit/test_intent_router.py backend/tests/unit/test_agent_intent_plan.py backend/tests/unit/test_public_agentos_runner.py backend/tests/unit/test_agent_bridge_recovery.py backend/tests/unit/test_b12_migration_route_policy.py => 36 passed"
+        - "test: node --test desktop/electron/tests/packaged-fused-worker-bridge.test.cjs => 6 passed"
+      evidence: "The public runner path requires agent_os_enabled plus an explicit agent_os_url and returns a stable unavailable error otherwise. Its submit payload carries text and server context, including the authoritative claude_code_runtime plan, while omitting runner_model and runner_base_url. AgentTaskService uses HTTP snapshot reconciliation for AgentOS and does not enter the Electron/B13 stream bridge; B13 remains a separate embedded path."
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "0.3.5"
+        - "agent"
+        - "agentos"
+        - "public"
+        - "claude-code"
+git_commit: null
