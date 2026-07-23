@@ -10,6 +10,7 @@ const { createCredentialVault } = require("../credential-vault.cjs");
 const {
   backendBoundJsonFetch,
   classifyRotationResponse,
+  createEphemeralPublicSessionManager,
   createPublicIdentitySessionManager,
   MAX_IDENTITY_RESPONSE_BYTES,
 } = require("../public-identity-session.cjs");
@@ -257,6 +258,69 @@ function session(token = "token-" + "t".repeat(40)) {
     principal: { tenant_id: "tenant", owner_id: "owner", device_id: "device" },
   };
 }
+
+test("ephemeral public identity keeps bearer material out of vaults and reboots via bootstrap", async () => {
+  const requests = [];
+  const createManager = (prefix) => {
+    let sequence = 0;
+    return createEphemeralPublicSessionManager({
+      newSecret: () => `${prefix}-${++sequence}`.padEnd(48, prefix),
+      displayName: "test-device",
+      request: async (pathname, body) => {
+        requests.push({ pathname, body });
+        return response(201, session(`token-${prefix}-${requests.length}`));
+      },
+    });
+  };
+
+  const firstProcess = createManager("first");
+  const firstSession = await firstProcess.ensure();
+  assert.equal(firstSession.token, "token-first-1");
+  assert.equal(requests[0].pathname, "/session/enroll");
+  assert.ok(requests[0].body.enrollment_id.startsWith("first-"));
+  assert.ok(requests[0].body.device_secret.startsWith("first-"));
+
+  // A fresh manager represents a process restart: no prior identity is read,
+  // and a new bootstrap is sent without any vault or filesystem dependency.
+  const restartedProcess = createManager("restart");
+  const restartedSession = await restartedProcess.ensure();
+  assert.equal(restartedSession.token, "token-restart-2");
+  assert.equal(requests[1].pathname, "/session/enroll");
+  assert.ok(requests[1].body.enrollment_id.startsWith("restart-"));
+  assert.ok(requests[1].body.device_secret.startsWith("restart-"));
+
+  await restartedProcess.reset();
+  await restartedProcess.ensure();
+  assert.equal(requests[2].pathname, "/session/enroll");
+  assert.ok(requests[2].body.enrollment_id.startsWith("restart-"));
+});
+
+test("ephemeral public identity reboots after a rejected renewal and otherwise fails closed", async () => {
+  const requests = [];
+  let secret = 0;
+  const manager = createEphemeralPublicSessionManager({
+    newSecret: () => `ephemeral-${++secret}`.padEnd(48, "e"),
+    request: async (pathname) => {
+      requests.push(pathname);
+      if (pathname === "/session/renew") return response(401);
+      return response(201, session(`token-${requests.length}`));
+    },
+  });
+
+  await manager.ensure();
+  const renewed = await manager.renew();
+  assert.equal(renewed.token, "token-3");
+  assert.deepEqual(requests, ["/session/enroll", "/session/renew", "/session/enroll"]);
+
+  const failing = createEphemeralPublicSessionManager({
+    newSecret: () => "f".repeat(48),
+    request: async () => response(503),
+  });
+  await assert.rejects(failing.ensure(), (error) => {
+    assert.equal(error.code, "IDENTITY_REQUEST_FAILED");
+    return true;
+  });
+});
 
 test("lost enrollment response retries the same durable identity pair", async () => {
   const { root, vault } = fixture();

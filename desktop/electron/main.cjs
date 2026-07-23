@@ -9,7 +9,6 @@ const {
   ipcMain,
   systemPreferences,
   session,
-  safeStorage,
   protocol,
   net,
   nativeImage,
@@ -33,10 +32,9 @@ const {
 const {
   electronNodeRuntimeEnvironment,
 } = require("./backend-runtime-env.cjs");
-const { createCredentialVault } = require("./credential-vault.cjs");
 const {
   backendBoundJsonFetch,
-  createPublicIdentitySessionManager,
+  createEphemeralPublicSessionManager,
 } = require("./public-identity-session.cjs");
 const {
   createWorkspaceBackendTransport,
@@ -108,9 +106,8 @@ const {
   captureStatusLabel,
 } = require("./background-residency.cjs");
 
-// Source Electron 默认以 Electron 作为应用身份。显式设置产品名，让 macOS
-// Keychain/safeStorage 与打包态使用同一个受支持的 EchoDesk 应用命名空间。
-// 这里不启用明文回退；safeStorage 不可用时仍必须 fail closed。
+// Source Electron 默认以 Electron 作为应用身份。显式设置产品名，使开发态与
+// 打包态使用同一个受支持的 EchoDesk 应用命名空间。
 app.setName("EchoDesk");
 
 // Electron 要求 privileged scheme 在 app ready 前完成声明。打包态只从该
@@ -254,8 +251,6 @@ function isTrustedRenderer(webContents) {
   }
 }
 
-const PUBLIC_CREDENTIAL_FILENAME = "public-device-credential.bin";
-
 function isTrustedAppRendererUrl(rawUrl) {
   try {
     const candidate = new URL(rawUrl);
@@ -312,32 +307,17 @@ function trustedRendererBlobInnerOrigin() {
   return `${APP_SCHEME}://${APP_HOST}`;
 }
 
-function publicCredentialPath() {
-  return path.join(app.getPath("userData"), PUBLIC_CREDENTIAL_FILENAME);
-}
-
-let publicCredentialVault = null;
 let publicIdentityManager = null;
 let publicSessionEnsurePromise = null;
 let currentPublicSession = null;
 
-function credentialVault() {
-  if (publicCredentialVault === null) {
-    publicCredentialVault = createCredentialVault({
-      safeStorage,
-      target: publicCredentialPath(),
-      backendBase: BACKEND_HOST,
-      officialBackendBase: BACKEND_ENDPOINT.publicServiceEndpoint,
-      enabled: PUBLIC_DEMO_MODE,
-      logger: (message) => log(`[credential] ${message}`),
-    });
-  }
-  return publicCredentialVault;
+function publicSessionOrigin() {
+  return new URL(BACKEND_HOST).origin;
 }
 
 function clearPublicCredential() {
   if (PUBLIC_DEMO_MODE) {
-    const origin = credentialVault().backendOrigin;
+    const origin = publicSessionOrigin();
     cancelWorkspaceOperations(origin);
     pendingWorkspaceSelections.delete(origin);
     const store = readLocalWorkspaceStore(origin);
@@ -358,7 +338,6 @@ function clearPublicCredential() {
       void removeRetainedWorkspaceSnapshot(snapshotPath);
     }
   }
-  credentialVault().clear();
   publicIdentityManager = null;
   publicSessionEnsurePromise = null;
   currentPublicSession = null;
@@ -369,14 +348,13 @@ function newDeviceSecret() {
 }
 
 async function postPublicIdentity(pathname, body, { token = null } = {}) {
-  const vault = credentialVault();
   const headers = {
     "Content-Type": "application/json",
     "X-EchoDesk-Client-Version": app.getVersion(),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
   return backendBoundJsonFetch({
-    backendOrigin: vault.backendOrigin,
+    backendOrigin: publicSessionOrigin(),
     pathname,
     method: "POST",
     headers,
@@ -386,8 +364,7 @@ async function postPublicIdentity(pathname, body, { token = null } = {}) {
 
 function publicIdentitySessionManager() {
   if (publicIdentityManager === null) {
-    publicIdentityManager = createPublicIdentitySessionManager({
-      vault: credentialVault(),
+    publicIdentityManager = createEphemeralPublicSessionManager({
       request: postPublicIdentity,
       newSecret: newDeviceSecret,
       // Enrollment does not need the user's machine hostname. Keep the
@@ -401,7 +378,7 @@ function publicIdentitySessionManager() {
 async function renewPublicSessionFromCredential() {
   const session = await publicIdentitySessionManager().renew();
   const bound = session
-    ? { ...session, backend_origin: credentialVault().backendOrigin }
+    ? { ...session, backend_origin: publicSessionOrigin() }
     : null;
   currentPublicSession = bound;
   return bound;
@@ -417,8 +394,21 @@ function reusablePublicSession() {
   return currentPublicSession;
 }
 
-async function ensurePublicSessionInMain() {
+async function ensurePublicSessionInMain({ forceBootstrap = false } = {}) {
   if (!PUBLIC_DEMO_MODE) return null;
+  if (forceBootstrap) {
+    const previous = publicSessionEnsurePromise;
+    if (previous) {
+      try {
+        await previous;
+      } catch {
+        // A renderer refresh still needs a fresh bootstrap after an earlier
+        // in-flight attempt fails.
+      }
+    }
+    await publicIdentitySessionManager().reset();
+    currentPublicSession = null;
+  }
   const active = reusablePublicSession();
   if (active) return active;
   if (publicSessionEnsurePromise) return publicSessionEnsurePromise;
@@ -427,7 +417,7 @@ async function ensurePublicSessionInMain() {
     if (session) {
       currentPublicSession = {
         ...session,
-        backend_origin: credentialVault().backendOrigin,
+        backend_origin: publicSessionOrigin(),
       };
       return currentPublicSession;
     }
@@ -445,8 +435,12 @@ async function ensurePublicSessionInMain() {
   }
 }
 
-async function rotatePublicCredential(sessionToken) {
-  return publicIdentitySessionManager().rotate(sessionToken);
+async function rotatePublicCredential() {
+  const error = new Error(
+    "public sessions are ephemeral and do not support credential rotation",
+  );
+  error.code = "EPHEMERAL_PUBLIC_IDENTITY";
+  throw error;
 }
 
 let publicWorkspaceBackendTransport = null;
@@ -460,10 +454,9 @@ function workspaceBackendTransport() {
     throw error;
   }
   if (publicWorkspaceBackendTransport === null) {
-    const vault = credentialVault();
     publicWorkspaceBackendTransport = createWorkspaceBackendTransport({
       backendBase: BACKEND_HOST,
-      vault,
+      identityOrigin: publicSessionOrigin(),
       ensureSession: ensurePublicSessionInMain,
       renewSession: renewPublicSessionFromCredential,
       clientVersion: app.getVersion(),
@@ -2928,7 +2921,9 @@ ipcMain.on("echo:is-public-demo", (event) => {
 
 ipcMain.handle("credential:ensure-session", async (event) => {
   assertTrustedIpcOrigin(event);
-  return ensurePublicSessionInMain();
+  // The renderer has no durable bearer. A reload must discard the main
+  // process's prior public identity and bootstrap a new in-memory session.
+  return ensurePublicSessionInMain({ forceBootstrap: true });
 });
 
 ipcMain.handle("credential:renew-session", async (event) => {

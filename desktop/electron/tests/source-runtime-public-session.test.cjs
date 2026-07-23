@@ -31,13 +31,23 @@ test("public source supervisor selects the configured HTTPS backend for Vite pro
   );
 });
 
-test("source public Electron keeps secure identity and proxy boundaries explicit", () => {
+test("source public Electron keeps ephemeral identity and proxy boundaries explicit", () => {
   const main = fs.readFileSync(path.join(desktopRoot, "electron/main.cjs"), "utf8");
+  const publicSession = fs.readFileSync(
+    path.join(desktopRoot, "electron/public-identity-session.cjs"),
+    "utf8",
+  );
   const runtime = fs.readFileSync(path.join(desktopRoot, "src/runtime.ts"), "utf8");
   const session = fs.readFileSync(path.join(desktopRoot, "src/session.ts"), "utf8");
   assert.match(main, /app\.setName\("EchoDesk"\)/);
-  assert.match(main, /safeStorage/);
-  assert.doesNotMatch(main, /setUsePlainTextEncryption\(true\)/);
+  assert.match(main, /createEphemeralPublicSessionManager/);
+  assert.doesNotMatch(main, /safeStorage|createCredentialVault|credentialVault\(/);
+  assert.doesNotMatch(main, /public-device-credential\.bin/);
+  assert.doesNotMatch(publicSession, /createEphemeralPublicSessionManager\([\s\S]*?(?:node:fs|writeFile|mkdirSync|safeStorage|vault\.)/);
+  assert.match(
+    main,
+    /ipcMain\.handle\("credential:ensure-session"[\s\S]*?forceBootstrap: true/,
+  );
   assert.match(runtime, /usesElectronViteProxy/);
   assert.match(session, /window\.echo\?\.backendHost/);
   assert.match(session, /actualOrigin === window\.location\.origin/);

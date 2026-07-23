@@ -453,10 +453,72 @@ function createPublicIdentitySessionManager({
   };
 }
 
+/**
+ * Public desktop sessions deliberately have no durable client identity. The
+ * enrollment material and bearer are closure-local, so a renderer reload or
+ * Electron restart always performs a fresh public bootstrap.
+ *
+ * The durable manager above remains for future explicitly provisioned secrets.
+ */
+function createEphemeralPublicSessionManager({ request, newSecret, displayName }) {
+  if (typeof request !== "function" || typeof newSecret !== "function") {
+    throw new TypeError("ephemeral public session dependencies are required");
+  }
+
+  let identity = null;
+  let operationTail = Promise.resolve();
+
+  function serialize(operation) {
+    const running = operationTail.then(operation, operation);
+    operationTail = running.then(
+      () => undefined,
+      () => undefined,
+    );
+    return running;
+  }
+
+  async function bootstrap() {
+    const nextIdentity = {
+      enrollmentId: newSecret(),
+      credential: newSecret(),
+    };
+    const response = await request("/session/enroll", {
+      enrollment_id: nextIdentity.enrollmentId,
+      device_secret: nextIdentity.credential,
+      display_name: String(displayName || "EchoDesk").slice(0, 120),
+    });
+    const session = await sessionDto(response, "enroll");
+    identity = nextIdentity;
+    return session;
+  }
+
+  async function renew() {
+    if (!identity) return bootstrap();
+    const response = await request("/session/renew", {
+      device_credential: identity.credential,
+    });
+    if (response.status === 401 || response.status === 409) {
+      identity = null;
+      return bootstrap();
+    }
+    if (!response.ok) throw responseError("renew", response);
+    return sessionDto(response, "renew");
+  }
+
+  return {
+    ensure: () => serialize(renew),
+    renew: () => serialize(renew),
+    reset: () => serialize(() => {
+      identity = null;
+    }),
+  };
+}
+
 module.exports = {
   backendBoundJsonFetch,
   classifyRotationResponse,
   MAX_IDENTITY_RESPONSE_BYTES,
   PublicIdentitySessionError,
+  createEphemeralPublicSessionManager,
   createPublicIdentitySessionManager,
 };

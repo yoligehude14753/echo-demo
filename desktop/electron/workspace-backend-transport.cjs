@@ -271,6 +271,7 @@ async function readWorkspaceJsonResponse(response) {
 function createWorkspaceBackendTransport({
   backendBase,
   vault,
+  identityOrigin = vault?.backendOrigin,
   ensureSession,
   renewSession,
   clientVersion,
@@ -279,7 +280,6 @@ function createWorkspaceBackendTransport({
   clearTimer = clearTimeout,
 }) {
   if (
-    !vault ||
     typeof ensureSession !== "function" ||
     typeof renewSession !== "function" ||
     typeof fetchImpl !== "function"
@@ -287,13 +287,13 @@ function createWorkspaceBackendTransport({
     throw new TypeError("workspace backend transport dependencies are required");
   }
   const backendOrigin = normalizedPublicOrigin(backendBase, "workspace backend");
-  const vaultOrigin = normalizedPublicOrigin(
-    vault.backendOrigin,
-    "workspace credential vault",
+  const boundIdentityOrigin = normalizedPublicOrigin(
+    identityOrigin,
+    "workspace session identity",
   );
-  if (vaultOrigin !== backendOrigin) {
+  if (boundIdentityOrigin !== backendOrigin) {
     throw new WorkspaceBackendTransportError(
-      "workspace backend and credential vault origins differ",
+      "workspace backend and session identity origins differ",
       "WORKSPACE_BACKEND_VAULT_MISMATCH",
     );
   }
@@ -308,9 +308,9 @@ function createWorkspaceBackendTransport({
       rawExpectedOrigin,
       "renderer expected backend",
     );
-    if (expectedOrigin !== backendOrigin || expectedOrigin !== vaultOrigin) {
+    if (expectedOrigin !== backendOrigin || expectedOrigin !== boundIdentityOrigin) {
       throw new WorkspaceBackendTransportError(
-        "renderer backend origin no longer matches the workspace identity vault",
+        "renderer backend origin no longer matches the workspace session identity",
         "WORKSPACE_BACKEND_ORIGIN_MISMATCH",
       );
     }
