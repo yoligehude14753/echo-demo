@@ -33,12 +33,18 @@ class AgentOSBackend:
     def __init__(self, settings: Settings) -> None:
         self.base_url = settings.agent_os_url.strip().rstrip("/")
         self.enabled = settings.agent_os_enabled and bool(self.base_url)
-        self._disabled_reason = (
-            "agent runner disabled"
-            if not settings.agent_os_enabled
-            else "agent runner endpoint is not explicitly configured"
-        )
-        self._settings = settings
+        self._disabled_reason = self._resolve_disabled_reason(settings)
+
+    @staticmethod
+    def _resolve_disabled_reason(settings: Settings) -> str:
+        if settings.public_demo_mode:
+            if not settings.agent_os_enabled:
+                return "public AgentOS runner is disabled"
+            if not settings.agent_os_url.strip():
+                return "public AgentOS runner endpoint is not explicitly configured"
+        if not settings.agent_os_enabled:
+            return "agent runner disabled"
+        return "agent runner endpoint is not explicitly configured"
 
     async def submit(self, intent: AgentIntent) -> AgentSubmitResult:
         if not self.enabled:
@@ -63,19 +69,20 @@ class AgentOSBackend:
                 provider=self.name,
                 error="agent submit requires a scoped operation key",
             )
-        runner_model = intent.runner_model or self._settings.llm_main_model
-        runner_base_url = intent.runner_base_url or self._settings.llm_main_base_url
         payload: dict[str, object] = {
             "operation_key": operation_key,
             "text": _compile_runner_prompt(intent),
+            # AgentOS is the authority for the Claude Code runtime.  Keep the
+            # server-replanned context in a separate value envelope so the
+            # runner can verify it without accepting model, credential, or
+            # capability values synthesized by Electron.
+            "context": intent.context,
             "speaker_id": intent.device_id,
             "conversation_id": intent.conversation_id,
             "callback_url": None,
             "priority": intent.priority,
             "timeout_s": intent.timeout_s,
             "reference_file_ids": [],
-            "runner_model": runner_model,
-            "runner_base_url": runner_base_url,
         }
         try:
             async with httpx.AsyncClient(

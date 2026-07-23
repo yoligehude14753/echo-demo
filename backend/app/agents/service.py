@@ -2446,8 +2446,16 @@ class AgentTaskService:
                     lease_token=lease,
                 )
 
+            if isinstance(self.backend, AgentOSBackend):
+                # Public release tasks use the explicitly configured AgentOS
+                # runner.  Its HTTP snapshot is the recovery/terminal source
+                # of truth; Electron/B13 is deliberately not involved here.
+                # A non-terminal snapshot remains pending and is retried by
+                # the existing durable bridge recovery loop.
+                retry = True
+                return
             if not isinstance(self.backend, EmbeddedRuntimeBackend):
-                raise RuntimeError("non-embedded agent runtime is not supported")
+                raise RuntimeError("unsupported agent runtime backend")
             bridge = EmbeddedTaskStreamBridge(
                 task_id=rec.task_id,
                 runner_task_id=rec.runner_task_id,
