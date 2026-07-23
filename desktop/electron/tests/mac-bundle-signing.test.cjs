@@ -11,6 +11,7 @@ const signer = readFileSync(join(desktopRoot, "scripts", "mac-bundle-sign.cjs"),
 test("mac dir bootstrap signs only after electron-builder completes", () => {
   const command = packageJson.scripts["app:build:mac:test"];
   assert.match(command, /electron-builder --mac --arm64 --dir --publish never && node scripts\/mac-bundle-sign\.cjs release\/mac-arm64\/EchoDesk\.app/);
+  assert.equal(packageJson.build.afterSign, undefined);
   assert.match(afterPack, /helper plist patched; signing is deferred until the final bundle stage/);
   assert.doesNotMatch(afterPack, /codesign/);
 });

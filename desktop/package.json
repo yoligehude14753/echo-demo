@@ -134,7 +134,6 @@
     ],
     "beforePack": "scripts/verify-bundled-backend.cjs",
     "afterPack": "scripts/after-pack-mac.cjs",
-    "afterSign": "scripts/after-sign-mac.cjs",
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "electron/icons/echodesk.icns",
