@@ -64,22 +64,7 @@ module.exports = async function afterPack(context) {
 
   patchHelperUsageDescriptions(appPath);
 
-  if (process.env.ECHODESK_ADHOC_SIGN !== "1") {
-    console.log(
-      "[mac-sign] ad-hoc signing disabled; leaving signing to electron-builder",
-    );
-    return;
-  }
-
-  console.log(`[mac-sign] development-only ad-hoc signing ${appPath}`);
-  execFileSync("codesign", ["--force", "--deep", "--sign", "-", appPath], {
-    stdio: "inherit",
-  });
-  execFileSync(
-    "codesign",
-    ["--verify", "--deep", "--strict", "--verbose=2", appPath],
-    {
-      stdio: "inherit",
-    },
+  console.log(
+    "[mac-sign] helper plist patched; signing is deferred until the final bundle stage",
   );
 };
