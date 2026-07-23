@@ -35,6 +35,7 @@ class GateDecision:
     reason: str  # "ok" / "rms_too_low" / "speech_ratio_too_low" / ...
     rms: float = 0.0
     speech_ratio: float = 0.0
+    active_rms: float = 0.0
 
 
 def integer_rms(audio_bytes: bytes) -> float:
@@ -57,26 +58,51 @@ def speech_frame_ratio(
     一个帧"活跃" = 帧 RMS > frame_rms_threshold。
     适合识别"大缓冲区里只有 0.5s 偶发噪声、整段 RMS 又勉强过线"的伪语音场景。
     """
+    ratio, _ = _active_frame_metrics(
+        audio_bytes,
+        frame_ms=frame_ms,
+        frame_rms_threshold=frame_rms_threshold,
+    )
+    return ratio
+
+
+def _active_frame_metrics(
+    audio_bytes: bytes,
+    *,
+    frame_ms: int,
+    frame_rms_threshold: int,
+) -> tuple[float, float]:
+    """Return (active-frame ratio, RMS over active frames only).
+
+    The second value deliberately excludes silence.  Capture clients submit
+    short, low-latency chunks, so a valid voiced frame must not be rejected
+    merely because surrounding silence dilutes the whole-window RMS.
+    """
     n = len(audio_bytes) // 2
     if n == 0:
-        return 0.0
+        return 0.0, 0.0
     samples = struct.unpack_from(f"<{n}h", audio_bytes)
     frame_samples = int(_SAMPLE_RATE * frame_ms / 1000)
     if frame_samples <= 0 or n < frame_samples:
-        return 0.0
+        return 0.0, 0.0
     # 只统计完整帧。旧实现用 ``n - frame_samples`` 且 range 右边界不包含，
     # 每个 chunk 都会漏掉最后一帧；短音频甚至会错误返回 0。
     total = n // frame_samples
     if total <= 0:
-        return 0.0
+        return 0.0, 0.0
     active = 0
+    active_sum_squares = 0
     for frame_index in range(total):
         i = frame_index * frame_samples
         chunk = samples[i : i + frame_samples]
-        rms = math.sqrt(sum(s * s for s in chunk) / frame_samples)
+        sum_squares = sum(sample * sample for sample in chunk)
+        rms = math.sqrt(sum_squares / frame_samples)
         if rms > frame_rms_threshold:
             active += 1
-    return active / total
+            active_sum_squares += sum_squares
+    if active == 0:
+        return 0.0, 0.0
+    return active / total, math.sqrt(active_sum_squares / (active * frame_samples))
 
 
 def pre_stt_gate(
@@ -88,21 +114,44 @@ def pre_stt_gate(
 ) -> GateDecision:
     """STT 前置门控：两道关卡。
 
-    1. 整段 RMS < rms_gate → 直接拒（静音/几乎无声）
+    1. 活动帧 RMS < rms_gate → 直接拒（静音/几乎无声）
     2. 帧级活跃率 < min_speech_frame_ratio → 拒（大段静音里偶发噪声）
+
+    整窗 RMS 仅保留在结果中作诊断，不能作为 admission 条件：长窗口
+    的静音会稀释真实短语音的整窗均值。现有的活动帧能量和活动帧比例
+    阈值仍同时生效，因此不会无条件接收底噪或静音。
 
     返回 GateDecision；调用方按 pass_ 决定是否跑 STT。
     """
     rms = integer_rms(audio_bytes)
-    if rms < rms_gate:
-        return GateDecision(pass_=False, reason="rms_too_low", rms=rms)
-    ratio = speech_frame_ratio(
+    ratio, active_rms = _active_frame_metrics(
         audio_bytes,
+        frame_ms=20,
         frame_rms_threshold=frame_rms_threshold,
     )
+    if active_rms < rms_gate:
+        return GateDecision(
+            pass_=False,
+            reason="rms_too_low",
+            rms=rms,
+            speech_ratio=ratio,
+            active_rms=active_rms,
+        )
     if ratio < min_speech_frame_ratio:
-        return GateDecision(pass_=False, reason="speech_ratio_too_low", rms=rms, speech_ratio=ratio)
-    return GateDecision(pass_=True, reason="ok", rms=rms, speech_ratio=ratio)
+        return GateDecision(
+            pass_=False,
+            reason="speech_ratio_too_low",
+            rms=rms,
+            speech_ratio=ratio,
+            active_rms=active_rms,
+        )
+    return GateDecision(
+        pass_=True,
+        reason="ok",
+        rms=rms,
+        speech_ratio=ratio,
+        active_rms=active_rms,
+    )
 
 
 def normalize_transcript_text(text: str) -> str:

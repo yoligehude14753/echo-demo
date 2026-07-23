@@ -1,8 +1,8 @@
 version: '1.0'
 project: echo
-generated_at: '2026-07-22T17:29:11.071129+00:00'
+generated_at: '2026-07-23T05:54:44.506813+00:00'
 generated_by: replay.py
-fact_count: 51
+fact_count: 52
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1673,3 +1673,35 @@ facts:
   - capture
   - correlation
   - privacy
+- id: F-ECHO-060
+  claim: Capture admission computes RMS over 20ms active PCM frames and retains the active-frame ratio gate, admitting voiced
+    short chunks while rejecting silence, truncated PCM, and unauthorized devices.
+  category: conclusion
+  volatility: low
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.98
+  observed_at: '2026-07-23T13:53:33+08:00'
+  observed_by: agent/codex-realtime-capture-admission
+  valid_until: null
+  ttl_hours: null
+  source:
+  - backend/app/adapters/audio_gate.py:108-154
+  - backend/tests/unit/test_ambient_gate_thresholds.py:176-208
+  - backend/tests/unit/test_ambient_capture.py:90-167
+  - backend/tests/unit/test_capture_stats_api.py:169-193
+  - test:focused pytest => 46 passed
+  evidence: Focused gate, ambient pipeline, API identity, admission stats, and storage-boundary tests passed. The accepting
+    fixture has 200ms of active 16kHz PCM plus 800ms silence, its whole-window RMS is below 800, and it persists only after
+    the active-frame gate passes. Silent and one-byte truncated PCM invoked neither STT nor ambient/recent persistence; a
+    mismatched device was rejected with HTTP 403 before pipeline invocation.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.5
+  - capture
+  - admission
+  - pcm
+  - vad
+  - low-latency

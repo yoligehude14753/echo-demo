@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from app.adapters.audio import pcm_to_wav
@@ -163,6 +164,30 @@ def test_post_chunk_response_includes_stt_status(client: TestClient) -> None:
     assert "stt_status" in body
     assert body["stt_status"] in ("ok", "empty", "failed", "circuit_open", "gated")
     assert body["segment_id"] == "status-silent"
+
+
+def test_capture_chunk_keeps_device_identity_rejection_before_pipeline(client: TestClient) -> None:
+    class _PipelineProbe:
+        ingest_chunk = AsyncMock()
+
+    probe = _PipelineProbe()
+    client.app.dependency_overrides[capture_api.get_ambient_pipeline] = lambda: probe
+    try:
+        response = client.post(
+            "/capture/chunk",
+            files={"audio": ("c.pcm", b"\x01\x02", "application/octet-stream")},
+            data={
+                "sample_rate": "16000",
+                "deviceId": "another-device",
+                "segmentId": "wrong-device",
+            },
+        )
+    finally:
+        client.app.dependency_overrides.pop(capture_api.get_ambient_pipeline, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "device identity mismatch"
+    probe.ingest_chunk.assert_not_awaited()
 
 
 def test_capture_chunk_returns_503_when_authoritative_persistence_fails(

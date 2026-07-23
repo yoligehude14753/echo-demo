@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import struct
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,6 +11,14 @@ import pytest
 from app.config import Settings
 from app.schemas.meeting import TranscriptSegment
 from app.use_cases.ambient_capture import AmbientCapturePipeline, AmbientPersistenceError
+
+
+def _sine_pcm(duration_ms: int, amplitude: int) -> bytes:
+    samples = [
+        int(amplitude * math.sin(2 * math.pi * 440 * index / 16_000))
+        for index in range(16 * duration_ms)
+    ]
+    return struct.pack(f"<{len(samples)}h", *samples)
 
 
 @pytest.fixture
@@ -75,6 +85,86 @@ async def test_ambient_chunk_preserves_client_segment_correlation(
     assert repository.append_ambient_segment.await_args.kwargs["client_segment_id"] == (
         "device:native:segment-17"
     )
+
+
+@pytest.mark.asyncio
+async def test_ambient_short_voiced_chunk_is_admitted_without_window_rms_dilution(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        ambient_rms_gate=800,
+        ambient_frame_rms_threshold=500,
+        ambient_min_speech_frame_ratio=0.15,
+        ambient_min_stt_chars=0,
+        ambient_llm_punctuate=False,
+    )
+    stt = AsyncMock(
+        transcribe=AsyncMock(
+            return_value=[TranscriptSegment(text="短语音片段已识别", start_ms=0, end_ms=200)]
+        )
+    )
+    repository = AsyncMock()
+    repository.append_ambient_segment = AsyncMock(return_value=18)
+    rag = AsyncMock()
+    rag.ingest_ambient_segment = AsyncMock(return_value="ambient-short")
+    meeting = MagicMock()
+    meeting.ingest_from_stt = AsyncMock(return_value=[])
+    pipeline = AmbientCapturePipeline(
+        settings=settings,
+        stt=stt,
+        rag=rag,
+        meeting=meeting,
+        repository=repository,
+    )
+    audio = _sine_pcm(200, amplitude=1600) + b"\x00\x00" * (16_000 - 3_200)
+
+    result = await pipeline.ingest_chunk(audio, client_segment_id="short-voice-1")
+
+    assert result.stt_status == "ok"
+    assert result.ambient_stored is True
+    assert result.segment_id == "short-voice-1"
+    assert result.audio_ref
+    stt.transcribe.assert_awaited_once()
+    repository.append_ambient_segment.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ambient_silent_or_truncated_chunk_never_reaches_stt_or_recent_store(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        storage_dir=tmp_path / "storage",
+        rag_index_dir=tmp_path / "rag",
+        ambient_rms_gate=800,
+        ambient_frame_rms_threshold=500,
+        ambient_min_speech_frame_ratio=0.15,
+        ambient_min_stt_chars=0,
+        ambient_llm_punctuate=False,
+    )
+    stt = AsyncMock(transcribe=AsyncMock())
+    repository = AsyncMock()
+    rag = AsyncMock()
+    meeting = MagicMock()
+    meeting.ingest_from_stt = AsyncMock(return_value=[])
+    pipeline = AmbientCapturePipeline(
+        settings=settings,
+        stt=stt,
+        rag=rag,
+        meeting=meeting,
+        repository=repository,
+    )
+
+    silent = await pipeline.ingest_chunk(b"\x00\x00" * 16_000)
+    truncated = await pipeline.ingest_chunk(b"\x01")
+
+    assert silent.stt_status == truncated.stt_status == "gated"
+    assert silent.audio_ref == truncated.audio_ref == ""
+    assert silent.ambient_stored is truncated.ambient_stored is False
+    stt.transcribe.assert_not_awaited()
+    repository.append_ambient_segment.assert_not_awaited()
+    rag.ingest_ambient_segment.assert_not_awaited()
 
 
 @pytest.mark.asyncio

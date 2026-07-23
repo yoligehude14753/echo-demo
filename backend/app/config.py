@@ -484,7 +484,8 @@ class Settings(BaseSettings):
     #   5% × 6s ≈ 0.3s 偶发噪声就能放行 → 实测大量"嗯。"/英文幻觉漏入。
     # 收紧的预算：宁可漏过低语，也不要让底噪上 RAG / 污染 speaker registry。
     #
-    # 整段 RMS 门控：低于此值视为底噪 → 跳过 STT/diarizer，整 chunk 丢弃
+    # 活动帧 RMS 门控：低于此值视为底噪 → 跳过 STT/diarizer，整 chunk 丢弃。
+    # 只计算已过 frame 阈值的 20ms 帧，避免长静音稀释短语音的整窗均值。
     # 600 → 800：远场底噪 30-60、近场底噪 200-400、正常说话 2000-8000+，提高安全余量
     ambient_rms_gate: int = 800
     # 帧级 VAD：20ms 帧统计；帧 RMS > 阈值算"活跃"

@@ -173,6 +173,41 @@ def test_pre_gate_rejects_short_burst_in_long_silence() -> None:
     assert decision.reason in {"speech_ratio_too_low", "rms_too_low"}
 
 
+def test_pre_gate_accepts_short_voiced_chunk_when_window_rms_is_diluted() -> None:
+    """活动帧合格且占短 chunk 20% 时，不能被整窗静音稀释后误拒。"""
+    s = _new_thresholds()
+    audio = _sine(0.2, amplitude=1600) + _silence(0.8)
+
+    # 整窗 RMS < 800 是旧实现的误拒条件；活动帧 RMS 仍明显高于 800。
+    assert integer_rms(audio) < s.ambient_rms_gate
+    assert speech_frame_ratio(audio, frame_rms_threshold=s.ambient_frame_rms_threshold) == 0.2
+
+    decision = pre_stt_gate(
+        audio,
+        rms_gate=s.ambient_rms_gate,
+        frame_rms_threshold=s.ambient_frame_rms_threshold,
+        min_speech_frame_ratio=s.ambient_min_speech_frame_ratio,
+    )
+
+    assert decision.pass_ is True
+    assert decision.reason == "ok"
+    assert decision.active_rms > s.ambient_rms_gate
+
+
+def test_pre_gate_rejects_truncated_pcm() -> None:
+    """不足一个完整 PCM/VAD 帧的损坏输入没有活动帧，必须拒绝。"""
+    s = _new_thresholds()
+    decision = pre_stt_gate(
+        b"\x01",
+        rms_gate=s.ambient_rms_gate,
+        frame_rms_threshold=s.ambient_frame_rms_threshold,
+        min_speech_frame_ratio=s.ambient_min_speech_frame_ratio,
+    )
+
+    assert decision.pass_ is False
+    assert decision.reason == "rms_too_low"
+
+
 # ── case 4: 正常说话（持续 sin amp=3000）→ 过 ────────────────────
 
 
