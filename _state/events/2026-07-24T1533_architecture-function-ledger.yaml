@@ -1,0 +1,87 @@
+event_id: "E-20260724T1533-001"
+event_type: "add"
+timestamp: "2026-07-24T15:33:00+08:00"
+author: "agent/codex-ledger-implementation"
+session_id: null
+changes:
+  - action: "add"
+    fact:
+      id: "F-ECHO-038"
+      claim: "在重放前，_state/FACTS.yaml 的项目路径为 echo-fix-runtime-bugs、fact_count 为 33，且未物化事件流已定义的 F-ECHO-035 至 F-ECHO-037。"
+      category: "observation"
+      volatility: "low"
+      evidence_strength: "code"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-24T15:33:00+08:00"
+      observed_by: "agent/codex-ledger-implementation"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "_state/FACTS.yaml"
+        - "_state/events/2026-07-13T1810_echodesk-0-3-2-runtime-memory.yaml"
+      evidence: "重放前静态读取物化视图及其事件源，确认项目路径、计数和末三条事实不一致。"
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "factstore"
+        - "materialized-view"
+        - "observation"
+  - action: "add"
+    fact:
+      id: "F-ECHO-039"
+      claim: "本工作树中的 ASR router、StepFun、STT telemetry 与 desktop transport 改动只有源码和新增单测，尚无运行时或安装包验收记录。"
+      category: "observation"
+      volatility: "high"
+      evidence_strength: "code"
+      status: "confirmed"
+      confidence: 0.96
+      observed_at: "2026-07-24T15:33:00+08:00"
+      observed_by: "agent/codex-ledger-implementation"
+      valid_until: null
+      ttl_hours: 24
+      source:
+        - "backend/app/adapters/stt/router.py"
+        - "backend/app/adapters/stt/stepfun.py"
+        - "backend/app/adapters/repo/migrations/040_stt_usage_telemetry.sql"
+        - "desktop/src/session.ts"
+        - "desktop/src/ws.ts"
+        - "desktop/src/capture/captureChunkRouter.ts"
+        - "desktop/src/components/WorkspaceBar.tsx"
+        - "backend/tests/unit/test_stt_router.py"
+        - "backend/tests/unit/test_stt_telemetry.py"
+      evidence: "静态检查工作树与新增测试源码；本任务未读取对应运行时、真实服务或安装包验收记录。"
+      supersedes: []
+      superseded_by: null
+      pinned: false
+      tags:
+        - "wip"
+        - "asr"
+        - "telemetry"
+        - "desktop"
+  - action: "add"
+    fact:
+      id: "F-ECHO-040"
+      claim: "用户要求 docs/ARCHITECTURE_FUNCTION_LEDGER.md 成为后续所有架构、功能与 bug 变动的强制同步入口。"
+      category: "intent"
+      volatility: "low"
+      evidence_strength: "doc"
+      status: "confirmed"
+      confidence: 1.0
+      observed_at: "2026-07-24T15:33:00+08:00"
+      observed_by: "agent/codex-ledger-implementation"
+      valid_until: null
+      ttl_hours: null
+      source:
+        - "conversation:2026-07-24-user-request"
+        - "docs/ARCHITECTURE_FUNCTION_LEDGER.md"
+      evidence: "用户明确要求以该台账约束后续开发动作和 bug 同步。"
+      supersedes: []
+      superseded_by: null
+      pinned: true
+      tags:
+        - "governance"
+        - "ledger"
+        - "pinned"
+git_commit: null

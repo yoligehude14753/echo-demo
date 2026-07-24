@@ -125,6 +125,7 @@ live contract 与安装态 workflow 是独立门禁，不能用 `/healthz`、moc
 - [`PRD.md`](PRD.md)：产品目标、用户流程、范围与验收。
 - [`METRICS.md`](METRICS.md)：北极星、输入指标和护栏指标。
 - [`ARCHITECTURE.md`](ARCHITECTURE.md)：当前实现架构、事务边界与已知 P2。
+- [架构与功能台账](docs/ARCHITECTURE_FUNCTION_LEDGER.md)
 - [`docs/0.3/README.md`](docs/0.3/README.md)：0.3 文档索引与当前/最终证据边界。
 - [`docs/INSTALL.md`](docs/INSTALL.md)：安装、运行模式、签名与排障。
 - [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md)：可复跑演示流程。

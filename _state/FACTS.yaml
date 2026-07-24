@@ -1,8 +1,8 @@
 version: '1.0'
-project: /Users/yoligehude/Desktop/all/echo-fix-runtime-bugs
-generated_at: '2026-07-13T06:59:43.793614+00:00'
+project: /Users/yoligehude/Desktop/all/echo-capture-refresh-fix
+generated_at: '2026-07-24T07:46:41.767864+00:00'
 generated_by: replay.py
-fact_count: 33
+fact_count: 39
 facts:
 - id: F-ECHO-001
   claim: EchoDesk 0.3 preparation starts from the v0.2.50 baseline commit e5574e9379e82f10057d5c84f401349c6f8e613b.
@@ -1095,3 +1095,169 @@ facts:
   - heyi-daheng
   - runtime-capacity
   - gpu-lost
+- id: F-ECHO-035
+  claim: EchoDesk 0.3.2 source adds owner-scoped L0-L3 memory, provenance and management APIs, ASR-triggered extraction, and
+    in-feed source cards.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.9
+  observed_at: '2026-07-13T18:10:00+08:00'
+  observed_by: agent/codex-runtime-memory-release
+  valid_until: null
+  ttl_hours: 168
+  source:
+  - backend/app/adapters/repo/migrations/039_memory_system.sql
+  - backend/app/memory/
+  - backend/app/api/memory.py
+  - backend/app/api/chat.py
+  - backend/app/use_cases/ambient_capture.py
+  - desktop/src/components/TranscriptStream.tsx
+  - runtime:backend AST parse => 138 files passed
+  - runtime:desktop npm run typecheck => passed
+  evidence: The implementation is present in source and passed syntax/type static gates. Functional runtime, migration, microphone,
+    UI and packaged-app validation were not run before this event and remain release verification work.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.2
+  - memory
+  - provenance
+  - asr
+  - ui
+- id: F-ECHO-036
+  claim: EchoDesk 0.3.2 uses Yunwu gpt-5.4-nano behind a 2 second breaker for fast tasks, displays qwen3 8b, and keeps Yunwu
+    deepseek-v4-flash as MAIN.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.95
+  observed_at: '2026-07-13T18:10:00+08:00'
+  observed_by: agent/codex-runtime-memory-release
+  valid_until: null
+  ttl_hours: 168
+  source:
+  - backend/app/config.py
+  - backend/app/adapters/intent/llm_router.py
+  - backend/app/use_cases/retrieve_and_answer.py
+  - backend/app/memory/service.py
+  - runtime:desktop version:check => v0.3.2 OK
+  evidence: Static inspection and version/type gates confirm the configured model identifiers and breaker paths. No live Yunwu
+    request was sent during this implementation turn.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.2
+  - yunwu
+  - gpt-5.4-nano
+  - deepseek-v4-flash
+  - routing
+- id: F-ECHO-037
+  claim: EchoDesk 0.3.2 adds fail-closed build/schema checks, bounded meeting lifecycle with cooldown, and FireRed hallucination
+    filters without changing ASR model.
+  category: conclusion
+  volatility: medium
+  evidence_strength: test
+  status: confirmed
+  confidence: 0.9
+  observed_at: '2026-07-13T18:10:00+08:00'
+  observed_by: agent/codex-runtime-memory-release
+  valid_until: null
+  ttl_hours: 168
+  source:
+  - backend/app/build_contract.py
+  - backend/app/adapters/repo/migrator.py
+  - desktop/electron/backend-contract.cjs
+  - backend/app/use_cases/meeting_state.py
+  - backend/app/use_cases/auto_meeting_detector.py
+  - backend/app/adapters/stt/firered.py
+  - runtime:git diff --check => passed
+  evidence: The controls are implemented in source and passed static parsing/whitespace gates. Packaged handshake, long-running
+    meeting, and real-microphone behavior were not executed before this event.
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - 0.3.2
+  - handshake
+  - meeting-lifecycle
+  - firered
+  - fail-closed
+- id: F-ECHO-038
+  claim: 在重放前，_state/FACTS.yaml 的项目路径为 echo-fix-runtime-bugs、fact_count 为 33，且未物化事件流已定义的 F-ECHO-035 至 F-ECHO-037。
+  category: observation
+  volatility: low
+  evidence_strength: code
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-24T15:33:00+08:00'
+  observed_by: agent/codex-ledger-implementation
+  valid_until: null
+  ttl_hours: null
+  source:
+  - _state/FACTS.yaml
+  - _state/events/2026-07-13T1810_echodesk-0-3-2-runtime-memory.yaml
+  evidence: 重放前静态读取物化视图及其事件源，确认项目路径、计数和末三条事实不一致。
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - factstore
+  - materialized-view
+  - observation
+- id: F-ECHO-039
+  claim: 本工作树中的 ASR router、StepFun、STT telemetry 与 desktop transport 改动只有源码和新增单测，尚无运行时或安装包验收记录。
+  category: observation
+  volatility: high
+  evidence_strength: code
+  status: confirmed
+  confidence: 0.96
+  observed_at: '2026-07-24T15:33:00+08:00'
+  observed_by: agent/codex-ledger-implementation
+  valid_until: null
+  ttl_hours: 24
+  source:
+  - backend/app/adapters/stt/router.py
+  - backend/app/adapters/stt/stepfun.py
+  - backend/app/adapters/repo/migrations/040_stt_usage_telemetry.sql
+  - desktop/src/session.ts
+  - desktop/src/ws.ts
+  - desktop/src/capture/captureChunkRouter.ts
+  - desktop/src/components/WorkspaceBar.tsx
+  - backend/tests/unit/test_stt_router.py
+  - backend/tests/unit/test_stt_telemetry.py
+  evidence: 静态检查工作树与新增测试源码；本任务未读取对应运行时、真实服务或安装包验收记录。
+  supersedes: []
+  superseded_by: null
+  pinned: false
+  tags:
+  - wip
+  - asr
+  - telemetry
+  - desktop
+- id: F-ECHO-040
+  claim: 用户要求 docs/ARCHITECTURE_FUNCTION_LEDGER.md 成为后续所有架构、功能与 bug 变动的强制同步入口。
+  category: intent
+  volatility: low
+  evidence_strength: doc
+  status: confirmed
+  confidence: 1.0
+  observed_at: '2026-07-24T15:33:00+08:00'
+  observed_by: agent/codex-ledger-implementation
+  valid_until: null
+  ttl_hours: null
+  source:
+  - conversation:2026-07-24-user-request
+  - docs/ARCHITECTURE_FUNCTION_LEDGER.md
+  evidence: 用户明确要求以该台账约束后续开发动作和 bug 同步。
+  supersedes: []
+  superseded_by: null
+  pinned: true
+  tags:
+  - governance
+  - ledger
+  - pinned
