@@ -56,7 +56,7 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Install packaged artifact runtime dependencies
         working-directory: backend/app/adapters/skill/assets/ppt_ib_deck
