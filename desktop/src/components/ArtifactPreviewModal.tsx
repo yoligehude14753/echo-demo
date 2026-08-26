@@ -634,7 +634,7 @@ function DocxPreview({
     );
   // srcDoc 给 iframe 一个独立 DOM，避免 mammoth 内联 style 污染主应用 CSS
   const wrapped = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; padding: 24px; color: #1f1f1f; line-height: 1.6; max-width: 860px; margin: 0 auto; }
+    body { font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif; padding: 24px; color: #1f1f1f; line-height: 1.72; max-width: 860px; margin: 0 auto; }
     h1, h2, h3 { color: #0f172a; }
     table { border-collapse: collapse; margin: 12px 0; }
     td, th { border: 1px solid #d4d4d8; padding: 6px 10px; }

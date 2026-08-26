@@ -41,8 +41,7 @@ if (!alreadyMounted) {
           colorBorder: "#e5e5e5",
           colorBorderSecondary: "#f0f0f0",
           borderRadius: 8,
-          fontFamily:
-            '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+          fontFamily: "var(--ed-font-ui)",
         },
         components: {
           Layout: {

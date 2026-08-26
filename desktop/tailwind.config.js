@@ -4,22 +4,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: [
-          "-apple-system",
-          "BlinkMacSystemFont",
-          "Segoe UI",
-          "PingFang SC",
-          "Microsoft YaHei",
-          "sans-serif",
-        ],
-        mono: [
-          "ui-monospace",
-          "SFMono-Regular",
-          "Menlo",
-          "Monaco",
-          "Consolas",
-          "monospace",
-        ],
+        sans: ["var(--ed-font-ui)"],
+        serif: ["var(--ed-font-primary)"],
+        mono: ["var(--ed-font-primary)"],
       },
       colors: {
         ink: {
