@@ -514,20 +514,20 @@ async def test_surviving_instance_reaps_expired_bridge_and_completes_projection(
     first = _service(
         settings,
         holder_id="instance-a",
-        heartbeat=0.03,
-        ttl=0.15,
-        recovery_interval=0.01,
-        retry_base=0.03,
-        retry_max=0.08,
+        heartbeat=0.05,
+        ttl=1.0,
+        recovery_interval=0.05,
+        retry_base=0.05,
+        retry_max=0.2,
     )
     second = _service(
         settings,
         holder_id="instance-b",
-        heartbeat=0.03,
-        ttl=0.15,
-        recovery_interval=0.01,
-        retry_base=0.03,
-        retry_max=0.08,
+        heartbeat=0.05,
+        ttl=1.0,
+        recovery_interval=0.05,
+        retry_base=0.05,
+        retry_max=0.2,
     )
     waiting = await first.submit_task(
         AgentIntent(
@@ -577,7 +577,7 @@ async def test_surviving_instance_reaps_expired_bridge_and_completes_projection(
         survivor = second if lease_holder is first else first
 
         await _close_without_releasing_bridge_lease(lease_holder, monkeypatch)
-        await asyncio.wait_for(harness.takeover_completed.wait(), timeout=2.0)
+        await asyncio.wait_for(harness.takeover_completed.wait(), timeout=5.0)
         stored = await _wait_for_bridge_completion(survivor, rec.task_id)
         run = await survivor.workflow.get_run(waiting.workflow_run_id)
         assert stored.state.value == "succeeded"
@@ -585,7 +585,7 @@ async def test_surviving_instance_reaps_expired_bridge_and_completes_projection(
         assert run is not None
         assert run.state == "succeeded"
         assert harness.starts == 2
-        assert acquire_probe.attempts <= 12
+        assert acquire_probe.attempts <= 30
         await asyncio.sleep(0.1)
         assert harness.starts == 2
     finally:

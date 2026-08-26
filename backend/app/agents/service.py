@@ -2466,11 +2466,6 @@ class AgentTaskService:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if heartbeat_task in done:
-                # A lost heartbeat means another process may already own the
-                # fenced bridge lease. Let the shared recovery loop reacquire
-                # it; scheduling an immediate local retry can create a third
-                # concurrent bridge during failover.
-                retry = False
                 bridge_task.cancel()
                 await asyncio.gather(bridge_task, return_exceptions=True)
                 return
@@ -2484,9 +2479,9 @@ class AgentTaskService:
             retry = False
             raise
         except LeaseOwnershipError:
-            # The lease fence has moved to another holder. Recovery scans are
-            # responsible for retrying after that holder exits; a local retry
-            # here races the survivor and can duplicate the stream bridge.
+            # The task lease has moved to another holder. Let the recovery
+            # loop retry after the survivor releases it; an immediate local
+            # retry can race that holder and create a duplicate stream.
             retry = False
             _log.info("agent bridge lease ownership moved task=%s", rec.task_id)
         except Exception as exc:
