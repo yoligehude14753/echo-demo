@@ -6,20 +6,20 @@
  *  - P2.1 多级状态可视化（fail vs warn 区分）
  *
  * 视频里观察点：
- *  - 语音探针失败不会把 AI 引擎主能力拖红，但 popover 保留错误明细
+ *  - 语音识别是 AI 引擎的必需能力；部分探针失败时 pill 显示橙色并保留错误明细
  *  - 顶栏 AI 引擎 pill 橙色（主模型 / 联网检索都 no_api_key）
  *  - 点开 popover 看到具体错误「Connection refused」+ 提示「编辑 config.json」
  */
 import { test, expect } from "@playwright/test";
 import { installScenarioMock } from "./_helpers";
 
-test("S06a · 语音服务全挂 → AI 引擎 pill 保持绿色 + 错误 popover", async ({ page }) => {
+test("S06a · 语音服务全挂 → AI 引擎 pill 显示降级 + 错误 popover", async ({ page }) => {
   await installScenarioMock(page, { healthOverride: "service-down" });
 
-  await test.step("打开主界面，AI 主能力正常时 pill 保持绿色", async () => {
+  await test.step("打开主界面，部分必需能力失败时 pill 显示橙色", async () => {
     await page.goto("/");
     await expect(page.getByTestId("pill-ai-engine")).toBeVisible();
-    await expect(page.getByTestId("pill-ai-engine").locator("span.bg-accent")).toBeVisible({
+    await expect(page.getByTestId("pill-ai-engine").locator("span.bg-amber-500")).toBeVisible({
       timeout: 8_000,
     });
   });

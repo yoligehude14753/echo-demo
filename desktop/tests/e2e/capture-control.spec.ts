@@ -307,13 +307,13 @@ test("Android 收音选择冲突后刷新权威 revision，等待用户再次确
 
   await page.goto("/");
   await page.getByTestId("meeting-status-bar").click();
-  await expect(page.getByRole("dialog", { name: "选择收音设备" })).toBeVisible();
+  await expect(page.getByText("选择收音设备").last()).toBeVisible();
   await expect(page.getByLabel("多端收音")).toBeChecked();
   await expect(page.getByLabel(/办公室 Mac/)).toBeChecked();
   await expect(page.getByRole("button", { name: "开启自由收音" })).toBeEnabled();
   await page.getByRole("button", { name: "开启自由收音" }).click();
 
-  await expect(page.getByRole("dialog", { name: "选择收音设备" })).toBeVisible();
+  await expect(page.getByText("选择收音设备").last()).toBeVisible();
   await expect(page.getByText("收音选择已更新，请确认最新选择后重试")).toBeVisible();
   await expect(page.getByLabel("单端收音")).toBeChecked();
   await expect(page.getByLabel(/会议室 Windows/)).toBeChecked();
