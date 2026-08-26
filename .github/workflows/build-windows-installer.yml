@@ -84,7 +84,23 @@ jobs:
           PY=.venv/Scripts/python
           "$PY" -m pip install --require-hashes -r packaging/requirements-build.lock
           npm ci --prefix app/adapters/skill/assets/ppt_ib_deck
-          npm audit --prefix app/adapters/skill/assets/ppt_ib_deck --audit-level=high --registry=https://registry.npmjs.org
+          report="$RUNNER_TEMP/echodesk-pptxgenjs-npm-audit.json"
+          exit_file="$RUNNER_TEMP/echodesk-pptxgenjs-npm-audit.exit-code"
+          set +e
+          npm audit --prefix app/adapters/skill/assets/ppt_ib_deck --audit-level=high --registry=https://registry.npmjs.org --json > "$report"
+          audit_exit=$?
+          set -e
+          printf '%s\n' "$audit_exit" > "$exit_file"
+          python "$GITHUB_WORKSPACE/scripts/check-npm-audit-evidence.py" \
+            --report "$report" \
+            --exit-code "$exit_file" \
+            --lock "$GITHUB_WORKSPACE/backend/app/adapters/skill/assets/ppt_ib_deck/package-lock.json" \
+            --exception "$GITHUB_WORKSPACE/backend/SECURITY_DEPENDENCY_EXCEPTIONS.md" \
+            --root-package pptxgenjs \
+            --root-version 3.12.0 \
+            --image-version 1.2.1 \
+            --advisory GHSA-w3rx-r6r6-pgpr \
+            --advisory GHSA-5p2g-fcmc-qvqq
 
       - name: Install desktop dependencies
         working-directory: desktop

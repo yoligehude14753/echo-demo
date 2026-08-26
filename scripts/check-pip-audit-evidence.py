@@ -50,10 +50,26 @@ def load_report(path: Path) -> list[dict[str, Any]]:
 
 def findings(dependencies: list[dict[str, Any]]) -> list[tuple[str, str, dict[str, Any]]]:
     result: list[tuple[str, str, dict[str, Any]]] = []
+    seen: set[tuple[str, str, str, tuple[str, ...]]] = set()
     for dependency in dependencies:
         for vulnerability in dependency["vulns"]:
             if not isinstance(vulnerability, dict):
                 fail(f"invalid vulnerability entry for {dependency['name']!r}")
+            aliases = vulnerability.get("aliases", [])
+            if not isinstance(aliases, list):
+                fail(f"pip-audit vulnerability aliases must be an array for {dependency['name']!r}")
+            identity = (
+                dependency["name"],
+                dependency["version"],
+                str(vulnerability.get("id", "")),
+                tuple(sorted(str(alias) for alias in aliases)),
+            )
+            # Newer pip-audit/advisory feeds can emit the same advisory twice
+            # with different descriptions.  Collapse only exact identity;
+            # distinct IDs/aliases remain visible and fail the allowlist.
+            if identity in seen:
+                continue
+            seen.add(identity)
             result.append((dependency["name"], dependency["version"], vulnerability))
     return result
 
@@ -186,12 +202,20 @@ def validate_exception(
 
         fix_versions = vulnerability.get("fix_versions")
         if fix_versions != []:
-            if (
-                package != "setuptools"
-                or vulnerability_id != "CVE-2026-59890"
-                or fix_versions != ["83.0.0"]
-                or "setuptools>=83.0.0" not in section
-            ):
+            setuptools_exception = (
+                package == "setuptools"
+                and vulnerability_id == "CVE-2026-59890"
+                and fix_versions == ["83.0.0"]
+                and "setuptools>=83.0.0" in section
+            )
+            torch_pair_exception = (
+                package == "torch"
+                and vulnerability_id == "CVE-2025-3000"
+                and fix_versions == ["2.13.0"]
+                and "matching Torch/TorchAudio pair" in section
+                and "TorchAudio 2.13.0" in section
+            )
+            if not (setuptools_exception or torch_pair_exception):
                 fail(
                     f"{vulnerability_id} now reports fixed versions {fix_versions!r}; "
                     "remove or renew the exception instead of accepting it"

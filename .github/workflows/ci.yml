@@ -220,7 +220,26 @@ jobs:
         run: npm ci
       - name: audit packaged Node skill runtime
         working-directory: backend/app/adapters/skill/assets/ppt_ib_deck
-        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/echodesk-pptxgenjs-npm-audit.json"
+          exit_file="$RUNNER_TEMP/echodesk-pptxgenjs-npm-audit.exit-code"
+          set +e
+          npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org --json > "$report"
+          audit_exit=$?
+          set -e
+          printf '%s\n' "$audit_exit" > "$exit_file"
+          python "$GITHUB_WORKSPACE/scripts/check-npm-audit-evidence.py" \
+            --report "$report" \
+            --exit-code "$exit_file" \
+            --lock "$GITHUB_WORKSPACE/backend/app/adapters/skill/assets/ppt_ib_deck/package-lock.json" \
+            --exception "$GITHUB_WORKSPACE/backend/SECURITY_DEPENDENCY_EXCEPTIONS.md" \
+            --root-package pptxgenjs \
+            --root-version 3.12.0 \
+            --image-version 1.2.1 \
+            --advisory GHSA-w3rx-r6r6-pgpr \
+            --advisory GHSA-5p2g-fcmc-qvqq
       - name: deterministic backend suite (live contracts excluded, zero skip)
         timeout-minutes: 20
         working-directory: backend
