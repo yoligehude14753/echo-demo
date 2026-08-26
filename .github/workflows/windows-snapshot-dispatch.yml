@@ -35,7 +35,7 @@ jobs:
         with:
           repository: yoligehude14753/yoli-platform
           ref: main
-          path: ../_platforms
+          path: _platforms
           token: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           persist-credentials: false
           sparse-checkout: |
@@ -99,6 +99,7 @@ jobs:
         shell: pwsh
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          ECHODESK_SHARED_LLM_ROOT: ${{ github.workspace }}\\_platforms\\llm\\src
         run: |
           $ErrorActionPreference = "Stop"
           if ("${{ inputs.release_mode }}" -eq "signed") { npm.cmd run app:dist:win } else { npm.cmd run app:dist:win:unsigned-test }
