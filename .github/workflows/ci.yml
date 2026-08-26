@@ -101,7 +101,7 @@ jobs:
           python scripts/check-ci-action-pins.py
           python scripts/check-python-locks.py
       - name: install locked Python audit tool
-        run: pip install --require-hashes -r backend/requirements-audit.lock
+        run: python -m pip install --require-hashes -r backend/requirements-audit.lock
       - name: capture and validate raw Python dependency audit evidence
         shell: bash
         env:
