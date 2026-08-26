@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 BACKEND_ROOT = Path(SPECPATH).parent
-SHARED_LLM_ROOT = BACKEND_ROOT.parents[1] / "_platforms" / "llm" / "src"
+DEFAULT_SHARED_LLM_ROOT = BACKEND_ROOT.parents[1] / "_platforms" / "llm" / "src"
+configured_shared_llm_root = os.environ.get("ECHODESK_SHARED_LLM_ROOT", "").strip()
+SHARED_LLM_ROOT = (
+    Path(configured_shared_llm_root).expanduser().resolve()
+    if configured_shared_llm_root
+    else DEFAULT_SHARED_LLM_ROOT
+)
 if not (SHARED_LLM_ROOT / "yoli_llm").is_dir():
     raise SystemExit(f"missing shared yoli_llm package root: {SHARED_LLM_ROOT}")
 LEGACY_APP_MODULE_PREFIXES = (
