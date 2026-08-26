@@ -1,0 +1,32 @@
+{
+  "requirements_schema_version": 1,
+  "requirements": {
+    "chat": {
+      "protocol": "openai_chat_json_sse",
+      "required_fields": ["model", "messages"],
+      "output": {"boundary": "json", "shape": "chat_completion"},
+      "stream_output": {"boundary": "sse", "shape": "chat_sse"},
+      "request_overrides": {
+        "chat_template_kwargs": {"enable_thinking": false}
+      }
+    },
+    "transcription": {
+      "protocol": "openai_audio_multipart",
+      "required_fields": ["model", "file", "stream"],
+      "output": {"boundary": "json", "shape": "transcription"},
+      "stream_output": {"boundary": "sse", "shape": "transcription_sse"},
+      "request_overrides": {"response_format": "json"},
+      "constraints": {"mime_types": ["audio/wav"]}
+    },
+    "speech": {
+      "protocol": "audio_binary",
+      "required_fields": ["model", "input", "voice", "response_format"],
+      "output": {"boundary": "binary", "shape": "audio"},
+      "request_overrides": {"response_format": "wav"},
+      "constraints": {
+        "input_chars_max": 4000,
+        "response_formats": ["wav"]
+      }
+    }
+  }
+}

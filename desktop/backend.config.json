@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 3,
+  "roles": {
+    "publicService": {
+      "baseUrl": "https://echo.yoliyoli.uk"
+    },
+    "pairedHubSyncGateway": {
+      "enabled": true,
+      "baseUrl": "https://echo.yoliyoli.uk"
+    }
+  },
+  "runtimeEndpoint": {
+    "environment": "ECHODESK_BASE_URL"
+  },
+  "lanShare": {
+    "enabled": true,
+    "bindHost": "0.0.0.0"
+  }
+}

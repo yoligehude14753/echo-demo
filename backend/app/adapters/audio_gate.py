@@ -1,0 +1,461 @@
+"""音频预过滤工具：RMS + 帧级 VAD + STT 字符速率门控 + VAD 句级切片。
+
+移植自 echo backend/app/pipeline.py 的 handle_audio 预过滤逻辑（已被生产验证）。
+
+设计意图：
+- ambient 全天候采集会把环境底噪一起送进来；如果不过滤，STT 会在静音/噪声上幻觉，
+  diarizer 会把每段噪声当成不同的"新说话人"——这正是当前 echo-demo 出现 61 个
+  speaker、转写满是 "嗯。" "ですね" 的根因。
+- echo 的预过滤在 1 年生产里已验证：先 RMS 粗过滤、再帧级 VAD 精过滤、最后字符速率门控。
+- 本模块只做静态判断函数，无状态、可单独单测。
+
+VAD 句级切片（PR echodesk-spk-2 新增）：
+- 单个 6s ambient chunk 内若发生说话人切换（A 说 3s → 静 0.5s → B 说 2.5s），
+  老链路会把整段做一次 ECAPA embedding，得到的是混合向量 → 跟 A、B 谁都不像 →
+  被判为新说话人 → speaker explosion 的关键源头之一（ARCH-AUDIT §4 root #5b）。
+- 新增 `split_into_voiced_segments` 在 STT 通过后、diarize 之前把整段切成多个连续
+  voiced 段，每段独立 embed + match。
+- 算法对齐 echo `backend/app/pipeline.py` 的 silence-gap 切句逻辑（200ms 间隔）。
+"""
+
+from __future__ import annotations
+
+import math
+import struct
+from dataclasses import dataclass
+
+_SAMPLE_RATE = 16_000  # 全链路约定 16kHz int16 mono
+
+
+@dataclass(slots=True)
+class GateDecision:
+    """前置门控判定结果。"""
+
+    pass_: bool
+    reason: str  # "ok" / "rms_too_low" / "speech_ratio_too_low" / ...
+    rms: float = 0.0
+    speech_ratio: float = 0.0
+    active_rms: float = 0.0
+    energy_cv: float = 0.0
+
+
+def integer_rms(audio_bytes: bytes) -> float:
+    """整段音频的 int16 RMS。空缓冲 → 0。"""
+    n = len(audio_bytes) // 2
+    if n == 0:
+        return 0.0
+    samples = struct.unpack_from(f"<{n}h", audio_bytes)
+    return math.sqrt(sum(s * s for s in samples) / n)
+
+
+def speech_frame_ratio(
+    audio_bytes: bytes,
+    *,
+    frame_ms: int = 20,
+    frame_rms_threshold: int = 400,
+) -> float:
+    """20ms 帧级活跃率：活跃帧数 / 总帧数。
+
+    一个帧"活跃" = 帧 RMS > frame_rms_threshold。
+    适合识别"大缓冲区里只有 0.5s 偶发噪声、整段 RMS 又勉强过线"的伪语音场景。
+    """
+    ratio, _, _ = _active_frame_metrics(
+        audio_bytes,
+        frame_ms=frame_ms,
+        frame_rms_threshold=frame_rms_threshold,
+    )
+    return ratio
+
+
+def _active_frame_metrics(
+    audio_bytes: bytes,
+    *,
+    frame_ms: int,
+    frame_rms_threshold: int,
+) -> tuple[float, float, float]:
+    """Return (active-frame ratio, active RMS, frame-energy CV).
+
+    The second value deliberately excludes silence.  Capture clients submit
+    short, low-latency chunks, so a valid voiced frame must not be rejected
+    merely because surrounding silence dilutes the whole-window RMS.
+    """
+    n = len(audio_bytes) // 2
+    if n == 0:
+        return 0.0, 0.0, 0.0
+    samples = struct.unpack_from(f"<{n}h", audio_bytes)
+    frame_samples = int(_SAMPLE_RATE * frame_ms / 1000)
+    if frame_samples <= 0 or n < frame_samples:
+        return 0.0, 0.0, 0.0
+    # 只统计完整帧。旧实现用 ``n - frame_samples`` 且 range 右边界不包含，
+    # 每个 chunk 都会漏掉最后一帧；短音频甚至会错误返回 0。
+    total = n // frame_samples
+    if total <= 0:
+        return 0.0, 0.0, 0.0
+    active = 0
+    active_sum_squares = 0
+    frame_rms_values: list[float] = []
+    for frame_index in range(total):
+        i = frame_index * frame_samples
+        chunk = samples[i : i + frame_samples]
+        sum_squares = sum(sample * sample for sample in chunk)
+        rms = math.sqrt(sum_squares / frame_samples)
+        frame_rms_values.append(rms)
+        if rms > frame_rms_threshold:
+            active += 1
+            active_sum_squares += sum_squares
+    mean_frame_rms = sum(frame_rms_values) / max(1, len(frame_rms_values))
+    energy_cv = 0.0
+    if mean_frame_rms > 0:
+        variance = sum(
+            (frame_rms - mean_frame_rms) ** 2 for frame_rms in frame_rms_values
+        ) / len(frame_rms_values)
+        energy_cv = math.sqrt(variance) / mean_frame_rms
+    if active == 0:
+        return 0.0, 0.0, energy_cv
+    return (
+        active / total,
+        math.sqrt(active_sum_squares / (active * frame_samples)),
+        energy_cv,
+    )
+
+
+def pre_stt_gate(
+    audio_bytes: bytes,
+    *,
+    rms_gate: int,
+    frame_rms_threshold: int,
+    min_speech_frame_ratio: float,
+    min_speech_energy_cv: float = 0.75,
+    stationary_noise_min_duration_ms: int = 3_000,
+    stationary_noise_min_active_ratio: float = 0.5,
+    stationary_noise_max_active_rms_factor: float = 1.35,
+) -> GateDecision:
+    """STT 前置门控：能量、活跃率与稳定底噪三道关卡。
+
+    1. 活动帧 RMS < rms_gate → 直接拒（静音/几乎无声）
+    2. 帧级活跃率 < min_speech_frame_ratio → 拒（大段静音里偶发噪声）
+    3. 长窗口能量低且过度平稳 → 拒（被客户端 AGC 抬高的稳定底噪）
+
+    整窗 RMS 仅保留在结果中作诊断，不能作为 admission 条件：长窗口
+    的静音会稀释真实短语音的整窗均值。现有的活动帧能量和活动帧比例
+    阈值仍同时生效，因此不会无条件接收底噪或静音。
+
+    返回 GateDecision；调用方按 pass_ 决定是否跑 STT。
+    """
+    rms = integer_rms(audio_bytes)
+    ratio, active_rms, energy_cv = _active_frame_metrics(
+        audio_bytes,
+        frame_ms=20,
+        frame_rms_threshold=frame_rms_threshold,
+    )
+    if active_rms < rms_gate:
+        return GateDecision(
+            pass_=False,
+            reason="rms_too_low",
+            rms=rms,
+            speech_ratio=ratio,
+            active_rms=active_rms,
+            energy_cv=energy_cv,
+        )
+    if ratio < min_speech_frame_ratio:
+        return GateDecision(
+            pass_=False,
+            reason="speech_ratio_too_low",
+            rms=rms,
+            speech_ratio=ratio,
+            active_rms=active_rms,
+            energy_cv=energy_cv,
+        )
+    duration_ms = len(audio_bytes) / (_SAMPLE_RATE * 2) * 1_000
+    # 客户端曾把“超过极低能量阈值的稳定底噪”误当成持续讲话，再用 AGC
+    # 精确抬到后端 RMS 门限。此类载荷的活跃率和连续时长都很高，但 20ms
+    # 帧能量几乎不随语音音节变化；不能继续把“有能量”等同于“有人声”。
+    if (
+        duration_ms >= stationary_noise_min_duration_ms
+        and ratio >= stationary_noise_min_active_ratio
+        and active_rms < rms_gate * stationary_noise_max_active_rms_factor
+        and energy_cv < min_speech_energy_cv
+    ):
+        return GateDecision(
+            pass_=False,
+            reason="stationary_noise",
+            rms=rms,
+            speech_ratio=ratio,
+            active_rms=active_rms,
+            energy_cv=energy_cv,
+        )
+    return GateDecision(
+        pass_=True,
+        reason="ok",
+        rms=rms,
+        speech_ratio=ratio,
+        active_rms=active_rms,
+        energy_cv=energy_cv,
+    )
+
+
+def normalize_transcript_text(text: str) -> str:
+    """生成用于幻觉/重复判断的稳定文本签名。
+
+    仅保留 Unicode 字母和数字，并统一大小写。这样 ``“嗯……”`` 不会因为
+    标点数量达到 ``min_chars`` 而绕过短文本门，跨 chunk 的标点差异也不会
+    绕过重复检测。
+    """
+
+    return "".join(char.casefold() for char in text if char.isalnum())
+
+
+def _repetitive_text_reason(normalized: str) -> str | None:
+    """识别短周期复读，不把普通的少量重复措辞误判为幻觉。"""
+
+    n_chars = len(normalized)
+    if n_chars < 5:
+        return None
+    if len(set(normalized)) == 1:
+        return "single_char"
+
+    # 至少完整重复 3 次，且周期模板覆盖率 ≥ 90% 才拒绝。例如
+    # “嗯嗯嗯…”、“测试测试测试”会命中，“非常非常重要”不会命中。
+    for unit_size in range(1, min(12, n_chars // 3) + 1):
+        unit = normalized[:unit_size]
+        template = (unit * ((n_chars + unit_size - 1) // unit_size))[:n_chars]
+        matches = sum(left == right for left, right in zip(normalized, template, strict=True))
+        if matches / n_chars >= 0.9:
+            return f"periodic_unit_{unit_size}"
+
+    # ASR 偶尔会在复读前拼出一个短假前缀，例如声学回放“嗯嗯嗯嗯”被写成
+    # “去躲过来过来过来”。只要同一尾段完整重复至少三次且覆盖全文 75%，
+    # 就按复读拒绝；普通的“非常非常重要”没有重复尾段，不会命中。
+    for unit_size in range(1, min(6, n_chars // 3) + 1):
+        unit = normalized[-unit_size:]
+        cursor = n_chars
+        repetitions = 0
+        while cursor >= unit_size and normalized[cursor - unit_size : cursor] == unit:
+            repetitions += 1
+            cursor -= unit_size
+        if repetitions >= 3 and repetitions * unit_size / n_chars >= 0.75:
+            return f"tail_unit_{unit_size}"
+
+    # 长文本的 3-gram 多样性极低，也通常是 ASR 卡住后的循环输出。
+    if n_chars >= 12:
+        trigrams = [normalized[i : i + 3] for i in range(n_chars - 2)]
+        if len(set(trigrams)) / len(trigrams) <= 0.25:
+            return "low_ngram_diversity"
+    return None
+
+
+def repetitive_transcript_reason(text: str) -> str | None:
+    """Return a stable reason when transcript text has entered a short loop."""
+
+    return _repetitive_text_reason(normalize_transcript_text(text))
+
+
+def is_likely_hallucination(
+    text: str,
+    audio_bytes: bytes,
+    *,
+    max_cps: float = 12.0,
+    min_chars: int = 4,
+    speech_duration_s: float | None = None,
+    acoustic_speech_ratio: float | None = None,
+    coherent_speech_ms: int | None = None,
+    recent_strong_speech: bool = False,
+    min_acoustic_speech_ratio: float = 0.25,
+    min_coherent_speech_ms: int = 800,
+) -> tuple[bool, str]:
+    """STT 后置过滤：有效字符、复读模式与字符速率。
+
+    - 有效字符短于 min_chars 直接判幻觉，标点不计入长度
+    - 短周期复读或极低 n-gram 多样性直接判幻觉
+    - 常规 cps 仍按完整音频时长计算；简单 RMS-VAD 会漏掉清辅音和停顿，直接按
+      active time 会误杀真实快语速
+    - 长文本必须由足够的活跃帧与连续语音支撑；仅在紧邻强语音时允许弱片段续接
+    - 调用方提供 ``speech_duration_s`` 时，额外拦截 active-cps 极端异常值
+    - cps > max_cps → 视为复读/幻觉
+
+    返回 (is_hallu, reason)。
+    """
+    t = text.strip()
+    normalized = normalize_transcript_text(t)
+    audio_duration_s = len(audio_bytes) / (_SAMPLE_RATE * 2)  # int16 mono = 32000 B/s
+
+    # 桌面端的 voice-active chunker 会在一句短话结束后立即提交，常见载荷
+    # 只有 0.4–0.8 秒。把为旧 6 秒 ambient chunk 设计的 5 字下限原样套用，
+    # 会把“好的”“可以”等已被 ASR 正确识别的自然短应答误判成幻觉。单字
+    # 仍然不接纳；重复/低多样性文本继续由下方的独立门控拒绝。
+    short_vad_chunk = audio_duration_s < 1.0
+    effective_min_chars = min_chars
+    if short_vad_chunk:
+        effective_min_chars = min(min_chars, 2)
+    if len(normalized) < effective_min_chars:
+        return True, f"too_short({len(normalized)}<{effective_min_chars})"
+
+    # 动态放宽到双字只适用于短 VAD 片段；仍不能接纳“嗯嗯”这类最短的
+    # 单字复读。该判定留在短片段分支，避免改变长录音的既有重复文本语义。
+    if short_vad_chunk and len(normalized) == 2 and len(set(normalized)) == 1:
+        return True, "repetitive_text(single_char)"
+
+    repetition_reason = _repetitive_text_reason(normalized)
+    if repetition_reason is not None:
+        return True, f"repetitive_text({repetition_reason})"
+
+    # 能量帧零散越过阈值时，ASR 可能在没有连续人声的噪声上生成一整句百科式
+    # 陈述。长会议中的句尾弱片段仍可由最近一条强语音承接；孤立弱片段则必须
+    # 同时具备最低活跃率和连续语音时长，不能只凭非空文本进入持久层。
+    if len(normalized) >= 12 and not recent_strong_speech:
+        weak_reasons: list[str] = []
+        if (
+            acoustic_speech_ratio is not None
+            and acoustic_speech_ratio < min_acoustic_speech_ratio
+        ):
+            weak_reasons.append(
+                f"ratio={acoustic_speech_ratio:.3f}<{min_acoustic_speech_ratio:.3f}"
+            )
+        if coherent_speech_ms is not None and coherent_speech_ms < min_coherent_speech_ms:
+            weak_reasons.append(
+                f"coherent_ms={coherent_speech_ms}<{min_coherent_speech_ms}"
+            )
+        if weak_reasons:
+            return True, "weak_acoustic_support(" + ",".join(weak_reasons) + ")"
+
+    if audio_duration_s >= 3.0 and len(normalized) >= 12:
+        cps = len(normalized) / audio_duration_s
+        if cps > max_cps:
+            return True, f"cps_too_high({cps:.1f}>{max_cps})"
+
+    # 真实保存 WAV 的只读抽样显示，简单能量 VAD 下正常中文 active-cps 可到
+    # 20 左右，因此不能直接套用常规阈值。这里只拒绝高出常规上限 2.5 倍的
+    # 极端结果，用来抓“不到 1s 活跃噪声却返回几十字”的典型幻觉。
+    if (
+        speech_duration_s is not None
+        and speech_duration_s > 0
+        and audio_duration_s >= 0.5
+        and len(normalized) >= 12
+    ):
+        active_duration_s = min(audio_duration_s, speech_duration_s)
+        active_cps = len(normalized) / active_duration_s
+        active_cps_limit = max_cps * 2.5
+        if active_cps > active_cps_limit:
+            return True, f"active_cps_too_high({active_cps:.1f}>{active_cps_limit:.1f})"
+    return False, "ok"
+
+
+@dataclass(slots=True, frozen=True)
+class VoicedSegment:
+    """一段连续 voiced 区间。
+
+    - start_ms / end_ms：相对整段输入的偏移（int16 mono 16kHz）
+    - audio_bytes：该段在原 buffer 中切出的 PCM
+    - active_ratio：段内活跃帧占比（diarizer 阈值门控用）
+    """
+
+    start_ms: int
+    end_ms: int
+    audio_bytes: bytes
+    active_ratio: float
+
+    @property
+    def duration_ms(self) -> int:
+        return self.end_ms - self.start_ms
+
+
+def split_into_voiced_segments(
+    audio_bytes: bytes,
+    *,
+    frame_ms: int = 20,
+    frame_rms_threshold: int = 400,
+    min_segment_ms: int = 800,
+    max_silence_gap_ms: int = 200,
+) -> list[VoicedSegment]:
+    """把整段音频切成多个连续 voiced 段（按 silence-gap 分句）。
+
+    算法（与 echo 对齐）：
+    1. 按 frame_ms 切帧，每帧算 RMS → active=(rms > frame_rms_threshold)
+    2. 状态机扫一遍：
+       - 静音态见到 active → 进入 voiced（标 start）
+       - voiced 态见到 active → 继续，silence_run=0
+       - voiced 态见到 silent → silence_run+=1，若 silence_run*frame_ms > max_silence_gap_ms
+         → 退出 voiced，end = 最后一个 active 帧尾，emit
+    3. 段长 < min_segment_ms 丢弃（embed 不可靠，echo 的 _MIN_BYTES_FOR_EMBED 也是 1s）
+
+    边界：
+    - 整段全静音 → 返回 []
+    - 整段全活跃 → 返回 1 段（覆盖完整 buffer）
+    - 末尾未结束的 voiced 段也会被 emit（用末帧位置作为 end）
+
+    返回的 audio_bytes 是 raw int16 PCM 切片（不包 WAV header），调用方自己加。
+    """
+    if frame_ms <= 0 or frame_rms_threshold < 0:
+        return []
+    n_samples = len(audio_bytes) // 2
+    frame_samples = int(_SAMPLE_RATE * frame_ms / 1000)
+    if frame_samples <= 0 or n_samples < frame_samples:
+        return []
+    samples = struct.unpack_from(f"<{n_samples}h", audio_bytes)
+
+    total_frames = n_samples // frame_samples
+    if total_frames == 0:
+        return []
+
+    actives: list[bool] = []
+    for fi in range(total_frames):
+        chunk = samples[fi * frame_samples : (fi + 1) * frame_samples]
+        rms = math.sqrt(sum(s * s for s in chunk) / frame_samples)
+        actives.append(rms > frame_rms_threshold)
+
+    max_silence_frames = max(1, max_silence_gap_ms // frame_ms)
+    min_seg_frames = max(1, min_segment_ms // frame_ms)
+
+    segments: list[VoicedSegment] = []
+    in_voice = False
+    start_f = 0
+    last_active_f = 0
+    silence_run = 0
+
+    def _emit(start_frame: int, end_frame_exclusive: int) -> None:
+        if end_frame_exclusive - start_frame < min_seg_frames:
+            return
+        s_byte = start_frame * frame_samples * 2
+        e_byte = end_frame_exclusive * frame_samples * 2
+        seg_bytes = audio_bytes[s_byte:e_byte]
+        n_active = sum(1 for f in range(start_frame, end_frame_exclusive) if actives[f])
+        ratio = n_active / max(1, end_frame_exclusive - start_frame)
+        segments.append(
+            VoicedSegment(
+                start_ms=start_frame * frame_ms,
+                end_ms=end_frame_exclusive * frame_ms,
+                audio_bytes=seg_bytes,
+                active_ratio=ratio,
+            )
+        )
+
+    for fi, is_active in enumerate(actives):
+        if is_active:
+            if not in_voice:
+                in_voice = True
+                start_f = fi
+            last_active_f = fi
+            silence_run = 0
+        elif in_voice:
+            silence_run += 1
+            if silence_run >= max_silence_frames:
+                _emit(start_f, last_active_f + 1)
+                in_voice = False
+                silence_run = 0
+    if in_voice:
+        _emit(start_f, last_active_f + 1)
+
+    return segments
+
+
+__all__ = [
+    "GateDecision",
+    "VoicedSegment",
+    "integer_rms",
+    "is_likely_hallucination",
+    "normalize_transcript_text",
+    "repetitive_transcript_reason",
+    "pre_stt_gate",
+    "speech_frame_ratio",
+    "split_into_voiced_segments",
+]

@@ -1,0 +1,294 @@
+"""自动会议检测状态机：根据 ambient 主链路里的说话人活动自动 start / end meeting。
+
+触发规则（保守为先，避免误开会）：
+- 滑动窗口（默认 30s）内 distinct speakers ≥ 2
+- 窗口内总语音 duration ≥ ``min_active_seconds``（默认 6s）
+- 如果声纹暂时识别不出 speaker_id，可在窗口内累积足够的严格音质
+  门控语音后通过 ``unknown_speaker_min_active_seconds`` fallback 自动开始记录
+- 当前没在 meeting 中（手动 @开始 优先；用户手动开会时 detector 自动让步）
+- 触发后进入 ``auto_meeting`` 状态，meeting_id = ``auto-<unix_ts>``
+
+结束规则（任意一条命中即 end auto-meeting）：
+- 静默 ≥ ``silence_timeout_s``（默认 30s） → reason="silence_timeout"
+- 距 start 超过 ``max_meeting_duration_s``（默认 30 min 硬上限）
+    → reason="max_duration_exceeded"
+    （兜底：避免持续环境音 / 单人独白 / 电视背景音让会议永远不结束。
+     2026-05 echodesk 顶栏「会议中 562:53」9h+ bug 的结构性修复。）
+- 自动会议只在真实静音或硬时长到达时结束。会议开始后即使只剩一人持续发言，
+  仍属于有效会议内容，不能以 speaker 数量变化代替静音证据。
+
+冷却：
+- cooldown：刚 end 后 ``cooldown_s``（默认 60s）内不再触发，避免抖动
+
+与手动 @开始会议 合并策略：
+- 手动 meeting_id 传入 observe()，detector 会立即取消自己当前的 auto meeting（end 事件）
+- detector 之后停止统计直到手动结束（manual_meeting_id 重新为 None）
+
+不直接依赖 MeetingPipeline / EventBus：只产出 ``DetectorEvent``，由调用者执行副作用。
+这保持了纯函数式的可测性。
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta
+from typing import Literal
+
+from pydantic import BaseModel
+
+logger = logging.getLogger("echodesk.auto_meeting")
+
+DetectorEventKind = Literal["start", "end"]
+
+
+class DetectorEvent(BaseModel):
+    kind: DetectorEventKind
+    meeting_id: str
+    reason: str = ""
+
+
+class AutoMeetingDetector:
+    def __init__(
+        self,
+        *,
+        window_s: float = 30.0,
+        min_distinct_speakers: int = 2,
+        min_active_seconds: float = 6.0,
+        unknown_speaker_min_active_seconds: float | None = None,
+        silence_timeout_s: float = 30.0,
+        cooldown_s: float = 60.0,
+        max_meeting_duration_s: float = 1800.0,
+    ) -> None:
+        self._window_s = window_s
+        self._min_distinct = min_distinct_speakers
+        self._min_active = min_active_seconds
+        # 默认禁用 unknown-speaker 自动开始。仅凭 ASR 文本无法区分真人语音与
+        # 固定环境音幻觉；显式配置正数才恢复保守 fallback。
+        self._unknown_min_active = unknown_speaker_min_active_seconds
+        self._silence = silence_timeout_s
+        self._cooldown = cooldown_s
+        self._max_meeting_duration_s = max_meeting_duration_s
+
+        self._window: list[tuple[datetime, str, int]] = []  # (t, speaker_id, dur_ms)
+        self._unknown_voice_window: list[tuple[datetime, int]] = []  # (t, dur_ms)
+        self._active_meeting_id: str | None = None
+        self._last_voice_at: datetime | None = None
+        self._last_end_at: datetime | None = None
+        # 会议开始时间：用于 max_meeting_duration_s 兜底
+        self._meeting_started_at: datetime | None = None
+
+    @property
+    def active_meeting_id(self) -> str | None:
+        return self._active_meeting_id
+
+    def adopt_active(
+        self,
+        meeting_id: str,
+        *,
+        started_at: datetime,
+        now: datetime,
+    ) -> None:
+        """从持久化状态接管一个正在进行的自动会议。
+
+        backend 重启后 ``MeetingState`` 可以从 DB 恢复 current meeting，但 detector
+        的内存字段会丢失。若不接管，后续 silence/max 事件可能生成另一个 auto id，
+        导致真正的 current meeting 永远收不到 end。
+        """
+        self._active_meeting_id = meeting_id
+        self._meeting_started_at = started_at
+        self._last_voice_at = now
+        self._last_end_at = None
+        self._prune_window(now)
+
+    def observe(
+        self,
+        *,
+        speaker_id: str | None,
+        duration_ms: int,
+        now: datetime,
+        manual_meeting_id: str | None = None,
+    ) -> list[DetectorEvent]:
+        """处理一次 ambient chunk 观测，可能 emit 0..2 个 detector events。
+
+        参数：
+        - speaker_id: 该 chunk 识别出的说话人；可为 None（静默或未识别）
+        - duration_ms: 该 chunk 经 VAD 判定的有效语音时长（不得使用 STT wall time）
+        - now: chunk 的 wall-clock 时间
+        - manual_meeting_id: 上层显式传入的会议 id（手动 @开始）；非 None 时 detector 让步
+        """
+        out: list[DetectorEvent] = []
+
+        # 1. 手动会议优先 → 让步并取消 auto
+        if manual_meeting_id is not None:
+            if self._active_meeting_id is not None:
+                out.append(
+                    DetectorEvent(
+                        kind="end",
+                        meeting_id=self._active_meeting_id,
+                        reason="manual_meeting_started",
+                    )
+                )
+                self._clear_active(now)
+            if speaker_id:
+                self._last_voice_at = now
+            return out
+
+        # 2. 维护窗口
+        self._prune_window(now)
+        if duration_ms > 0:
+            self._last_voice_at = now
+            if speaker_id:
+                self._window.append((now, speaker_id, duration_ms))
+            else:
+                self._unknown_voice_window.append((now, duration_ms))
+
+        distinct_now = {s for (_, s, _) in self._window}
+
+        # 3. 已在 auto_meeting：检查静音与硬时长 end 触发
+        if self._active_meeting_id is not None:
+            ended = self._maybe_end_active(now, out)
+            if ended:
+                return out
+            return out
+
+        # 4. idle 状态：检查触发条件
+        if self._in_cooldown(now):
+            return out
+
+        active_ms = sum(d for (_, _, d) in self._window)
+        unknown_active_ms = sum(d for (_, d) in self._unknown_voice_window)
+        if len(distinct_now) >= self._min_distinct and active_ms >= self._min_active * 1000:
+            new_id = f"auto-{int(now.timestamp())}"
+            self._active_meeting_id = new_id
+            self._meeting_started_at = now
+            out.append(
+                DetectorEvent(
+                    kind="start",
+                    meeting_id=new_id,
+                    reason=f"distinct_speakers={len(distinct_now)} active_ms={active_ms}",
+                )
+            )
+        elif (
+            self._unknown_min_active is not None
+            and unknown_active_ms >= self._unknown_min_active * 1000
+        ):
+            new_id = f"auto-{int(now.timestamp())}"
+            self._active_meeting_id = new_id
+            self._meeting_started_at = now
+            out.append(
+                DetectorEvent(
+                    kind="start",
+                    meeting_id=new_id,
+                    reason=f"unknown_speaker_active_ms={unknown_active_ms}",
+                )
+            )
+        return out
+
+    def force_end(self, *, now: datetime, reason: str = "external") -> DetectorEvent | None:
+        """外部强制结束（例如 ambient 端检测到长时间无任何 chunk）。"""
+        if self._active_meeting_id is None:
+            return None
+        ev = DetectorEvent(kind="end", meeting_id=self._active_meeting_id, reason=reason)
+        self.enter_cooldown(now)
+        return ev
+
+    def enter_cooldown(self, now: datetime) -> None:
+        """记录任意来源的结束，并清掉上一场的触发窗口。
+
+        manual end 时 detector 通常没有 active id，旧 ``force_end`` 因而是 no-op，
+        实际没有进入 cooldown。MeetingState 对 manual/auto/watchdog 统一调用本入口。
+        """
+
+        self._clear_active(now)
+
+    def tick(self, *, now: datetime) -> list[DetectorEvent]:
+        """在没有新 ambient chunk 时只推进超时，不制造语音观测。"""
+
+        self._prune_window(now)
+        out: list[DetectorEvent] = []
+        if self._active_meeting_id is not None:
+            self._maybe_end_active(now, out)
+        return out
+
+    def note_voice_activity(self, *, now: datetime) -> None:
+        """用已通过声学门控的采集活动刷新当前自动会议心跳。
+
+        这条路径只允许续命已经存在的自动会议，不能参与自动开始窗口。ASR
+        可能排队、超时或把真实远场语音只识别成两三个字；若等文本终态才更新
+        ``_last_voice_at``，watchdog 会在真实声音仍持续进入时误报静默。
+        """
+
+        if self._active_meeting_id is None:
+            return
+        if self._last_voice_at is None or now > self._last_voice_at:
+            self._last_voice_at = now
+
+    def reset(self) -> None:
+        self._window.clear()
+        self._unknown_voice_window.clear()
+        self._active_meeting_id = None
+        self._last_voice_at = None
+        self._last_end_at = None
+        self._meeting_started_at = None
+
+    def _clear_active(self, now: datetime) -> None:
+        """结束时统一清状态并写 cooldown，禁止旧环境窗口参与下一次触发。"""
+        self._window.clear()
+        self._unknown_voice_window.clear()
+        self._active_meeting_id = None
+        self._last_voice_at = None
+        self._last_end_at = now
+        self._meeting_started_at = None
+
+    def _maybe_end_active(self, now: datetime, out: list[DetectorEvent]) -> bool:
+        """两类 end 触发判定；按优先级依次检查，命中即返回 True 并 append 事件。
+
+        优先级：max_duration > silence_timeout。speaker 数量不再是结束证据。
+        """
+        assert self._active_meeting_id is not None
+
+        # 3.1 硬上限（防止任意原因导致会议永不结束的兜底）
+        if (
+            self._meeting_started_at is not None
+            and (now - self._meeting_started_at).total_seconds() > self._max_meeting_duration_s
+        ):
+            out.append(
+                DetectorEvent(
+                    kind="end",
+                    meeting_id=self._active_meeting_id,
+                    reason="max_duration_exceeded",
+                )
+            )
+            self._clear_active(now)
+            return True
+
+        # 3.2 静默超时
+        if self._last_voice_at is not None and (
+            (now - self._last_voice_at).total_seconds() > self._silence
+        ):
+            out.append(
+                DetectorEvent(
+                    kind="end",
+                    meeting_id=self._active_meeting_id,
+                    reason="silence_timeout",
+                )
+            )
+            self._clear_active(now)
+            return True
+
+        return False
+
+    def _prune_window(self, now: datetime) -> None:
+        cutoff = now - timedelta(seconds=self._window_s)
+        self._window = [(t, s, d) for (t, s, d) in self._window if t >= cutoff]
+        self._unknown_voice_window = [
+            (t, d) for (t, d) in self._unknown_voice_window if t >= cutoff
+        ]
+
+    def _in_cooldown(self, now: datetime) -> bool:
+        if self._last_end_at is None:
+            return False
+        return (now - self._last_end_at).total_seconds() < self._cooldown
+
+
+__all__ = ["AutoMeetingDetector", "DetectorEvent"]

@@ -1,0 +1,43 @@
+{
+  "appId": "com.echodesk.legacy-candidate",
+  "productName": "EchoDesk Legacy Candidate",
+  "directories": {
+    "output": "release/legacy-candidate"
+  },
+  "electronDist": "node_modules/electron/dist",
+  "files": [
+    "dist/**",
+    "electron/**",
+    "!electron/tests/**",
+    "!electron/agent-runtime/**",
+    "!electron/**/fused/**",
+    "!electron/**/B13/**",
+    "!electron/**/CoreShell/**",
+    "!electron/**/*fused*",
+    "!electron/**/*B13*",
+    "!electron/**/*CoreShell*",
+    "!electron/**/*coreshell*",
+    "!electron/**/*core-shell*",
+    "!agent-kernel/**",
+    "!.agent-runtime-package/**",
+    "!.codex-tmp/**",
+    "backend.config.json",
+    "package.json"
+  ],
+  "beforePack": "scripts/verify-bundled-backend.cjs",
+  "afterPack": "scripts/after-pack-mac.cjs",
+  "mac": {
+    "category": "public.app-category.productivity",
+    "icon": "electron/icons/echodesk.icns",
+    "hardenedRuntime": true,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+    "extraResources": [
+      {
+        "from": "../backend/dist/echodesk-backend",
+        "to": "backend/echodesk-backend"
+      }
+    ],
+    "target": ["dir"]
+  }
+}

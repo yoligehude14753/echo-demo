@@ -1,0 +1,36 @@
+.env
+.env.local
+.env.production
+*.key
+*.pem
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+!desktop/build/
+desktop/build/*
+!desktop/build/entitlements.mac.plist
+!desktop/build/entitlements.mac.inherit.plist
+.DS_Store
+.cursor/
+.claude/
+node_modules/
+*.log
+desktop/.release-transactions/
+
+# 数据库文件（运行时生成，不进版本控制）
+backend/echo.db
+backend/*.db
+*.db
+
+# 固件运行时产物（可能含 WiFi 凭据）
+firmware/nvs_config.bin
+firmware/build/
+firmware/managed_components/
+firmware/.cache/
+
+# Python 依赖锁（由 uv 管理）
+.python-version

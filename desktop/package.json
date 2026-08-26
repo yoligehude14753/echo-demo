@@ -1,0 +1,212 @@
+{
+  "name": "echodesk-desktop",
+  "version": "0.3.30",
+  "description": "EchoDesk public demo desktop client",
+  "author": "EchoDesk <support@yoliyoli.uk>",
+  "homepage": "https://github.com/yoligehude14753/echo-demo",
+  "private": false,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "type": "module",
+  "main": "electron/main.cjs",
+  "desktopName": "com.echodesk.app.desktop",
+  "scripts": {
+    "dev": "vite",
+    "dev:e2e:https": "node scripts/start-e2e-vite.cjs 5174",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --port 4173",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "typecheck": "tsc -b --noEmit",
+    "version:check": "node scripts/check-version-sync.cjs",
+    "electron:brand": "node electron/scripts/brand-dev-electron.cjs",
+    "electron:dev": "npm run electron:brand && node scripts/start-electron-dev.cjs",
+    "electron:start": "npm run electron:brand && cross-env ELECTRON_DEV=1 electron electron/main.cjs",
+    "test:electron": "node --test electron/tests/*.test.cjs",
+    "test:canonical-only": "node --test scripts/canonical-only-contract.test.cjs && node scripts/canonical-only-contract.cjs",
+    "test:legacy-source-closure": "node --test scripts/legacy-source-closure.test.cjs && node scripts/legacy-source-closure.cjs",
+    "test:core-e2e": "node --test scripts/core-e2e-acceptance.test.cjs",
+    "acceptance:core": "node scripts/core-e2e-acceptance.cjs",
+    "update:staging:contract": "node scripts/preview-update-contract.cjs",
+    "update:readback:release": "node scripts/preview-update-release-readback.cjs",
+    "update:readback:installed": "node scripts/preview-update-installed-readback.cjs",
+    "postinstall": "node scripts/prepare-android-gradle-locks.cjs && node electron/scripts/brand-dev-electron.cjs",
+    "backend:build:mac": "node scripts/build-backend-mac.cjs",
+    "app:dist:legacy-candidate": "node scripts/build-legacy-candidate.cjs",
+    "backend:build:linux": "node scripts/build-backend-linux.cjs",
+    "backend:build:win": "node scripts/build-backend-win.cjs",
+    "app:dist": "npm run release:canonical:mac",
+    "preapp:dist:mac": "node scripts/canonical-only-contract.cjs",
+    "app:dist:mac": "node scripts/desktop-release-signing.cjs mac",
+    "release:canonical:mac": "node scripts/canonical-mac-release.cjs",
+    "preapp:dist:win": "node scripts/canonical-only-contract.cjs",
+    "app:dist:win": "node scripts/desktop-release-signing.cjs windows",
+    "app:dist:win:unsigned-test": "npm run backend:build:win && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis zip --x64 --publish never",
+    "preapp:dist:linux": "node scripts/canonical-only-contract.cjs",
+    "app:dist:linux": "npm run backend:build:linux && npm run build && electron-builder --linux AppImage deb --x64 --publish never",
+    "app:build:android:development": "node scripts/build-android-debug.cjs",
+    "app:build:android:preview": "node scripts/build-android-preview.cjs",
+    "app:dist:android": "node scripts/build-android-release.cjs",
+    "tv:smoke": "node scripts/tv-adb-smoke.cjs",
+    "android:sync": "npm run build && cap sync android && node scripts/prepare-android-gradle-locks.cjs",
+    "android:open": "cap open android",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:real": "playwright test --config=playwright.real.config.ts",
+    "demo:record": "playwright test --config=playwright.demo.config.ts",
+    "scenarios": "playwright test --config=playwright.scenarios.config.ts",
+    "smoke:mac:dmg": "node scripts/macos-mounted-dmg-smoke.cjs",
+    "smoke:linux": "node scripts/linux-packaged-smoke.cjs",
+    "smoke:android:rotation": "node scripts/android-signing-rotation-smoke.cjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/core": "^8.4.0",
+    "@types/qrcode": "^1.5.6",
+    "antd": "^5.19.4",
+    "exceljs": "4.4.0",
+    "lucide-react": "^0.395.0",
+    "mammoth": "^1.12.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.0",
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "8.63.0",
+    "@typescript-eslint/parser": "8.63.0",
+    "@vitejs/plugin-legacy": "^7.2.1",
+    "@vitejs/plugin-react": "^5.1.1",
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "43.1.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "0.28.1",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "eslint-plugin-react-refresh": "^0.4.7",
+    "postcss": "^8.4.39",
+    "tailwindcss": "^3.4.4",
+    "terser": "^5.48.0",
+    "typescript": "^5.5.3",
+    "vite": "^7.3.1",
+    "wait-on": "^7.2.0"
+  },
+  "overrides": {
+    "form-data": "4.0.6",
+    "joi": "17.13.4",
+    "js-yaml": "4.3.0",
+    "tmp": "0.2.7",
+    "uuid": "11.1.1"
+  },
+  "build": {
+    "appId": "com.echodesk.app",
+    "productName": "EchoDesk",
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "yoligehude14753",
+        "repo": "echo-demo",
+        "releaseType": "release"
+      }
+    ],
+    "files": [
+      "dist/**",
+      "electron/**",
+      "!electron/tests/**",
+      "backend.config.json",
+      "package.json"
+    ],
+    "beforePack": "scripts/verify-bundled-backend.cjs",
+    "afterPack": "scripts/after-pack-mac.cjs",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "electron/icons/echodesk.icns",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "extraResources": [
+        {
+          "from": "../backend/dist/echodesk-backend",
+          "to": "backend/echodesk-backend"
+        }
+      ],
+      "target": [
+        "dir"
+      ]
+    },
+    "win": {
+      "artifactName": "EchoDesk-${version}-win-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "../backend/dist/echodesk-backend.exe",
+          "to": "backend/echodesk-backend.exe"
+        }
+      ],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "category": "Utility",
+      "syncDesktopName": true,
+      "icon": "electron/icons/echodesk.png",
+      "maintainer": "EchoDesk <support@yoliyoli.uk>",
+      "executableName": "echodesk",
+      "artifactName": "EchoDesk-${version}-linux-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "../backend/dist/echodesk-backend",
+          "to": "backend/echodesk-backend"
+        }
+      ],
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "include": "scripts/nsis-installer.nsh",
+      "artifactName": "EchoDesk.Setup.${version}.${ext}",
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": false
+    }
+  }
+}

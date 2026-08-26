@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "echo-backend"
+version = "0.3.0"
+description = "Echo AI Companion — FastAPI Backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "websockets>=13.1",
+    "httpx>=0.28.0",
+    "openai>=1.58.0",
+    "deepgram-sdk>=3.8.0",
+    "edge-tts>=6.1.19",
+    "miniaudio>=1.59",
+    "aiosqlite>=0.21.0",
+    "apscheduler>=3.10.4",
+    "pydantic-settings>=2.7.0",
+    "numpy>=1.26.0",
+    "loguru>=0.7.3",
+    "python-multipart>=0.0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",
+    "anyio>=4.7.0",
+]
+speaker = [
+    "resemblyzer>=0.1.1.dev0",
+    "torch>=2.5.0",
+]
+whisper = [
+    "faster-whisper>=1.1.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # 日志/注释超长不阻塞
+
