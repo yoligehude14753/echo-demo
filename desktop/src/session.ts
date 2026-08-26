@@ -208,6 +208,11 @@ let readiness: BackendReadiness = INITIAL_BACKEND_READINESS;
 let readinessDiagnosticCode: BackendReadinessDiagnosticCode | null = null;
 let identityStatus: SessionIdentityStatus = { phase: "idle", message: null };
 let rendererIdentityTail: Promise<void> = Promise.resolve();
+// Keep the terminal identity-loss decision in the session layer as well as in
+// the credential store. This closes a race where a second bootstrap/enroll
+// caller can observe the unconfirmed credential before the store write from
+// the first 401/409 rejection completes.
+const rendererIdentityLostOrigins = new Set<string>();
 let clientUpgradeRequired: {
   origin: string;
   error: ClientUpgradeRequiredError;
@@ -1106,6 +1111,7 @@ async function markRendererIdentityLost(
   origin: string,
   cause: unknown,
 ): Promise<never> {
+  rendererIdentityLostOrigins.add(origin);
   try {
     await identityCredentialStore.markIdentityLost(origin);
   } catch {
@@ -1176,6 +1182,9 @@ async function recoverPendingRotation(
 }
 
 async function rendererDeviceSessionUnlocked(origin: string): Promise<string> {
+  if (rendererIdentityLostOrigins.has(origin)) {
+    throw identityLost(origin);
+  }
   const identity = await identityCredentialStore.loadOrCreate(origin);
   if (identity.pending_rotation) {
     return recoverPendingRotation(origin, identity.pending_rotation);
@@ -1281,6 +1290,7 @@ async function rendererReconnectSession(origin: string): Promise<string> {
         origin,
       );
       await identityCredentialStore.restoreIdentity(origin);
+      rendererIdentityLostOrigins.delete(origin);
       const token = acceptSession(renewed, origin);
       if (!token) throw new Error("identity reconnect returned no access token");
       return token;
@@ -2036,6 +2046,7 @@ export function resetSessionForTest(): void {
   clientUpgradeRequired = null;
   resetIdentityCredentialStoreForTest();
   rendererIdentityTail = Promise.resolve();
+  rendererIdentityLostOrigins.clear();
   compatibility = "unknown";
   readiness = INITIAL_BACKEND_READINESS;
   readinessDiagnosticCode = null;

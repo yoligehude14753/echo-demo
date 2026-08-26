@@ -101,14 +101,23 @@ test("first-run 引导：跳过按钮立即关闭", async ({ page }) => {
 test("native Android 引导明确 remote-mobile、public endpoint 与 paired Hub 边界", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { Capacitor: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+    window.localStorage.setItem(
+      "echodesk.mobileBackendBase",
+      "https://echodesk.yoliyoli.uk",
+    );
+    window.localStorage.setItem("echodesk.mobileBackendBase.userSet", "1");
+  });
   await installEchoMock(page, { isElectron: false });
   await page.goto("/");
   await page.evaluate(() => {
-    (
-      window as unknown as {
-        Capacitor?: { isNativePlatform: () => boolean };
-      }
-    ).Capacitor = { isNativePlatform: () => true };
+    Object.defineProperty(window.Capacitor, "isNativePlatform", {
+      configurable: true,
+      value: () => true,
+    });
   });
   await page.getByTestId("open-settings").click();
   await page.getByTestId("replay-onboarding").click();
@@ -139,7 +148,10 @@ test("native Android 引导明确 remote-mobile、public endpoint 与 paired Hub
     "单端或多端收音",
   );
   await expect(page.getByTestId("onboarding-native-done-copy")).toContainText(
-    "转写与纪要依赖远程服务可用",
+    "公共服务",
+  );
+  await expect(page.getByTestId("onboarding-native-done-copy")).toContainText(
+    "自由模式持续收音",
   );
   await expect(page.getByTestId("onboarding-native-done-copy")).toContainText(
     "多端同步需要另行配对 Hub",

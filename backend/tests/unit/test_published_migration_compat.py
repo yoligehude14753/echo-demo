@@ -11,7 +11,11 @@ from typing import Any
 
 import aiosqlite
 import pytest
-from app.adapters.repo.migrator import _DEFAULT_MIGRATIONS_DIR, run_migrations
+from app.adapters.repo.migrator import (
+    _DEFAULT_MIGRATIONS_DIR,
+    migration_catalog_max_version,
+    run_migrations,
+)
 
 from tests.unit.test_migration_upgrade_chain import _insert_v11_legacy_data
 
@@ -36,6 +40,10 @@ def _version(path: Path) -> int:
 
 def _migration_files() -> list[Path]:
     return sorted(_DEFAULT_MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"), key=_version)
+
+
+def _applied_from(version: int) -> list[int]:
+    return list(range(version, migration_catalog_max_version() + 1))
 
 
 def _published_v11_catalog(root: Path) -> Path:
@@ -182,7 +190,7 @@ async def test_published_v11_upgrade_preserves_data_and_archives_old_control_pla
     result = await run_migrations(db_path)
 
     assert result.errors == []
-    assert result.current_version == 41
+    assert result.current_version == migration_catalog_max_version()
     assert result.not_applicable == []
     assert await _integrity(db_path) == ("ok", [])
     async with aiosqlite.connect(str(db_path)) as conn:
@@ -330,9 +338,9 @@ async def test_current_v36_switch_marks_restored_history_not_applicable_and_conv
 
     switched = await run_migrations(current_db)
 
-    assert switched.errors == [] and switched.applied == [37, 38, 39, 40, 41]
+    assert switched.errors == [] and switched.applied == _applied_from(37)
     assert switched.not_applicable == [6, 7, 8, 9]
-    assert switched.current_version == 41
+    assert switched.current_version == migration_catalog_max_version()
     assert await _integrity(current_db) == ("ok", [])
     async with aiosqlite.connect(str(current_db)) as conn:
         history_rows = await (
@@ -443,7 +451,7 @@ async def test_v37_rebuild_guard_rolls_back_compatibility_prelude(tmp_path: Path
     assert view is not None and version_37 is None
 
     resumed = await run_migrations(db_path)
-    assert resumed.errors == [] and resumed.applied == [37, 38, 39, 40, 41]
+    assert resumed.errors == [] and resumed.applied == _applied_from(37)
     assert await _integrity(db_path) == ("ok", [])
 
 
@@ -490,7 +498,10 @@ def test_two_processes_upgrade_published_v11_without_duplicate_or_lock_failure(
     result_queue.close()
 
     pending_versions = [version for version in map(_version, _migration_files()) if version >= 12]
-    assert all(errors == [] and current == 41 for errors, current, _applied in results)
+    assert all(
+        errors == [] and current == migration_catalog_max_version()
+        for errors, current, _applied in results
+    )
     assert sum(len(applied) for _errors, _current, applied in results) == len(pending_versions)
     assert asyncio.run(_integrity(db_path)) == ("ok", [])
 

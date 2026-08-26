@@ -545,7 +545,7 @@ test("A current meeting 延迟返回时 B 保持 idle 且不会携 A id mutation
   await switchBackend(page, ORIGIN_B);
   await waitForRequest(page, ORIGIN_B, "current");
   const statusBar = page.getByTestId("meeting-status-bar");
-  await expect(statusBar).toContainText("待机");
+  await expect(statusBar).toContainText("开始正式会议");
   await expect(statusBar).toHaveAttribute("aria-pressed", "false");
 
   await resolveAll(page, "current", {
@@ -555,7 +555,7 @@ test("A current meeting 延迟返回时 B 保持 idle 且不会携 A id mutation
     started_by: "manual",
   });
 
-  await expect(statusBar).toContainText("待机");
+  await expect(statusBar).toContainText("开始正式会议");
   await expect(statusBar).not.toContainText("会议中");
   await expect(statusBar).toHaveAttribute("aria-pressed", "false");
   const beforeClickMutations = await page.evaluate((origin) => {
@@ -574,6 +574,9 @@ test("A current meeting 延迟返回时 B 保持 idle 且不会携 A id mutation
   expect(beforeClickMutations).toEqual([]);
 
   // B 仍为 idle，因此下一次用户操作必须走 B 的 manual_start，而非沿用 A snapshot。
+  const capturePump = await page.evaluate(() =>
+    window.setInterval(() => window.__echoAudioCapture?.__emitChunkForTest(), 50),
+  );
   await statusBar.click();
   await expect
     .poll(() =>
@@ -593,6 +596,7 @@ test("A current meeting 延迟返回时 B 保持 idle 且不会携 A id mutation
     )
     .toBe(true);
   await expect(statusBar).toContainText("会议中");
+  await page.evaluate((timer) => window.clearInterval(timer), capturePump);
 
   const bMeetingMutations = await page.evaluate((origin) => {
     const state = (

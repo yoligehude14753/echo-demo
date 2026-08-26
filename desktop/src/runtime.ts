@@ -431,8 +431,16 @@ function releaseVersionForChannel(
   if (!release || release.draft === true) return null;
   if (channel === "preview") {
     const tag = String(release.tag_name ?? "").trim();
-    return release.prerelease === true &&
-      /^v\d+\.\d+\.\d+-preview\.\d+$/.test(tag)
+    if (release.prerelease === true) {
+      return /^v\d+\.\d+\.\d+-preview\.\d+$/.test(tag)
+        ? normalizeVersion(tag)
+        : null;
+    }
+    // Preview installs may promote to a formal release (for example
+    // 0.3.3-preview.4 → 0.3.4). GitHub marks those releases explicitly as
+    // non-prerelease; keep the renderer in lock-step with the Electron
+    // updater instead of silently treating the formal release as "current".
+    return release.prerelease === false && /^v\d+\.\d+\.\d+$/.test(tag)
       ? normalizeVersion(tag)
       : null;
   }
@@ -452,6 +460,9 @@ function isCompatibleAppUpgrade(
 ): boolean {
   if (channel !== "preview") return compareVersions(version, currentVersion) > 0;
   const next = version.match(/^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/);
+  // A stable release is the promotion target for a preview install. Compare
+  // it normally; only preview-to-preview updates stay on the same core train.
+  if (!next) return compareVersions(version, currentVersion) > 0;
   const current = currentVersion.match(
     /^(\d+)\.(\d+)\.(\d+)-preview\.(\d+)$/,
   );
@@ -561,9 +572,11 @@ function preferredUpdateAsset(
     const ua = window.navigator.userAgent;
     const tv = isTvRuntime();
     if (tv && (isNativeMobile() || /Android|AFT|TV|EchoDeskTV/i.test(ua))) {
-      return null;
+      exactName = `EchoDesk-${version}-smart-tv.apk`;
     } else if (isNativeMobile() || /Android/i.test(ua)) {
-      exactName = `EchoDesk-${version}-android-universal-PREVIEW.apk`;
+      exactName = version.includes("-")
+        ? `EchoDesk-${version}-android-universal-PREVIEW.apk`
+        : `EchoDesk-${version}-android.apk`;
     } else if (/Windows/i.test(ua)) {
       exactName = `EchoDesk.Setup.${version}.exe`;
     } else if (/Linux/i.test(ua)) {
@@ -750,12 +763,25 @@ export async function checkAppUpdate(): Promise<AppUpdateStatus> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const releases = (await res.json()) as GithubAppRelease[];
     if (!Array.isArray(releases)) throw new Error("invalid release list");
+    const channel: AppUpdateChannel = "preview";
     const candidate = selectCompatibleAppUpdate(
       releases,
       __APP_UPDATE_VERSION__,
-      "preview",
+      channel,
     );
-    const latestVersion = candidate?.version ?? __APP_UPDATE_VERSION__;
+    // Keep the newest compatible release even when it has no asset for this
+    // platform. The UI can then explain "暂无适用安装包" instead of claiming
+    // the app is current, while selectCompatibleAppUpdate still falls back to
+    // an older release that does have a usable asset.
+    const latestCompatibleVersion = releases
+      .map((release) => releaseVersionForChannel(release, channel))
+      .filter((version): version is string => {
+        if (!version) return false;
+        return isCompatibleAppUpgrade(version, __APP_UPDATE_VERSION__, channel);
+      })
+      .sort((left, right) => compareVersions(right, left))[0];
+    const latestVersion =
+      candidate?.version ?? latestCompatibleVersion ?? __APP_UPDATE_VERSION__;
     const asset = candidate?.asset ?? null;
     const hasNewerVersion =
       compareVersions(latestVersion, __APP_UPDATE_VERSION__) > 0;

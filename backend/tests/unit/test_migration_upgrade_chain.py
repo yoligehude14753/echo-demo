@@ -14,7 +14,11 @@ from typing import Any
 
 import aiosqlite
 import pytest
-from app.adapters.repo.migrator import _DEFAULT_MIGRATIONS_DIR, run_migrations
+from app.adapters.repo.migrator import (
+    _DEFAULT_MIGRATIONS_DIR,
+    migration_catalog_max_version,
+    run_migrations,
+)
 
 
 def _version(path: Path) -> int:
@@ -23,6 +27,10 @@ def _version(path: Path) -> int:
 
 def _migration_files() -> list[Path]:
     return sorted(_DEFAULT_MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"), key=_version)
+
+
+def _applied_from(version: int) -> list[int]:
+    return list(range(version, migration_catalog_max_version() + 1))
 
 
 def _copy_migrations_through(root: Path, version: int) -> Path:
@@ -573,7 +581,7 @@ async def test_v36_backfills_existing_cancel_requested_agent_commands(
 
     upgraded = await run_migrations(db_path)
 
-    assert upgraded.errors == [] and upgraded.applied == [36, 37, 38, 39, 40, 41]
+    assert upgraded.errors == [] and upgraded.applied == _applied_from(36)
     async with aiosqlite.connect(str(db_path)) as conn:
         row = await (
             await conn.execute(
@@ -647,7 +655,7 @@ async def test_v33_audits_and_closes_historical_duplicate_active_meetings(
     upgraded = await run_migrations(db_path)
 
     assert upgraded.errors == []
-    assert upgraded.applied == [33, 34, 35, 36, 37, 38, 39, 40, 41]
+    assert upgraded.applied == _applied_from(33)
     async with aiosqlite.connect(str(db_path)) as conn:
         rows = await (
             await conn.execute(

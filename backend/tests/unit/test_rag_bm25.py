@@ -16,7 +16,7 @@ import pytest
 from app.adapters.rag import BM25Rag, RagError
 from app.adapters.rag.bm25 import _IndexedChunk, _ScopeIndexSnapshot, _tokenize_cn_en
 from app.adapters.rag.index_store import BM25IndexStoreError
-from app.adapters.repo.migrator import run_migrations
+from app.adapters.repo.migrator import migration_catalog_max_version, run_migrations
 from app.config import Settings
 from app.security import Principal
 from app.security.context import bind_principal, reset_principal
@@ -289,7 +289,10 @@ async def test_direct_bm25_adapter_before_migrations_keeps_upgrade_chain_valid(
 
     assert result.errors == []
     with sqlite3.connect(settings.db_path) as conn:
-        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 41
+        assert (
+            conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+            == migration_catalog_max_version()
+        )
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM sqlite_master "

@@ -183,7 +183,7 @@ test("429, 5xx and network renewal errors retain the confirmed owner", async ({
   expect(enrollCalls).toBe(1);
   expect(renewBodies).toHaveLength(4);
   expect(new Set(renewBodies).size).toBe(1);
-  expect(identityClientVersions).toEqual(Array(5).fill("0.3.3"));
+  expect(identityClientVersions).toEqual(Array(5).fill("0.3.4"));
 });
 
 test("pending rotation survives a transient error and commits when the new secret renews", async ({

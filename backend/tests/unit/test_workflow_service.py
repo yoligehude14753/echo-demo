@@ -11,7 +11,11 @@ from typing import Any
 import aiosqlite
 import pytest
 from app.adapters.event_bus.inmemory import InMemoryEventBus, SlowConsumerError
-from app.adapters.repo.migrator import _DEFAULT_MIGRATIONS_DIR, run_migrations
+from app.adapters.repo.migrator import (
+    _DEFAULT_MIGRATIONS_DIR,
+    migration_catalog_max_version,
+    run_migrations,
+)
 from app.config import Settings
 from app.schemas.events import EchoEvent
 from app.schemas.workflow import WorkflowRunCreate
@@ -2024,7 +2028,9 @@ async def test_v35_upgrade_drains_existing_sparse_rows_in_order(tmp_path: Path) 
         )
         await conn.commit()
     upgraded = await run_migrations(db_path)
-    assert upgraded.errors == [] and upgraded.applied == [35, 36, 37, 38, 39, 40, 41]
+    assert upgraded.errors == [] and upgraded.applied == list(
+        range(35, migration_catalog_max_version() + 1)
+    )
 
     settings = Settings(
         db_path=db_path,

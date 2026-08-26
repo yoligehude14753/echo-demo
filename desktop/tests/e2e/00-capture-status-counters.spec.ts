@@ -228,7 +228,7 @@ test("public/TV 模式直接显示并持久化 capture/chunk 返回的会议转�
     .toContain("电视会议段落已经进入本机 UI");
 });
 
-test("public/TV 待机时不吸收共享 backend 返回的 meeting_id", async ({
+test("public/TV 未进入正式会议时不吸收共享 backend 返回的 meeting_id", async ({
   page,
 }) => {
   test.setTimeout(30_000);
@@ -279,10 +279,10 @@ test("public/TV 待机时不吸收共享 backend 返回的 meeting_id", async ({
   });
   await expect(page.getByText("共享会议段落不应该进入新装客户端")).toHaveCount(0);
   await expect(page.getByText("shared-public-meeting")).toHaveCount(0);
-  await expect(page.getByTestId("meeting-status-bar")).toContainText("待机");
+  await expect(page.getByTestId("meeting-status-bar")).not.toContainText("会议中");
 });
 
-test("待机文案：正在转写 · 已采集 · 已保存 · 静音/底噪自动过滤", async ({
+test("自由收音文案：状态 · 已采集 · 已保存 · 静音/底噪自动过滤", async ({
   page,
 }) => {
   test.setTimeout(20_000);
@@ -313,14 +313,14 @@ test("待机文案：正在转写 · 已采集 · 已保存 · 静音/底噪自�
   // 待机态文案断言：必须包含两个新计数器名 + 静音/底噪过滤说明
   await expect
     .poll(async () => await cap.textContent(), { timeout: 8_000, intervals: [200] })
-    .toMatch(/正在转写.*已采集 \d+.*已保存 \d+.*静音\/底噪自动过滤/);
+    .toMatch(/自由收音中.*已采集 \d+.*已保存 \d+.*静音\/底噪自动过滤/);
 
   // 旧文案"已转"不应再出现
   await expect(cap).not.toContainText("已转");
 
   // aria-label 已注入（无障碍）
   const ariaLabel = await cap.getAttribute("aria-label");
-  expect(ariaLabel).toMatch(/正在转写，已采集 \d+ 段，已保存 \d+ 段/);
+  expect(ariaLabel).toMatch(/自由收音中，已采集 \d+ 段，已保存 \d+ 段/);
 });
 
 test("偶发 STT circuit_open 不进入长时间熔断暂停", async ({ page }) => {

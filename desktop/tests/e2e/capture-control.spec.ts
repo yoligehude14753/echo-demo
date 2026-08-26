@@ -39,7 +39,7 @@ test("打开 App 只同步控制 revision，不自动请求麦克风", async ({ 
   });
 
   await page.goto("/");
-  await expect(page.getByTestId("meeting-item-ambient")).toContainText("待机");
+  await expect(page.getByTestId("meeting-item-ambient")).toContainText("自由收音");
   await expect
     .poll(() =>
       page.evaluate(
@@ -54,7 +54,13 @@ test("多设备在线时点击开始弹框，并按 expectedRevision 提交 mult
 }) => {
   const updates: Array<Record<string, unknown>> = [];
   await installEchoMock(page, {
+    deviceId: "device-mac",
     skipPaths: ["/capture/control", "/capture/devices"],
+  });
+  await page.addInitScript(() => {
+    // Start paused so the explicit status-bar click exercises the selector,
+    // even though the authoritative control already contains this device.
+    window.localStorage.setItem("echodesk.capture.freeModeEnabled.v1", "0");
   });
   await page.route("**/capture/devices", async (route) => {
     await route.fulfill({
@@ -115,7 +121,7 @@ test("多设备在线时点击开始弹框，并按 expectedRevision 提交 mult
   await page.getByLabel("多台设备同时收音").check();
   await page.getByLabel(/办公室 Mac/).check();
   await page.getByLabel(/会议室 Windows/).check();
-  await page.getByRole("button", { name: "开始会议" }).last().click();
+  await page.getByRole("button", { name: /开启自由收音/ }).last().click();
 
   await expect.poll(() => updates.length).toBe(1);
   expect(updates[0]).toEqual({
@@ -133,7 +139,11 @@ test("收音选择冲突后刷新权威 revision，等待用户再次确认", as
     revision: 12,
   };
   await installEchoMock(page, {
+    deviceId: "device-win",
     skipPaths: ["/capture/control", "/capture/devices"],
+  });
+  await page.addInitScript(() => {
+    window.localStorage.setItem("echodesk.capture.freeModeEnabled.v1", "0");
   });
   await page.route("**/capture/devices", async (route) => {
     await route.fulfill({
@@ -189,7 +199,7 @@ test("收音选择冲突后刷新权威 revision，等待用户再次确认", as
   await page.getByTestId("meeting-status-bar").click();
   await expect(page.getByText("选择收音设备")).toBeVisible();
   await page.getByLabel(/会议室 Windows/).check();
-  await page.getByRole("button", { name: "开始会议" }).last().click();
+  await page.getByRole("button", { name: /开启自由收音/ }).last().click();
 
   await expect(page.getByText("选择收音设备")).toBeVisible();
   await expect(page.getByText("收音选择已更新，请确认最新选择后重试")).toBeVisible();
@@ -201,7 +211,7 @@ test("收音选择冲突后刷新权威 revision，等待用户再次确认", as
     expectedRevision: 12,
   });
 
-  await page.getByRole("button", { name: "开始会议" }).last().click();
+  await page.getByRole("button", { name: "开启自由收音" }).last().click();
   await expect.poll(() => updates.length).toBe(2);
   expect(updates[1]).toEqual({
     mode: "single",
@@ -221,6 +231,9 @@ test("Android 收音选择冲突后刷新权威 revision，等待用户再次确
   };
   await page.addInitScript(() => {
     (window as unknown as { androidBridge: Record<string, never> }).androidBridge = {};
+    (window as unknown as { Capacitor: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
     window.localStorage.setItem(
       "echodesk.mobileBackendBase",
       "http://192.168.50.10:8769",
@@ -229,7 +242,12 @@ test("Android 收音选择冲突后刷新权威 revision，等待用户再次确
   });
   await installEchoMock(page, {
     isElectron: false,
+    deviceId: "device-mac",
     skipPaths: ["/capture/control", "/capture/devices"],
+  });
+  // Keep this scenario in the unconfigured state so the native selector opens.
+  await page.addInitScript(() => {
+    window.localStorage.setItem("echodesk.capture.freeModeEnabled.v1", "0");
   });
   await page.route("**/capture/devices", async (route) => {
     await route.fulfill({
@@ -292,8 +310,8 @@ test("Android 收音选择冲突后刷新权威 revision，等待用户再次确
   await expect(page.getByRole("dialog", { name: "选择收音设备" })).toBeVisible();
   await expect(page.getByLabel("多端收音")).toBeChecked();
   await expect(page.getByLabel(/办公室 Mac/)).toBeChecked();
-  await expect(page.getByRole("button", { name: "确认并开始" })).toBeEnabled();
-  await page.getByRole("button", { name: "确认并开始" }).click();
+  await expect(page.getByRole("button", { name: "开启自由收音" })).toBeEnabled();
+  await page.getByRole("button", { name: "开启自由收音" }).click();
 
   await expect(page.getByRole("dialog", { name: "选择收音设备" })).toBeVisible();
   await expect(page.getByText("收音选择已更新，请确认最新选择后重试")).toBeVisible();
@@ -305,7 +323,7 @@ test("Android 收音选择冲突后刷新权威 revision，等待用户再次确
     expectedRevision: 12,
   });
 
-  await page.getByRole("button", { name: "确认并开始" }).click();
+  await page.getByRole("button", { name: "开启自由收音" }).click();
   await expect.poll(() => updates.length).toBe(2);
   expect(updates[1]).toEqual({
     mode: "single",

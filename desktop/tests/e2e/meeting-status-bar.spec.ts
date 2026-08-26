@@ -3,9 +3,9 @@
  * （2026-05 phase4-meeting-deadlock 修复）。
  *
  * 验收点：
- *  - idle：「待机」文案；按钮样式不带 rose / amber 色
+ *  - idle：「开始正式会议」文案；按钮样式不带 rose / amber 色
  *  - in_meeting + started_by=manual：「会议中」+ mm:ss 计时（含 ":" 字符）
- *  - in_meeting + started_by=auto：「自动记录中」+ Mic 图标，不显示计时（不含 ":"）
+ *  - in_meeting + started_by=auto：「检测到对话」+ Mic 图标，不显示计时（不含 ":"）
  *    — 这是核心回归点：旧 UI 会显示「会议中 562:53」给用户假象
  */
 import { test, expect } from "@playwright/test";
@@ -33,7 +33,7 @@ async function mockCurrentMeeting(
   });
 }
 
-test("MeetingStatusBar · idle 显示「待机」", async ({ page }) => {
+test("MeetingStatusBar · idle 显示「开始正式会议」", async ({ page }) => {
   await mockCurrentMeeting(page, {
     mode: "idle",
     meeting_id: null,
@@ -45,7 +45,7 @@ test("MeetingStatusBar · idle 显示「待机」", async ({ page }) => {
 
   const bar = page.getByTestId("meeting-status-bar");
   await expect(bar).toBeVisible({ timeout: 5_000 });
-  await expect(bar).toContainText("待机");
+  await expect(bar).toContainText("开始正式会议");
 });
 
 test("MeetingStatusBar · manual 显示「会议中 mm:ss」(含计时 ':')", async ({ page }) => {
@@ -66,11 +66,11 @@ test("MeetingStatusBar · manual 显示「会议中 mm:ss」(含计时 ':')", as
   // manual 必须显示 mm:ss 计时（含 ":"）
   const text = (await bar.textContent()) ?? "";
   expect(text).toContain(":");
-  // 不应误显示 auto 文案
-  expect(text).not.toContain("自动记录中");
+  // 不应误显示自由收音文案
+  expect(text).not.toContain("检测到对话");
 });
 
-test("MeetingStatusBar · auto 显示「自动记录中」(不含计时 ':')", async ({ page }) => {
+test("MeetingStatusBar · auto 显示「检测到对话」(不含计时 ':')", async ({ page }) => {
   // 模拟 auto-meeting 已开始 6 小时（旧 UI 会显 360:00 这种假象）
   const startedAt = new Date(Date.now() - 6 * 3600_000).toISOString();
   await mockCurrentMeeting(page, {
@@ -84,7 +84,7 @@ test("MeetingStatusBar · auto 显示「自动记录中」(不含计时 ':')", a
 
   const bar = page.getByTestId("meeting-status-bar");
   await expect(bar).toBeVisible({ timeout: 5_000 });
-  await expect(bar).toContainText("自动记录中");
+  await expect(bar).toContainText("检测到对话");
 
   // 核心回归断言：auto 状态下顶栏不显示 mm:ss 计时（不含 ":"）
   const text = (await bar.textContent()) ?? "";

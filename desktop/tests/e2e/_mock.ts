@@ -24,6 +24,8 @@ export interface EchoMockOptions {
    *  在 CDP 网络层接管 mock（适用于需要更丰富 fixture 的场景，如 /healthz/full
    *  / /admin/settings/remote）。 */
   skipPaths?: string[];
+  /** Override the deterministic local device id for multi-device fixtures. */
+  deviceId?: string;
 }
 
 export interface EchoMock {
@@ -41,6 +43,7 @@ export async function installEchoMock(
   const errorPaths = options.errorPaths ?? {};
   const skipPaths = options.skipPaths ?? [];
   const isElectron = options.isElectron ?? true;
+  const deviceId = options.deviceId ?? "mock-device";
 
   // P3.1：onboarding 默认在 e2e 跳过，避免 Modal 遮挡所有交互；
   // 想专门测引导流程的 spec 用 `disableOnboardingSkip` opt-out（注：放在 addInitScript
@@ -49,6 +52,10 @@ export async function installEchoMock(
     await page.addInitScript(() => {
       try {
         window.localStorage.setItem("echodesk.onboarding.completed", "1");
+        // The product asks for a capture-device choice only on the first run.
+        // Keep ordinary E2E pages out of that modal; capture-focused specs can
+        // still open it explicitly by clicking the meeting status bar.
+        window.localStorage.setItem("echodesk.capture.freeModeEnabled.v1", "1");
       } catch {
         /* ignore */
       }
@@ -56,10 +63,11 @@ export async function installEchoMock(
   }
 
   await page.addInitScript(
-    ({ errorPaths, skipPaths, isElectron }: {
+    ({ errorPaths, skipPaths, isElectron, deviceId: configuredDeviceId }: {
       errorPaths: Record<string, number>;
       skipPaths: string[];
       isElectron: boolean;
+      deviceId: string;
     }) => {
     type MockWs = {
       readyState: number;
@@ -88,16 +96,60 @@ export async function installEchoMock(
       fetchLog: [],
       _seq: 0,
     };
+    // Keep the default browser fixture aligned with the production capture
+    // contract: a deterministic local device is online and selected.  Specs
+    // that exercise conflicts or empty selection explicitly bypass these
+    // routes with skipPaths/page.route().
+    const syncStateKey = "echodesk.syncState.v1";
+    const defaultDeviceId = configuredDeviceId;
+    let syncState: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(syncStateKey) ?? "null");
+      if (parsed && typeof parsed === "object") syncState = parsed as Record<string, unknown>;
+    } catch {
+      syncState = {};
+    }
+    const localDeviceId =
+      typeof syncState.device_id === "string" && syncState.device_id.length > 0
+        ? syncState.device_id
+        : defaultDeviceId;
+    if (typeof syncState.device_id !== "string" || syncState.device_id.length === 0) {
+      try {
+        window.localStorage.setItem(
+          syncStateKey,
+          JSON.stringify({
+            schema: 1,
+            device_id: localDeviceId,
+            device_name: "EchoDesk",
+            platform: "web",
+            sync_token: null,
+            cursor: null,
+            status: "unpaired",
+            last_error: null,
+            last_synced_at: null,
+            outbox: [],
+            canonical_revisions: {},
+          }),
+        );
+      } catch {
+        /* storage may be unavailable in a restricted browser context */
+      }
+    }
+    let captureControl = {
+      mode: "single",
+      selectedDeviceIds: [localDeviceId],
+      revision: 1,
+    };
     (window as unknown as { __echoMock__: typeof ctrl }).__echoMock__ = ctrl;
     const existingEcho = (window as unknown as { echo?: Record<string, unknown> }).echo ?? {};
     const originBoundEcho = { ...existingEcho };
     const mockBuildContract = {
       schema_version: 1,
       product_id: "com.echodesk.app.backend",
-      product_version: "0.3.3",
+      product_version: "0.3.4",
       api_contract: "echodesk.desktop-backend/v1",
       build_id: `sha256:${"0".repeat(64)}`,
-      schema_catalog_max: 39,
+      schema_catalog_max: 44,
     };
     const identityOrigin = (): string => {
       const configured = window.localStorage.getItem("echodesk.mobileBackendBase");
@@ -125,10 +177,10 @@ export async function installEchoMock(
         backend_origin: identityOrigin(),
         principal: {
           tenant_id: "mock-tenant",
-          device_id: "mock-device",
+          device_id: localDeviceId,
           owner_id: "mock-owner",
           session_id: "mock-session",
-          mode: "public",
+          mode: originBoundEcho.isPublicDemo === true ? "public" : "local",
         },
       });
       if (typeof originBoundEcho.ensurePublicSession !== "function") {
@@ -270,13 +322,68 @@ export async function installEchoMock(
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      if (path === "/capture/devices" || path === "/api/capture/devices") {
+        return new Response(
+          JSON.stringify({
+            devices: [
+              {
+                deviceId: localDeviceId,
+                displayName: "EchoDesk 本机",
+                platform: "web",
+                online: true,
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (path === "/capture/control" || path === "/api/capture/control") {
+        if (method === "PUT") {
+          const body = JSON.parse(bodyText ?? "{}") as {
+            mode?: string;
+            selectedDeviceIds?: unknown;
+            expectedRevision?: number;
+          };
+          if (body.expectedRevision !== captureControl.revision) {
+            return new Response(JSON.stringify({ detail: "capture control revision conflict" }), {
+              status: 409,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          const ids = Array.isArray(body.selectedDeviceIds)
+            ? body.selectedDeviceIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+            : [];
+          captureControl = {
+            mode: body.mode === "multi" ? "multi" : "single",
+            selectedDeviceIds: [...new Set(ids)],
+            revision: captureControl.revision + 1,
+          };
+        }
+        return new Response(JSON.stringify(captureControl), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (
+        path === "/capture/control/authorize" ||
+        path === "/api/capture/control/authorize"
+      ) {
+        return new Response(
+          JSON.stringify({
+            allowed: true,
+            mode: captureControl.mode,
+            revision: captureControl.revision,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (path === "/bootstrap" || path === "/api/bootstrap") {
         return new Response(
           JSON.stringify({
             schema_version: 1,
             api_version: "0.3",
-            backend_version: "0.3.3",
-            app_version: "0.3.3",
+            backend_version: "0.3.4",
+            app_version: "0.3.4",
             build_contract: mockBuildContract,
             session_required: false,
             capabilities: {
@@ -300,7 +407,7 @@ export async function installEchoMock(
             expires_at: "2099-01-01T00:00:00Z",
             principal: {
               tenant_id: "mock-tenant",
-              device_id: "mock-device",
+              device_id: localDeviceId,
               owner_id: "mock-owner",
               session_id: "mock-session",
               mode: "public",
@@ -568,7 +675,7 @@ export async function installEchoMock(
       // 其它走真实 fetch
       return realFetch(input, init);
     };
-  }, { errorPaths, skipPaths, isElectron });
+  }, { errorPaths, skipPaths, isElectron, deviceId });
 
   // 在 Node 上下文返回简单的 controller proxy
   const ctrl: EchoMock = {

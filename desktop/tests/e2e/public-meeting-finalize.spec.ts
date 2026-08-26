@@ -28,6 +28,31 @@ async function installPublicRuntime(page: Page): Promise<void> {
   await page.route(/\/(api\/)?meetings\/[^/]+\/minutes$/, (route) =>
     route.fulfill({ status: 404, contentType: "application/json", body: "{}" }),
   );
+  await page.route(/\/(api\/)?capture\/chunk$/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ambient_stored: false, meeting_segments: [] }),
+    }),
+  );
+}
+
+async function bypassCaptureWait(page: Page): Promise<void> {
+  // These tests exercise the public end/finalize transaction. Feed the real
+  // capture test seam so the status-bar action can cross its first-frame gate
+  // without requiring a physical microphone in headless Chromium.
+  await page.evaluate(() => {
+    const pump = () => window.__echoAudioCapture?.__emitChunkForTest();
+    const timer = window.setInterval(pump, 50);
+    (window as unknown as { __publicCapturePump?: number }).__publicCapturePump = timer;
+  });
+}
+
+async function stopCaptureWaitBypass(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const timer = (window as unknown as { __publicCapturePump?: number }).__publicCapturePump;
+    if (timer !== undefined) window.clearInterval(timer);
+  });
 }
 
 function meetingActionPaths(
@@ -68,9 +93,11 @@ test("public/TV 结束会议会 end 后 finalize，并把纪要写回界面", as
   await page.goto("/");
 
   const status = page.getByTestId("meeting-status-bar");
+  await bypassCaptureWait(page);
   await status.click();
   await expect(status).toContainText("会议中");
   await status.click();
+  await stopCaptureWaitBypass(page);
 
   await expect(page.getByText("已结束本机会议并生成纪要")).toBeVisible();
   await expect(page.getByText("public finalize 已完成")).toBeVisible();
@@ -96,9 +123,11 @@ test("public/TV finalize 失败可见，且不伪装结束成功", async ({ page
   await page.goto("/");
 
   const status = page.getByTestId("meeting-status-bar");
+  await bypassCaptureWait(page);
   await status.click();
   await expect(status).toContainText("会议中");
   await status.click();
+  await stopCaptureWaitBypass(page);
 
   await expect(
     page.locator(".ant-message-error").filter({

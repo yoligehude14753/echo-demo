@@ -23,6 +23,11 @@ async function openCommandBarHarness(
     window.localStorage.setItem("echodesk.mobileBackendBase.userSet", "1");
   }, ORIGIN_A);
   await installEchoMock(page, { isElectron: false });
+  // This harness only exercises command routing. Keep capture paused so an
+  // origin switch cannot add an unrelated /capture/control/authorize write.
+  await page.addInitScript(() => {
+    window.localStorage.setItem("echodesk.capture.freeModeEnabled.v1", "0");
+  });
   await page.goto("/");
 
   await page.evaluate(

@@ -11,7 +11,11 @@ from typing import Any
 import aiosqlite
 import pytest
 from app.adapters.rag import BM25Rag
-from app.adapters.repo.migrator import _DEFAULT_MIGRATIONS_DIR, run_migrations
+from app.adapters.repo.migrator import (
+    _DEFAULT_MIGRATIONS_DIR,
+    migration_catalog_max_version,
+    run_migrations,
+)
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.config import Settings
 from app.schemas.llm import ChatMessage, LLMResponse, LLMUsage
@@ -572,7 +576,7 @@ async def test_v37_ambient_reconciliation_repairs_crash_gap_without_legacy_dupli
         await conn.commit()
 
     migration = await run_migrations(db_path)
-    assert migration.errors == [] and migration.current_version == 41
+    assert migration.errors == [] and migration.current_version == migration_catalog_max_version()
     repo = SQLiteRepository(db_path)
     await repo.init()
     pipeline = MeetingPipeline(

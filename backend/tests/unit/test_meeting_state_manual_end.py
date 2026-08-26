@@ -26,7 +26,11 @@ from typing import Any
 import aiosqlite
 import pytest
 from app.adapters.event_bus.inmemory import InMemoryEventBus
-from app.adapters.repo.migrator import _DEFAULT_MIGRATIONS_DIR, run_migrations
+from app.adapters.repo.migrator import (
+    _DEFAULT_MIGRATIONS_DIR,
+    migration_catalog_max_version,
+    run_migrations,
+)
 from app.adapters.repo.sqlite import SQLiteRepository
 from app.api.meetings import bind_meeting_workflow_handlers, dispatch_meeting_finalize
 from app.config import Settings
@@ -252,7 +256,7 @@ async def _seed_v37_unfinished_finalize(
         await conn.commit()
 
     upgraded = await run_migrations(db_path)
-    assert upgraded.errors == [] and upgraded.current_version == 41
+    assert upgraded.errors == [] and upgraded.current_version == migration_catalog_max_version()
     return (
         Settings(
             db_path=db_path,

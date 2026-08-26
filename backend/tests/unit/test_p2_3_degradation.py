@@ -22,6 +22,7 @@ from app.api.artifacts import generate as artifacts_generate
 from app.artifacts.repository import ArtifactRepository
 from app.config import Settings
 from app.schemas.artifact import ArtifactRequest
+from app.security import local_principal
 from app.use_cases.retrieve_and_answer import _classify
 from app.workflows.kernel import WorkflowDispatcher
 from app.workflows.service import WorkflowService
@@ -53,6 +54,7 @@ async def test_artifacts_emits_failed_on_llm_error(tmp_path: Path) -> None:
         with pytest.raises(HTTPException) as ei:
             await artifacts_generate(
                 body=ArtifactRequest(artifact_type="html", brief="test brief"),
+                principal=local_principal(),
                 llm=fake_llm,
                 runner=fake_skill,
                 event_bus=bus,

@@ -94,11 +94,41 @@ test("AudioCapture stop 后晚到 getUserMedia 结果不会复活 capturing", as
 test("Android 原生录音错误会隔离旧监听、单次恢复并在三次后停止", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => {
+    Object.defineProperty(window.screen, "width", { configurable: true, value: 390 });
+    Object.defineProperty(window.screen, "height", { configurable: true, value: 844 });
     Object.defineProperty(window.navigator, "userAgent", {
       configurable: true,
       get: () => "Mozilla/5.0 (Linux; Android 14; EchoDesk Native Test)",
     });
+    (window as unknown as { Capacitor: { isNativePlatform: () => boolean } }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+    window.localStorage.setItem(
+      "echodesk.mobileBackendBase",
+      "https://echodesk.yoliyoli.uk",
+    );
+    window.localStorage.setItem("echodesk.mobileBackendBase.userSet", "0");
+    window.localStorage.setItem("echodesk.capture.freeModeEnabled.v1", "0");
+    const nativeSession = () => ({
+      token: "native-test-token",
+      expires_at: "2099-01-01T00:00:00Z",
+      backend_origin: "https://echodesk.yoliyoli.uk",
+      principal: {
+        tenant_id: "mock-tenant",
+        owner_id: "mock-owner",
+        device_id: "mock-device",
+        session_id: "mock-session",
+      },
+    });
+    (window as unknown as { echo?: Record<string, unknown> }).echo = {
+      isElectron: true,
+      isPublicDemo: true,
+      backendHost: "https://echodesk.yoliyoli.uk",
+      ensurePublicSession: async () => nativeSession(),
+      renewPublicSession: async () => nativeSession(),
+    };
     (
       window as unknown as {
         CapacitorCustomPlatform?: { name: string };
@@ -107,6 +137,12 @@ test("Android 原生录音错误会隔离旧监听、单次恢复并在三次后
   });
   await installEchoMock(page, { keepOnboarding: true });
   await page.goto("/");
+  await page.evaluate(() => {
+    Object.defineProperty(window.Capacitor, "isNativePlatform", {
+      configurable: true,
+      value: () => true,
+    });
+  });
   await page.clock.install();
 
   await page.evaluate(async () => {
@@ -173,6 +209,9 @@ test("Android 原生录音错误会隔离旧监听、单次恢复并在三次后
     ).__nativeAudioMock__ = controller;
 
     audioCapture.__setNativePluginForTest({
+      configureSession: async () => undefined,
+      setCaptureMode: async () => undefined,
+      status: async () => ({ active: false, foregroundService: false }),
       start: async () => {
         state.startCalls += 1;
         return { sampleRate: 16_000, source: "mock-native" };
@@ -347,7 +386,7 @@ test("Capture 上传单飞且队列有界，过载时明确背压", async ({ pag
     skipPaths: ["/capture/chunk", "/capture/control"],
   });
   await page.goto("/");
-  await expect(page.getByTestId("capture-status")).toContainText("麦克风待机");
+  await expect(page.getByTestId("capture-status")).toContainText("本设备未选为收音端");
   await authorizeLocalCapture(page, 2);
 
   await page.evaluate(() => {
@@ -400,7 +439,7 @@ test("切换 backend origin 会丢弃旧 Capture 响应和排队音频", async (
   await installCaptureControlContract(page);
   await installEchoMock(page, { skipPaths: ["/capture/control"] });
   await page.goto("/");
-  await expect(page.getByTestId("capture-status")).toContainText("麦克风待机");
+  await expect(page.getByTestId("capture-status")).toContainText("本设备未选为收音端");
   await authorizeLocalCapture(page, 2);
 
   await page.evaluate(
@@ -518,7 +557,7 @@ test("切换 backend origin 会丢弃旧 Capture 响应和排队音频", async (
     bRequests: 0,
     ambientTexts: [],
   });
-  await expect(page.getByTestId("capture-status")).toContainText("麦克风待机");
+  await expect(page.getByTestId("capture-status")).toContainText("本设备未选为收音端");
 
   // B generation 的新音频仍应正常上传，不能被 A 的旧 drain 阻塞。
   await authorizeLocalCapture(page, 3);
