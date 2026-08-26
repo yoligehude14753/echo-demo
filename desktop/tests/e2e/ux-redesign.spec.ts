@@ -91,13 +91,9 @@ test("新版工作台：统一系统字体、清晰分区，长输入自动增�
     };
   });
 
-  // Chromium 会把 BlinkMacSystemFont 规范化为 system-ui；两者都表示浏览器的
-  // 平台系统字体入口。
-  expect(typography.body).toMatch(
-    /-apple-system.*(?:BlinkMacSystemFont|system-ui).*Segoe UI/,
-  );
-  expect(typography.body).toContain("Segoe UI");
+  expect(typography.body).toMatch(/Noto Sans CJK SC.*Noto Sans SC/);
   expect(typography.body).toContain("PingFang SC");
+  expect(typography.body).not.toContain("Segoe UI");
   expect(typography.body).not.toContain("Inter");
   expect(typography.conversationMode).toBe(typography.body);
   expect(typography.inspectorTab).toBe(typography.body);
