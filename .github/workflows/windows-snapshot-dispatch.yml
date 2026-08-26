@@ -35,7 +35,7 @@ jobs:
         with:
           repository: yoligehude14753/yoli-platform
           ref: main
-          path: _platforms
+          path: ../_platforms
           token: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           persist-credentials: false
           sparse-checkout: |
