@@ -126,7 +126,7 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: echodesk-windows-${{ inputs.release_mode }}-${{ inputs.source_ref }}
+          name: echodesk-windows-${{ inputs.release_mode }}-${{ github.sha }}
           path: |
             desktop/release/EchoDesk.Setup.*.exe
             desktop/release/EchoDesk.Setup.*.exe.blockmap
