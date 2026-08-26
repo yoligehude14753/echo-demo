@@ -10,8 +10,8 @@ from app.adapters.event_bus.inmemory import InMemoryEventBus
 from app.adapters.repo.migrator import run_migrations
 from app.agents.artifact_transfer import ArtifactDownloadResult
 from app.agents.base import AgentIntent, AgentTaskState
-from app.agents.events import EchoTaskEvent
 from app.agents.embedded_runtime import EmbeddedRuntimeBackend
+from app.agents.events import EchoTaskEvent
 from app.agents.service import AgentTaskRecord, AgentTaskService
 from app.config import Settings
 from app.runtime.execution_lease import ExecutionLeaseStore, LeaseOwnershipError
