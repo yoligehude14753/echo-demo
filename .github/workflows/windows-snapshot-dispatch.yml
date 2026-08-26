@@ -58,6 +58,10 @@ jobs:
         working-directory: desktop
         run: npm ci --ignore-scripts
 
+      - name: Download Electron runtime
+        working-directory: desktop
+        run: node node_modules/electron/install.js
+
       - name: Install packaged artifact runtime dependencies
         working-directory: backend/app/adapters/skill/assets/ppt_ib_deck
         run: npm ci --ignore-scripts --no-audit --no-fund
